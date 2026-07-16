@@ -416,7 +416,7 @@ func (a *API) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
-	if name == "index.html" || name == "manifest.webmanifest" {
+	if name == "index.html" || name == "manifest.webmanifest" || name == "sw.js" || name == "sw.js.map" {
 		w.Header().Set("Cache-Control", "no-cache")
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")

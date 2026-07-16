@@ -74,6 +74,22 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 	}
 }
 
+func TestServiceWorkerIsNotLongTermCached(t *testing.T) {
+	api := &API{frontend: fstest.MapFS{
+		"index.html": {Data: []byte("index")},
+		"sw.js":      {Data: []byte("worker")},
+	}}
+	request := httptest.NewRequest(http.MethodGet, "/sw.js", nil)
+	response := httptest.NewRecorder()
+	api.serveFrontend(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("service worker returned %d", response.Code)
+	}
+	if cacheControl := response.Header().Get("Cache-Control"); cacheControl != "no-cache" {
+		t.Fatalf("service worker cache control = %q", cacheControl)
+	}
+}
+
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any, cookie *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	var payload []byte
