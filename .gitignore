@@ -1,5 +1,6 @@
 .env
 .env.local
+*.pem
 *.db
 *.db-shm
 *.db-wal
