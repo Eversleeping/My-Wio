@@ -77,16 +77,22 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 func TestServiceWorkerIsNotLongTermCached(t *testing.T) {
 	api := &API{frontend: fstest.MapFS{
 		"index.html": {Data: []byte("index")},
-		"sw.js":      {Data: []byte("worker")},
+		"sw-v2.js":   {Data: []byte("worker")},
 	}}
-	request := httptest.NewRequest(http.MethodGet, "/sw.js", nil)
+	request := httptest.NewRequest(http.MethodGet, "/sw-v2.js", nil)
 	response := httptest.NewRecorder()
 	api.serveFrontend(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("service worker returned %d", response.Code)
 	}
-	if cacheControl := response.Header().Get("Cache-Control"); cacheControl != "no-cache" {
+	if cacheControl := response.Header().Get("Cache-Control"); cacheControl != "no-store, no-cache, must-revalidate" {
 		t.Fatalf("service worker cache control = %q", cacheControl)
+	}
+	if cdnCacheControl := response.Header().Get("CDN-Cache-Control"); cdnCacheControl != "no-store" {
+		t.Fatalf("service worker CDN cache control = %q", cdnCacheControl)
+	}
+	if cloudflareCacheControl := response.Header().Get("Cloudflare-CDN-Cache-Control"); cloudflareCacheControl != "no-store" {
+		t.Fatalf("service worker Cloudflare cache control = %q", cloudflareCacheControl)
 	}
 }
 

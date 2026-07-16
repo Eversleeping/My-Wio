@@ -416,8 +416,12 @@ func (a *API) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
-	if name == "index.html" || name == "manifest.webmanifest" || name == "sw.js" || name == "sw.js.map" {
-		w.Header().Set("Cache-Control", "no-cache")
+	isServiceWorker := name == "sw.js" || strings.HasPrefix(name, "sw-") &&
+		(strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".js.map"))
+	if name == "index.html" || name == "manifest.webmanifest" || isServiceWorker {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("CDN-Cache-Control", "no-store")
+		w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
