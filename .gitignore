@@ -1,0 +1,16 @@
+.env
+.env.local
+*.db
+*.db-shm
+*.db-wal
+bin/
+dist/
+node_modules/
+web/dist/
+*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+graphify-out/
+coverage/
+work/
+outputs/

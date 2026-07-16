@@ -1,0 +1,27 @@
+[Unit]
+Description=Wio server agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=wio-agent
+Group=wio-agent
+SupplementaryGroups=docker
+Environment=HOME=/var/lib/wio-agent
+WorkingDirectory=/var/lib/wio-agent
+ExecStart=/usr/local/bin/wio-agent run --config /etc/wio-agent/config.json
+Restart=always
+RestartSec=5
+StateDirectory=wio-agent
+ConfigurationDirectory=wio-agent
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/wio-agent
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

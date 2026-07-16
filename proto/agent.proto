@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package wio.agent.v1;
+
+option go_package = "github.com/wio-platform/wio/internal/protocol";
+
+// The Go implementation uses these wire fields with a JSON gRPC codec so the
+// repository can build without protoc. This schema remains the public contract.
+message AgentEnvelope {
+  string message_id = 1;
+  string server_id = 2;
+  string kind = 3;
+  int64 occurred_at_unix_ms = 4;
+  bytes payload_json = 5;
+}
+
+message ControlEnvelope {
+  string operation_id = 1;
+  string kind = 2;
+  int64 created_at_unix_ms = 3;
+  bytes payload_json = 4;
+}
+
+service AgentService {
+  rpc Connect(stream AgentEnvelope) returns (stream ControlEnvelope);
+}
+
