@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -20,9 +21,10 @@ import (
 type EmitFunc func(protocol.StreamEvent) error
 
 type Adapter struct {
-	command string
-	log     *slog.Logger
-	emit    EmitFunc
+	command     string
+	environment []string
+	log         *slog.Logger
+	emit        EmitFunc
 
 	startMu sync.Mutex
 	writeMu sync.Mutex
@@ -62,17 +64,22 @@ type rpcError struct {
 }
 
 func New(command string, log *slog.Logger, emit EmitFunc) *Adapter {
+	return NewWithEnvironment(command, nil, log, emit)
+}
+
+func NewWithEnvironment(command string, environment []string, log *slog.Logger, emit EmitFunc) *Adapter {
 	if command == "" {
 		command = "codex"
 	}
 	return &Adapter{
-		command: command,
-		log:     log,
-		emit:    emit,
-		pending: make(map[string]chan rpcMessage),
-		approve: make(map[string]approvalRequest),
-		threads: make(map[string]string),
-		turns:   make(map[string]turnState),
+		command:     command,
+		environment: append([]string(nil), environment...),
+		log:         log,
+		emit:        emit,
+		pending:     make(map[string]chan rpcMessage),
+		approve:     make(map[string]approvalRequest),
+		threads:     make(map[string]string),
+		turns:       make(map[string]turnState),
 	}
 }
 
@@ -196,6 +203,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	}
 	processContext, cancel := context.WithCancel(context.Background())
 	process := exec.CommandContext(processContext, a.command, "app-server", "--listen", "stdio://")
+	process.Env = append(os.Environ(), a.environment...)
 	stdout, err := process.StdoutPipe()
 	if err != nil {
 		cancel()

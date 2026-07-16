@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/sshbootstrap"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -36,9 +38,12 @@ type API struct {
 	vault        *security.Vault
 	log          *slog.Logger
 	frontend     fs.FS
+	bootstrapper serverBootstrapper
+	publicURL    string
 	secureCookie bool
 	setupMu      sync.Mutex
 	loginMu      sync.Mutex
+	bootstrapMu  sync.Mutex
 	login        map[string]*loginAttempt
 }
 
@@ -57,6 +62,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 		vault:        vault,
 		log:          log,
 		frontend:     frontend,
+		bootstrapper: sshbootstrap.New(os.Getenv("WIO_AGENT_ASSET_DIR")),
+		publicURL:    strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		secureCookie: strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
 		login:        make(map[string]*loginAttempt),
 	}
@@ -75,6 +82,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/summary", api.summary)
 			private.Get("/servers", api.servers)
 			private.Post("/servers/enrollments", api.createEnrollment)
+			private.Post("/servers/ssh/probe", api.probeServerSSH)
+			private.Post("/servers/ssh/bootstrap", api.bootstrapServerSSH)
 			private.Delete("/servers/{serverID}", api.revokeServer)
 			private.Get("/servers/{serverID}/metrics", api.metrics)
 			private.Get("/projects", api.projects)

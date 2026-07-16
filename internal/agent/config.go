@@ -16,6 +16,7 @@ type Config struct {
 	CloneRoot          string   `json:"clone_root"`
 	StateDir           string   `json:"state_dir"`
 	CodexPath          string   `json:"codex_path"`
+	CodexAPIKeyFile    string   `json:"codex_api_key_file"`
 	DockerPath         string   `json:"docker_path"`
 	InsecureSkipVerify bool     `json:"insecure_skip_verify,omitempty"`
 }
@@ -72,6 +73,9 @@ func (c *Config) defaults() {
 	if c.CodexPath == "" {
 		c.CodexPath = "codex"
 	}
+	if c.CodexAPIKeyFile == "" {
+		c.CodexAPIKeyFile = "/etc/wio-agent/codex.key"
+	}
 	if c.DockerPath == "" {
 		c.DockerPath = "docker"
 	}
@@ -84,8 +88,8 @@ func (c Config) Validate() error {
 	if !strings.HasPrefix(c.ControlURL, "https://") && !strings.HasPrefix(c.ControlURL, "http://") {
 		return errors.New("control_url must use https:// or http://")
 	}
-	if !filepath.IsAbs(c.CloneRoot) || !filepath.IsAbs(c.StateDir) {
-		return errors.New("clone_root and state_dir must be absolute")
+	if !filepath.IsAbs(c.CloneRoot) || !filepath.IsAbs(c.StateDir) || !filepath.IsAbs(c.CodexAPIKeyFile) {
+		return errors.New("clone_root, state_dir, and codex_api_key_file must be absolute")
 	}
 	for _, root := range c.ScanRoots {
 		if !filepath.IsAbs(root) {

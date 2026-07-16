@@ -1,5 +1,7 @@
 export interface Session { username: string; csrf_token: string; expires_at: string }
 export interface Server { id: string; name: string; hostname: string; status: string; agent_version: string; codex_version: string; codex_ready: number; last_seen_at: string | null; created_at: string }
+export interface SSHHostKey { fingerprint: string; key_type: string }
+export interface SSHBootstrapResult { server_id: string; hostname: string; architecture: string; warnings: string[] }
 export interface Project { id: string; name: string; remote_url: string; updated_at: string; workspace_count: number }
 export interface Workspace { id: string; project_id: string; server_id: string; path: string; branch: string; commit_sha: string; dirty: number; server_name: string; project_name: string }
 export interface Thread { id: string; workspace_id: string; codex_thread_id: string; title: string; status: string; path: string; server_id: string; server_name: string; project_name: string; created_at: string; updated_at: string }

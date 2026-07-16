@@ -82,6 +82,7 @@ h2 { font-size: 15px; line-height: 1.35; font-weight: 700; }
 .primary-button, .secondary-button, .text-button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border-radius: 6px; font-size: 13px; font-weight: 680; white-space: nowrap; }
 .primary-button { color: #fff; background: #267b5e; border: 1px solid #267b5e; }
 .primary-button:hover { background: #1d684e; border-color: #1d684e; }
+.primary-button:disabled, .secondary-button:disabled { cursor: wait; opacity: .62; }
 .secondary-button { color: #32373d; background: #fff; border: 1px solid #cfd3d0; }
 .secondary-button:hover { background: #f3f5f2; }
 .secondary-button.danger { color: var(--red); border-color: #efc1c4; }
@@ -143,10 +144,28 @@ textarea { resize: vertical; line-height: 1.5; }
 input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0 0 0 3px rgba(43, 144, 108, .12); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid.thirds { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.form-divider { height: 31px; display: flex; align-items: center; margin: 4px 0 13px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.form-divider::before, .form-divider::after { height: 1px; flex: 1; content: ""; background: var(--line); }
+.form-divider span { padding: 0 10px; }
 .copy-field { display: flex; align-items: stretch; border: 1px solid #cfd3d0; border-radius: 6px; overflow: hidden; }
 .copy-field code { min-width: 0; flex: 1; padding: 11px; overflow-wrap: anywhere; background: #f7f8f6; font-size: 11px; }
 .copy-field .icon-button { height: auto; border-left: 1px solid #cfd3d0; border-radius: 0; }
 .expiry { color: var(--muted); font-size: 12px; }
+.enrollment-step { min-height: 250px; }
+.fingerprint-status { min-height: 58px; display: flex; align-items: center; gap: 12px; color: var(--green); border-bottom: 1px solid var(--line); }
+.fingerprint-status > div { min-width: 0; display: grid; gap: 3px; }
+.fingerprint-status strong { color: var(--ink); }
+.fingerprint-status span { color: var(--muted); font-size: 12px; }
+.fingerprint-value { display: block; margin: 18px 0 10px; padding: 12px; overflow-wrap: anywhere; color: #1f4f3e; background: #edf5f0; border: 1px solid #c7ddd1; border-radius: 5px; font-size: 13px; }
+.security-notice { display: flex; align-items: center; min-height: 35px; color: #765016; font-size: 12px; }
+.enrollment-complete { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.completion-mark { width: 48px; height: 48px; display: grid; place-items: center; margin: 8px 0 12px; color: #fff; background: var(--green); border-radius: 50%; }
+.enrollment-complete > p { margin-top: 6px; color: var(--muted); font-size: 13px; }
+.enrollment-complete .dialog-actions { width: 100%; }
+.warning-list { width: 100%; display: grid; gap: 8px; margin-top: 18px; padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
+.warning-list > strong { font-size: 12px; }
+.warning-list > span { display: flex; align-items: flex-start; gap: 7px; color: #85510c; font-size: 12px; }
+.warning-list svg { flex: 0 0 auto; margin-top: 1px; }
 
 .auth-layout { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #ecefeb; }
 .auth-panel { width: min(680px, 100%); padding: 27px; background: #fff; border: 1px solid #d5d9d5; border-radius: 8px; box-shadow: 0 12px 36px rgba(27, 33, 36, .09); }

@@ -104,35 +104,22 @@ go build ./cmd/controlplane ./cmd/agent
 
 生产镜像会将 Vite 构建结果嵌入 Go 二进制文件。PostgreSQL 数据、Caddy 证书和 Caddy 状态均使用命名卷保存。
 
-## 安装 Agent
+## 网页注册服务器
 
-在任意 Go 主机上构建 Linux 二进制文件：
+生产控制面镜像内置 Linux amd64 和 arm64 两种 Agent。管理员无需在目标服务器手工编译或复制 Agent：
 
-```bash
-make agent-linux
-sudo install -m 0755 bin/wio-agent-linux-amd64 /usr/local/bin/wio-agent
-```
+1. 确保目标服务器运行 Linux、systemd 和 SSH，并允许控制面连接 SSH 端口。
+2. SSH 用户必须是 `root`，或拥有无需交互输入密码的 `sudo` 权限。
+3. 在 Wio 中打开“服务器”，点击“注册服务器”。
+4. 填写服务器地址、SSH 用户以及密码或私钥文件。
+5. 填写 Codex API URL、API Key 和模型。API URL 可以使用 OpenAI 官方地址，也可以使用兼容 Responses API 的自定义网关。
+6. Wio 首先只读取 SSH 主机公钥，不发送登录凭据。确认页面显示的 SHA-256 指纹后，Wio 才会连接并执行固定的安装流程。
 
-在受管服务器上执行：
+自动注册会创建专用 `wio-agent` 系统用户、安装 Agent 和 systemd unit、生成一次性注册令牌并启动服务。目标服务器缺少 Codex CLI 但存在 npm 时，安装器会自动安装与当前适配器匹配的 Codex CLI 版本。
 
-```bash
-sudo useradd --system --home /var/lib/wio-agent --create-home --shell /usr/sbin/nologin wio-agent
-sudo usermod -aG docker wio-agent
-sudo install -m 0644 deploy/agent.service /etc/systemd/system/wio-agent.service
-```
+Codex provider 配置保存在 `/var/lib/wio-agent/.codex/config.toml`。API Key 只写入目标服务器的 `/etc/wio-agent/codex.key`，权限为 `0600`；控制面不保存 SSH 密码、SSH 私钥或 Codex API Key，也不会把这些值写入审计日志。Agent 仅在启动 `codex app-server` 子进程时注入 API Key，Git、扫描和 Docker Compose 子进程不会继承它。
 
-在 Wio 中打开“服务器”，创建注册令牌，然后以 root 身份执行界面显示的命令。生成的 `/etc/wio-agent/config.json` 文件权限为 `0600`。
-
-启动 systemd 服务前，需要以服务账号登录 Codex。使用默认 unit 时，Codex 状态保存在 `/var/lib/wio-agent/.codex`：
-
-```bash
-sudo -u wio-agent -H env HOME=/var/lib/wio-agent codex login
-sudo systemctl daemon-reload
-sudo systemctl enable --now wio-agent
-sudo journalctl -u wio-agent -f
-```
-
-Agent 管理的克隆根目录和发布根目录默认分别为 `/var/lib/wio-agent/projects` 与 `/var/lib/wio-agent/releases`。systemd unit 仅允许服务写入 `/var/lib/wio-agent` 目录。
+Git 和 Docker 未安装时，服务器仍可注册并上报基础指标，但项目发现和部署功能会在完成页面中显示为不可用。Agent 管理的克隆根目录和发布根目录默认分别为 `/var/lib/wio-agent/projects` 与 `/var/lib/wio-agent/releases`。
 
 ## 部署流程
 
@@ -167,8 +154,9 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec -T postgres \
 
 - Wio 面向可信的单管理员环境。
 - Agent 令牌和注册令牌只显示一次，控制面仅保存其哈希值。
+- SSH 主机指纹必须经过确认；SSH 密码、私钥和 Codex API Key 仅在单次注册请求内使用，不写入控制面数据库。
 - Vault 密钥集保存后，浏览器不会再次收到其中的明文。
-- Git 和 Compose 均通过参数数组调用；Wio 不提供任意 Shell 操作 API。
+- SSH 引导程序只能执行内置的 Agent 安装步骤；Git 和 Compose 均通过参数数组调用，Wio 不提供任意 Shell 操作 API。
 - Agent 导入目标和发布路径必须位于配置的根目录内。
 - 明文 HTTP 仅用于本地开发，生产环境必须使用 Caddy 或同等的 TLS 代理。
 - Docker 组权限实际上等同于 root。请使用专用系统账号，并严格限制其配置文件的访问权限。

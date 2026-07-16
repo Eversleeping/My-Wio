@@ -137,6 +137,11 @@ func (s *Store) CreateEnrollment(ctx context.Context, name string, roots []strin
 	return id, err
 }
 
+func (s *Store) DeleteUnusedEnrollment(ctx context.Context, id string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q("DELETE FROM enrollment_tokens WHERE id=? AND consumed_at IS NULL"), id)
+	return err
+}
+
 type Enrollment struct {
 	ID         string    `db:"id"`
 	ServerName string    `db:"server_name"`

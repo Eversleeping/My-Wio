@@ -47,10 +47,24 @@ type Client struct {
 
 func NewClient(config Config, log *slog.Logger) *Client {
 	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath), seen: make(map[string]bool)}
-	client.codex = codexadapter.New(config.CodexPath, log, func(event protocol.StreamEvent) error {
+	client.codex = codexadapter.NewWithEnvironment(config.CodexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
 		return client.queue("event", event, true)
 	})
 	return client
+}
+
+func codexEnvironment(config Config, log *slog.Logger) []string {
+	raw, err := os.ReadFile(config.CodexAPIKeyFile)
+	if err != nil {
+		log.Warn("Codex API key is unavailable", "path", config.CodexAPIKeyFile, "error", err)
+		return nil
+	}
+	key := strings.TrimSpace(string(raw))
+	if key == "" || strings.ContainsAny(key, "\r\n\x00") {
+		log.Warn("Codex API key file is invalid", "path", config.CodexAPIKeyFile)
+		return nil
+	}
+	return []string{"WIO_CODEX_API_KEY=" + key}
 }
 
 func (c *Client) Run(ctx context.Context) error {

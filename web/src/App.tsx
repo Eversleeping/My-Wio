@@ -47,6 +47,8 @@ import type {
   SecretSet,
   Server,
   Session,
+  SSHBootstrapResult,
+  SSHHostKey,
   StreamEvent,
   Summary,
   Thread,
@@ -256,17 +258,71 @@ function ServersPage({ realtime, notify }: PageProps) {
   const { t } = useI18n();
   const servers = useData<Server[]>("/servers", realtime);
   const [dialog, setDialog] = useState(false);
-  const [name, setName] = useState("");
-  const [roots, setRoots] = useState("/srv, /opt, /home");
-  const [enrollment, setEnrollment] = useState<{ token: string; expires_at: string } | null>(null);
-  const create = async (event: FormEvent) => {
-    event.preventDefault();
-    try { setEnrollment(await post("/servers/enrollments", { name, scan_roots: roots.split(",").map(value => value.trim()).filter(Boolean) })); servers.reload(); } catch (err) { notify(message(err)); }
+  const [step, setStep] = useState<"form" | "fingerprint" | "complete">("form");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [hostKey, setHostKey] = useState<SSHHostKey | null>(null);
+  const [result, setResult] = useState<SSHBootstrapResult | null>(null);
+  const [form, setForm] = useState({
+    name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "ubuntu", authMethod: "private_key",
+    password: "", privateKey: "", privateKeyPassphrase: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4"
+  });
+  const reset = () => {
+    setStep("form"); setError(""); setHostKey(null); setResult(null); setBusy(false);
+    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "ubuntu", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4" });
   };
-  const command = enrollment ? `sudo wio-agent enroll --url ${location.origin} --token ${enrollment.token}` : "";
-  return <div className="page-stack"><Section title={t("server.registered")} icon={<ServerIcon size={18} />} action={<button className="primary-button" onClick={() => { setDialog(true); setEnrollment(null); }}><Plus size={17} />{t("server.enroll")}</button>}>
+  const open = () => { reset(); setDialog(true); };
+  const close = () => { if (busy) return; setDialog(false); reset(); };
+  const probe = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError("");
+    try {
+      setHostKey(await post<SSHHostKey>("/servers/ssh/probe", { host: form.host.trim(), port: Number(form.port) }));
+      setStep("fingerprint");
+    } catch (err) { setError(enrollmentMessage(err, t)); } finally { setBusy(false); }
+  };
+  const install = async () => {
+    if (!hostKey) return;
+    setBusy(true); setError("");
+    try {
+      const installed = await post<SSHBootstrapResult>("/servers/ssh/bootstrap", {
+        name: form.name.trim(), scan_roots: form.roots.split(",").map(value => value.trim()).filter(Boolean),
+        host: form.host.trim(), port: Number(form.port), user: form.user.trim(), auth_method: form.authMethod,
+        password: form.authMethod === "password" ? form.password : "",
+        private_key: form.authMethod === "private_key" ? form.privateKey : "",
+        private_key_passphrase: form.authMethod === "private_key" ? form.privateKeyPassphrase : "",
+        host_key_fingerprint: hostKey.fingerprint,
+        codex_api_url: form.codexAPIURL.trim(), codex_api_key: form.codexAPIKey, codex_model: form.codexModel.trim()
+      });
+      setResult(installed); setStep("complete"); servers.reload(); notify(t("server.installed"));
+      setForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", codexAPIKey: "" }));
+    } catch (err) { setError(enrollmentMessage(err, t)); } finally { setBusy(false); }
+  };
+  const choosePrivateKey = async (file?: File) => {
+    setError("");
+    if (!file) { setForm(current => ({ ...current, privateKey: "" })); return; }
+    if (file.size > 256 * 1024) { setError(t("server.privateKeyTooLarge")); return; }
+    try { const privateKey = await file.text(); setForm(current => ({ ...current, privateKey })); } catch (err) { setError(message(err)); }
+  };
+  return <div className="page-stack"><Section title={t("server.registered")} icon={<ServerIcon size={18} />} action={<button className="primary-button" onClick={open}><Plus size={17} />{t("server.enroll")}</button>}>
     <DataTable headers={[t("column.server"), t("column.connectivity"), t("column.agent"), t("column.codex"), t("column.lastSeen"), ""]} empty={t("server.none")}>{(servers.data ?? []).map(server => <tr key={server.id}><td><div className="cell-main"><strong>{server.name}</strong><small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><button className="icon-button danger" title={t("server.revoke")} onClick={async () => { if (!confirm(t("server.confirmRevoke", { name: server.name }))) return; await remove(`/servers/${server.id}`); notify(t("server.revoked")); servers.reload(); }}><X size={16} /></button></td></tr>)}</DataTable>
-  </Section><Dialog open={dialog} title={t("server.enrollLinux")} onClose={() => setDialog(false)}>{!enrollment ? <form onSubmit={create}><Field label={t("server.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("server.scanRoots")}><input value={roots} onChange={e => setRoots(e.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("server.createToken")}</button></DialogActions></form> : <div><Field label={t("server.command")}><div className="copy-field"><code>{command}</code><button className="icon-button" title={t("common.copy")} onClick={() => { navigator.clipboard.writeText(command); notify(t("server.commandCopied")); }}><Copy size={16} /></button></div></Field><p className="expiry">{t("server.expires", { time: formatDate(enrollment.expires_at) })}</p><DialogActions><button className="primary-button" onClick={() => setDialog(false)}><Check size={16} />{t("common.done")}</button></DialogActions></div>}</Dialog></div>;
+  </Section><Dialog open={dialog} title={t("server.enrollLinux")} onClose={close} wide>{step === "form" ? <form onSubmit={probe}>
+    {error && <ErrorBanner text={error} />}
+    <div className="form-grid"><Field label={t("server.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></Field><Field label={t("server.scanRoots")}><input value={form.roots} onChange={e => setForm({ ...form, roots: e.target.value })} required /></Field></div>
+    <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={form.port} onChange={e => setForm({ ...form, port: e.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} required /></Field></div>
+    <Field label={t("server.authMethod")}><select value={form.authMethod} onChange={e => setForm({ ...form, authMethod: e.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option></select></Field>
+    {form.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={e => void choosePrivateKey(e.target.files?.[0])} required={!form.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={form.privateKeyPassphrase} onChange={e => setForm({ ...form, privateKeyPassphrase: e.target.value })} placeholder={t("common.optional")} /></Field></div> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field>}
+    <div className="form-divider"><span>{t("server.codexAPI")}</span></div>
+    <div className="form-grid"><Field label={t("server.codexAPIURL")}><input type="url" value={form.codexAPIURL} onChange={e => setForm({ ...form, codexAPIURL: e.target.value })} required /></Field><Field label={t("server.codexModel")}><input value={form.codexModel} onChange={e => setForm({ ...form, codexModel: e.target.value })} required /></Field></div>
+    <Field label={t("server.codexAPIKey")}><input type="password" autoComplete="new-password" value={form.codexAPIKey} onChange={e => setForm({ ...form, codexAPIKey: e.target.value })} required /></Field>
+    <DialogActions><button type="button" className="secondary-button" onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{busy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
+  </form> : step === "fingerprint" && hostKey ? <div className="enrollment-step">
+    {error && <ErrorBanner text={error} />}
+    <div className="fingerprint-status"><ShieldCheck size={28} /><div><strong>{t("server.fingerprint")}</strong><span>{form.host}:{form.port} · {hostKey.key_type}</span></div></div>
+    <code className="fingerprint-value">{hostKey.fingerprint}</code>
+    <p className="security-notice">{t("server.fingerprintNotice")}</p>
+    <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={() => { setStep("form"); setError(""); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button" disabled={busy} onClick={() => void install()}>{busy ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{busy ? t("server.installing") : t("server.confirmInstall")}</button></DialogActions>
+  </div> : <div className="enrollment-step enrollment-complete"><div className="completion-mark"><Check size={28} /></div><h3>{t("server.installed")}</h3>{result && <p>{t("server.installedSummary", { hostname: result.hostname, architecture: result.architecture })}</p>}{result && result.warnings.length > 0 && <div className="warning-list"><strong>{t("server.warningTitle")}</strong>{result.warnings.map(warning => <span key={warning}><AlertTriangle size={15} />{t(`server.warning.${warning}`)}</span>)}</div>}<DialogActions><button className="primary-button" onClick={close}><Check size={16} />{t("common.done")}</button></DialogActions></div>}</Dialog></div>;
 }
 
 function ProjectsPage({ realtime, notify }: PageProps) {
@@ -396,6 +452,13 @@ function useData<T>(path: string | null, dependency: unknown) {
 }
 
 function message(error: unknown) { return error instanceof Error ? error.message : "Request failed"; }
+function enrollmentMessage(error: unknown, translate: (key: string) => string) {
+  if (error instanceof APIError && error.code) {
+    const localized = translate(`server.error.${error.code}`);
+    if (!localized.startsWith("server.error.")) return localized;
+  }
+  return message(error);
+}
 function pretty(value: unknown) { try { return JSON.stringify(value, null, 2); } catch { return String(value); } }
 function extractText(payload: unknown): string { if (!payload || typeof payload !== "object") return typeof payload === "string" ? payload : ""; const value = payload as Record<string, unknown>; for (const key of ["delta", "text", "diff", "output"]) if (typeof value[key] === "string") return value[key] as string; if (value.item && typeof value.item === "object") return extractText(value.item); return ""; }
 function readableKind(kind: string) { return kind.replace(/^codex\./, "").replaceAll(".", " / ").replaceAll("/", " / "); }

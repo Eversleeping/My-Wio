@@ -4,9 +4,11 @@ let csrfToken = "";
 
 export class APIError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code: string;
+  constructor(status: number, message: string, code = "") {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -23,7 +25,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const response = await fetch(`/api${path}`, { ...options, headers, credentials: "same-origin" });
   const contentType = response.headers.get("content-type") ?? "";
   const body = contentType.includes("application/json") ? await response.json() : null;
-  if (!response.ok) throw new APIError(response.status, body?.error ?? `Request failed (${response.status})`);
+  if (!response.ok) throw new APIError(response.status, body?.error ?? `Request failed (${response.status})`, body?.code ?? "");
   return body as T;
 }
 
