@@ -405,6 +405,10 @@ func (a *API) serveFrontend(w http.ResponseWriter, r *http.Request) {
 		name = "index.html"
 	}
 	data, err := fs.ReadFile(a.frontend, name)
+	if err != nil && name == "sw.js" {
+		// Keep existing PWA installations updatable after versioning the worker filename.
+		data, err = fs.ReadFile(a.frontend, "sw-v2.js")
+	}
 	if err != nil {
 		data, err = fs.ReadFile(a.frontend, "index.html")
 		name = "index.html"
