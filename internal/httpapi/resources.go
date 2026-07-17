@@ -443,16 +443,27 @@ func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "threadID")
 	var input struct {
-		Prompt       string `json:"prompt"`
-		Model        string `json:"model"`
-		ApprovalMode string `json:"approval_mode"`
+		Prompt          string `json:"prompt"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoning_effort"`
+		ApprovalMode    string `json:"approval_mode"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
+	input.Model = strings.TrimSpace(input.Model)
+	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
 	if input.Prompt == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	if utf8.RuneCountInString(input.Model) > 128 {
+		writeError(w, http.StatusBadRequest, "model is too long")
+		return
+	}
+	if !validReasoningEffort(input.ReasoningEffort) {
+		writeError(w, http.StatusBadRequest, "invalid reasoning_effort")
 		return
 	}
 	if input.ApprovalMode == "" {
@@ -467,7 +478,7 @@ func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
 		return
 	}
-	command := protocol.StartTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: input.Prompt, Model: input.Model, ApprovalMode: input.ApprovalMode}
+	command := protocol.StartTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: input.Prompt, Model: input.Model, ReasoningEffort: input.ReasoningEffort, ApprovalMode: input.ApprovalMode}
 	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.turn.start", command, "codex-turn:"+store.NewID())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Codex turn")
@@ -480,6 +491,15 @@ func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "codex.turn.start", "thread", thread.ID, map[string]string{"operation_id": operationID}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
+func validReasoningEffort(value string) bool {
+	switch value {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {

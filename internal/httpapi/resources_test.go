@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -245,10 +246,74 @@ func TestDeleteFailedProjectWithoutWorkspace(t *testing.T) {
 	}
 }
 
+func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "turn-model-token")
+	if err := database.UpsertInventory(context.Background(), server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/model-project", Name: "model-project", RemoteURL: "https://example.com/model-project.git", Branch: "main"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(context.Background())
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(context.Background(), workspaces[0].ID, "model test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]string{"prompt": "hello", "model": "  gpt-5.6-sol  ", "reasoning_effort": "  high  ", "approval_mode": "on-request"}, api.startTurn)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("start turn returned %d: %s", response.Code, response.Body.String())
+	}
+	operations, err := database.PendingOperations(context.Background(), server.ID)
+	if err != nil || len(operations) != 1 {
+		t.Fatalf("unexpected operations: %#v %v", operations, err)
+	}
+	var command protocol.StartTurnCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.Model != "gpt-5.6-sol" {
+		t.Fatalf("unexpected model: %q", command.Model)
+	}
+	if command.ReasoningEffort != "high" {
+		t.Fatalf("unexpected reasoning effort: %q", command.ReasoningEffort)
+	}
+}
+
+func TestStartTurnRejectsOversizedModel(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/missing/turns", "missing", map[string]string{"prompt": "hello", "model": strings.Repeat("m", 129)}, api.startTurn)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("start turn returned %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestStartTurnRejectsInvalidReasoningEffort(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/missing/turns", "missing", map[string]string{"prompt": "hello", "reasoning_effort": "extreme"}, api.startTurn)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("start turn returned %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func projectResourceRequest(t *testing.T, method, target, projectID string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	route := chi.NewRouteContext()
 	route.URLParams.Add("projectID", projectID)
+	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
+	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
+	return directJSONRequest(t, method, target, body, nil, func(w http.ResponseWriter, r *http.Request) {
+		handler(w, r.WithContext(requestContext))
+	})
+}
+
+func threadResourceRequest(t *testing.T, method, target, threadID string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+	route := chi.NewRouteContext()
+	route.URLParams.Add("threadID", threadID)
 	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
 	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
 	return directJSONRequest(t, method, target, body, nil, func(w http.ResponseWriter, r *http.Request) {

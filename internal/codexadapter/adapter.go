@@ -89,14 +89,7 @@ func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnComma
 	}
 	codexThread := command.CodexThread
 	if codexThread == "" {
-		params := map[string]any{
-			"cwd":            command.Workspace,
-			"approvalPolicy": approvalPolicy(command.ApprovalMode),
-			"sandbox":        "workspace-write",
-		}
-		if command.Model != "" {
-			params["model"] = command.Model
-		}
+		params := threadStartParams(command)
 		result, err := a.request(ctx, "thread/start", params)
 		if err != nil {
 			return err
@@ -118,15 +111,7 @@ func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnComma
 	a.threads[codexThread] = command.ThreadID
 	a.turns[command.ThreadID] = turnState{CodexThread: codexThread}
 	a.mu.Unlock()
-	params := map[string]any{
-		"threadId":       codexThread,
-		"input":          []map[string]string{{"type": "text", "text": command.Prompt}},
-		"approvalPolicy": approvalPolicy(command.ApprovalMode),
-		"cwd":            command.Workspace,
-	}
-	if command.Model != "" {
-		params["model"] = command.Model
-	}
+	params := turnStartParams(command, codexThread)
 	result, err := a.request(ctx, "turn/start", params)
 	if err != nil {
 		return err
@@ -143,6 +128,34 @@ func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnComma
 	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, TurnID: response.Turn.ID}
 	a.mu.Unlock()
 	return a.emitEvent(command.ThreadID, "turn.accepted", map[string]string{"codex_thread_id": codexThread, "turn_id": response.Turn.ID})
+}
+
+func threadStartParams(command protocol.StartTurnCommand) map[string]any {
+	params := map[string]any{
+		"cwd":            command.Workspace,
+		"approvalPolicy": approvalPolicy(command.ApprovalMode),
+		"sandbox":        "workspace-write",
+	}
+	if command.Model != "" {
+		params["model"] = command.Model
+	}
+	return params
+}
+
+func turnStartParams(command protocol.StartTurnCommand, codexThread string) map[string]any {
+	params := map[string]any{
+		"threadId":       codexThread,
+		"input":          []map[string]string{{"type": "text", "text": command.Prompt}},
+		"approvalPolicy": approvalPolicy(command.ApprovalMode),
+		"cwd":            command.Workspace,
+	}
+	if command.Model != "" {
+		params["model"] = command.Model
+	}
+	if command.ReasoningEffort != "" {
+		params["effort"] = command.ReasoningEffort
+	}
+	return params
 }
 
 func (a *Adapter) Interrupt(ctx context.Context, command protocol.InterruptTurnCommand) error {

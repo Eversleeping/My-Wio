@@ -72,13 +72,14 @@ type StreamEvent struct {
 }
 
 type StartTurnCommand struct {
-	ThreadID     string `json:"thread_id"`
-	CodexThread  string `json:"codex_thread_id,omitempty"`
-	WorkspaceID  string `json:"workspace_id"`
-	Workspace    string `json:"workspace"`
-	Prompt       string `json:"prompt"`
-	Model        string `json:"model,omitempty"`
-	ApprovalMode string `json:"approval_mode"`
+	ThreadID        string `json:"thread_id"`
+	CodexThread     string `json:"codex_thread_id,omitempty"`
+	WorkspaceID     string `json:"workspace_id"`
+	Workspace       string `json:"workspace"`
+	Prompt          string `json:"prompt"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ApprovalMode    string `json:"approval_mode"`
 }
 
 type ApprovalDecisionCommand struct {

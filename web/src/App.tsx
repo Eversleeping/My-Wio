@@ -71,6 +71,21 @@ type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "mo
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
 
+const defaultCodexModel = "gpt-5.6-sol";
+const codexModelOptions = [
+  { value: "gpt-5.6-sol", labelKey: "codex.model56Sol" },
+  { value: "gpt-5.6-terra", labelKey: "codex.model56Terra" },
+  { value: "gpt-5.6-luna", labelKey: "codex.model56Luna" },
+  { value: "gpt-5.5", labelKey: "codex.model55" }
+] as const;
+const codexReasoningOptions = [
+  { value: "low", labelKey: "codex.reasoningLow" },
+  { value: "medium", labelKey: "codex.reasoningMedium" },
+  { value: "high", labelKey: "codex.reasoningHigh" },
+  { value: "xhigh", labelKey: "codex.reasoningExtraHigh" },
+  { value: "max", labelKey: "codex.reasoningMax" }
+] as const;
+
 const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboard }> = [
   { id: "dashboard", labelKey: "nav.overview", icon: LayoutDashboard },
   { id: "servers", labelKey: "nav.servers", icon: ServerIcon },
@@ -284,11 +299,11 @@ function ServersPage({ realtime, notify }: PageProps) {
   const [metadataForm, setMetadataForm] = useState({ address: "", configuration: "", notes: "" });
   const [form, setForm] = useState({
     name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
-    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4"
+    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: defaultCodexModel
   });
   const reset = () => {
     setStep("form"); setError(""); setHostKey(null); setResult(null); setInstallLogs([]); setBusy(false);
-    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4" });
+    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: defaultCodexModel });
   };
   const open = () => { reset(); setDialog(true); };
   const close = () => { if (busy) return; setDialog(false); reset(); };
@@ -373,7 +388,7 @@ function ServersPage({ realtime, notify }: PageProps) {
     <Field label={t("server.authMethod")}><select value={form.authMethod} onChange={e => setForm({ ...form, authMethod: e.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option></select></Field>
     {form.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={e => void choosePrivateKey(e.target.files?.[0])} required={!form.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={form.privateKeyPassphrase} onChange={e => setForm({ ...form, privateKeyPassphrase: e.target.value })} placeholder={t("common.optional")} /></Field></div> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field>}
     <div className="form-divider"><span>{t("server.codexAPI")}</span></div>
-    <div className="form-grid"><Field label={t("server.codexAPIURL")}><input type="url" value={form.codexAPIURL} onChange={e => setForm({ ...form, codexAPIURL: e.target.value })} required /></Field><Field label={t("server.codexModel")}><input value={form.codexModel} onChange={e => setForm({ ...form, codexModel: e.target.value })} required /></Field></div>
+    <div className="form-grid"><Field label={t("server.codexAPIURL")}><input type="url" value={form.codexAPIURL} onChange={e => setForm({ ...form, codexAPIURL: e.target.value })} required /></Field><Field label={t("server.codexModel")}><CodexModelPicker value={form.codexModel} onChange={codexModel => setForm({ ...form, codexModel })} required /></Field></div>
     <Field label={t("server.codexAPIKey")}><input type="password" autoComplete="new-password" value={form.codexAPIKey} onChange={e => setForm({ ...form, codexAPIKey: e.target.value })} required /></Field>
     <DialogActions><button type="button" className="secondary-button" onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{busy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
   </form> : step === "fingerprint" && hostKey ? <div className="enrollment-step">
@@ -469,9 +484,9 @@ function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCr
 function SessionView({ thread, realtime, notify }: { thread: Thread; realtime: number; notify: (text: string) => void }) {
   const { t } = useI18n();
   const events = useData<StreamEvent[]>(`/threads/${thread.id}/events`, realtime + thread.id);
-  const [prompt, setPrompt] = useState(""); const [model, setModel] = useState(""); const [approvalMode, setApprovalMode] = useState("on-request");
-  const send = async (event: FormEvent) => { event.preventDefault(); if (!prompt.trim()) return; try { await post(`/threads/${thread.id}/turns`, { prompt, model, approval_mode: approvalMode }); setPrompt(""); notify(t("codex.turnQueued")); } catch (err) { notify(message(err)); } };
-  return <><div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" title={t("codex.interrupt")} onClick={async () => { await post(`/threads/${thread.id}/interrupt`, {}); notify(t("codex.interruptQueued")); }}><Ban size={16} /></button>}</div></div><div className="event-stream">{(events.data ?? []).length === 0 ? <Empty icon={<SquareTerminal size={26} />} text={t("codex.noMessages")} /> : (events.data ?? []).map(event => <EventItem key={event.event_id} event={event} />)}</div><form className="composer" onSubmit={send}><textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={t("codex.messagePlaceholder")} rows={3} /><div className="composer-bar"><div><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={e => setApprovalMode(e.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><input aria-label={t("codex.modelOverride")} value={model} onChange={e => setModel(e.target.value)} placeholder={t("codex.defaultModel")} /></div><button className="primary-button" disabled={!prompt.trim()}><ChevronRight size={17} />{t("codex.send")}</button></div></form></>;
+  const [prompt, setPrompt] = useState(""); const [model, setModel] = useState(defaultCodexModel); const [reasoningEffort, setReasoningEffort] = useState(""); const [approvalMode, setApprovalMode] = useState("on-request");
+  const send = async (event: FormEvent) => { event.preventDefault(); if (!prompt.trim()) return; try { await post(`/threads/${thread.id}/turns`, { prompt, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode }); setPrompt(""); notify(t("codex.turnQueued")); } catch (err) { notify(message(err)); } };
+  return <><div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" title={t("codex.interrupt")} onClick={async () => { await post(`/threads/${thread.id}/interrupt`, {}); notify(t("codex.interruptQueued")); }}><Ban size={16} /></button>}</div></div><div className="event-stream">{(events.data ?? []).length === 0 ? <Empty icon={<SquareTerminal size={26} />} text={t("codex.noMessages")} /> : (events.data ?? []).map(event => <EventItem key={event.event_id} event={event} />)}</div><form className="composer" onSubmit={send}><textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={t("codex.messagePlaceholder")} rows={3} /><div className="composer-bar"><div><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={e => setApprovalMode(e.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" disabled={!prompt.trim()}><ChevronRight size={17} />{t("codex.send")}</button></div></form></>;
 }
 
 function EventItem({ event }: { event: StreamEvent }) {
@@ -632,6 +647,14 @@ function LanguageSwitch() {
 
 function Section({ title, icon, action, children }: { title: string; icon?: ReactNode; action?: ReactNode; children: ReactNode }) { return <section className="section"><div className="section-heading"><div>{icon}<h2>{title}</h2></div>{action}</div>{children}</section>; }
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
+function CodexModelPicker({ value, onChange, allowServerDefault = false, required = false }: { value: string; onChange: (value: string) => void; allowServerDefault?: boolean; required?: boolean }) {
+  const { t } = useI18n();
+  const known = value === "" || codexModelOptions.some(option => option.value === value);
+  const [customMode, setCustomMode] = useState(!known);
+  const [customValue, setCustomValue] = useState(known ? "" : value);
+  const selectValue = customMode ? "__custom__" : value;
+  return <div className="codex-model-picker"><select aria-label={t("codex.modelOverride")} value={selectValue} required={required} onChange={event => { if (event.target.value === "__custom__") { setCustomMode(true); setCustomValue(""); onChange(""); } else { setCustomMode(false); onChange(event.target.value); } }}>{allowServerDefault && <option value="">{t("codex.modelServerDefault")}</option>}{codexModelOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}<option value="__custom__">{t("codex.modelCustom")}</option></select>{customMode && <input aria-label={t("codex.customModelName")} value={customValue} onChange={event => { setCustomValue(event.target.value); onChange(event.target.value); }} placeholder={t("codex.customModelPlaceholder")} required={required} />}</div>;
+}
 function ServerInformation({ server, className = "" }: { server?: Server; className?: string }) {
   const { t } = useI18n();
   if (!server || (!server.address && !server.configuration && !server.notes)) return <span className="muted">{t("server.noInformation")}</span>;
