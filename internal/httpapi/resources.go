@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -443,19 +444,24 @@ func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "threadID")
 	var input struct {
-		Prompt          string `json:"prompt"`
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoning_effort"`
-		ApprovalMode    string `json:"approval_mode"`
+		Prompt          string               `json:"prompt"`
+		Images          []protocol.TurnImage `json:"images"`
+		Model           string               `json:"model"`
+		ReasoningEffort string               `json:"reasoning_effort"`
+		ApprovalMode    string               `json:"approval_mode"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONLimit(w, r, &input, 6<<20) {
 		return
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
-	if input.Prompt == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
+	if input.Prompt == "" && len(input.Images) == 0 {
+		writeError(w, http.StatusBadRequest, "prompt or image is required")
+		return
+	}
+	if !validTurnImages(input.Images) {
+		writeError(w, http.StatusBadRequest, "invalid or oversized turn images")
 		return
 	}
 	if utf8.RuneCountInString(input.Model) > 128 {
@@ -478,14 +484,14 @@ func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
 		return
 	}
-	command := protocol.StartTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: input.Prompt, Model: input.Model, ReasoningEffort: input.ReasoningEffort, ApprovalMode: input.ApprovalMode}
+	command := protocol.StartTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: input.Prompt, Images: input.Images, Model: input.Model, ReasoningEffort: input.ReasoningEffort, ApprovalMode: input.ApprovalMode}
 	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.turn.start", command, "codex-turn:"+store.NewID())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Codex turn")
 		return
 	}
 	_ = a.store.SetThreadStatus(r.Context(), thread.ID, "queued")
-	event, _ := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: eventPayload(map[string]string{"text": input.Prompt})})
+	event, _ := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images)})})
 	a.hub.Publish(event)
 	a.gateway.Wake(thread.ServerID)
 	session := currentSession(r)
@@ -500,6 +506,28 @@ func validReasoningEffort(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validTurnImages(images []protocol.TurnImage) bool {
+	if len(images) > 4 {
+		return false
+	}
+	total := 0
+	for _, image := range images {
+		prefix, encoded, ok := strings.Cut(image.DataURL, ",")
+		if !ok || (prefix != "data:image/png;base64" && prefix != "data:image/jpeg;base64" && prefix != "data:image/webp;base64") {
+			return false
+		}
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(decoded) == 0 || len(decoded) > 2<<20 {
+			return false
+		}
+		if http.DetectContentType(decoded) != strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64") {
+			return false
+		}
+		total += len(decoded)
+	}
+	return total <= 4<<20
 }
 
 func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {

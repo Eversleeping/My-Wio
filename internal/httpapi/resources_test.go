@@ -261,7 +261,8 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]string{"prompt": "hello", "model": "  gpt-5.6-sol  ", "reasoning_effort": "  high  ", "approval_mode": "on-request"}, api.startTurn)
+	image := "data:image/png;base64,iVBORw0KGgo="
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "hello", "images": []map[string]string{{"data_url": image}}, "model": "  gpt-5.6-sol  ", "reasoning_effort": "  high  ", "approval_mode": "on-request"}, api.startTurn)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("start turn returned %d: %s", response.Code, response.Body.String())
 	}
@@ -278,6 +279,22 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 	}
 	if command.ReasoningEffort != "high" {
 		t.Fatalf("unexpected reasoning effort: %q", command.ReasoningEffort)
+	}
+	if len(command.Images) != 1 || command.Images[0].DataURL != image {
+		t.Fatalf("unexpected turn images: %#v", command.Images)
+	}
+}
+
+func TestValidTurnImages(t *testing.T) {
+	valid := protocol.TurnImage{DataURL: "data:image/png;base64,iVBORw0KGgo="}
+	if !validTurnImages([]protocol.TurnImage{valid}) {
+		t.Fatal("valid image was rejected")
+	}
+	if validTurnImages([]protocol.TurnImage{{DataURL: "data:image/svg+xml;base64,Zm9v"}}) {
+		t.Fatal("unsupported image type was accepted")
+	}
+	if validTurnImages([]protocol.TurnImage{{DataURL: "data:image/png;base64,not-base64"}}) {
+		t.Fatal("invalid base64 was accepted")
 	}
 }
 

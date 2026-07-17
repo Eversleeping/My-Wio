@@ -200,9 +200,16 @@ func threadResumeParams(command protocol.StartTurnCommand, codexThread string) m
 }
 
 func turnStartParams(command protocol.StartTurnCommand, codexThread string) map[string]any {
+	input := []map[string]string{}
+	if command.Prompt != "" {
+		input = append(input, map[string]string{"type": "text", "text": command.Prompt})
+	}
+	for _, image := range command.Images {
+		input = append(input, map[string]string{"type": "image", "url": image.DataURL})
+	}
 	params := map[string]any{
 		"threadId":       codexThread,
-		"input":          []map[string]string{{"type": "text", "text": command.Prompt}},
+		"input":          input,
 		"approvalPolicy": approvalPolicy(command.ApprovalMode),
 		"cwd":            command.Workspace,
 	}

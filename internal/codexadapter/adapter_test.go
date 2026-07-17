@@ -28,6 +28,7 @@ func TestStartTurnParamsIncludeReasoningEffort(t *testing.T) {
 	command := protocol.StartTurnCommand{
 		Workspace:       "/srv/project",
 		Prompt:          "test prompt",
+		Images:          []protocol.TurnImage{{DataURL: "data:image/png;base64,Zm9v"}},
 		Model:           "gpt-5.6-sol",
 		ReasoningEffort: "xhigh",
 		ApprovalMode:    "on-request",
@@ -42,6 +43,10 @@ func TestStartTurnParamsIncludeReasoningEffort(t *testing.T) {
 	}
 	if turnParams["model"] != "gpt-5.6-sol" {
 		t.Fatalf("unexpected turn/start model: %#v", turnParams["model"])
+	}
+	input, ok := turnParams["input"].([]map[string]string)
+	if !ok || len(input) != 2 || input[1]["type"] != "image" || input[1]["url"] != command.Images[0].DataURL {
+		t.Fatalf("unexpected turn/start input: %#v", turnParams["input"])
 	}
 }
 
