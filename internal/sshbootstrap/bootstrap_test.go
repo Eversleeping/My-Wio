@@ -54,9 +54,9 @@ func TestValidateInstallRequest(t *testing.T) {
 	}
 }
 
-func TestCodexConfigurationDoesNotContainKey(t *testing.T) {
+func TestCodexConfiguration(t *testing.T) {
 	configuration := codexConfiguration("https://api.example.com/v1/", "custom-model")
-	for _, expected := range []string{`model = "custom-model"`, `model_provider = "wio_api"`, `base_url = "https://api.example.com/v1"`, `env_key = "WIO_CODEX_API_KEY"`, `wire_api = "responses"`} {
+	for _, expected := range []string{`model = "custom-model"`, `model_provider = "wio_api"`, `model_supports_reasoning_summaries = true`, `base_url = "https://api.example.com/v1"`, `env_key = "WIO_CODEX_API_KEY"`, `wire_api = "responses"`} {
 		if !strings.Contains(configuration, expected) {
 			t.Fatalf("configuration missing %q:\n%s", expected, configuration)
 		}

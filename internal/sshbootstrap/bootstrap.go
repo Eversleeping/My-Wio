@@ -603,7 +603,9 @@ func validModel(value string) bool {
 }
 
 func codexConfiguration(apiURL, model string) string {
-	return fmt.Sprintf("model = %s\nmodel_provider = \"wio_api\"\n\n[model_providers.wio_api]\nname = \"Wio API\"\nbase_url = %s\nenv_key = \"WIO_CODEX_API_KEY\"\nwire_api = \"responses\"\n", strconv.Quote(strings.TrimSpace(model)), strconv.Quote(strings.TrimRight(strings.TrimSpace(apiURL), "/")))
+	// Codex omits the entire reasoning object for custom model names unless this
+	// capability is forced on, even when turn/start contains an explicit effort.
+	return fmt.Sprintf("model = %s\nmodel_provider = \"wio_api\"\nmodel_supports_reasoning_summaries = true\n\n[model_providers.wio_api]\nname = \"Wio API\"\nbase_url = %s\nenv_key = \"WIO_CODEX_API_KEY\"\nwire_api = \"responses\"\n", strconv.Quote(strings.TrimSpace(model)), strconv.Quote(strings.TrimRight(strings.TrimSpace(apiURL), "/")))
 }
 
 func runTrimmed(client *ssh.Client, command string) (string, error) {
