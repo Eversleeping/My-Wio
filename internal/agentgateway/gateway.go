@@ -263,8 +263,9 @@ func (g *Gateway) publish(ctx context.Context, event protocol.StreamEvent) error
 
 func (g *Gateway) upsertApproval(ctx context.Context, event protocol.StreamEvent) error {
 	var p struct {
-		RequestID, Kind string
-		Detail          json.RawMessage
+		RequestID string          `json:"request_id"`
+		Kind      string          `json:"kind"`
+		Detail    json.RawMessage `json:"detail"`
 	}
 	if json.Unmarshal(event.Payload, &p) != nil || p.RequestID == "" {
 		return nil

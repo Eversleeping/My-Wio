@@ -195,3 +195,50 @@ func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
 		t.Fatalf("unexpected failure event: %#v", events[0])
 	}
 }
+
+func TestUpsertApprovalStoresSnakeCaseRequestID(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "approval-node", []string{"/srv"}, "approval-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "approval-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "approval-node.local", "approval-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "approval test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	event := protocol.StreamEvent{StreamID: thread.ID, Kind: "approval.requested", Payload: json.RawMessage(`{"request_id":"request-123","kind":"item/commandExecution/requestApproval","detail":{"command":"npm test"}}`)}
+	if err := gateway.upsertApproval(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	var approval struct {
+		RequestID string `db:"request_id"`
+		Kind      string `db:"kind"`
+		Detail    string `db:"detail"`
+	}
+	if err := database.DB.GetContext(ctx, &approval, "SELECT request_id,kind,detail FROM approvals WHERE thread_id=?", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if approval.RequestID != "request-123" || approval.Kind != "item/commandExecution/requestApproval" || !strings.Contains(approval.Detail, "npm test") {
+		t.Fatalf("unexpected approval: %#v", approval)
+	}
+}
