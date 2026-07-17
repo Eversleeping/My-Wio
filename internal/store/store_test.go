@@ -85,6 +85,33 @@ func TestListServersUsesHeartbeatGracePeriod(t *testing.T) {
 	}
 }
 
+func TestMetricsStoreCountersAboveInt32(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "metrics-01", []string{"/srv"}, "metrics-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "metrics-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "metrics-01.local", "metrics-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metric := protocol.Metrics{NetRxBytes: 3_000_000_000, NetTxBytes: 4_000_000_000}
+	if err := database.SaveMetrics(ctx, server.ID, metric); err != nil {
+		t.Fatal(err)
+	}
+	points, err := database.Metrics(ctx, server.ID, time.Now().UTC().Add(-time.Minute))
+	if err != nil || len(points) != 1 {
+		t.Fatalf("unexpected metric points: %#v %v", points, err)
+	}
+	if points[0].NetRxBytes != metric.NetRxBytes || points[0].NetTxBytes != metric.NetTxBytes {
+		t.Fatalf("large network counters changed: %#v", points[0])
+	}
+}
+
 func TestServerMetadataFollowsEnrollmentAndCanBeUpdated(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

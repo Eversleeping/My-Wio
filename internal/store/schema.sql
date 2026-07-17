@@ -185,8 +185,8 @@ CREATE TABLE IF NOT EXISTS metric_rollups (
   memory_percent REAL NOT NULL,
   disk_percent REAL NOT NULL,
   load_1 REAL NOT NULL,
-  net_rx_bytes INTEGER NOT NULL,
-  net_tx_bytes INTEGER NOT NULL,
+  net_rx_bytes BIGINT NOT NULL,
+  net_tx_bytes BIGINT NOT NULL,
   samples INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY(server_id, bucket_at, resolution)
 );

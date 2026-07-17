@@ -53,6 +53,13 @@ func Open(databaseURL string) (*Store, error) {
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
+			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
+			ALTER COLUMN net_tx_bytes TYPE BIGINT USING net_tx_bytes::BIGINT`); err != nil {
+			return nil, fmt.Errorf("migrate metric counters: %w", err)
+		}
+	}
 	return &Store{DB: db, driver: driver}, nil
 }
 
