@@ -25,6 +25,7 @@ type fakeServerBootstrapper struct {
 	installResult   sshbootstrap.InstallResult
 	installError    error
 	installProgress []sshbootstrap.InstallProgress
+	installDeadline bool
 }
 
 func (fake *fakeServerBootstrapper) Probe(_ context.Context, target sshbootstrap.HostTarget) (sshbootstrap.HostKeyResult, error) {
@@ -32,8 +33,9 @@ func (fake *fakeServerBootstrapper) Probe(_ context.Context, target sshbootstrap
 	return fake.probeResult, nil
 }
 
-func (fake *fakeServerBootstrapper) Install(_ context.Context, request sshbootstrap.InstallRequest) (sshbootstrap.InstallResult, error) {
+func (fake *fakeServerBootstrapper) Install(ctx context.Context, request sshbootstrap.InstallRequest) (sshbootstrap.InstallResult, error) {
 	fake.installRequest = request
+	_, fake.installDeadline = ctx.Deadline()
 	for _, progress := range fake.installProgress {
 		if request.Progress != nil {
 			request.Progress(progress)
@@ -68,6 +70,9 @@ func TestBootstrapServerSSHDoesNotEchoSecrets(t *testing.T) {
 	}
 	if fake.installRequest.EnrollmentToken == "" {
 		t.Fatal("missing enrollment token")
+	}
+	if fake.installDeadline {
+		t.Fatal("server installation must not inherit a fixed request deadline")
 	}
 	for _, secret := range []string{"ssh-secret", "api-key-secret", "private-key-secret"} {
 		if strings.Contains(response.Body.String(), secret) {

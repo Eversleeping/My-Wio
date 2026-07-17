@@ -356,6 +356,10 @@ func connect(ctx context.Context, target Target, expectedFingerprint string) (*s
 		}
 		return nil, hostKeyInfo{}, classifyHandshakeError(err)
 	}
+	if err := connection.SetDeadline(time.Time{}); err != nil {
+		_ = clientConnection.Close()
+		return nil, hostKeyInfo{}, fmt.Errorf("%w: could not clear SSH handshake deadline: %v", ErrConnection, err)
+	}
 	return ssh.NewClient(clientConnection, channels, requests), keyInfo, nil
 }
 

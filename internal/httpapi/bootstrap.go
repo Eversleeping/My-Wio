@@ -224,9 +224,7 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentStore, err)
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
-	defer cancel()
-	result, err := a.bootstrapper.Install(ctx, sshbootstrap.InstallRequest{
+	result, err := a.bootstrapper.Install(r.Context(), sshbootstrap.InstallRequest{
 		Target:              input.target(),
 		ExpectedFingerprint: strings.TrimSpace(input.HostKeyFingerprint),
 		ControlURL:          a.agentControlURL(r),

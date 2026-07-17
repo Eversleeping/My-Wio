@@ -1,8 +1,13 @@
 package sshbootstrap
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"io"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +84,89 @@ func TestClassifyHandshakeError(t *testing.T) {
 	if err := classifyHandshakeError(errors.New("handshake failed")); !errors.Is(err, ErrConnection) {
 		t.Fatalf("expected connection error, got %v", err)
 	}
+}
+
+func TestConnectClearsHandshakeDeadline(t *testing.T) {
+	host, port := startTestSSHServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	client, _, err := connect(ctx, Target{Host: host, Port: port, User: "root", AuthMethod: "password", Password: "test-password"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	<-ctx.Done()
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("SSH connection inherited the handshake deadline: %v", err)
+	}
+	defer session.Close()
+	if err := session.Run("true"); err != nil {
+		t.Fatalf("SSH command failed after the handshake deadline: %v", err)
+	}
+}
+
+func startTestSSHServer(t *testing.T) (string, int) {
+	t.Helper()
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := &ssh.ServerConfig{NoClientAuth: true}
+	configuration.AddHostKey(signer)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		server, channels, requests, err := ssh.NewServerConn(connection, configuration)
+		if err != nil {
+			_ = connection.Close()
+			return
+		}
+		defer server.Close()
+		go ssh.DiscardRequests(requests)
+		for newChannel := range channels {
+			if newChannel.ChannelType() != "session" {
+				_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+				continue
+			}
+			channel, channelRequests, err := newChannel.Accept()
+			if err != nil {
+				continue
+			}
+			go func() {
+				defer channel.Close()
+				for request := range channelRequests {
+					if request.Type != "exec" {
+						_ = request.Reply(false, nil)
+						continue
+					}
+					_ = request.Reply(true, nil)
+					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
+					return
+				}
+			}()
+		}
+	}()
+	host, rawPort, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host, port
 }
 
 func TestProgressReaderReportsUploadCompletion(t *testing.T) {
