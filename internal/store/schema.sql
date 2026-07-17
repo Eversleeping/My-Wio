@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS servers (
   revoked_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS server_metadata (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  address TEXT NOT NULL DEFAULT '',
+  configuration TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS agent_credentials (
   server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL UNIQUE,
@@ -44,6 +52,13 @@ CREATE TABLE IF NOT EXISTS enrollment_tokens (
   scan_roots TEXT NOT NULL DEFAULT '[]',
   expires_at TIMESTAMP NOT NULL,
   consumed_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS enrollment_metadata (
+  enrollment_id TEXT PRIMARY KEY REFERENCES enrollment_tokens(id) ON DELETE CASCADE,
+  address TEXT NOT NULL DEFAULT '',
+  configuration TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS projects (

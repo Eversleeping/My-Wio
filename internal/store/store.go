@@ -114,29 +114,52 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 }
 
 type Server struct {
-	ID           string     `db:"id" json:"id"`
-	Name         string     `db:"name" json:"name"`
-	Hostname     string     `db:"hostname" json:"hostname"`
-	Status       string     `db:"status" json:"status"`
-	AgentVersion string     `db:"agent_version" json:"agent_version"`
-	CodexVersion string     `db:"codex_version" json:"codex_version"`
-	CodexReady   int        `db:"codex_ready" json:"codex_ready"`
-	ScanRoots    string     `db:"scan_roots" json:"-"`
-	LastSeenAt   *time.Time `db:"last_seen_at" json:"last_seen_at"`
-	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	ID            string     `db:"id" json:"id"`
+	Name          string     `db:"name" json:"name"`
+	Hostname      string     `db:"hostname" json:"hostname"`
+	Status        string     `db:"status" json:"status"`
+	AgentVersion  string     `db:"agent_version" json:"agent_version"`
+	CodexVersion  string     `db:"codex_version" json:"codex_version"`
+	CodexReady    int        `db:"codex_ready" json:"codex_ready"`
+	ScanRoots     string     `db:"scan_roots" json:"-"`
+	Address       string     `db:"address" json:"address"`
+	Configuration string     `db:"configuration" json:"configuration"`
+	Notes         string     `db:"notes" json:"notes"`
+	LastSeenAt    *time.Time `db:"last_seen_at" json:"last_seen_at"`
+	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
+}
+
+type ServerMetadata struct {
+	Address       string `db:"address" json:"address"`
+	Configuration string `db:"configuration" json:"configuration"`
+	Notes         string `db:"notes" json:"notes"`
 }
 
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
-	err := s.DB.SelectContext(ctx, &out, s.Q("SELECT id,name,hostname,CASE WHEN last_seen_at>? THEN 'online' ELSE 'offline' END status,agent_version,codex_version,codex_ready,scan_roots,last_seen_at,created_at FROM servers WHERE revoked_at IS NULL ORDER BY name"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id WHERE s.revoked_at IS NULL ORDER BY s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	return out, err
 }
 
 func (s *Store) CreateEnrollment(ctx context.Context, name string, roots []string, token string, expires time.Time) (string, error) {
+	return s.CreateEnrollmentWithMetadata(ctx, name, roots, token, expires, ServerMetadata{})
+}
+
+func (s *Store) CreateEnrollmentWithMetadata(ctx context.Context, name string, roots []string, token string, expires time.Time, metadata ServerMetadata) (string, error) {
 	id := NewID()
 	raw, _ := json.Marshal(roots)
-	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO enrollment_tokens(id,token_hash,server_name,scan_roots,expires_at) VALUES(?,?,?,?,?)"), id, HashToken(token), name, string(raw), expires)
-	return id, err
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return id, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO enrollment_tokens(id,token_hash,server_name,scan_roots,expires_at) VALUES(?,?,?,?,?)"), id, HashToken(token), name, string(raw), expires); err != nil {
+		return id, err
+	}
+	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO enrollment_metadata(enrollment_id,address,configuration,notes) VALUES(?,?,?,?)"), id, metadata.Address, metadata.Configuration, metadata.Notes); err != nil {
+		return id, err
+	}
+	return id, tx.Commit()
 }
 
 func (s *Store) DeleteUnusedEnrollment(ctx context.Context, id string) error {
@@ -145,10 +168,13 @@ func (s *Store) DeleteUnusedEnrollment(ctx context.Context, id string) error {
 }
 
 type Enrollment struct {
-	ID         string    `db:"id"`
-	ServerName string    `db:"server_name"`
-	ScanRoots  string    `db:"scan_roots"`
-	ExpiresAt  time.Time `db:"expires_at"`
+	ID            string    `db:"id"`
+	ServerName    string    `db:"server_name"`
+	ScanRoots     string    `db:"scan_roots"`
+	Address       string    `db:"address"`
+	Configuration string    `db:"configuration"`
+	Notes         string    `db:"notes"`
+	ExpiresAt     time.Time `db:"expires_at"`
 }
 
 func (s *Store) ConsumeEnrollment(ctx context.Context, token string) (Enrollment, error) {
@@ -158,7 +184,7 @@ func (s *Store) ConsumeEnrollment(ctx context.Context, token string) (Enrollment
 	}
 	defer tx.Rollback()
 	var e Enrollment
-	err = tx.GetContext(ctx, &e, s.Q("SELECT id,server_name,scan_roots,expires_at FROM enrollment_tokens WHERE token_hash=? AND consumed_at IS NULL AND expires_at>?"), HashToken(token), time.Now().UTC())
+	err = tx.GetContext(ctx, &e, s.Q(`SELECT e.id,e.server_name,e.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,e.expires_at FROM enrollment_tokens e LEFT JOIN enrollment_metadata m ON m.enrollment_id=e.id WHERE e.token_hash=? AND e.consumed_at IS NULL AND e.expires_at>?`), HashToken(token), time.Now().UTC())
 	if err != nil {
 		return Enrollment{}, err
 	}
@@ -172,7 +198,7 @@ func (s *Store) ConsumeEnrollment(ctx context.Context, token string) (Enrollment
 }
 
 func (s *Store) EnrollServer(ctx context.Context, e Enrollment, hostname, agentToken string) (Server, error) {
-	server := Server{ID: NewID(), Name: e.ServerName, Hostname: hostname, Status: "offline", ScanRoots: e.ScanRoots, CreatedAt: time.Now().UTC()}
+	server := Server{ID: NewID(), Name: e.ServerName, Hostname: hostname, Status: "offline", ScanRoots: e.ScanRoots, Address: e.Address, Configuration: e.Configuration, Notes: e.Notes, CreatedAt: time.Now().UTC()}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return server, err
@@ -182,11 +208,24 @@ func (s *Store) EnrollServer(ctx context.Context, e Enrollment, hostname, agentT
 	if err != nil {
 		return server, err
 	}
+	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO server_metadata(server_id,address,configuration,notes) VALUES(?,?,?,?)"), server.ID, e.Address, e.Configuration, e.Notes)
+	if err != nil {
+		return server, err
+	}
 	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO agent_credentials(server_id,token_hash) VALUES(?,?)"), server.ID, HashToken(agentToken))
 	if err != nil {
 		return server, err
 	}
 	return server, tx.Commit()
+}
+
+func (s *Store) UpdateServerMetadata(ctx context.Context, serverID string, metadata ServerMetadata) (bool, error) {
+	result, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO server_metadata(server_id,address,configuration,notes,updated_at) SELECT id,?,?,?,? FROM servers WHERE id=? AND revoked_at IS NULL ON CONFLICT(server_id) DO UPDATE SET address=excluded.address,configuration=excluded.configuration,notes=excluded.notes,updated_at=excluded.updated_at`), metadata.Address, metadata.Configuration, metadata.Notes, time.Now().UTC(), serverID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
 }
 
 func (s *Store) AuthenticateAgent(ctx context.Context, token string) (string, error) {

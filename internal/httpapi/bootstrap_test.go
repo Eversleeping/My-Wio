@@ -74,6 +74,13 @@ func TestBootstrapServerSSHDoesNotEchoSecrets(t *testing.T) {
 			t.Fatalf("response exposed %q", secret)
 		}
 	}
+	enrollment, err := database.ConsumeEnrollment(context.Background(), fake.installRequest.EnrollmentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enrollment.Address != "192.0.2.10" || enrollment.Configuration != "4 vCPU / 8 GB RAM" || enrollment.Notes != "Production API" {
+		t.Fatalf("server metadata was not attached to enrollment: %#v", enrollment)
+	}
 }
 
 func TestBootstrapFailureDeletesUnusedEnrollment(t *testing.T) {
@@ -165,6 +172,7 @@ func TestBootstrapStreamEmitsSafeInstallationError(t *testing.T) {
 func bootstrapInput() map[string]any {
 	return map[string]any{
 		"name": "node-1", "scan_roots": []string{"/srv"}, "host": "192.0.2.10", "port": 22, "user": "ubuntu",
+		"configuration": "4 vCPU / 8 GB RAM", "notes": "Production API",
 		"auth_method": "password", "password": "ssh-secret", "private_key": "private-key-secret", "private_key_passphrase": "",
 		"host_key_fingerprint": "SHA256:test", "codex_api_url": "https://api.example.com/v1", "codex_api_key": "api-key-secret", "codex_model": "gpt-5.4",
 	}

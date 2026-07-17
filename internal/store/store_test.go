@@ -85,6 +85,42 @@ func TestListServersUsesHeartbeatGracePeriod(t *testing.T) {
 	}
 }
 
+func TestServerMetadataFollowsEnrollmentAndCanBeUpdated(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	metadata := ServerMetadata{Address: "192.0.2.10", Configuration: "4 vCPU / 8 GB RAM", Notes: "Production API"}
+	if _, err := database.CreateEnrollmentWithMetadata(ctx, "build-01", []string{"/srv"}, "metadata-token", time.Now().Add(time.Hour), metadata); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "metadata-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "build-01.local", "metadata-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, err := database.ListServers(ctx)
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("unexpected server list: %#v %v", servers, err)
+	}
+	if servers[0].Address != metadata.Address || servers[0].Configuration != metadata.Configuration || servers[0].Notes != metadata.Notes {
+		t.Fatalf("enrollment metadata was not persisted: %#v", servers[0])
+	}
+	updated := ServerMetadata{Address: "server.example.com", Configuration: "8 vCPU / 16 GB RAM", Notes: "Primary production API"}
+	ok, err := database.UpdateServerMetadata(ctx, server.ID, updated)
+	if err != nil || !ok {
+		t.Fatalf("could not update metadata: ok=%v err=%v", ok, err)
+	}
+	servers, err = database.ListServers(ctx)
+	if err != nil || servers[0].Address != updated.Address || servers[0].Configuration != updated.Configuration || servers[0].Notes != updated.Notes {
+		t.Fatalf("metadata update was not returned: %#v %v", servers, err)
+	}
+	if ok, err = database.UpdateServerMetadata(ctx, "missing-server", updated); err != nil || ok {
+		t.Fatalf("missing server update should not succeed: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestEventsHaveMonotonicSequence(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

@@ -81,6 +81,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/auth/logout", api.logout)
 			private.Get("/summary", api.summary)
 			private.Get("/servers", api.servers)
+			private.Patch("/servers/{serverID}", api.updateServer)
 			private.Post("/servers/enrollments", api.createEnrollment)
 			private.Post("/servers/ssh/probe", api.probeServerSSH)
 			private.Post("/servers/ssh/bootstrap", api.bootstrapServerSSH)

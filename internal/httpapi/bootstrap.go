@@ -13,6 +13,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
+	"github.com/wio-platform/wio/internal/store"
 )
 
 type serverBootstrapper interface {
@@ -39,6 +40,8 @@ type sshBootstrapInput struct {
 	sshConnectionInput
 	Name               string   `json:"name"`
 	ScanRoots          []string `json:"scan_roots"`
+	Configuration      string   `json:"configuration"`
+	Notes              string   `json:"notes"`
 	HostKeyFingerprint string   `json:"host_key_fingerprint"`
 	CodexAPIURL        string   `json:"codex_api_url"`
 	CodexAPIKey        string   `json:"codex_api_key"`
@@ -186,6 +189,14 @@ func decodeSSHBootstrapInput(w http.ResponseWriter, r *http.Request) (sshBootstr
 		writeBootstrapCode(w, http.StatusBadRequest, "server_name_required", "server name is required")
 		return sshBootstrapInput{}, false
 	}
+	metadata, err := normalizeServerMetadata(input.Host, input.Configuration, input.Notes)
+	if err != nil {
+		writeBootstrapCode(w, http.StatusBadRequest, "server_metadata_invalid", err.Error())
+		return sshBootstrapInput{}, false
+	}
+	input.Host = metadata.Address
+	input.Configuration = metadata.Configuration
+	input.Notes = metadata.Notes
 	if len(input.ScanRoots) == 0 {
 		input.ScanRoots = []string{"/srv", "/opt", "/home"}
 	}
@@ -206,7 +217,9 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentToken, err)
 	}
 	expires := time.Now().UTC().Add(15 * time.Minute)
-	enrollmentID, err := a.store.CreateEnrollment(r.Context(), input.Name, input.ScanRoots, token, expires)
+	enrollmentID, err := a.store.CreateEnrollmentWithMetadata(r.Context(), input.Name, input.ScanRoots, token, expires, store.ServerMetadata{
+		Address: input.Host, Configuration: input.Configuration, Notes: input.Notes,
+	})
 	if err != nil {
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentStore, err)
 	}

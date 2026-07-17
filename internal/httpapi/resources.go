@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -62,10 +63,68 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, servers)
 }
 
+const (
+	serverAddressLimit       = 255
+	serverConfigurationLimit = 4096
+	serverNotesLimit         = 4096
+)
+
+func normalizeServerMetadata(address, configuration, notes string) (store.ServerMetadata, error) {
+	metadata := store.ServerMetadata{
+		Address:       strings.TrimSpace(address),
+		Configuration: strings.TrimSpace(configuration),
+		Notes:         strings.TrimSpace(notes),
+	}
+	if utf8.RuneCountInString(metadata.Address) > serverAddressLimit {
+		return store.ServerMetadata{}, fmt.Errorf("server address must be %d characters or fewer", serverAddressLimit)
+	}
+	if utf8.RuneCountInString(metadata.Configuration) > serverConfigurationLimit {
+		return store.ServerMetadata{}, fmt.Errorf("server configuration must be %d characters or fewer", serverConfigurationLimit)
+	}
+	if utf8.RuneCountInString(metadata.Notes) > serverNotesLimit {
+		return store.ServerMetadata{}, fmt.Errorf("server notes must be %d characters or fewer", serverNotesLimit)
+	}
+	return metadata, nil
+}
+
+func (a *API) updateServer(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Address       string `json:"address"`
+		Configuration string `json:"configuration"`
+		Notes         string `json:"notes"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	metadata, err := normalizeServerMetadata(input.Address, input.Configuration, input.Notes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id := chi.URLParam(r, "serverID")
+	updated, err := a.store.UpdateServerMetadata(r.Context(), id, metadata)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not update server information")
+		return
+	}
+	if !updated {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "server.metadata.update", "server", id, map[string]bool{
+		"address": metadata.Address != "", "configuration": metadata.Configuration != "", "notes": metadata.Notes != "",
+	}, clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (a *API) createEnrollment(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Name      string   `json:"name"`
-		ScanRoots []string `json:"scan_roots"`
+		Name          string   `json:"name"`
+		ScanRoots     []string `json:"scan_roots"`
+		Address       string   `json:"address"`
+		Configuration string   `json:"configuration"`
+		Notes         string   `json:"notes"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -84,19 +143,24 @@ func (a *API) createEnrollment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	metadata, err := normalizeServerMetadata(input.Address, input.Configuration, input.Notes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	token, err := security.RandomToken(24)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate enrollment token")
 		return
 	}
 	expires := time.Now().UTC().Add(15 * time.Minute)
-	id, err := a.store.CreateEnrollment(r.Context(), input.Name, input.ScanRoots, token, expires)
+	id, err := a.store.CreateEnrollmentWithMetadata(r.Context(), input.Name, input.ScanRoots, token, expires, metadata)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create enrollment")
 		return
 	}
 	session := currentSession(r)
-	_ = a.store.Audit(r.Context(), session.UserID, "server.enrollment.create", "enrollment", id, map[string]any{"name": input.Name, "scan_roots": input.ScanRoots}, clientIP(r))
+	_ = a.store.Audit(r.Context(), session.UserID, "server.enrollment.create", "enrollment", id, map[string]any{"name": input.Name, "scan_roots": input.ScanRoots, "has_address": metadata.Address != "", "has_configuration": metadata.Configuration != "", "has_notes": metadata.Notes != ""}, clientIP(r))
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "token": token, "expires_at": expires})
 }
 
