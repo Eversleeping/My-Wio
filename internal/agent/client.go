@@ -35,6 +35,8 @@ import (
 
 const agentVersion = "0.1.0"
 
+const initialReconnectBackoff = time.Second
+
 type Client struct {
 	config   Config
 	log      *slog.Logger
@@ -69,15 +71,16 @@ func codexEnvironment(config Config, log *slog.Logger) []string {
 
 func (c *Client) Run(ctx context.Context) error {
 	defer c.codex.Close()
-	backoff := time.Second
+	backoff := initialReconnectBackoff
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := c.connect(ctx)
+		connected, err := c.connect(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		backoff = reconnectBackoffAfterResult(backoff, connected)
 		c.log.Warn("agent connection ended", "error", err, "retry_in", backoff)
 		jitter := time.Duration(rand.Int63n(int64(backoff/2 + 1)))
 		select {
@@ -91,10 +94,17 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 }
 
-func (c *Client) connect(ctx context.Context) error {
+func reconnectBackoffAfterResult(current time.Duration, connected bool) time.Duration {
+	if connected {
+		return initialReconnectBackoff
+	}
+	return current
+}
+
+func (c *Client) connect(ctx context.Context) (bool, error) {
 	parsed, err := url.Parse(c.config.ControlURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var transport credentials.TransportCredentials
 	if parsed.Scheme == "https" {
@@ -104,35 +114,42 @@ func (c *Client) connect(ctx context.Context) error {
 	}
 	connection, err := grpc.NewClient(parsed.Host, grpc.WithTransportCredentials(transport), grpc.WithDefaultCallOptions(grpc.ForceCodec(protocol.Codec()), grpc.MaxCallRecvMsgSize(8<<20), grpc.MaxCallSendMsgSize(8<<20)))
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer connection.Close()
 	streamContext, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.config.AgentToken))
 	defer cancel()
 	stream, err := protocol.NewAgentServiceClient(connection).Connect(streamContext)
 	if err != nil {
-		return err
+		return false, err
 	}
-	c.log.Info("connected to Wio control plane", "server_id", c.config.ServerID)
 	_ = c.enqueueHeartbeat(ctx)
 	_ = c.enqueueMetrics(ctx)
 	_ = c.enqueueInventory(ctx)
 	sendErrors := make(chan error, 1)
 	go c.sendLoop(streamContext, stream, sendErrors)
 	go c.periodic(streamContext)
+	connected := false
 	for {
 		command, err := stream.Recv()
 		if err != nil {
 			cancel()
-			return err
+			return connected, err
 		}
-		go c.handleOperation(ctx, command)
+		if !connected {
+			connected = true
+			c.log.Info("connected to Wio control plane", "server_id", c.config.ServerID)
+		}
 		select {
 		case err := <-sendErrors:
 			cancel()
-			return err
+			return connected, err
 		default:
 		}
+		if command.Kind == protocol.ControlKindKeepalive && command.OperationID == "" {
+			continue
+		}
+		go c.handleOperation(ctx, command)
 	}
 }
 

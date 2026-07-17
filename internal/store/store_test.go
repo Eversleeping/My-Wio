@@ -55,6 +55,36 @@ func TestEnrollmentInventoryAndOperations(t *testing.T) {
 	}
 }
 
+func TestListServersUsesHeartbeatGracePeriod(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "build-01", []string{"/srv"}, "enrollment-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "enrollment-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "build-01.local", "agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE servers SET status='offline',last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-30*time.Second), server.ID); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := database.ListServers(ctx)
+	if err != nil || len(servers) != 1 || servers[0].Status != "online" {
+		t.Fatalf("recent heartbeat should keep server online: %#v %v", servers, err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE servers SET status='online',last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-2*time.Minute), server.ID); err != nil {
+		t.Fatal(err)
+	}
+	servers, err = database.ListServers(ctx)
+	if err != nil || len(servers) != 1 || servers[0].Status != "offline" {
+		t.Fatalf("stale heartbeat should mark server offline: %#v %v", servers, err)
+	}
+}
+
 func TestEventsHaveMonotonicSequence(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

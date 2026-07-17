@@ -26,6 +26,7 @@ type Gateway struct {
 	hub            *realtime.Hub
 	vault          *security.Vault
 	log            *slog.Logger
+	keepaliveEvery time.Duration
 	mu             sync.RWMutex
 	wakes          map[string]chan struct{}
 	metricMu       sync.Mutex
@@ -33,7 +34,7 @@ type Gateway struct {
 }
 
 func New(s *store.Store, hub *realtime.Hub, vault *security.Vault, log *slog.Logger) *Gateway {
-	return &Gateway{store: s, hub: hub, vault: vault, log: log, wakes: make(map[string]chan struct{}), metricBreaches: make(map[string]map[string]int)}
+	return &Gateway{store: s, hub: hub, vault: vault, log: log, keepaliveEvery: 20 * time.Second, wakes: make(map[string]chan struct{}), metricBreaches: make(map[string]map[string]int)}
 }
 
 func (g *Gateway) Wake(serverID string) {
@@ -76,8 +77,13 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- g.receive(stream, serverID) }()
+	if err := sendKeepalive(stream, time.Now()); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(2 * time.Second)
+	keepalive := time.NewTicker(g.keepaliveEvery)
 	defer ticker.Stop()
+	defer keepalive.Stop()
 	for {
 		if err := g.flush(stream, serverID); err != nil {
 			return err
@@ -91,9 +97,17 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		case <-ticker.C:
+		case now := <-keepalive.C:
+			if err := sendKeepalive(stream, now); err != nil {
+				return err
+			}
 		case <-wake:
 		}
 	}
+}
+
+func sendKeepalive(stream protocol.AgentServiceConnectServer, now time.Time) error {
+	return stream.Send(&protocol.ControlEnvelope{Kind: protocol.ControlKindKeepalive, CreatedAtUnixMS: now.UnixMilli()})
 }
 
 func (g *Gateway) receive(stream protocol.AgentServiceConnectServer, serverID string) error {

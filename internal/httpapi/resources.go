@@ -32,7 +32,7 @@ func (a *API) summary(w http.ResponseWriter, r *http.Request) {
 		var count int
 		var err error
 		if key == "online" {
-			err = a.store.DB.GetContext(r.Context(), &count, a.store.Q(query), time.Now().UTC().Add(-90*time.Second))
+			err = a.store.DB.GetContext(r.Context(), &count, a.store.Q(query), time.Now().UTC().Add(-store.ServerOnlineGracePeriod))
 		} else {
 			err = a.store.DB.GetContext(r.Context(), &count, query)
 		}

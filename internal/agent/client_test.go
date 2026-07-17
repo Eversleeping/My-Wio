@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestCodexEnvironmentIsScopedFromKeyFile(t *testing.T) {
@@ -20,5 +21,14 @@ func TestCodexEnvironmentIsScopedFromKeyFile(t *testing.T) {
 	}
 	if environment := codexEnvironment(Config{CodexAPIKeyFile: filepath.Join(t.TempDir(), "missing")}, log); environment != nil {
 		t.Fatalf("expected no environment, got %#v", environment)
+	}
+}
+
+func TestSuccessfulConnectionResetsReconnectBackoff(t *testing.T) {
+	if backoff := reconnectBackoffAfterResult(32*time.Second, true); backoff != time.Second {
+		t.Fatalf("expected successful connection to reset backoff, got %s", backoff)
+	}
+	if backoff := reconnectBackoffAfterResult(16*time.Second, false); backoff != 16*time.Second {
+		t.Fatalf("failed connection should preserve backoff, got %s", backoff)
 	}
 }

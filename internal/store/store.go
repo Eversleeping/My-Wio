@@ -29,6 +29,8 @@ type Store struct {
 	driver string
 }
 
+const ServerOnlineGracePeriod = 90 * time.Second
+
 func Open(databaseURL string) (*Store, error) {
 	driver, dsn := "sqlite", databaseURL
 	if strings.HasPrefix(databaseURL, "postgres://") || strings.HasPrefix(databaseURL, "postgresql://") {
@@ -126,7 +128,7 @@ type Server struct {
 
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
-	err := s.DB.SelectContext(ctx, &out, "SELECT id,name,hostname,status,agent_version,codex_version,codex_ready,scan_roots,last_seen_at,created_at FROM servers WHERE revoked_at IS NULL ORDER BY name")
+	err := s.DB.SelectContext(ctx, &out, s.Q("SELECT id,name,hostname,CASE WHEN last_seen_at>? THEN 'online' ELSE 'offline' END status,agent_version,codex_version,codex_ready,scan_roots,last_seen_at,created_at FROM servers WHERE revoked_at IS NULL ORDER BY name"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	return out, err
 }
 
