@@ -126,10 +126,10 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 
 	root := isRoot(client)
 	if err := upload(client, root, "/usr/local/bin/wio-agent", "0755", agentBinary); err != nil {
-		return InstallResult{}, fmt.Errorf("%w: could not install agent binary", ErrInstallation)
+		return InstallResult{}, fmt.Errorf("%w: could not install agent binary: %v", ErrInstallation, err)
 	}
 	if err := upload(client, root, "/etc/systemd/system/wio-agent.service", "0644", unit); err != nil {
-		return InstallResult{}, fmt.Errorf("%w: could not install systemd unit", ErrInstallation)
+		return InstallResult{}, fmt.Errorf("%w: could not install systemd unit: %v", ErrInstallation, err)
 	}
 	setup := `set -eu
 getent group docker >/dev/null 2>&1 || groupadd --system docker
@@ -142,10 +142,10 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
 	if err := upload(client, root, "/etc/wio-agent/codex.key", "0600", []byte(request.CodexAPIKey+"\n")); err != nil {
-		return InstallResult{}, fmt.Errorf("%w: could not install Codex credentials", ErrInstallation)
+		return InstallResult{}, fmt.Errorf("%w: could not install Codex credentials: %v", ErrInstallation, err)
 	}
 	if err := upload(client, root, "/var/lib/wio-agent/.codex/config.toml", "0600", []byte(codexConfiguration(request.CodexAPIURL, request.CodexModel))); err != nil {
-		return InstallResult{}, fmt.Errorf("%w: could not install Codex configuration", ErrInstallation)
+		return InstallResult{}, fmt.Errorf("%w: could not install Codex configuration: %v", ErrInstallation, err)
 	}
 	if _, err := run(client, elevated(root, "chown wio-agent:wio-agent /var/lib/wio-agent/.codex/config.toml")); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not protect Codex configuration", ErrInstallation)
@@ -467,23 +467,39 @@ func upload(client *ssh.Client, root bool, destination, mode string, content []b
 	if allowed[destination] != mode {
 		return ErrInstallation
 	}
-	install := "install -m " + mode + " \"$tmp\" " + destination
-	if !root {
-		install = "sudo -n " + install
-	}
-	temporary := `set -eu
-tmp=$(mktemp)
+	temporary := fmt.Sprintf(`set -eu
+umask 077
+tmp=%s
 trap 'rm -f "$tmp"' EXIT
+mkdir -p %s
 cat > "$tmp"
-chmod 0600 "$tmp"
-` + install
+chmod %s "$tmp"
+mv -f "$tmp" %s
+`, shellQuote(destination+".wio-new"), shellQuote(filepath.Dir(destination)), mode, shellQuote(destination))
 	session, err := client.NewSession()
 	if err != nil {
 		return err
 	}
 	defer session.Close()
+	output := &limitedBuffer{remaining: 4 << 10}
+	session.Stdout = output
+	session.Stderr = output
 	session.Stdin = bytes.NewReader(content)
-	return session.Run("sh -c " + shellQuote(temporary))
+	if err := session.Run(elevated(root, temporary)); err != nil {
+		return fmt.Errorf("%w: %s", ErrInstallation, remoteErrorDetail(output.String(), err))
+	}
+	return nil
+}
+
+func remoteErrorDetail(output string, err error) string {
+	detail := strings.Join(strings.Fields(output), " ")
+	if detail == "" {
+		detail = err.Error()
+	}
+	if len(detail) > 512 {
+		detail = detail[:512]
+	}
+	return detail
 }
 
 func elevated(root bool, script string) string {
