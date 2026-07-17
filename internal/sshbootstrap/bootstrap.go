@@ -23,6 +23,7 @@ var (
 	ErrInvalidTarget       = errors.New("invalid SSH target")
 	ErrHostKeyMismatch     = errors.New("SSH host key fingerprint changed")
 	ErrConnection          = errors.New("SSH connection failed")
+	ErrAuthentication      = errors.New("SSH authentication failed")
 	ErrPrivilegeRequired   = errors.New("root or passwordless sudo is required")
 	ErrUnsupportedPlatform = errors.New("unsupported Linux architecture")
 	ErrAssetsUnavailable   = errors.New("agent installation assets are unavailable")
@@ -315,9 +316,17 @@ func connect(ctx context.Context, target Target, expectedFingerprint string) (*s
 		if mismatch {
 			return nil, hostKeyInfo{}, ErrHostKeyMismatch
 		}
-		return nil, hostKeyInfo{}, fmt.Errorf("%w: %v", ErrConnection, err)
+		return nil, hostKeyInfo{}, classifyHandshakeError(err)
 	}
 	return ssh.NewClient(clientConnection, channels, requests), keyInfo, nil
+}
+
+func classifyHandshakeError(err error) error {
+	var authenticationError *ssh.ServerAuthError
+	if errors.As(err, &authenticationError) {
+		return fmt.Errorf("%w: %v", ErrAuthentication, err)
+	}
+	return fmt.Errorf("%w: %v", ErrConnection, err)
 }
 
 var errHostKeyCaptured = errors.New("SSH host key captured")

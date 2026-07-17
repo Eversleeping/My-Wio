@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func TestNormalizeTargetAndArchitecture(t *testing.T) {
@@ -64,5 +66,15 @@ func TestEnrollmentServerID(t *testing.T) {
 	}
 	if actual := enrollmentServerID("unexpected output"); actual != "" {
 		t.Fatalf("got %q", actual)
+	}
+}
+
+func TestClassifyHandshakeError(t *testing.T) {
+	authenticationError := &ssh.ServerAuthError{Errors: []error{errors.New("password rejected")}}
+	if err := classifyHandshakeError(authenticationError); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("expected authentication error, got %v", err)
+	}
+	if err := classifyHandshakeError(errors.New("handshake failed")); !errors.Is(err, ErrConnection) {
+		t.Fatalf("expected connection error, got %v", err)
 	}
 }

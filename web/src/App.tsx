@@ -264,12 +264,12 @@ function ServersPage({ realtime, notify }: PageProps) {
   const [hostKey, setHostKey] = useState<SSHHostKey | null>(null);
   const [result, setResult] = useState<SSHBootstrapResult | null>(null);
   const [form, setForm] = useState({
-    name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "ubuntu", authMethod: "private_key",
+    name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
     password: "", privateKey: "", privateKeyPassphrase: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4"
   });
   const reset = () => {
     setStep("form"); setError(""); setHostKey(null); setResult(null); setBusy(false);
-    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "ubuntu", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4" });
+    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4" });
   };
   const open = () => { reset(); setDialog(true); };
   const close = () => { if (busy) return; setDialog(false); reset(); };
@@ -309,7 +309,7 @@ function ServersPage({ realtime, notify }: PageProps) {
   </Section><Dialog open={dialog} title={t("server.enrollLinux")} onClose={close} wide>{step === "form" ? <form onSubmit={probe}>
     {error && <ErrorBanner text={error} />}
     <div className="form-grid"><Field label={t("server.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></Field><Field label={t("server.scanRoots")}><input value={form.roots} onChange={e => setForm({ ...form, roots: e.target.value })} required /></Field></div>
-    <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={form.port} onChange={e => setForm({ ...form, port: e.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} required /></Field></div>
+    <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={form.port} onChange={e => setForm({ ...form, port: e.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} placeholder="root / ubuntu / ec2-user" required /></Field></div>
     <Field label={t("server.authMethod")}><select value={form.authMethod} onChange={e => setForm({ ...form, authMethod: e.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option></select></Field>
     {form.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={e => void choosePrivateKey(e.target.files?.[0])} required={!form.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={form.privateKeyPassphrase} onChange={e => setForm({ ...form, privateKeyPassphrase: e.target.value })} placeholder={t("common.optional")} /></Field></div> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field>}
     <div className="form-divider"><span>{t("server.codexAPI")}</span></div>

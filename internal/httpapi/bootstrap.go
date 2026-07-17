@@ -160,12 +160,16 @@ func (a *API) writeBootstrapError(w http.ResponseWriter, err error) {
 		writeBootstrapCode(w, http.StatusBadRequest, "invalid_configuration", "invalid SSH or Codex API configuration")
 	case errors.Is(err, sshbootstrap.ErrHostKeyMismatch):
 		writeBootstrapCode(w, http.StatusConflict, "fingerprint_changed", "SSH host key fingerprint changed; probe the server again")
+	case errors.Is(err, sshbootstrap.ErrAuthentication):
+		writeBootstrapCode(w, http.StatusUnprocessableEntity, "ssh_auth_failed", "the SSH username or credential was rejected")
 	case errors.Is(err, sshbootstrap.ErrPrivilegeRequired):
 		writeBootstrapCode(w, http.StatusBadRequest, "sudo_required", "the SSH user must be root or have passwordless sudo")
 	case errors.Is(err, sshbootstrap.ErrUnsupportedPlatform):
 		writeBootstrapCode(w, http.StatusBadRequest, "unsupported_platform", "only Linux amd64 and arm64 servers are supported")
 	case errors.Is(err, sshbootstrap.ErrAssetsUnavailable):
 		writeBootstrapCode(w, http.StatusServiceUnavailable, "assets_unavailable", "agent installation assets are unavailable")
+	case errors.Is(err, sshbootstrap.ErrInstallation):
+		writeBootstrapCode(w, http.StatusUnprocessableEntity, "installation_failed", "connected to the server but could not install the agent")
 	default:
 		writeBootstrapCode(w, http.StatusBadGateway, "connection_failed", "could not connect to or configure the server")
 	}

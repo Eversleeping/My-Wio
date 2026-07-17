@@ -23,8 +23,11 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     headers.set("X-CSRF-Token", csrfToken);
   }
   const response = await fetch(`/api${path}`, { ...options, headers, credentials: "same-origin" });
-  const contentType = response.headers.get("content-type") ?? "";
-  const body = contentType.includes("application/json") ? await response.json() : null;
+  const text = await response.text();
+  let body: any = null;
+  if (text) {
+    try { body = JSON.parse(text); } catch { body = null; }
+  }
   if (!response.ok) throw new APIError(response.status, body?.error ?? `Request failed (${response.status})`, body?.code ?? "");
   return body as T;
 }

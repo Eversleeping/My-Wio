@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -83,6 +84,23 @@ func TestBootstrapFailureDeletesUnusedEnrollment(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected enrollment cleanup, found %d", count)
+	}
+}
+
+func TestBootstrapAuthenticationFailureHasSpecificCode(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	fake := &fakeServerBootstrapper{installError: fmt.Errorf("%w: password rejected", sshbootstrap.ErrAuthentication)}
+	api := &API{store: database, bootstrapper: fake, publicURL: "https://wio.example.com", log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directJSONRequest(t, http.MethodPost, "/api/servers/ssh/bootstrap", bootstrapInput(), nil, api.bootstrapServerSSH)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bootstrap returned %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "ssh_auth_failed" {
+		t.Fatalf("unexpected error code: %q", body["code"])
 	}
 }
 
