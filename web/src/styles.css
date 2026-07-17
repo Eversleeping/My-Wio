@@ -222,6 +222,7 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .message.user { margin-left: auto; margin-right: 0; background: #eaf5ef; border-color: #c9e5d7; border-left-color: var(--green); }
 .message.command { background: #20242a; border-color: #20242a; border-left-color: #e0a54c; color: #e9ece9; }
 .message.diff { border-left-color: #936ab5; }
+.message.error { color: #8e2d34; background: var(--red-soft); border-color: #efc3c6; border-left-color: var(--red); }
 .message header { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; color: var(--muted); font-size: 11px; }
 .message.command header { color: #b8c0c6; }
 .message header time { margin-left: auto; }

@@ -497,7 +497,8 @@ function EventItem({ event }: { event: StreamEvent }) {
   const text = extractText(payload);
   const command = kind.toLowerCase().includes("command");
   const diff = kind.toLowerCase().includes("diff") || kind.toLowerCase().includes("filechange");
-  return <article className={`message ${command ? "command" : diff ? "diff" : "agent"}`}><header>{command ? <SquareTerminal size={15} /> : diff ? <GitBranch size={15} /> : <Code2 size={15} />}<strong>{command ? t("codex.command") : diff ? t("codex.changes") : readableKind(kind)}</strong><time>{formatTime(event.occurred_at)}</time></header>{text ? <pre>{text}</pre> : <pre>{pretty(payload)}</pre>}</article>;
+  const failed = kind === "codex.turn.failed";
+  return <article className={`message ${failed ? "error" : command ? "command" : diff ? "diff" : "agent"}`}><header>{failed ? <AlertTriangle size={15} /> : command ? <SquareTerminal size={15} /> : diff ? <GitBranch size={15} /> : <Code2 size={15} />}<strong>{failed ? t("codex.turnFailed") : command ? t("codex.command") : diff ? t("codex.changes") : readableKind(kind)}</strong><time>{formatTime(event.occurred_at)}</time></header>{text ? <pre>{text}</pre> : <pre>{pretty(payload)}</pre>}</article>;
 }
 
 function DeploymentsPage({ realtime, notify }: PageProps) {
@@ -686,7 +687,7 @@ function enrollmentMessage(error: unknown, translate: (key: string) => string) {
   return message(error);
 }
 function pretty(value: unknown) { try { return JSON.stringify(value, null, 2); } catch { return String(value); } }
-function extractText(payload: unknown): string { if (!payload || typeof payload !== "object") return typeof payload === "string" ? payload : ""; const value = payload as Record<string, unknown>; for (const key of ["delta", "text", "diff", "output"]) if (typeof value[key] === "string") return value[key] as string; if (value.item && typeof value.item === "object") return extractText(value.item); return ""; }
+function extractText(payload: unknown): string { if (!payload || typeof payload !== "object") return typeof payload === "string" ? payload : ""; const value = payload as Record<string, unknown>; for (const key of ["delta", "text", "message", "diff", "output"]) if (typeof value[key] === "string") return value[key] as string; if (value.item && typeof value.item === "object") return extractText(value.item); return ""; }
 function readableKind(kind: string) { return kind.replace(/^codex\./, "").replaceAll(".", " / ").replaceAll("/", " / "); }
 function shortSHA(value: string) { return value ? value.slice(0, 8) : "-"; }
 function formatDate(value: string) { return new Intl.DateTimeFormat(currentLocale(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }

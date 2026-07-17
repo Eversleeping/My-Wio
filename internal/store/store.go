@@ -474,6 +474,12 @@ type Operation struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
+func (s *Store) Operation(ctx context.Context, id string) (Operation, error) {
+	var operation Operation
+	err := s.DB.GetContext(ctx, &operation, s.Q("SELECT id,server_id,kind,payload,created_at FROM agent_operations WHERE id=?"), id)
+	return operation, err
+}
+
 func (s *Store) PendingOperations(ctx context.Context, serverID string) ([]Operation, error) {
 	var out []Operation
 	err := s.DB.SelectContext(ctx, &out, s.Q("SELECT id,server_id,kind,payload,created_at FROM agent_operations WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<?)) ORDER BY created_at LIMIT 100"), serverID, time.Now().UTC().Add(-30*time.Second))
@@ -527,9 +533,12 @@ func (s *Store) Events(ctx context.Context, streamID string, after int64, limit 
 		limit = 500
 	}
 	var rows []struct {
-		EventID, StreamID, Kind, Payload string
-		Sequence                         int64
-		OccurredAt                       time.Time
+		EventID    string    `db:"event_id"`
+		StreamID   string    `db:"stream_id"`
+		Kind       string    `db:"kind"`
+		Payload    string    `db:"payload"`
+		Sequence   int64     `db:"sequence"`
+		OccurredAt time.Time `db:"occurred_at"`
 	}
 	err := s.DB.SelectContext(ctx, &rows, s.Q("SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE (?='' OR stream_id=?) AND sequence>? ORDER BY occurred_at,sequence LIMIT ?"), streamID, streamID, after, limit)
 	if err != nil {

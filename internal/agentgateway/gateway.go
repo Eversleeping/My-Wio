@@ -176,8 +176,20 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if err := json.Unmarshal(msg.PayloadJSON, &result); err != nil {
 			return err
 		}
+		operation, err := g.store.Operation(ctx, result.OperationID)
+		if err != nil {
+			return err
+		}
+		if operation.ServerID != serverID {
+			return errors.New("operation result server mismatch")
+		}
 		if err := g.store.CompleteOperation(ctx, result); err != nil {
 			return err
+		}
+		if operation.Kind == "codex.turn.start" && result.Status == "failed" {
+			if err := g.failCodexTurn(ctx, operation, result); err != nil {
+				return err
+			}
 		}
 		payload, err := json.Marshal(result)
 		if err != nil {
@@ -200,6 +212,24 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 	default:
 		return errors.New("unsupported agent message kind")
 	}
+}
+
+func (g *Gateway) failCodexTurn(ctx context.Context, operation store.Operation, result protocol.OperationResult) error {
+	var command protocol.StartTurnCommand
+	if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+		return err
+	}
+	if command.ThreadID == "" {
+		return errors.New("Codex turn operation has no thread id")
+	}
+	if err := g.store.SetThreadStatus(ctx, command.ThreadID, "failed"); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]string{"operation_id": result.OperationID, "text": result.Message})
+	if err != nil {
+		return err
+	}
+	return g.publish(ctx, protocol.StreamEvent{StreamID: command.ThreadID, Kind: "codex.turn.failed", Payload: security.RedactJSON(payload)})
 }
 
 func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID string) error {

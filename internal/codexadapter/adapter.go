@@ -63,6 +63,18 @@ type rpcError struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
+type rpcRequestError struct {
+	Method  string
+	Code    int
+	Message string
+}
+
+func (e *rpcRequestError) Error() string {
+	return fmt.Sprintf("Codex %s: %s (%d)", e.Method, e.Message, e.Code)
+}
+
+type requestFunc func(context.Context, string, any) (json.RawMessage, error)
+
 func New(command string, log *slog.Logger, emit EmitFunc) *Adapter {
 	return NewWithEnvironment(command, nil, log, emit)
 }
@@ -87,25 +99,9 @@ func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnComma
 	if err := a.ensureStarted(ctx); err != nil {
 		return err
 	}
-	codexThread := command.CodexThread
-	if codexThread == "" {
-		params := threadStartParams(command)
-		result, err := a.request(ctx, "thread/start", params)
-		if err != nil {
-			return err
-		}
-		var response struct {
-			Thread struct {
-				ID string `json:"id"`
-			} `json:"thread"`
-		}
-		if err := json.Unmarshal(result, &response); err != nil || response.Thread.ID == "" {
-			return errors.New("thread/start returned no thread id")
-		}
-		codexThread = response.Thread.ID
-		if err := a.emitEvent(command.ThreadID, "thread.bound", map[string]string{"codex_thread_id": codexThread}); err != nil {
-			return err
-		}
+	codexThread, err := a.prepareCodexThread(ctx, command, a.request)
+	if err != nil {
+		return err
 	}
 	a.mu.Lock()
 	a.threads[codexThread] = command.ThreadID
@@ -130,6 +126,61 @@ func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnComma
 	return a.emitEvent(command.ThreadID, "turn.accepted", map[string]string{"codex_thread_id": codexThread, "turn_id": response.Turn.ID})
 }
 
+func (a *Adapter) prepareCodexThread(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) (string, error) {
+	codexThread := command.CodexThread
+	if codexThread == "" {
+		return a.startCodexThread(ctx, command, request)
+	}
+	a.mu.Lock()
+	active := a.threads[codexThread] != ""
+	a.mu.Unlock()
+	if active {
+		return codexThread, nil
+	}
+	result, err := request(ctx, "thread/resume", threadResumeParams(command, codexThread))
+	if err != nil {
+		if !isThreadNotFound(err) {
+			return "", err
+		}
+		return a.startCodexThread(ctx, command, request)
+	}
+	resumed, err := responseThreadID(result, "thread/resume")
+	if err != nil {
+		return "", err
+	}
+	return resumed, nil
+}
+
+func (a *Adapter) startCodexThread(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) (string, error) {
+	result, err := request(ctx, "thread/start", threadStartParams(command))
+	if err != nil {
+		return "", err
+	}
+	codexThread, err := responseThreadID(result, "thread/start")
+	if err != nil {
+		return "", err
+	}
+	if err := a.emitEvent(command.ThreadID, "thread.bound", map[string]string{"codex_thread_id": codexThread}); err != nil {
+		return "", err
+	}
+	return codexThread, nil
+}
+
+func responseThreadID(result json.RawMessage, method string) (string, error) {
+	var response struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &response); err != nil {
+		return "", err
+	}
+	if response.Thread.ID == "" {
+		return "", fmt.Errorf("%s returned no thread id", method)
+	}
+	return response.Thread.ID, nil
+}
+
 func threadStartParams(command protocol.StartTurnCommand) map[string]any {
 	params := map[string]any{
 		"cwd":            command.Workspace,
@@ -139,6 +190,12 @@ func threadStartParams(command protocol.StartTurnCommand) map[string]any {
 	if command.Model != "" {
 		params["model"] = command.Model
 	}
+	return params
+}
+
+func threadResumeParams(command protocol.StartTurnCommand, codexThread string) map[string]any {
+	params := threadStartParams(command)
+	params["threadId"] = codexThread
 	return params
 }
 
@@ -285,7 +342,7 @@ func (a *Adapter) request(ctx context.Context, method string, params any) (json.
 			return nil, errors.New("Codex app-server disconnected")
 		}
 		if message.Error != nil {
-			return nil, fmt.Errorf("Codex %s: %s (%d)", method, message.Error.Message, message.Error.Code)
+			return nil, &rpcRequestError{Method: method, Message: message.Error.Message, Code: message.Error.Code}
 		}
 		return message.Result, nil
 	case <-ctx.Done():
@@ -420,10 +477,17 @@ func (a *Adapter) reset(reason error) {
 		close(response)
 	}
 	a.approve = make(map[string]approvalRequest)
+	a.threads = make(map[string]string)
+	a.turns = make(map[string]turnState)
 	a.mu.Unlock()
 	if reason != nil {
 		a.log.Debug("Codex adapter reset", "reason", reason)
 	}
+}
+
+func isThreadNotFound(err error) bool {
+	var requestError *rpcRequestError
+	return errors.As(err, &requestError) && strings.Contains(strings.ToLower(requestError.Message), "thread not found")
 }
 
 func approvalPolicy(value string) string {

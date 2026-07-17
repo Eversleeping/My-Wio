@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,5 +134,64 @@ func TestOperationResultPublishesRealtimeEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for operation result event")
+	}
+}
+
+func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "codex-node", []string{"/srv"}, "codex-enrollment-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "codex-enrollment-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "codex-node.local", "codex-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "failed turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.StartTurnCommand{ThreadID: thread.ID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: "hello"}
+	operationID, err := database.QueueOperation(ctx, server.ID, "codex.turn.start", command, "failed-codex-turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := protocol.OperationResult{OperationID: operationID, Status: "failed", Message: "Codex turn/start: thread not found"}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.Thread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "failed" {
+		t.Fatalf("unexpected thread status: %q", updated.Status)
+	}
+	events, err := database.Events(ctx, thread.ID, 0, 10)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("unexpected thread events: %#v %v", events, err)
+	}
+	if events[0].Kind != "codex.turn.failed" || !strings.Contains(string(events[0].Payload), "thread not found") {
+		t.Fatalf("unexpected failure event: %#v", events[0])
 	}
 }
