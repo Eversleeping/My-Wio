@@ -1,4 +1,4 @@
-import { FormEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -6,7 +6,9 @@ import {
   ArrowUpFromLine,
   Ban,
   BellRing,
+  Bot,
   Boxes,
+  Braces,
   Check,
   ChevronRight,
   Clipboard,
@@ -40,6 +42,7 @@ import {
   Trash2,
   Undo2,
   UserRound,
+  Wrench,
   Wifi,
   WifiOff,
   X
@@ -484,21 +487,44 @@ function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCr
 function SessionView({ thread, realtime, notify }: { thread: Thread; realtime: number; notify: (text: string) => void }) {
   const { t } = useI18n();
   const events = useData<StreamEvent[]>(`/threads/${thread.id}/events`, realtime + thread.id);
+  const [rawEvents, setRawEvents] = useState(false);
+  const streamRef = useRef<HTMLDivElement>(null);
+  const sourceEvents = events.data ?? [];
+  const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
   const [prompt, setPrompt] = useState(""); const [model, setModel] = useState(defaultCodexModel); const [reasoningEffort, setReasoningEffort] = useState(""); const [approvalMode, setApprovalMode] = useState("on-request");
+  useEffect(() => { setRawEvents(false); }, [thread.id]);
+  useEffect(() => { const frame = requestAnimationFrame(() => { if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight; }); return () => cancelAnimationFrame(frame); }, [thread.id, rawEvents, sourceEvents.length]);
   const send = async (event: FormEvent) => { event.preventDefault(); if (!prompt.trim()) return; try { await post(`/threads/${thread.id}/turns`, { prompt, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode }); setPrompt(""); notify(t("codex.turnQueued")); } catch (err) { notify(message(err)); } };
-  return <><div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" title={t("codex.interrupt")} onClick={async () => { await post(`/threads/${thread.id}/interrupt`, {}); notify(t("codex.interruptQueued")); }}><Ban size={16} /></button>}</div></div><div className="event-stream">{(events.data ?? []).length === 0 ? <Empty icon={<SquareTerminal size={26} />} text={t("codex.noMessages")} /> : (events.data ?? []).map(event => <EventItem key={event.event_id} event={event} />)}</div><form className="composer" onSubmit={send}><textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={t("codex.messagePlaceholder")} rows={3} /><div className="composer-bar"><div><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={e => setApprovalMode(e.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" disabled={!prompt.trim()}><ChevronRight size={17} />{t("codex.send")}</button></div></form></>;
+  return <><div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" title={t("codex.interrupt")} onClick={async () => { await post(`/threads/${thread.id}/interrupt`, {}); notify(t("codex.interruptQueued")); }}><Ban size={16} /></button>}</div></div><div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{chatEvents.map(event => <ConversationEventItem key={event.event_id} event={event} />)}{thread.status === "running" && <WorkingIndicator />}</>}</div><form className="composer" onSubmit={send}><textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={t("codex.messagePlaceholder")} rows={3} /><div className="composer-bar"><div><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={e => setApprovalMode(e.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" disabled={!prompt.trim()}><ChevronRight size={17} />{t("codex.send")}</button></div></form></>;
 }
 
-function EventItem({ event }: { event: StreamEvent }) {
+function ConversationEventItem({ event }: { event: StreamEvent }) {
   const { t } = useI18n();
   const kind = event.kind;
-  const payload = event.payload as Record<string, unknown> | string | null;
-  if (kind === "user.message") return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header><p>{typeof payload === "object" && payload ? String(payload.text ?? "") : String(payload ?? "")}</p></article>;
-  const text = extractText(payload);
-  const command = kind.toLowerCase().includes("command");
-  const diff = kind.toLowerCase().includes("diff") || kind.toLowerCase().includes("filechange");
-  const failed = kind === "codex.turn.failed";
-  return <article className={`message ${failed ? "error" : command ? "command" : diff ? "diff" : "agent"}`}><header>{failed ? <AlertTriangle size={15} /> : command ? <SquareTerminal size={15} /> : diff ? <GitBranch size={15} /> : <Code2 size={15} />}<strong>{failed ? t("codex.turnFailed") : command ? t("codex.command") : diff ? t("codex.changes") : readableKind(kind)}</strong><time>{formatTime(event.occurred_at)}</time></header>{text ? <pre>{text}</pre> : <pre>{pretty(payload)}</pre>}</article>;
+  const payload = asRecord(event.payload);
+  if (kind === "user.message") return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{String(payload?.text ?? "")}</div></article>;
+  if (kind === "codex.error" || kind === "codex.turn.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t("codex.turnFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
+  const item = asRecord(payload?.item);
+  if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{extractText(item)}</div></article>;
+  return <ToolEvent event={event} item={item} />;
+}
+
+function ToolEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> | null }) {
+  const { t } = useI18n();
+  const type = String(item?.type ?? "tool");
+  const title = type === "commandExecution" ? t("codex.command") : type === "fileChange" ? t("codex.changes") : type === "webSearch" ? t("codex.webSearch") : type === "mcpToolCall" ? `${String(item?.server ?? "MCP")} / ${String(item?.tool ?? t("codex.toolCall"))}` : String(item?.tool ?? t("codex.toolCall"));
+  const summary = toolSummary(item);
+  const detail = toolDetail(item);
+  return <details className={`tool-event ${type === "fileChange" ? "change" : ""}`}><summary><span>{type === "fileChange" ? <GitBranch size={15} /> : type === "commandExecution" ? <SquareTerminal size={15} /> : <Wrench size={15} />}<strong>{title}</strong>{summary && <small>{summary}</small>}</span><time>{formatTime(event.occurred_at)}</time></summary>{detail && <pre>{detail}</pre>}</details>;
+}
+
+function RawEventItem({ event }: { event: StreamEvent }) {
+  return <details className="raw-event"><summary><span><Braces size={14} /><strong>{readableKind(event.kind)}</strong></span><time>{formatTime(event.occurred_at)}</time></summary><pre>{pretty(event.payload)}</pre></details>;
+}
+
+function WorkingIndicator() {
+  const { t } = useI18n();
+  return <div className="working-indicator"><Bot size={15} /><span>{t("codex.working")}</span><i /><i /><i /></div>;
 }
 
 function DeploymentsPage({ realtime, notify }: PageProps) {
@@ -687,7 +713,43 @@ function enrollmentMessage(error: unknown, translate: (key: string) => string) {
   return message(error);
 }
 function pretty(value: unknown) { try { return JSON.stringify(value, null, 2); } catch { return String(value); } }
-function extractText(payload: unknown): string { if (!payload || typeof payload !== "object") return typeof payload === "string" ? payload : ""; const value = payload as Record<string, unknown>; for (const key of ["delta", "text", "message", "diff", "output"]) if (typeof value[key] === "string") return value[key] as string; if (value.item && typeof value.item === "object") return extractText(value.item); return ""; }
+function conversationEvents(events: StreamEvent[]) {
+  const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch"]);
+  return events.filter(event => {
+    if (event.kind === "user.message" || event.kind === "codex.turn.failed") return true;
+    const payload = asRecord(event.payload);
+    if (event.kind === "codex.error") return payload?.willRetry !== true;
+    if (event.kind !== "codex.item.completed") return false;
+    const item = asRecord(payload?.item);
+    return completedTypes.has(String(item?.type ?? ""));
+  });
+}
+function asRecord(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
+function extractText(payload: unknown): string {
+  if (typeof payload === "string") return payload;
+  if (Array.isArray(payload)) return payload.map(extractText).filter(Boolean).join("\n");
+  const value = asRecord(payload);
+  if (!value) return "";
+  for (const key of ["delta", "text", "message", "diff", "output"]) if (typeof value[key] === "string") return value[key] as string;
+  for (const key of ["content", "item", "error"]) { const text = extractText(value[key]); if (text) return text; }
+  return "";
+}
+function errorText(payload: Record<string, unknown> | null) { return extractText(payload?.error) || extractText(payload); }
+function toolSummary(item: Record<string, unknown> | null) {
+  if (!item) return "";
+  const type = String(item.type ?? "");
+  const primary = type === "commandExecution" ? String(item.command ?? "") : type === "webSearch" ? String(item.query ?? "") : type === "fileChange" && Array.isArray(item.changes) ? String(item.changes.length) : "";
+  const status = typeof item.status === "string" ? item.status : "";
+  return [primary, status].filter(Boolean).join(" · ");
+}
+function toolDetail(item: Record<string, unknown> | null) {
+  if (!item) return "";
+  const type = String(item.type ?? "");
+  if (type === "commandExecution") return [`$ ${String(item.command ?? "")}`, typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : ""].filter(Boolean).join("\n\n");
+  if (type === "fileChange" && Array.isArray(item.changes)) return item.changes.map(change => { const value = asRecord(change); return value ? `${String(value.kind ?? "updated")} ${String(value.path ?? "")}\n${String(value.diff ?? "")}`.trim() : pretty(change); }).join("\n\n");
+  if (type === "webSearch") return String(item.query ?? "");
+  return pretty({ arguments: item.arguments, result: item.result, error: item.error });
+}
 function readableKind(kind: string) { return kind.replace(/^codex\./, "").replaceAll(".", " / ").replaceAll("/", " / "); }
 function shortSHA(value: string) { return value ? value.slice(0, 8) : "-"; }
 function formatDate(value: string) { return new Intl.DateTimeFormat(currentLocale(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }
