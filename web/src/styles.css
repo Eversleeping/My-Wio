@@ -111,13 +111,14 @@ td code { font-size: 12px; }
 .message-cell { max-width: 300px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .project-import-state { min-width: 220px; display: grid; gap: 4px; }
 .project-import-message { max-width: 280px; display: -webkit-box; overflow: hidden; color: #98343b; font-size: 11px; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.project-import-message.syncing { color: var(--muted); }
 .inline, .inline-success, .muted { display: inline-flex; align-items: center; gap: 5px; }
 .inline-success { color: var(--green); }
 .muted { color: var(--muted); }
 
 .status-tag { width: fit-content; min-height: 23px; display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; color: #596068; background: #eef0ed; border: 1px solid #dfe2df; border-radius: 12px; font-size: 11px; font-weight: 670; line-height: 1.2; text-transform: capitalize; white-space: nowrap; }
 .status-tag.online, .status-tag.succeeded, .status-tag.clean, .status-tag.success, .status-tag.production, .status-tag.resolved, .status-tag.ready { color: #126848; background: var(--green-soft); border-color: #bde0cf; }
-.status-tag.running, .status-tag.queued, .status-tag.preparing, .status-tag.pending, .status-tag.warning, .status-tag.staging, .status-tag.importing { color: #86520b; background: var(--amber-soft); border-color: #efd2a6; }
+.status-tag.running, .status-tag.queued, .status-tag.preparing, .status-tag.pending, .status-tag.warning, .status-tag.staging, .status-tag.importing, .status-tag.syncing { color: #86520b; background: var(--amber-soft); border-color: #efd2a6; }
 .status-tag.failed, .status-tag.critical, .status-tag.open, .status-tag.dirty, .status-tag.denied, .status-tag.offline { color: #9a3037; background: var(--red-soft); border-color: #efc3c6; }
 .status-tag.idle, .status-tag.rolled-back, .status-tag.development { color: #17687d; background: var(--cyan-soft); border-color: #bcdde5; }
 .status-tag.neutral { color: #565d64; background: #eff1ef; }

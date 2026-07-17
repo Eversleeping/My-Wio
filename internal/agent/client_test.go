@@ -32,3 +32,24 @@ func TestSuccessfulConnectionResetsReconnectBackoff(t *testing.T) {
 		t.Fatalf("failed connection should preserve backoff, got %s", backoff)
 	}
 }
+
+func TestInventoryRootsIncludeCloneRoot(t *testing.T) {
+	base := t.TempDir()
+	scanRoot := filepath.Join(base, "services")
+	cloneRoot := filepath.Join(base, "state", "projects")
+	client := &Client{config: Config{ScanRoots: []string{scanRoot, scanRoot}, CloneRoot: cloneRoot}}
+	roots := client.inventoryRoots()
+	if len(roots) != 2 || roots[0] != scanRoot || roots[1] != cloneRoot {
+		t.Fatalf("unexpected inventory roots: %#v", roots)
+	}
+}
+
+func TestInventoryRootsDoNotDuplicateCoveredCloneRoot(t *testing.T) {
+	base := t.TempDir()
+	cloneRoot := filepath.Join(base, "state", "projects")
+	client := &Client{config: Config{ScanRoots: []string{base}, CloneRoot: cloneRoot}}
+	roots := client.inventoryRoots()
+	if len(roots) != 1 || roots[0] != base {
+		t.Fatalf("unexpected inventory roots: %#v", roots)
+	}
+}

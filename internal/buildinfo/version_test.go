@@ -33,3 +33,9 @@ func TestUpdateAvailableRequiresANewerTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentVersionUpdatesExistingSelfUpdatingAgents(t *testing.T) {
+	if !UpdateAvailable("0.2.0", Version) {
+		t.Fatalf("current version %s must be newer than deployed Agent 0.2.0", Version)
+	}
+}

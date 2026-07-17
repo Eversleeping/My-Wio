@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -320,7 +321,7 @@ func (c *Client) runRollback(ctx context.Context, command protocol.RollbackComma
 
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	hostname, _ := os.Hostname()
-	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, c.config.CodexPath), CodexReady: commandAvailable(c.config.CodexPath), ScanRoots: c.config.ScanRoots}
+	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, c.config.CodexPath), CodexReady: commandAvailable(c.config.CodexPath), ScanRoots: c.inventoryRoots()}
 	return c.queue("heartbeat", heartbeat, false)
 }
 
@@ -351,11 +352,35 @@ func (c *Client) enqueueMetrics(ctx context.Context) error {
 }
 
 func (c *Client) enqueueInventory(ctx context.Context) error {
-	inventory, err := scanner.Discover(ctx, c.config.ScanRoots, 200)
+	inventory, err := scanner.Discover(ctx, c.inventoryRoots(), 200)
 	if err != nil {
 		return err
 	}
 	return c.queue("inventory", inventory, false)
+}
+
+func (c *Client) inventoryRoots() []string {
+	roots := make([]string, 0, len(c.config.ScanRoots)+1)
+	seen := make(map[string]bool, len(c.config.ScanRoots)+1)
+	for _, root := range c.config.ScanRoots {
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "." || seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	cloneRoot := filepath.Clean(strings.TrimSpace(c.config.CloneRoot))
+	if cloneRoot == "." {
+		return roots
+	}
+	for _, root := range roots {
+		relative, err := filepath.Rel(root, cloneRoot)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return roots
+		}
+	}
+	return append(roots, cloneRoot)
 }
 
 func (c *Client) queue(kind string, payload any, important bool) error {
