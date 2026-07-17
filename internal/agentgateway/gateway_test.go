@@ -241,4 +241,22 @@ func TestUpsertApprovalStoresSnakeCaseRequestID(t *testing.T) {
 	if approval.RequestID != "request-123" || approval.Kind != "item/commandExecution/requestApproval" || !strings.Contains(approval.Detail, "npm test") {
 		t.Fatalf("unexpected approval: %#v", approval)
 	}
+	completed := protocol.StreamEvent{EventID: "completed-event", StreamID: thread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"status":"interrupted"}}`)}
+	payload, err := json.Marshal(completed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	var resolved struct {
+		Status   string `db:"status"`
+		Decision string `db:"decision"`
+	}
+	if err := database.DB.GetContext(ctx, &resolved, "SELECT status,decision FROM approvals WHERE thread_id=?", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != "resolved" || resolved.Decision != "cancelled" {
+		t.Fatalf("approval was not resolved with its turn: %#v", resolved)
+	}
 }

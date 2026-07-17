@@ -49,6 +49,11 @@ func (s *Store) SetThreadStatus(ctx context.Context, id, status string) error {
 	return err
 }
 
+func (s *Store) ResolvePendingApprovals(ctx context.Context, threadID, decision string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE approvals SET status='resolved',decision=?,resolved_at=? WHERE thread_id=? AND status='pending'"), decision, time.Now().UTC(), threadID)
+	return err
+}
+
 func (s *Store) CreateProject(ctx context.Context, name, remoteURL string) (Project, error) {
 	id := NewID()
 	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?)"), id, name, remoteURL, normalizeRemote(remoteURL))

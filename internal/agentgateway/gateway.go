@@ -169,6 +169,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		if event.Kind == "codex.turn.completed" {
 			_ = g.store.SetThreadStatus(ctx, event.StreamID, "idle")
+			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
 		return g.publish(ctx, event)
 	case "operation_result":
