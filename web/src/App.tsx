@@ -31,6 +31,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  Search,
   Server as ServerIcon,
   Settings,
   ShieldCheck,
@@ -278,6 +279,7 @@ function ServersPage({ realtime, notify }: PageProps) {
   const [editingServer, setEditingServer] = useState<Server | null>(null);
   const [metadataBusy, setMetadataBusy] = useState(false);
   const [metadataError, setMetadataError] = useState("");
+	const [updatingServer, setUpdatingServer] = useState("");
   const [metadataForm, setMetadataForm] = useState({ address: "", configuration: "", notes: "" });
   const [form, setForm] = useState({
     name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
@@ -352,8 +354,16 @@ function ServersPage({ realtime, notify }: PageProps) {
       setEditingServer(null); servers.reload(); notify(t("server.informationSaved"));
     } catch (err) { setMetadataError(message(err)); } finally { setMetadataBusy(false); }
   };
+  const updateAgent = async (server: Server) => {
+    if (!server.agent_update_available || !confirm(t("server.confirmUpdate", { name: server.name, version: server.agent_target_version }))) return;
+    setUpdatingServer(server.id);
+    try {
+      await post(`/servers/${server.id}/agent-update`, {});
+      notify(t("server.updateQueued", { version: server.agent_target_version }));
+    } catch (err) { notify(message(err)); } finally { setUpdatingServer(""); }
+  };
   return <div className="page-stack"><Section title={t("server.registered")} icon={<ServerIcon size={18} />} action={<button className="primary-button" onClick={open}><Plus size={17} />{t("server.enroll")}</button>}>
-    <DataTable headers={[t("column.server"), t("server.information"), t("column.connectivity"), t("column.agent"), t("column.codex"), t("column.lastSeen"), ""]} empty={t("server.none")}>{(servers.data ?? []).map(server => <tr key={server.id}><td><div className="cell-main"><strong>{server.name}</strong><small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button><button className="icon-button danger" title={t("server.revoke")} onClick={async () => { if (!confirm(t("server.confirmRevoke", { name: server.name }))) return; await remove(`/servers/${server.id}`); notify(t("server.revoked")); servers.reload(); }}><X size={16} /></button></div></td></tr>)}</DataTable>
+    <DataTable headers={[t("column.server"), t("server.information"), t("column.connectivity"), t("column.agent"), t("column.codex"), t("column.lastSeen"), ""]} empty={t("server.none")}>{(servers.data ?? []).map(server => { const updateTitle = server.status !== "online" ? t("server.updateOffline") : server.agent_update_available ? t("server.updateAgent", { version: server.agent_target_version }) : !server.agent_version ? t("common.awaitingHeartbeat") : !server.agent_update_supported ? t("server.updateRequiresReinstall") : server.agent_version === server.agent_target_version ? t("server.agentLatest") : t("server.updateUnavailable"); return <tr key={server.id}><td><div className="cell-main"><strong>{server.name}</strong><small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" disabled={server.status !== "online" || !server.agent_update_available || updatingServer !== ""} title={updateTitle} onClick={() => void updateAgent(server)}><RefreshCw className={updatingServer === server.id ? "spin" : ""} size={15} /></button><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button><button className="icon-button danger" title={t("server.revoke")} onClick={async () => { if (!confirm(t("server.confirmRevoke", { name: server.name }))) return; await remove(`/servers/${server.id}`); notify(t("server.revoked")); servers.reload(); }}><X size={16} /></button></div></td></tr>; })}</DataTable>
   </Section><Dialog open={dialog} title={t("server.enrollLinux")} onClose={close} wide>{step === "form" ? <form onSubmit={probe}>
     {error && <ErrorBanner text={error} />}
     <div className="form-grid"><Field label={t("server.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></Field><Field label={t("server.scanRoots")}><input value={form.roots} onChange={e => setForm({ ...form, roots: e.target.value })} required /></Field></div>
@@ -384,15 +394,30 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   const workspaces = useData<Workspace[]>("/workspaces", realtime);
   const servers = useData<Server[]>("/servers", realtime);
   const [dialog, setDialog] = useState(false);
+  const [mode, setMode] = useState<"clone" | "discover">("clone");
+  const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: "", remote_url: "", server_id: "", destination: "" });
+  const close = () => { if (!busy) setDialog(false); };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    try { await post("/projects/import", form); notify(t("project.queued")); setDialog(false); projects.reload(); } catch (err) { notify(message(err)); }
+    setBusy(true);
+    try {
+      if (mode === "clone") {
+        await post("/projects/import", form);
+        notify(t("project.queued"));
+        projects.reload();
+      } else {
+        await post("/projects/discover", { server_id: form.server_id });
+        notify(t("project.scanQueued"));
+      }
+      setDialog(false);
+    } catch (err) { notify(message(err)); } finally { setBusy(false); }
   };
+  const serverOptions = (servers.data ?? []).map(server => <option key={server.id} value={server.id} disabled={server.status !== "online"}>{server.name}{server.status !== "online" ? ` (${t("status.offline")})` : ""}</option>);
   return <div className="page-stack"><Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={() => setDialog(true)}><Plus size={17} />{t("project.import")}</button>}>
     <DataTable headers={[t("column.project"), t("column.remote"), t("column.workspaces"), t("column.updated")]} empty={t("project.none")}>{(projects.data ?? []).map(project => <tr key={project.id}><td><strong>{project.name}</strong></td><td><code className="truncate-code">{project.remote_url || t("project.local")}</code></td><td>{project.workspace_count}</td><td>{relative(project.updated_at)}</td></tr>)}</DataTable>
   </Section><Section title={t("project.workspaces")} icon={<Boxes size={18} />}><DataTable headers={[t("column.project"), t("column.server"), t("column.path"), t("column.branch"), t("column.commit"), t("column.state")]} empty={t("project.noWorkspaces")}>{(workspaces.data ?? []).map(workspace => <tr key={workspace.id}><td><strong>{workspace.project_name}</strong></td><td>{workspace.server_name}</td><td><code className="truncate-code">{workspace.path}</code></td><td><span className="inline"><GitBranch size={13} />{workspace.branch || t("project.detached")}</span></td><td><code>{shortSHA(workspace.commit_sha)}</code></td><td><Status value={workspace.dirty ? "dirty" : "clean"} /></td></tr>)}</DataTable></Section>
-  <Dialog open={dialog} title={t("project.import")} onClose={() => setDialog(false)}><form onSubmit={submit}><Field label={t("project.remoteURL")}><input value={form.remote_url} onChange={e => setForm({ ...form, remote_url: e.target.value })} placeholder="https://git.example.com/team/project.git" required /></Field><div className="form-grid"><Field label={t("project.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field><Field label={t("project.targetServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{(servers.data ?? []).map(server => <option key={server.id} value={server.id}>{server.name}</option>)}</select></Field></div><Field label={t("project.destination")}><input value={form.destination} onChange={e => setForm({ ...form, destination: e.target.value })} placeholder={t("common.optional")} /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><GitBranch size={16} />{t("project.queue")}</button></DialogActions></form></Dialog></div>;
+  <Dialog open={dialog} title={t("project.import")} onClose={close}><form onSubmit={submit}><div className="segmented-control" role="tablist" aria-label={t("project.importMode")}><button type="button" role="tab" aria-selected={mode === "clone"} className={mode === "clone" ? "active" : ""} onClick={() => setMode("clone")}><GitBranch size={15} />{t("project.cloneMode")}</button><button type="button" role="tab" aria-selected={mode === "discover"} className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")}><ServerIcon size={15} />{t("project.discoverMode")}</button></div>{mode === "clone" ? <><Field label={t("project.remoteURL")}><input value={form.remote_url} onChange={e => setForm({ ...form, remote_url: e.target.value })} placeholder="https://git.example.com/team/project.git" required /></Field><div className="form-grid"><Field label={t("project.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field><Field label={t("project.targetServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field></div><Field label={t("project.destination")}><input value={form.destination} onChange={e => setForm({ ...form, destination: e.target.value })} placeholder={t("common.optional")} /></Field></> : <Field label={t("project.existingServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field>}<DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : mode === "clone" ? <GitBranch size={16} /> : <Search size={16} />}{busy ? t("project.working") : mode === "clone" ? t("project.queue") : t("project.scan")}</button></DialogActions></form></Dialog></div>;
 }
 
 function CodexPage({ realtime, approvals, notify }: PageProps & { approvals: Approval[] }) {

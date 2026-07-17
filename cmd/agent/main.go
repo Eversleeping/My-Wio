@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/agent"
+	"github.com/wio-platform/wio/internal/buildinfo"
 )
 
 func main() {
@@ -28,6 +29,9 @@ func run(log *slog.Logger, args []string) error {
 		return errors.New("usage: wio-agent <enroll|run> [options]")
 	}
 	switch args[0] {
+	case "version", "--version", "-version":
+		fmt.Println(buildinfo.Version)
+		return nil
 	case "enroll":
 		flags := flag.NewFlagSet("enroll", flag.ContinueOnError)
 		controlURL := flags.String("url", "", "Wio control-plane URL")
@@ -64,6 +68,9 @@ func run(log *slog.Logger, args []string) error {
 		config, err := agent.LoadConfig(*configPath)
 		if err != nil {
 			return err
+		}
+		if err := agent.ActivateCurrentUpdate(config.StateDir); err != nil {
+			log.Warn("could not activate current Agent update; continuing with installed binary", "error", err)
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()

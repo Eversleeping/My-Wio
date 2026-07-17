@@ -27,13 +27,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexadapter"
 	"github.com/wio-platform/wio/internal/deployer"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/scanner"
 )
-
-const agentVersion = "0.1.0"
 
 const initialReconnectBackoff = time.Second
 
@@ -138,6 +137,12 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		}
 		if !connected {
 			connected = true
+			confirmed, confirmErr := confirmCurrentUpdate(c.config.StateDir)
+			if confirmErr != nil {
+				c.log.Warn("could not confirm Agent update", "error", confirmErr)
+			} else if confirmed {
+				_ = c.queue("agent_update_status", map[string]string{"version": buildinfo.Version, "status": "healthy"}, true)
+			}
 			c.log.Info("connected to Wio control plane", "server_id", c.config.ServerID)
 		}
 		select {
@@ -209,10 +214,21 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	timeout := 10 * time.Minute
 	if strings.HasPrefix(envelope.Kind, "deploy.") {
 		timeout = time.Hour
+	} else if envelope.Kind == "agent.update" {
+		timeout = 30 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	err := c.execute(ctx, envelope)
+	var restartPath string
+	var err error
+	if envelope.Kind == "agent.update" {
+		var command protocol.AgentUpdateCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			restartPath, err = c.stageAgentUpdate(ctx, command)
+		}
+	} else {
+		err = c.execute(ctx, envelope)
+	}
 	status := "succeeded"
 	message := ""
 	if err != nil {
@@ -220,7 +236,16 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		message = err.Error()
 		c.log.Warn("operation failed", "operation_id", envelope.OperationID, "kind", envelope.Kind, "error", err)
 	}
-	_ = c.queue("operation_result", protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192)}, true)
+	if queueErr := c.queue("operation_result", protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192)}, true); queueErr != nil {
+		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
+	}
+	if err == nil && restartPath != "" {
+		time.Sleep(750 * time.Millisecond)
+		if restartErr := activateStagedUpdate(c.config.StateDir, restartPath); restartErr != nil {
+			c.log.Error("could not restart into Agent update", "operation_id", envelope.OperationID, "error", restartErr)
+			_ = c.queue("operation_result", protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: truncate(restartErr.Error(), 8192)}, true)
+		}
+	}
 }
 
 func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope) error {
@@ -295,7 +320,7 @@ func (c *Client) runRollback(ctx context.Context, command protocol.RollbackComma
 
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	hostname, _ := os.Hostname()
-	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: agentVersion, CodexVersion: commandVersion(ctx, c.config.CodexPath), CodexReady: commandAvailable(c.config.CodexPath), ScanRoots: c.config.ScanRoots}
+	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, c.config.CodexPath), CodexReady: commandAvailable(c.config.CodexPath), ScanRoots: c.config.ScanRoots}
 	return c.queue("heartbeat", heartbeat, false)
 }
 

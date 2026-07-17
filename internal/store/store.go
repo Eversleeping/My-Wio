@@ -114,19 +114,22 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 }
 
 type Server struct {
-	ID            string     `db:"id" json:"id"`
-	Name          string     `db:"name" json:"name"`
-	Hostname      string     `db:"hostname" json:"hostname"`
-	Status        string     `db:"status" json:"status"`
-	AgentVersion  string     `db:"agent_version" json:"agent_version"`
-	CodexVersion  string     `db:"codex_version" json:"codex_version"`
-	CodexReady    int        `db:"codex_ready" json:"codex_ready"`
-	ScanRoots     string     `db:"scan_roots" json:"-"`
-	Address       string     `db:"address" json:"address"`
-	Configuration string     `db:"configuration" json:"configuration"`
-	Notes         string     `db:"notes" json:"notes"`
-	LastSeenAt    *time.Time `db:"last_seen_at" json:"last_seen_at"`
-	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
+	ID                   string     `db:"id" json:"id"`
+	Name                 string     `db:"name" json:"name"`
+	Hostname             string     `db:"hostname" json:"hostname"`
+	Status               string     `db:"status" json:"status"`
+	AgentVersion         string     `db:"agent_version" json:"agent_version"`
+	CodexVersion         string     `db:"codex_version" json:"codex_version"`
+	CodexReady           int        `db:"codex_ready" json:"codex_ready"`
+	ScanRoots            string     `db:"scan_roots" json:"-"`
+	Address              string     `db:"address" json:"address"`
+	Configuration        string     `db:"configuration" json:"configuration"`
+	Notes                string     `db:"notes" json:"notes"`
+	LastSeenAt           *time.Time `db:"last_seen_at" json:"last_seen_at"`
+	CreatedAt            time.Time  `db:"created_at" json:"created_at"`
+	AgentTargetVersion   string     `db:"-" json:"agent_target_version"`
+	AgentUpdateAvailable bool       `db:"-" json:"agent_update_available"`
+	AgentUpdateSupported bool       `db:"-" json:"agent_update_supported"`
 }
 
 type ServerMetadata struct {
@@ -139,6 +142,12 @@ func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
 	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id WHERE s.revoked_at IS NULL ORDER BY s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	return out, err
+}
+
+func (s *Store) Server(ctx context.Context, id string) (Server, error) {
+	var server Server
+	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	return server, err
 }
 
 func (s *Store) CreateEnrollment(ctx context.Context, name string, roots []string, token string, expires time.Time) (string, error) {
@@ -362,6 +371,13 @@ func (s *Store) PendingOperations(ctx context.Context, serverID string) ([]Opera
 	err := s.DB.SelectContext(ctx, &out, s.Q("SELECT id,server_id,kind,payload,created_at FROM agent_operations WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<?)) ORDER BY created_at LIMIT 100"), serverID, time.Now().UTC().Add(-30*time.Second))
 	return out, err
 }
+
+func (s *Store) HasActiveOperation(ctx context.Context, serverID, kind string) (bool, error) {
+	var count int
+	err := s.DB.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind=? AND status IN ('queued','delivered')"), serverID, kind)
+	return count > 0, err
+}
+
 func (s *Store) MarkDelivered(ctx context.Context, id string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='delivered',delivered_at=? WHERE id=? AND status='queued'"), time.Now().UTC(), id)
 	return err

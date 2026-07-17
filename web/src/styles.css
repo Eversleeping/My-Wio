@@ -148,6 +148,9 @@ textarea { resize: vertical; line-height: 1.5; }
 input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0 0 0 3px rgba(43, 144, 108, .12); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid.thirds { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.segmented-control { min-height: 42px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 17px; padding: 3px; background: #eef0ed; border: 1px solid #d8dcd8; border-radius: 6px; }
+.segmented-control button { min-width: 0; min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 8px; color: #656c72; background: transparent; border: 0; border-radius: 4px; font-size: 12px; font-weight: 680; line-height: 1.25; }
+.segmented-control button.active { color: #1f4f3e; background: #fff; box-shadow: 0 1px 3px rgba(26, 32, 36, .12); }
 .form-divider { height: 31px; display: flex; align-items: center; margin: 4px 0 13px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .form-divider::before, .form-divider::after { height: 1px; flex: 1; content: ""; background: var(--line); }
 .form-divider span { padding: 0 10px; }

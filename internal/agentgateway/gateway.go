@@ -177,6 +177,8 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			return err
 		}
 		return g.store.CompleteOperation(ctx, result)
+	case "agent_update_status":
+		return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "agent.updated", Payload: security.RedactJSON(msg.PayloadJSON)})
 	case "deployment_status":
 		var p struct{ DeploymentID, Status, Message, ResolvedCommit string }
 		if err := json.Unmarshal(msg.PayloadJSON, &p); err != nil {

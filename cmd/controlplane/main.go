@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/wio-platform/wio/internal/agentgateway"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/httpapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
@@ -25,8 +26,6 @@ import (
 	"github.com/wio-platform/wio/internal/store"
 	webassets "github.com/wio-platform/wio/web"
 )
-
-const version = "0.1.0"
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -92,7 +91,7 @@ func run(log *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("Wio control plane listening", "address", address, "version", version)
+		log.Info("Wio control plane listening", "address", address, "version", buildinfo.Version)
 		errCh <- server.ListenAndServe()
 	}()
 	stop := make(chan os.Signal, 1)

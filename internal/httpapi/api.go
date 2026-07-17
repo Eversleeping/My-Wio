@@ -22,6 +22,7 @@ import (
 	"github.com/pquerna/otp/totp"
 
 	"github.com/wio-platform/wio/internal/agentgateway"
+	"github.com/wio-platform/wio/internal/agentupdate"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
@@ -39,6 +40,7 @@ type API struct {
 	log          *slog.Logger
 	frontend     fs.FS
 	bootstrapper serverBootstrapper
+	agentUpdates *agentupdate.Store
 	publicURL    string
 	secureCookie bool
 	setupMu      sync.Mutex
@@ -55,6 +57,7 @@ type loginAttempt struct {
 type sessionContextKey struct{}
 
 func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool) http.Handler {
+	assetDir := os.Getenv("WIO_AGENT_ASSET_DIR")
 	api := &API{
 		store:        s,
 		hub:          hub,
@@ -62,7 +65,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 		vault:        vault,
 		log:          log,
 		frontend:     frontend,
-		bootstrapper: sshbootstrap.New(os.Getenv("WIO_AGENT_ASSET_DIR")),
+		bootstrapper: sshbootstrap.New(assetDir),
+		agentUpdates: agentupdate.New(assetDir),
 		publicURL:    strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		secureCookie: strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
 		login:        make(map[string]*loginAttempt),
@@ -75,6 +79,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 		r.Post("/setup", api.setup)
 		r.Post("/auth/login", api.loginHandler)
 		r.Post("/agent/enroll", api.enrollAgent)
+		r.Get("/agent/update-package/{architecture}", api.downloadAgentUpdate)
 		r.Group(func(private chi.Router) {
 			private.Use(api.authenticate, api.requireCSRF)
 			private.Get("/auth/session", api.session)
@@ -82,6 +87,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/summary", api.summary)
 			private.Get("/servers", api.servers)
 			private.Patch("/servers/{serverID}", api.updateServer)
+			private.Post("/servers/{serverID}/agent-update", api.updateAgent)
 			private.Post("/servers/enrollments", api.createEnrollment)
 			private.Post("/servers/ssh/probe", api.probeServerSSH)
 			private.Post("/servers/ssh/bootstrap", api.bootstrapServerSSH)
@@ -91,6 +97,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/projects", api.projects)
 			private.Get("/workspaces", api.workspaces)
 			private.Post("/projects/import", api.importProject)
+			private.Post("/projects/discover", api.discoverProjects)
 			private.Get("/threads", api.threads)
 			private.Post("/threads", api.createThread)
 			private.Get("/threads/{threadID}/events", api.threadEvents)

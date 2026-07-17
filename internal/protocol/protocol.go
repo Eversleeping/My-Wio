@@ -99,6 +99,17 @@ type GitImportCommand struct {
 	Destination string `json:"destination,omitempty"`
 }
 
+type AgentUpdatePackage struct {
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+type AgentUpdateCommand struct {
+	Version  string                        `json:"version"`
+	Packages map[string]AgentUpdatePackage `json:"packages"`
+}
+
 type DeployCommand struct {
 	DeploymentID string            `json:"deployment_id"`
 	TargetID     string            `json:"target_id"`

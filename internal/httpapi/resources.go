@@ -3,6 +3,7 @@ package httpapi
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/store"
@@ -59,6 +61,16 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list servers")
 		return
+	}
+	packagesAvailable := false
+	if a.agentUpdates != nil {
+		_, packagesErr := a.agentUpdates.Command()
+		packagesAvailable = packagesErr == nil
+	}
+	for index := range servers {
+		servers[index].AgentTargetVersion = buildinfo.Version
+		servers[index].AgentUpdateSupported = buildinfo.SupportsSelfUpdate(servers[index].AgentVersion)
+		servers[index].AgentUpdateAvailable = packagesAvailable && buildinfo.UpdateAvailable(servers[index].AgentVersion, buildinfo.Version)
 	}
 	writeJSON(w, http.StatusOK, servers)
 }
@@ -257,6 +269,42 @@ func (a *API) importProject(w http.ResponseWriter, r *http.Request) {
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "project.import", "project", project.ID, map[string]string{"server_id": input.ServerID, "operation_id": operationID}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]any{"project": project, "operation_id": operationID})
+}
+
+func (a *API) discoverProjects(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ServerID string `json:"server_id"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.ServerID = strings.TrimSpace(input.ServerID)
+	if input.ServerID == "" {
+		writeError(w, http.StatusBadRequest, "server_id is required")
+		return
+	}
+	server, err := a.store.Server(r.Context(), input.ServerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	operationID, err := a.store.QueueOperation(r.Context(), server.ID, "inventory.scan", map[string]any{}, "inventory-scan:"+server.ID+":"+store.NewID())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue project discovery")
+		return
+	}
+	a.gateway.Wake(server.ID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "project.inventory.scan", "server", server.ID, map[string]string{"operation_id": operationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
 }
 
 func (a *API) threads(w http.ResponseWriter, r *http.Request) {

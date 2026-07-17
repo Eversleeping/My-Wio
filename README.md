@@ -29,6 +29,8 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 - 使用短期一次性令牌注册 Linux Agent
 - 采集心跳、CPU、内存、磁盘和网络指标，维护仓库清单并产生阈值告警
 - 自动发现 Git 仓库，并将导入路径限制在 Agent 克隆根目录内
+- 可从项目页指定在线服务器，立即触发 Agent 扫描并导入该服务器已有的 Git 项目
+- 控制面下发 Agent 更新包，Agent 校验大小与 SHA-256 后原子切换版本，首次启动失败时自动回退
 - 实时展示 Codex 消息、命令输出、文件变更、任务状态、中断和审批请求
 - 使用 Docker Compose 发布目录、健康检查、稳定的 Compose 项目名和上一版本回滚
 - 生产环境使用 PostgreSQL，本地开发使用 SQLite
@@ -121,6 +123,14 @@ Codex provider 配置保存在 `/var/lib/wio-agent/.codex/config.toml`。API Key
 
 Git 和 Docker 未安装时，服务器仍可注册并上报基础指标，但项目发现和部署功能会在完成页面中显示为不可用。Agent 管理的克隆根目录和发布根目录默认分别为 `/var/lib/wio-agent/projects` 与 `/var/lib/wio-agent/releases`。
 
+## 项目发现与 Agent 升级
+
+在“项目”页选择“服务器已有项目”并指定在线服务器后，控制面会下发 `inventory.scan` 操作。Agent 按注册时配置的扫描根目录搜索 Git 仓库，结果仍通过既有清单链路写入项目和工作区，不会复制或修改仓库。
+
+生产控制面镜像中的 amd64 和 arm64 Agent 二进制同时作为升级包。服务器表格只会在控制面版本严格高于 Agent、目标在线且该 Agent 支持自更新时启用升级按钮。Agent 使用自己的注册令牌下载对应架构的包，在 `/var/lib/wio-agent/updates` 中完成大小和 SHA-256 校验后原子切换进程；systemd 服务权限不需要放宽。
+
+自更新能力从 `0.2.0` 开始提供。早于该版本的 Agent 无法识别升级操作，需要通过“注册服务器”的 SSH 安装流程重新安装一次；以后即可使用远程升级。更新后的 Agent 首次连接控制面前如果退出，基础安装版本会在 systemd 重启时自动回退。
+
 ## 部署流程
 
 1. 创建包含 `KEY=value` 环境变量的 Vault 密钥集。
@@ -158,6 +168,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec -T postgres \
 - Vault 密钥集保存后，浏览器不会再次收到其中的明文。
 - SSH 引导程序只能执行内置的 Agent 安装步骤；Git 和 Compose 均通过参数数组调用，Wio 不提供任意 Shell 操作 API。
 - Agent 导入目标和发布路径必须位于配置的根目录内。
+- Agent 更新包只能由已注册 Agent 下载，且执行前必须匹配控制面下发的架构、大小和 SHA-256。
 - 明文 HTTP 仅用于本地开发，生产环境必须使用 Caddy 或同等的 TLS 代理。
 - Docker 组权限实际上等同于 root。请使用专用系统账号，并严格限制其配置文件的访问权限。
 
