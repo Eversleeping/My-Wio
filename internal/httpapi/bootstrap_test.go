@@ -19,11 +19,12 @@ import (
 )
 
 type fakeServerBootstrapper struct {
-	probeTarget    sshbootstrap.HostTarget
-	installRequest sshbootstrap.InstallRequest
-	probeResult    sshbootstrap.HostKeyResult
-	installResult  sshbootstrap.InstallResult
-	installError   error
+	probeTarget     sshbootstrap.HostTarget
+	installRequest  sshbootstrap.InstallRequest
+	probeResult     sshbootstrap.HostKeyResult
+	installResult   sshbootstrap.InstallResult
+	installError    error
+	installProgress []sshbootstrap.InstallProgress
 }
 
 func (fake *fakeServerBootstrapper) Probe(_ context.Context, target sshbootstrap.HostTarget) (sshbootstrap.HostKeyResult, error) {
@@ -33,6 +34,11 @@ func (fake *fakeServerBootstrapper) Probe(_ context.Context, target sshbootstrap
 
 func (fake *fakeServerBootstrapper) Install(_ context.Context, request sshbootstrap.InstallRequest) (sshbootstrap.InstallResult, error) {
 	fake.installRequest = request
+	for _, progress := range fake.installProgress {
+		if request.Progress != nil {
+			request.Progress(progress)
+		}
+	}
 	return fake.installResult, fake.installError
 }
 
@@ -101,6 +107,58 @@ func TestBootstrapAuthenticationFailureHasSpecificCode(t *testing.T) {
 	}
 	if body["code"] != "ssh_auth_failed" {
 		t.Fatalf("unexpected error code: %q", body["code"])
+	}
+}
+
+func TestBootstrapStreamEmitsProgressAndResult(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	fake := &fakeServerBootstrapper{
+		installResult: sshbootstrap.InstallResult{ServerID: "server-id", Hostname: "node-1", Architecture: "amd64"},
+		installProgress: []sshbootstrap.InstallProgress{
+			{Step: "connecting"},
+			{Step: "uploading_agent", Current: 512, Total: 1024},
+		},
+	}
+	api := &API{store: database, bootstrapper: fake, publicURL: "https://wio.example.com", log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directJSONRequest(t, http.MethodPost, "/api/servers/ssh/bootstrap-stream", bootstrapInput(), &store.Session{UserID: "test-user"}, api.streamBootstrapServerSSH)
+	if response.Code != http.StatusOK || !response.Flushed {
+		t.Fatalf("stream returned %d, flushed=%v: %s", response.Code, response.Flushed, response.Body.String())
+	}
+	var events []bootstrapStreamEvent
+	decoder := json.NewDecoder(response.Body)
+	for {
+		var event bootstrapStreamEvent
+		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 4 || events[2].Step != "uploading_agent" || events[2].Current != 512 {
+		t.Fatalf("unexpected progress events: %#v", events)
+	}
+	if events[3].Type != "complete" || events[3].Result == nil || events[3].Result.ServerID != "server-id" {
+		t.Fatalf("missing completion event: %#v", events)
+	}
+}
+
+func TestBootstrapStreamEmitsSafeInstallationError(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	fake := &fakeServerBootstrapper{installError: fmt.Errorf("%w: upload closed by remote host", sshbootstrap.ErrInstallation)}
+	api := &API{store: database, bootstrapper: fake, publicURL: "https://wio.example.com", log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directJSONRequest(t, http.MethodPost, "/api/servers/ssh/bootstrap-stream", bootstrapInput(), nil, api.streamBootstrapServerSSH)
+	var last bootstrapStreamEvent
+	decoder := json.NewDecoder(response.Body)
+	for decoder.Decode(&last) == nil {
+	}
+	if last.Type != "error" || last.Code != "installation_failed" || !strings.Contains(last.Detail, "remote host") {
+		t.Fatalf("unexpected error event: %#v", last)
+	}
+	for _, secret := range []string{"ssh-secret", "api-key-secret", "private-key-secret"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatalf("stream exposed %q", secret)
+		}
 	}
 }
 

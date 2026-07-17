@@ -36,6 +36,39 @@ export function post<T>(path: string, body: unknown): Promise<T> {
   return api<T>(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+export async function postStream<T>(path: string, body: unknown, onEvent: (event: T) => void): Promise<void> {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  const response = await fetch(`/api${path}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers,
+    credentials: "same-origin"
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let errorBody: { error?: string; code?: string } | null = null;
+    try { errorBody = text ? JSON.parse(text) : null; } catch { errorBody = null; }
+    throw new APIError(response.status, errorBody?.error ?? `Request failed (${response.status})`, errorBody?.code ?? "");
+  }
+  if (!response.body) throw new APIError(502, "Streaming response unavailable", "stream_unavailable");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    pending += decoder.decode(value, { stream: !done });
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line) as T);
+    }
+    if (done) break;
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending) as T);
+}
+
 export function remove<T>(path: string): Promise<T> {
   return api<T>(path, { method: "DELETE" });
 }

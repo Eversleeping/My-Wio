@@ -2,8 +2,10 @@ package sshbootstrap
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -76,5 +78,24 @@ func TestClassifyHandshakeError(t *testing.T) {
 	}
 	if err := classifyHandshakeError(errors.New("handshake failed")); !errors.Is(err, ErrConnection) {
 		t.Fatalf("expected connection error, got %v", err)
+	}
+}
+
+func TestProgressReaderReportsUploadCompletion(t *testing.T) {
+	content := strings.Repeat("x", 700<<10)
+	var updates []InstallProgress
+	reader := &progressReader{
+		reader: strings.NewReader(content), total: int64(len(content)), lastAt: time.Now(),
+		notify: func(current, total int64) { updates = append(updates, InstallProgress{Current: current, Total: total}) },
+	}
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) < 2 {
+		t.Fatalf("expected incremental progress, got %d updates", len(updates))
+	}
+	last := updates[len(updates)-1]
+	if last.Current != int64(len(content)) || last.Total != int64(len(content)) {
+		t.Fatalf("unexpected final progress: %#v", last)
 	}
 }

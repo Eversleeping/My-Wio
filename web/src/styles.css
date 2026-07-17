@@ -158,6 +158,16 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .fingerprint-status span { color: var(--muted); font-size: 12px; }
 .fingerprint-value { display: block; margin: 18px 0 10px; padding: 12px; overflow-wrap: anywhere; color: #1f4f3e; background: #edf5f0; border: 1px solid #c7ddd1; border-radius: 5px; font-size: 13px; }
 .security-notice { display: flex; align-items: center; min-height: 35px; color: #765016; font-size: 12px; }
+.install-log { margin-top: 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #f7f8f6; }
+.install-log-heading { min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 8px 11px; color: #3f474d; border-bottom: 1px solid var(--line); font-size: 12px; }
+.install-log-lines { max-height: 210px; overflow: auto; padding: 5px 11px; }
+.install-log-entry { min-height: 31px; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.install-log-entry.running { color: #17687d; }
+.install-log-entry.done { color: #24775a; }
+.install-log-entry.error { color: #98343b; }
+.install-log-entry svg { flex: 0 0 auto; }
+.install-log-entry code { color: inherit; font-size: 11px; }
+.install-log-entry small { grid-column: 2 / -1; padding-bottom: 7px; overflow-wrap: anywhere; color: #98343b; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.4; }
 .enrollment-complete { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .completion-mark { width: 48px; height: 48px; display: grid; place-items: center; margin: 8px 0 12px; color: #fff; background: var(--green); border-radius: 50%; }
 .enrollment-complete > p { margin-top: 6px; color: var(--muted); font-size: 13px; }

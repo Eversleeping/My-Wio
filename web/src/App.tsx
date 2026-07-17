@@ -34,7 +34,7 @@ import {
   X
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { api, APIError, post, remove, setSession, socketURL } from "./api";
+import { api, APIError, post, postStream, remove, setSession, socketURL } from "./api";
 import { currentLocale, useI18n } from "./i18n";
 import type {
   Alert,
@@ -48,6 +48,7 @@ import type {
   Server,
   Session,
   SSHBootstrapResult,
+  SSHBootstrapStreamEvent,
   SSHHostKey,
   StreamEvent,
   Summary,
@@ -57,6 +58,7 @@ import type {
 
 type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "monitoring" | "settings";
 type AuthState = "loading" | "setup" | "login" | "authenticated";
+type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
 
 const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboard }> = [
   { id: "dashboard", labelKey: "nav.overview", icon: LayoutDashboard },
@@ -263,12 +265,13 @@ function ServersPage({ realtime, notify }: PageProps) {
   const [error, setError] = useState("");
   const [hostKey, setHostKey] = useState<SSHHostKey | null>(null);
   const [result, setResult] = useState<SSHBootstrapResult | null>(null);
+  const [installLogs, setInstallLogs] = useState<InstallLogEntry[]>([]);
   const [form, setForm] = useState({
     name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
     password: "", privateKey: "", privateKeyPassphrase: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4"
   });
   const reset = () => {
-    setStep("form"); setError(""); setHostKey(null); setResult(null); setBusy(false);
+    setStep("form"); setError(""); setHostKey(null); setResult(null); setInstallLogs([]); setBusy(false);
     setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: "gpt-5.4" });
   };
   const open = () => { reset(); setDialog(true); };
@@ -283,9 +286,11 @@ function ServersPage({ realtime, notify }: PageProps) {
   };
   const install = async () => {
     if (!hostKey) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setInstallLogs([]);
     try {
-      const installed = await post<SSHBootstrapResult>("/servers/ssh/bootstrap", {
+      let installed: SSHBootstrapResult | null = null;
+      let streamedFailure: APIError | null = null;
+      await postStream<SSHBootstrapStreamEvent>("/servers/ssh/bootstrap-stream", {
         name: form.name.trim(), scan_roots: form.roots.split(",").map(value => value.trim()).filter(Boolean),
         host: form.host.trim(), port: Number(form.port), user: form.user.trim(), auth_method: form.authMethod,
         password: form.authMethod === "password" ? form.password : "",
@@ -293,7 +298,23 @@ function ServersPage({ realtime, notify }: PageProps) {
         private_key_passphrase: form.authMethod === "private_key" ? form.privateKeyPassphrase : "",
         host_key_fingerprint: hostKey.fingerprint,
         codex_api_url: form.codexAPIURL.trim(), codex_api_key: form.codexAPIKey, codex_model: form.codexModel.trim()
+      }, event => {
+        if (event.type === "progress" && event.step) {
+          setInstallLogs(current => {
+            const existing = current.findIndex(entry => entry.step === event.step);
+            if (existing >= 0) return current.map((entry, index) => index === existing ? { ...entry, current: event.current ?? entry.current, total: event.total ?? entry.total } : entry);
+            return [...current.map<InstallLogEntry>(entry => entry.status === "running" ? { ...entry, status: "done" } : entry), { step: event.step!, status: "running", current: event.current ?? 0, total: event.total ?? 0, detail: "" }];
+          });
+        } else if (event.type === "error") {
+          streamedFailure = new APIError(422, event.error ?? t("server.error.installation_failed"), event.code ?? "installation_failed");
+          setInstallLogs(current => current.map<InstallLogEntry>((entry, index) => index === current.length - 1 ? { ...entry, status: "error", detail: event.detail ?? "" } : entry));
+        } else if (event.type === "complete" && event.result) {
+          installed = event.result;
+          setInstallLogs(current => current.map<InstallLogEntry>(entry => ({ ...entry, status: "done" })));
+        }
       });
+      if (streamedFailure) throw streamedFailure;
+      if (!installed) throw new APIError(502, t("server.error.stream_incomplete"), "stream_incomplete");
       setResult(installed); setStep("complete"); servers.reload(); notify(t("server.installed"));
       setForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", codexAPIKey: "" }));
     } catch (err) { setError(enrollmentMessage(err, t)); } finally { setBusy(false); }
@@ -321,7 +342,8 @@ function ServersPage({ realtime, notify }: PageProps) {
     <div className="fingerprint-status"><ShieldCheck size={28} /><div><strong>{t("server.fingerprint")}</strong><span>{form.host}:{form.port} · {hostKey.key_type}</span></div></div>
     <code className="fingerprint-value">{hostKey.fingerprint}</code>
     <p className="security-notice">{t("server.fingerprintNotice")}</p>
-    <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={() => { setStep("form"); setError(""); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button" disabled={busy} onClick={() => void install()}>{busy ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{busy ? t("server.installing") : t("server.confirmInstall")}</button></DialogActions>
+    {installLogs.length > 0 && <div className="install-log" aria-live="polite"><div className="install-log-heading"><SquareTerminal size={16} /><strong>{t("server.installLog")}</strong></div><div className="install-log-lines">{installLogs.map(entry => <div className={`install-log-entry ${entry.status}`} key={entry.step}>{entry.status === "running" ? <LoaderCircle className="spin" size={15} /> : entry.status === "done" ? <Check size={15} /> : <AlertTriangle size={15} />}<span>{t(`server.progress.${entry.step}`)}</span>{entry.total > 0 && <code>{Math.min(100, Math.round((entry.current / entry.total) * 100))}%</code>}{entry.detail && <small>{entry.detail}</small>}</div>)}</div></div>}
+    <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={() => { setStep("form"); setError(""); setInstallLogs([]); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button" disabled={busy} onClick={() => void install()}>{busy ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{busy ? t("server.installing") : t("server.confirmInstall")}</button></DialogActions>
   </div> : <div className="enrollment-step enrollment-complete"><div className="completion-mark"><Check size={28} /></div><h3>{t("server.installed")}</h3>{result && <p>{t("server.installedSummary", { hostname: result.hostname, architecture: result.architecture })}</p>}{result && result.warnings.length > 0 && <div className="warning-list"><strong>{t("server.warningTitle")}</strong>{result.warnings.map(warning => <span key={warning}><AlertTriangle size={15} />{t(`server.warning.${warning}`)}</span>)}</div>}<DialogActions><button className="primary-button" onClick={close}><Check size={16} />{t("common.done")}</button></DialogActions></div>}</Dialog></div>;
 }
 

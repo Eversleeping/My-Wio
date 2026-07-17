@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -58,6 +59,13 @@ type InstallRequest struct {
 	CodexAPIURL         string
 	CodexAPIKey         string
 	CodexModel          string
+	Progress            func(InstallProgress)
+}
+
+type InstallProgress struct {
+	Step    string `json:"step"`
+	Current int64  `json:"current,omitempty"`
+	Total   int64  `json:"total,omitempty"`
 }
 
 type InstallResult struct {
@@ -95,11 +103,24 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	if err := validateInstallRequest(request); err != nil {
 		return InstallResult{}, err
 	}
+	request.report("connecting", 0, 0)
 	client, hostKey, err := connect(ctx, request.Target, request.ExpectedFingerprint)
 	if err != nil {
 		return InstallResult{}, err
 	}
-	defer client.Close()
+	clientDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = client.Close()
+		case <-clientDone:
+		}
+	}()
+	defer func() {
+		close(clientDone)
+		_ = client.Close()
+	}()
+	request.report("inspecting", 0, 0)
 	probe, err := inspect(client, hostKey)
 	if err != nil {
 		return InstallResult{}, err
@@ -125,12 +146,19 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	}
 
 	root := isRoot(client)
-	if err := upload(client, root, "/usr/local/bin/wio-agent", "0755", agentBinary); err != nil {
+	request.report("uploading_agent", 0, int64(len(agentBinary)))
+	if err := upload(client, root, "/usr/local/bin/wio-agent", "0755", agentBinary, func(current, total int64) {
+		request.report("uploading_agent", current, total)
+	}); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install agent binary: %v", ErrInstallation, err)
 	}
-	if err := upload(client, root, "/etc/systemd/system/wio-agent.service", "0644", unit); err != nil {
+	request.report("uploading_service", 0, int64(len(unit)))
+	if err := upload(client, root, "/etc/systemd/system/wio-agent.service", "0644", unit, func(current, total int64) {
+		request.report("uploading_service", current, total)
+	}); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install systemd unit: %v", ErrInstallation, err)
 	}
+	request.report("preparing_account", 0, 0)
 	setup := `set -eu
 getent group docker >/dev/null 2>&1 || groupadd --system docker
 id -u wio-agent >/dev/null 2>&1 || useradd --system --home /var/lib/wio-agent --create-home --shell /usr/sbin/nologin wio-agent
@@ -141,10 +169,11 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 	if _, err := run(client, elevated(root, setup)); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
-	if err := upload(client, root, "/etc/wio-agent/codex.key", "0600", []byte(request.CodexAPIKey+"\n")); err != nil {
+	request.report("configuring_codex", 0, 0)
+	if err := upload(client, root, "/etc/wio-agent/codex.key", "0600", []byte(request.CodexAPIKey+"\n"), nil); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install Codex credentials: %v", ErrInstallation, err)
 	}
-	if err := upload(client, root, "/var/lib/wio-agent/.codex/config.toml", "0600", []byte(codexConfiguration(request.CodexAPIURL, request.CodexModel))); err != nil {
+	if err := upload(client, root, "/var/lib/wio-agent/.codex/config.toml", "0600", []byte(codexConfiguration(request.CodexAPIURL, request.CodexModel)), nil); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install Codex configuration: %v", ErrInstallation, err)
 	}
 	if _, err := run(client, elevated(root, "chown wio-agent:wio-agent /var/lib/wio-agent/.codex/config.toml")); err != nil {
@@ -154,6 +183,7 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 	codexReady := probe.CodexReady
 	resultWarnings := make([]string, 0, 4)
 	if !codexReady && probe.NPMReady {
+		request.report("installing_codex", 0, 0)
 		if _, installErr := run(client, elevated(root, "npm install --global @openai/codex@0.139.0")); installErr == nil {
 			codexReady = commandAvailable(client, "codex")
 		} else {
@@ -164,6 +194,7 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 		resultWarnings = append(resultWarnings, "codex_install_requires_npm")
 	}
 
+	request.report("enrolling_agent", 0, 0)
 	enroll := "/usr/local/bin/wio-agent enroll --url " + shellQuote(request.ControlURL) + " --token " + shellQuote(request.EnrollmentToken)
 	output, err := run(client, elevated(root, enroll))
 	if err != nil {
@@ -179,6 +210,7 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 	if _, err := run(client, elevated(root, permissions)); err != nil {
 		result.Warnings = append(result.Warnings, "config_permission_failed")
 	}
+	request.report("starting_service", 0, 0)
 	start := "systemctl daemon-reload && systemctl enable --now wio-agent"
 	if _, err := run(client, elevated(root, start)); err != nil {
 		result.Warnings = append(result.Warnings, "service_start_failed")
@@ -195,6 +227,12 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 		result.Warnings = append(result.Warnings, "codex_unavailable")
 	}
 	return result, nil
+}
+
+func (request InstallRequest) report(step string, current, total int64) {
+	if request.Progress != nil {
+		request.Progress(InstallProgress{Step: step, Current: current, Total: total})
+	}
 }
 
 func validateInstallRequest(request InstallRequest) error {
@@ -457,7 +495,7 @@ func commandAvailable(client *ssh.Client, command string) bool {
 	return err == nil
 }
 
-func upload(client *ssh.Client, root bool, destination, mode string, content []byte) error {
+func upload(client *ssh.Client, root bool, destination, mode string, content []byte, progress func(int64, int64)) error {
 	allowed := map[string]string{
 		"/usr/local/bin/wio-agent":              "0755",
 		"/etc/systemd/system/wio-agent.service": "0644",
@@ -484,11 +522,35 @@ mv -f "$tmp" %s
 	output := &limitedBuffer{remaining: 4 << 10}
 	session.Stdout = output
 	session.Stderr = output
-	session.Stdin = bytes.NewReader(content)
+	reader := io.Reader(bytes.NewReader(content))
+	if progress != nil {
+		reader = &progressReader{reader: reader, total: int64(len(content)), notify: progress, lastAt: time.Now()}
+	}
+	session.Stdin = reader
 	if err := session.Run(elevated(root, temporary)); err != nil {
 		return fmt.Errorf("%w: %s", ErrInstallation, remoteErrorDetail(output.String(), err))
 	}
 	return nil
+}
+
+type progressReader struct {
+	reader      io.Reader
+	total       int64
+	current     int64
+	lastCurrent int64
+	lastAt      time.Time
+	notify      func(int64, int64)
+}
+
+func (reader *progressReader) Read(buffer []byte) (int, error) {
+	count, err := reader.reader.Read(buffer)
+	reader.current += int64(count)
+	if reader.current == reader.total || reader.current-reader.lastCurrent >= 256<<10 || time.Since(reader.lastAt) >= time.Second {
+		reader.notify(reader.current, reader.total)
+		reader.lastCurrent = reader.current
+		reader.lastAt = time.Now()
+	}
+	return count, err
 }
 
 func remoteErrorDetail(output string, err error) string {
