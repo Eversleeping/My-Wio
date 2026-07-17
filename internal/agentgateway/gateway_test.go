@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -87,5 +88,50 @@ func TestConnectSendsDownlinkKeepalive(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("gateway did not stop after stream cancellation")
+	}
+}
+
+func TestOperationResultPublishesRealtimeEvent(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "build-01", []string{"/srv"}, "result-enrollment-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "result-enrollment-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "build-01.local", "result-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, err := database.QueueOperation(ctx, server.ID, "inventory.scan", map[string]any{}, "result-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := realtime.New()
+	subscriptionID, events := hub.Subscribe()
+	t.Cleanup(func() { hub.Unsubscribe(subscriptionID) })
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gateway := New(database, hub, security.DevVault(), log)
+	result := protocol.OperationResult{OperationID: operationID, Status: "failed", Message: "network timeout"}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		if event.Kind != "operation.failed" || event.StreamID != server.ID {
+			t.Fatalf("unexpected realtime event: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for operation result event")
 	}
 }

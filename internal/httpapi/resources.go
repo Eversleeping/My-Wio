@@ -271,6 +271,98 @@ func (a *API) importProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"project": project, "operation_id": operationID})
 }
 
+func (a *API) retryProjectImport(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	project, err := a.store.Project(r.Context(), projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	latest, err := a.store.LatestProjectImport(r.Context(), projectID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && latest.Status != "failed") {
+		writeError(w, http.StatusConflict, "only a failed Git import can be retried")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Git import")
+		return
+	}
+	active, err := a.store.HasActiveProjectImport(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check Git import queue")
+		return
+	}
+	if active {
+		writeError(w, http.StatusConflict, "a Git import is already active for this project")
+		return
+	}
+	server, err := a.store.Server(r.Context(), latest.ServerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusConflict, "the original target server is unavailable")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load target server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "the target server is offline")
+		return
+	}
+	command := protocol.GitImportCommand{ProjectID: project.ID, Name: project.Name, RemoteURL: project.RemoteURL, Destination: latest.Command.Destination}
+	operationID, err := a.store.QueueOperation(r.Context(), server.ID, "git.import", command, "git-import-retry:"+project.ID+":"+store.NewID())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue Git import retry")
+		return
+	}
+	a.gateway.Wake(server.ID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "project.import.retry", "project", project.ID, map[string]string{"server_id": server.ID, "operation_id": operationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
+func (a *API) deleteProject(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	project, err := a.store.Project(r.Context(), projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	active, err := a.store.HasActiveProjectImport(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check Git import queue")
+		return
+	}
+	if active {
+		writeError(w, http.StatusConflict, "project cannot be deleted while a Git import is active")
+		return
+	}
+	if project.WorkspaceCount > 0 {
+		writeError(w, http.StatusConflict, "project cannot be deleted while workspaces exist")
+		return
+	}
+	deleted, err := a.store.DeleteProject(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete project")
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusConflict, "project cannot be deleted while dependent resources exist")
+		return
+	}
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "project.delete", "project", project.ID, map[string]string{"name": project.Name}, clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (a *API) discoverProjects(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		ServerID string `json:"server_id"`

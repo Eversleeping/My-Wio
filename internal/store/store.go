@@ -306,17 +306,118 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 }
 
 type Project struct {
-	ID             string    `db:"id" json:"id"`
-	Name           string    `db:"name" json:"name"`
-	RemoteURL      string    `db:"remote_url" json:"remote_url"`
-	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
-	WorkspaceCount int       `db:"workspace_count" json:"workspace_count"`
+	ID                string    `db:"id" json:"id"`
+	Name              string    `db:"name" json:"name"`
+	RemoteURL         string    `db:"remote_url" json:"remote_url"`
+	UpdatedAt         time.Time `db:"updated_at" json:"updated_at"`
+	WorkspaceCount    int       `db:"workspace_count" json:"workspace_count"`
+	ImportStatus      string    `db:"-" json:"import_status"`
+	ImportMessage     string    `db:"-" json:"import_message"`
+	ImportServerID    string    `db:"-" json:"import_server_id"`
+	ImportServerName  string    `db:"-" json:"import_server_name"`
+	ImportOperationID string    `db:"-" json:"import_operation_id"`
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project
-	err := s.DB.SelectContext(ctx, &out, `SELECT p.id,p.name,p.remote_url,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id GROUP BY p.id,p.name,p.remote_url,p.updated_at ORDER BY p.name`)
-	return out, err
+	if err := s.DB.SelectContext(ctx, &out, `SELECT p.id,p.name,p.remote_url,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id GROUP BY p.id,p.name,p.remote_url,p.updated_at ORDER BY p.name`); err != nil {
+		return nil, err
+	}
+	imports, err := s.listProjectImports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	latest := make(map[string]ProjectImportOperation, len(imports))
+	for _, operation := range imports {
+		if _, exists := latest[operation.Command.ProjectID]; !exists {
+			latest[operation.Command.ProjectID] = operation
+		}
+	}
+	for i := range out {
+		if operation, ok := latest[out[i].ID]; ok {
+			out[i].ImportStatus = operation.Status
+			out[i].ImportMessage = operation.Message
+			out[i].ImportServerID = operation.ServerID
+			out[i].ImportServerName = operation.ServerName
+			out[i].ImportOperationID = operation.ID
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) Project(ctx context.Context, id string) (Project, error) {
+	var project Project
+	err := s.DB.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.remote_url,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id WHERE p.id=? GROUP BY p.id,p.name,p.remote_url,p.updated_at`), id)
+	return project, err
+}
+
+type ProjectImportOperation struct {
+	ID         string
+	ServerID   string
+	ServerName string
+	Status     string
+	Message    string
+	CreatedAt  time.Time
+	Command    protocol.GitImportCommand
+}
+
+func (s *Store) listProjectImports(ctx context.Context) ([]ProjectImportOperation, error) {
+	var rows []struct {
+		ID         string    `db:"id"`
+		ServerID   string    `db:"server_id"`
+		ServerName string    `db:"server_name"`
+		Status     string    `db:"status"`
+		Message    string    `db:"message"`
+		Payload    string    `db:"payload"`
+		CreatedAt  time.Time `db:"created_at"`
+	}
+	if err := s.DB.SelectContext(ctx, &rows, `SELECT o.id,o.server_id,s.name server_name,o.status,COALESCE(o.result,'') message,o.payload,o.created_at FROM agent_operations o JOIN servers s ON s.id=o.server_id WHERE o.kind='git.import' ORDER BY o.created_at DESC`); err != nil {
+		return nil, err
+	}
+	out := make([]ProjectImportOperation, 0, len(rows))
+	for _, row := range rows {
+		var command protocol.GitImportCommand
+		if json.Unmarshal([]byte(row.Payload), &command) != nil || command.ProjectID == "" {
+			continue
+		}
+		out = append(out, ProjectImportOperation{ID: row.ID, ServerID: row.ServerID, ServerName: row.ServerName, Status: row.Status, Message: row.Message, CreatedAt: row.CreatedAt, Command: command})
+	}
+	return out, nil
+}
+
+func (s *Store) LatestProjectImport(ctx context.Context, projectID string) (ProjectImportOperation, error) {
+	operations, err := s.listProjectImports(ctx)
+	if err != nil {
+		return ProjectImportOperation{}, err
+	}
+	for _, operation := range operations {
+		if operation.Command.ProjectID == projectID {
+			return operation, nil
+		}
+	}
+	return ProjectImportOperation{}, sql.ErrNoRows
+}
+
+func (s *Store) HasActiveProjectImport(ctx context.Context, projectID string) (bool, error) {
+	operations, err := s.listProjectImports(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, operation := range operations {
+		if operation.Command.ProjectID == projectID && (operation.Status == "queued" || operation.Status == "delivered") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) DeleteProject(ctx context.Context, projectID string) (bool, error) {
+	result, err := s.DB.ExecContext(ctx, s.Q(`DELETE FROM projects WHERE id=? AND NOT EXISTS (SELECT 1 FROM workspaces WHERE project_id=projects.id) AND NOT EXISTS (SELECT 1 FROM deployment_targets WHERE project_id=projects.id)`), projectID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
 }
 
 type Workspace struct {
@@ -354,7 +455,7 @@ func (s *Store) QueueEncryptedOperation(ctx context.Context, serverID, kind, cip
 
 func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, payload, idempotency string) (string, error) {
 	id := NewID()
-	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key) VALUES(?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING"), id, serverID, kind, payload, idempotency)
+	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING"), id, serverID, kind, payload, idempotency, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}

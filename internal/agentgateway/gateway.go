@@ -176,7 +176,14 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if err := json.Unmarshal(msg.PayloadJSON, &result); err != nil {
 			return err
 		}
-		return g.store.CompleteOperation(ctx, result)
+		if err := g.store.CompleteOperation(ctx, result); err != nil {
+			return err
+		}
+		payload, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "operation." + result.Status, Payload: security.RedactJSON(payload)})
 	case "agent_update_status":
 		return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "agent.updated", Payload: security.RedactJSON(msg.PayloadJSON)})
 	case "deployment_status":

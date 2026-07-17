@@ -98,6 +98,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/workspaces", api.workspaces)
 			private.Post("/projects/import", api.importProject)
 			private.Post("/projects/discover", api.discoverProjects)
+			private.Post("/projects/{projectID}/retry-import", api.retryProjectImport)
+			private.Delete("/projects/{projectID}", api.deleteProject)
 			private.Get("/threads", api.threads)
 			private.Post("/threads", api.createThread)
 			private.Get("/threads/{threadID}/events", api.threadEvents)
