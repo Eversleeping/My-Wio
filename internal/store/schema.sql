@@ -162,6 +162,8 @@ CREATE TABLE IF NOT EXISTS credential_profiles (
   endpoint TEXT NOT NULL,
   username TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
+  commit_name TEXT NOT NULL DEFAULT '',
+  commit_email TEXT NOT NULL DEFAULT '',
   ciphertext TEXT NOT NULL,
   key_version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

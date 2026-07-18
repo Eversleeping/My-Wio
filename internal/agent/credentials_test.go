@@ -26,7 +26,7 @@ func TestConfigureCredentialsWritesProtectedFilesAndRemovesGit(t *testing.T) {
 	client := NewClient(Config{CodexAPIKeyFile: keyFile, StateDir: filepath.Join(root, "state")}, log)
 	command := protocol.ConfigureCredentialsCommand{
 		CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "new-codex-secret", CodexModel: "gpt-5.6-sol",
-		GitEndpoint: "https://gitee.com", GitUsername: "user@example.com", GitToken: "token:/with spaces",
+		GitEndpoint: "https://gitee.com", GitUsername: "user@example.com", GitToken: "token:/with spaces", GitCommitName: "Example User", GitCommitEmail: "user@users.noreply.github.com",
 	}
 	if err := client.configureCredentials(command); err != nil {
 		t.Fatal(err)
@@ -41,13 +41,14 @@ func TestConfigureCredentialsWritesProtectedFilesAndRemovesGit(t *testing.T) {
 	key, _ := os.ReadFile(keyFile)
 	config, _ := os.ReadFile(paths[1])
 	credential, _ := os.ReadFile(paths[2])
+	gitConfig, _ := os.ReadFile(paths[3])
 	parsed, err := url.Parse(strings.TrimSpace(string(credential)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	password, _ := parsed.User.Password()
-	if string(key) != "new-codex-secret\n" || !strings.Contains(string(config), `base_url = "https://api.example.com/v1"`) || parsed.User.Username() != command.GitUsername || password != command.GitToken {
-		t.Fatalf("unexpected credential files: key=%q config=%q credential=%q", key, config, credential)
+	if string(key) != "new-codex-secret\n" || !strings.Contains(string(config), `base_url = "https://api.example.com/v1"`) || parsed.User.Username() != command.GitUsername || password != command.GitToken || !strings.Contains(string(gitConfig), `name = "Example User"`) || !strings.Contains(string(gitConfig), `email = "user@users.noreply.github.com"`) {
+		t.Fatalf("unexpected credential files: key=%q config=%q credential=%q gitconfig=%q", key, config, credential, gitConfig)
 	}
 	if err := client.configureCredentials(protocol.ConfigureCredentialsCommand{CodexAPIURL: command.CodexAPIURL, CodexAPIKey: command.CodexAPIKey, CodexModel: command.CodexModel, RemoveGit: true}); err != nil {
 		t.Fatal(err)

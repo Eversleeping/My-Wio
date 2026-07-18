@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wio-platform/wio/internal/gitidentity"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -27,6 +28,8 @@ func (c *Client) configureCredentials(command protocol.ConfigureCredentialsComma
 	command.CodexModel = strings.TrimSpace(command.CodexModel)
 	command.GitEndpoint = strings.TrimRight(strings.TrimSpace(command.GitEndpoint), "/")
 	command.GitUsername = strings.TrimSpace(command.GitUsername)
+	command.GitCommitName = strings.TrimSpace(command.GitCommitName)
+	command.GitCommitEmail = strings.TrimSpace(command.GitCommitEmail)
 	if err := validateCredentialCommand(command); err != nil {
 		return err
 	}
@@ -59,7 +62,11 @@ func (c *Client) configureCredentials(command protocol.ConfigureCredentialsComma
 			changes[paths[3]] = nil
 		} else {
 			changes[paths[2]] = pointer(gitCredential)
-			changes[paths[3]] = pointer("[credential]\n\thelper = store --file=" + paths[2] + "\n")
+			gitConfig, err := gitidentity.Configuration(command.GitCommitName, command.GitCommitEmail, paths[2])
+			if err != nil {
+				return err
+			}
+			changes[paths[3]] = pointer(gitConfig)
 		}
 		for _, path := range paths {
 			value := changes[path]
@@ -92,7 +99,7 @@ func validateCredentialCommand(command protocol.ConfigureCredentialsCommand) err
 		return errors.New("Codex API key is invalid")
 	}
 	if command.RemoveGit {
-		if command.GitEndpoint != "" || command.GitUsername != "" || command.GitToken != "" {
+		if command.GitEndpoint != "" || command.GitUsername != "" || command.GitToken != "" || command.GitCommitName != "" || command.GitCommitEmail != "" {
 			return errors.New("Git credentials must be empty when removal is requested")
 		}
 		return nil
@@ -103,6 +110,9 @@ func validateCredentialCommand(command protocol.ConfigureCredentialsCommand) err
 	}
 	if command.GitUsername == "" || strings.ContainsAny(command.GitUsername, "\r\n\x00") || !validCredentialValue(command.GitToken) {
 		return errors.New("Git credentials are invalid")
+	}
+	if _, _, err := gitidentity.Normalize(command.GitCommitName, command.GitCommitEmail); err != nil {
+		return err
 	}
 	return nil
 }

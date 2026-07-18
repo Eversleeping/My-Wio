@@ -57,13 +57,15 @@ func (a *API) updateServerCredentialProfiles(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	command := protocol.ConfigureCredentialsCommand{
-		CodexAPIURL: resolved.CodexAPIURL,
-		CodexAPIKey: resolved.CodexAPIKey,
-		CodexModel:  resolved.CodexModel,
-		GitEndpoint: resolved.GitEndpoint,
-		GitUsername: resolved.GitUsername,
-		GitToken:    resolved.GitToken,
-		RemoveGit:   input.GitProfileID == "",
+		CodexAPIURL:    resolved.CodexAPIURL,
+		CodexAPIKey:    resolved.CodexAPIKey,
+		CodexModel:     resolved.CodexModel,
+		GitEndpoint:    resolved.GitEndpoint,
+		GitUsername:    resolved.GitUsername,
+		GitToken:       resolved.GitToken,
+		GitCommitName:  resolved.GitCommitName,
+		GitCommitEmail: resolved.GitCommitEmail,
+		RemoveGit:      input.GitProfileID == "",
 	}
 	ciphertext, err := a.vault.Encrypt(command)
 	if err != nil {

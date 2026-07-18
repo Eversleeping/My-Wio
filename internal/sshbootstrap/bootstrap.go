@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/wio-platform/wio/internal/gitidentity"
 )
 
 var (
@@ -62,6 +64,8 @@ type InstallRequest struct {
 	GitEndpoint         string
 	GitUsername         string
 	GitToken            string
+	GitCommitName       string
+	GitCommitEmail      string
 	Progress            func(InstallProgress)
 }
 
@@ -191,7 +195,10 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 		if err := upload(client, root, "/var/lib/wio-agent/.git-credentials", "0600", []byte(credential+"\n"), nil); err != nil {
 			return InstallResult{}, fmt.Errorf("%w: could not install Git credentials: %v", ErrInstallation, err)
 		}
-		gitConfig := "[credential]\n\thelper = store --file=/var/lib/wio-agent/.git-credentials\n"
+		gitConfig, err := gitidentity.Configuration(request.GitCommitName, request.GitCommitEmail, "/var/lib/wio-agent/.git-credentials")
+		if err != nil {
+			return InstallResult{}, ErrInvalidTarget
+		}
 		if err := upload(client, root, "/var/lib/wio-agent/.gitconfig", "0600", []byte(gitConfig), nil); err != nil {
 			return InstallResult{}, fmt.Errorf("%w: could not install Git configuration: %v", ErrInstallation, err)
 		}
@@ -267,6 +274,9 @@ func validateInstallRequest(request InstallRequest) error {
 	}
 	if request.GitEndpoint != "" {
 		if !validAPIURL(request.GitEndpoint) || strings.TrimSpace(request.GitUsername) == "" || len(request.GitUsername) > 256 || strings.ContainsAny(request.GitUsername, "\r\n\x00") || !validAPIKey(request.GitToken) {
+			return ErrInvalidTarget
+		}
+		if _, _, err := gitidentity.Normalize(request.GitCommitName, request.GitCommitEmail); err != nil {
 			return ErrInvalidTarget
 		}
 	}

@@ -56,7 +56,7 @@ func TestCredentialProfilesEncryptSecretsAndReturnMetadataOnly(t *testing.T) {
 func TestCredentialProfileEndpointValidation(t *testing.T) {
 	for name, input := range map[string]credentialProfileInput{
 		"local Codex HTTP endpoint": {Kind: "codex", Name: "Local", Endpoint: "http://127.0.0.1:8080/v1", Model: "gpt-5.6-sol", Secret: "secret-value"},
-		"Git HTTPS endpoint":        {Kind: "git", Name: "Git", Endpoint: "https://gitee.com", Username: "user", Secret: "secret-value"},
+		"Git HTTPS endpoint":        {Kind: "git", Name: "Git", Endpoint: "https://gitee.com", Username: "user", CommitName: "Example User", CommitEmail: "user@example.com", Secret: "secret-value"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateCredentialProfile(input); err != nil {
@@ -64,9 +64,31 @@ func TestCredentialProfileEndpointValidation(t *testing.T) {
 			}
 		})
 	}
-	insecureGit := credentialProfileInput{Kind: "git", Name: "Git", Endpoint: "http://gitee.com", Username: "user", Secret: "secret-value"}
+	insecureGit := credentialProfileInput{Kind: "git", Name: "Git", Endpoint: "http://gitee.com", Username: "user", CommitName: "Example User", CommitEmail: "user@example.com", Secret: "secret-value"}
 	if err := validateCredentialProfile(insecureGit); err == nil {
 		t.Fatal("insecure Git credential endpoint was accepted")
+	}
+	missingIdentity := credentialProfileInput{Kind: "git", Name: "Git", Endpoint: "https://gitee.com", Username: "user", Secret: "secret-value"}
+	if err := validateCredentialProfile(missingIdentity); err == nil {
+		t.Fatal("Git profile without commit identity was accepted")
+	}
+}
+
+func TestGitCredentialProfilePersistsCommitIdentityWithoutExposingToken(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	api := &API{store: database, vault: security.DevVault()}
+	response := directJSONRequest(t, http.MethodPost, "/api/credential-profiles", map[string]string{
+		"kind": "git", "name": "GitHub", "endpoint": "https://github.com", "username": "git-user", "commit_name": "Example User", "commit_email": "user@users.noreply.github.com", "secret": "git-token-value",
+	}, &store.Session{UserID: "test-user"}, api.saveCredentialProfile)
+	if response.Code != http.StatusCreated || strings.Contains(response.Body.String(), "git-token-value") {
+		t.Fatalf("unexpected Git profile response: %d %s", response.Code, response.Body.String())
+	}
+	var profile store.CredentialProfile
+	if err := json.Unmarshal(response.Body.Bytes(), &profile); err != nil {
+		t.Fatal(err)
+	}
+	if profile.CommitName != "Example User" || profile.CommitEmail != "user@users.noreply.github.com" {
+		t.Fatalf("commit identity was not persisted: %#v", profile)
 	}
 }
 
@@ -79,7 +101,7 @@ func TestBootstrapResolvesCodexAndGitCredentialProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	git, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "Git preset", Endpoint: "https://github.com", Username: "git-user"}, gitCiphertext)
+	git, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "Git preset", Endpoint: "https://github.com", Username: "git-user", CommitName: "Example User", CommitEmail: "user@users.noreply.github.com"}, gitCiphertext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +118,7 @@ func TestBootstrapResolvesCodexAndGitCredentialProfiles(t *testing.T) {
 		t.Fatalf("bootstrap returned %d: %s", response.Code, response.Body.String())
 	}
 	request := fake.installRequest
-	if request.CodexAPIURL != codex.Endpoint || request.CodexAPIKey != "profile-codex-secret" || request.CodexModel != codex.Model || request.GitEndpoint != git.Endpoint || request.GitUsername != git.Username || request.GitToken != "profile-git-token" {
+	if request.CodexAPIURL != codex.Endpoint || request.CodexAPIKey != "profile-codex-secret" || request.CodexModel != codex.Model || request.GitEndpoint != git.Endpoint || request.GitUsername != git.Username || request.GitToken != "profile-git-token" || request.GitCommitName != git.CommitName || request.GitCommitEmail != git.CommitEmail {
 		t.Fatalf("profiles were not resolved into install request: %#v", request)
 	}
 	for _, secret := range []string{"profile-codex-secret", "profile-git-token"} {

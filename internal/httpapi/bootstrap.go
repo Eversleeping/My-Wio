@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wio-platform/wio/internal/gitidentity"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
 	"github.com/wio-platform/wio/internal/store"
@@ -51,6 +52,8 @@ type sshBootstrapInput struct {
 	GitEndpoint        string   `json:"-"`
 	GitUsername        string   `json:"-"`
 	GitToken           string   `json:"-"`
+	GitCommitName      string   `json:"-"`
+	GitCommitEmail     string   `json:"-"`
 	CodexProfileName   string   `json:"-"`
 	GitProfileName     string   `json:"-"`
 }
@@ -248,6 +251,8 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 		GitEndpoint:         input.GitEndpoint,
 		GitUsername:         input.GitUsername,
 		GitToken:            input.GitToken,
+		GitCommitName:       input.GitCommitName,
+		GitCommitEmail:      input.GitCommitEmail,
 		Progress:            progress,
 	})
 	if err != nil {
@@ -294,6 +299,9 @@ func (a *API) resolveBootstrapCredentialProfiles(ctx context.Context, input sshB
 		if err != nil || profile.Kind != "git" || a.vault == nil {
 			return sshBootstrapInput{}, errCredentialProfile
 		}
+		if _, _, err := gitidentity.Normalize(profile.CommitName, profile.CommitEmail); err != nil {
+			return sshBootstrapInput{}, errCredentialProfile
+		}
 		var secret string
 		if err := a.vault.Decrypt(profile.Ciphertext, &secret); err != nil {
 			return sshBootstrapInput{}, errCredentialProfile
@@ -301,6 +309,8 @@ func (a *API) resolveBootstrapCredentialProfiles(ctx context.Context, input sshB
 		input.GitEndpoint = profile.Endpoint
 		input.GitUsername = profile.Username
 		input.GitToken = secret
+		input.GitCommitName = profile.CommitName
+		input.GitCommitEmail = profile.CommitEmail
 		input.GitProfileName = profile.Name
 	}
 	return input, nil

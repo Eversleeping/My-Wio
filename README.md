@@ -119,7 +119,7 @@ go build ./cmd/controlplane ./cmd/agent
 
 自动注册会创建专用 `wio-agent` 系统用户、安装 Agent 和 systemd unit、生成一次性注册令牌并启动服务。目标服务器缺少 Codex CLI 但存在 npm 时，安装器会自动安装与当前适配器匹配的 Codex CLI 版本。
 
-Codex provider 配置保存在 `/var/lib/wio-agent/.codex/config.toml`。API Key 写入目标服务器的 `/etc/wio-agent/codex.key`，权限为 `0600`；控制面不保存 SSH 密码或 SSH 私钥，Codex API Key 与 Git Token 预设仅以 Vault 密文保存，且不会把明文写入审计日志或返回浏览器。Agent 仅在启动 `codex app-server` 子进程时注入 API Key，Git、扫描和 Docker Compose 子进程不会继承它。
+Codex provider 配置保存在 `/var/lib/wio-agent/.codex/config.toml`。API Key 写入目标服务器的 `/etc/wio-agent/codex.key`，权限为 `0600`；控制面不保存 SSH 密码或 SSH 私钥，Codex API Key 与 Git Token 预设仅以 Vault 密文保存，且不会把明文写入审计日志或返回浏览器。Git 预设还会保存非敏感的提交姓名与邮箱，并与 HTTPS 凭据助手一起写入 Agent 的全局 `.gitconfig`。Agent 仅在启动 `codex app-server` 子进程时注入 API Key，Git、扫描和 Docker Compose 子进程不会继承它。
 
 Git 和 Docker 未安装时，服务器仍可注册并上报基础指标，但项目发现和部署功能会在完成页面中显示为不可用。Agent 管理的克隆根目录和发布根目录默认分别为 `/var/lib/wio-agent/projects` 与 `/var/lib/wio-agent/releases`。
 

@@ -2,12 +2,37 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
+
+func TestOpenMigratesLegacyCredentialProfilesWithCommitIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE credential_profiles (id TEXT PRIMARY KEY,kind TEXT NOT NULL,name TEXT NOT NULL,endpoint TEXT NOT NULL,username TEXT NOT NULL DEFAULT '',model TEXT NOT NULL DEFAULT '',ciphertext TEXT NOT NULL,key_version INTEGER NOT NULL DEFAULT 1,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE(kind,name)); INSERT INTO credential_profiles(id,kind,name,endpoint,username,ciphertext) VALUES('legacy-git','git','GitHub','https://github.com','git-user','v1:test')`)
+	if closeErr := legacy.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(path + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	profile, err := database.CredentialProfile(context.Background(), "legacy-git")
+	if err != nil || profile.CommitName != "" || profile.CommitEmail != "" {
+		t.Fatalf("legacy profile migration failed: %#v %v", profile, err)
+	}
+}
 
 func testStore(t *testing.T) *Store {
 	t.Helper()

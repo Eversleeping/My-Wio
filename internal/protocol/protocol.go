@@ -139,13 +139,15 @@ type AgentUpdateCommand struct {
 }
 
 type ConfigureCredentialsCommand struct {
-	CodexAPIURL string `json:"codex_api_url"`
-	CodexAPIKey string `json:"codex_api_key"`
-	CodexModel  string `json:"codex_model"`
-	GitEndpoint string `json:"git_endpoint,omitempty"`
-	GitUsername string `json:"git_username,omitempty"`
-	GitToken    string `json:"git_token,omitempty"`
-	RemoveGit   bool   `json:"remove_git,omitempty"`
+	CodexAPIURL    string `json:"codex_api_url"`
+	CodexAPIKey    string `json:"codex_api_key"`
+	CodexModel     string `json:"codex_model"`
+	GitEndpoint    string `json:"git_endpoint,omitempty"`
+	GitUsername    string `json:"git_username,omitempty"`
+	GitToken       string `json:"git_token,omitempty"`
+	GitCommitName  string `json:"git_commit_name,omitempty"`
+	GitCommitEmail string `json:"git_commit_email,omitempty"`
+	RemoveGit      bool   `json:"remove_git,omitempty"`
 }
 
 type DeployCommand struct {

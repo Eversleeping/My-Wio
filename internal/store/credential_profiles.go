@@ -11,14 +11,16 @@ import (
 )
 
 type CredentialProfile struct {
-	ID         string    `db:"id" json:"id"`
-	Kind       string    `db:"kind" json:"kind"`
-	Name       string    `db:"name" json:"name"`
-	Endpoint   string    `db:"endpoint" json:"endpoint"`
-	Username   string    `db:"username" json:"username"`
-	Model      string    `db:"model" json:"model"`
-	Ciphertext string    `db:"ciphertext" json:"-"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	ID          string    `db:"id" json:"id"`
+	Kind        string    `db:"kind" json:"kind"`
+	Name        string    `db:"name" json:"name"`
+	Endpoint    string    `db:"endpoint" json:"endpoint"`
+	Username    string    `db:"username" json:"username"`
+	Model       string    `db:"model" json:"model"`
+	CommitName  string    `db:"commit_name" json:"commit_name"`
+	CommitEmail string    `db:"commit_email" json:"commit_email"`
+	Ciphertext  string    `db:"ciphertext" json:"-"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
 func (s *Store) SetServerCredentialProfiles(ctx context.Context, serverID, codexProfileID, gitProfileID string) error {
@@ -73,13 +75,13 @@ func (s *Store) CompleteCredentialUpdate(ctx context.Context, result protocol.Op
 
 func (s *Store) ListCredentialProfiles(ctx context.Context) ([]CredentialProfile, error) {
 	var profiles []CredentialProfile
-	err := s.DB.SelectContext(ctx, &profiles, "SELECT id,kind,name,endpoint,username,model,updated_at FROM credential_profiles ORDER BY kind,name")
+	err := s.DB.SelectContext(ctx, &profiles, "SELECT id,kind,name,endpoint,username,model,commit_name,commit_email,updated_at FROM credential_profiles ORDER BY kind,name")
 	return profiles, err
 }
 
 func (s *Store) CredentialProfile(ctx context.Context, id string) (CredentialProfile, error) {
 	var profile CredentialProfile
-	err := s.DB.GetContext(ctx, &profile, s.Q("SELECT id,kind,name,endpoint,username,model,ciphertext,updated_at FROM credential_profiles WHERE id=?"), id)
+	err := s.DB.GetContext(ctx, &profile, s.Q("SELECT id,kind,name,endpoint,username,model,commit_name,commit_email,ciphertext,updated_at FROM credential_profiles WHERE id=?"), id)
 	return profile, err
 }
 
@@ -87,12 +89,12 @@ func (s *Store) SaveCredentialProfile(ctx context.Context, profile CredentialPro
 	now := time.Now().UTC()
 	if profile.ID == "" {
 		profile.ID = NewID()
-		_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO credential_profiles(id,kind,name,endpoint,username,model,ciphertext,updated_at) VALUES(?,?,?,?,?,?,?,?)"), profile.ID, profile.Kind, profile.Name, profile.Endpoint, profile.Username, profile.Model, ciphertext, now)
+		_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO credential_profiles(id,kind,name,endpoint,username,model,commit_name,commit_email,ciphertext,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)"), profile.ID, profile.Kind, profile.Name, profile.Endpoint, profile.Username, profile.Model, profile.CommitName, profile.CommitEmail, ciphertext, now)
 		if err != nil {
 			return CredentialProfile{}, err
 		}
 	} else {
-		result, err := s.DB.ExecContext(ctx, s.Q("UPDATE credential_profiles SET kind=?,name=?,endpoint=?,username=?,model=?,ciphertext=CASE WHEN ?='' THEN ciphertext ELSE ? END,updated_at=? WHERE id=?"), profile.Kind, profile.Name, profile.Endpoint, profile.Username, profile.Model, ciphertext, ciphertext, now, profile.ID)
+		result, err := s.DB.ExecContext(ctx, s.Q("UPDATE credential_profiles SET kind=?,name=?,endpoint=?,username=?,model=?,commit_name=?,commit_email=?,ciphertext=CASE WHEN ?='' THEN ciphertext ELSE ? END,updated_at=? WHERE id=?"), profile.Kind, profile.Name, profile.Endpoint, profile.Username, profile.Model, profile.CommitName, profile.CommitEmail, ciphertext, ciphertext, now, profile.ID)
 		if err != nil {
 			return CredentialProfile{}, err
 		}

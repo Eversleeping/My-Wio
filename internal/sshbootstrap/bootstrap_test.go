@@ -92,6 +92,22 @@ func TestGitCredentialEscapesUsernameAndToken(t *testing.T) {
 	}
 }
 
+func TestValidateInstallRequestRequiresGitCommitIdentity(t *testing.T) {
+	request := InstallRequest{
+		Target: Target{Host: "192.0.2.10", Port: 22, User: "root", AuthMethod: "password", Password: "ssh-password"}, ExpectedFingerprint: "SHA256:example",
+		ControlURL: "https://wio.example.com", EnrollmentToken: "enrollment-token", CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "api-key-value", CodexModel: "gpt-5.6-sol",
+		GitEndpoint: "https://github.com", GitUsername: "git-user", GitToken: "git-token-value",
+	}
+	if !errors.Is(validateInstallRequest(request), ErrInvalidTarget) {
+		t.Fatal("Git credentials without commit identity were accepted")
+	}
+	request.GitCommitName = "Example User"
+	request.GitCommitEmail = "user@example.com"
+	if err := validateInstallRequest(request); err != nil {
+		t.Fatalf("valid Git commit identity was rejected: %v", err)
+	}
+}
+
 func TestClassifyHandshakeError(t *testing.T) {
 	authenticationError := &ssh.ServerAuthError{Errors: []error{errors.New("password rejected")}}
 	if err := classifyHandshakeError(authenticationError); !errors.Is(err, ErrAuthentication) {

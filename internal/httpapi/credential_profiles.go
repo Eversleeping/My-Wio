@@ -11,19 +11,22 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wio-platform/wio/internal/gitidentity"
 	"github.com/wio-platform/wio/internal/store"
 )
 
 var credentialModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 type credentialProfileInput struct {
-	ID       string `json:"id"`
-	Kind     string `json:"kind"`
-	Name     string `json:"name"`
-	Endpoint string `json:"endpoint"`
-	Username string `json:"username"`
-	Model    string `json:"model"`
-	Secret   string `json:"secret"`
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Endpoint    string `json:"endpoint"`
+	Username    string `json:"username"`
+	Model       string `json:"model"`
+	CommitName  string `json:"commit_name"`
+	CommitEmail string `json:"commit_email"`
+	Secret      string `json:"secret"`
 }
 
 func (a *API) credentialProfiles(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +49,8 @@ func (a *API) saveCredentialProfile(w http.ResponseWriter, r *http.Request) {
 	input.Endpoint = strings.TrimRight(strings.TrimSpace(input.Endpoint), "/")
 	input.Username = strings.TrimSpace(input.Username)
 	input.Model = strings.TrimSpace(input.Model)
+	input.CommitName = strings.TrimSpace(input.CommitName)
+	input.CommitEmail = strings.TrimSpace(input.CommitEmail)
 	if input.ID != "" {
 		existing, err := a.store.CredentialProfile(r.Context(), input.ID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -74,7 +79,7 @@ func (a *API) saveCredentialProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	profile, err := a.store.SaveCredentialProfile(r.Context(), store.CredentialProfile{ID: input.ID, Kind: input.Kind, Name: input.Name, Endpoint: input.Endpoint, Username: input.Username, Model: input.Model}, ciphertext)
+	profile, err := a.store.SaveCredentialProfile(r.Context(), store.CredentialProfile{ID: input.ID, Kind: input.Kind, Name: input.Name, Endpoint: input.Endpoint, Username: input.Username, Model: input.Model, CommitName: input.CommitName, CommitEmail: input.CommitEmail}, ciphertext)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "credential profile not found")
 		return
@@ -111,12 +116,18 @@ func validateCredentialProfile(input credentialProfileInput) error {
 		if input.Username != "" {
 			return errors.New("Codex credential profile must not include a username")
 		}
+		if input.CommitName != "" || input.CommitEmail != "" {
+			return errors.New("Codex credential profile must not include a Git commit identity")
+		}
 	} else {
 		if input.Username == "" || utf8.RuneCountInString(input.Username) > 256 || strings.ContainsAny(input.Username, "\r\n\x00") {
 			return errors.New("Git username is required")
 		}
 		if input.Model != "" {
 			return errors.New("Git credential profile must not include a model")
+		}
+		if _, _, err := gitidentity.Normalize(input.CommitName, input.CommitEmail); err != nil {
+			return err
 		}
 	}
 	if input.ID == "" && !validCredentialSecret(input.Secret) {

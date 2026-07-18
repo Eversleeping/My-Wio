@@ -27,7 +27,7 @@ func TestServerCredentialUpdateQueuesEncryptedSecretsAndPersistsAssignmentOnSucc
 	if err != nil {
 		t.Fatal(err)
 	}
-	git, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "Git", Endpoint: "https://gitee.com", Username: "git-user"}, gitCiphertext)
+	git, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "Git", Endpoint: "https://gitee.com", Username: "git-user", CommitName: "Example User", CommitEmail: "user@example.com"}, gitCiphertext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestServerCredentialUpdateQueuesEncryptedSecretsAndPersistsAssignmentOnSucc
 	if err := api.vault.Decrypt(operation.Payload, &command); err != nil {
 		t.Fatal(err)
 	}
-	if command.CodexAPIKey != "codex-secret-value" || command.GitToken != "git-token-value" || command.RemoveGit {
+	if command.CodexAPIKey != "codex-secret-value" || command.GitToken != "git-token-value" || command.GitCommitName != git.CommitName || command.GitCommitEmail != git.CommitEmail || command.RemoveGit {
 		t.Fatalf("unexpected credential command: %#v", command)
 	}
 	if err := database.CompleteCredentialUpdate(context.Background(), protocol.OperationResult{OperationID: operation.ID, Status: "succeeded"}); err != nil {
@@ -67,7 +67,7 @@ func TestServerCredentialUpdateRejectsOfflineServerAndWrongProfileKind(t *testin
 	api := resourceTestAPI(database)
 	server := enrollResourceTestServer(t, database, "credential-reject-token")
 	ciphertext, _ := api.vault.Encrypt("credential-secret")
-	git, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "Git", Endpoint: "https://gitee.com", Username: "git-user"}, ciphertext)
+	git, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "Git", Endpoint: "https://gitee.com", Username: "git-user", CommitName: "Example User", CommitEmail: "user@example.com"}, ciphertext)
 	if err != nil {
 		t.Fatal(err)
 	}

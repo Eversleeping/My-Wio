@@ -51,7 +51,12 @@ func Open(databaseURL string) (*Store, error) {
 		return nil, err
 	}
 	if _, err := db.ExecContext(ctx, schema); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+	if err := migrateCredentialProfileIdentity(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
@@ -61,6 +66,34 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateCredentialProfileIdentity(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE credential_profiles
+			ADD COLUMN IF NOT EXISTS commit_name TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS commit_email TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("migrate Git commit identity: %w", err)
+		}
+		return nil
+	}
+	var columns []string
+	if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info('credential_profiles')"); err != nil {
+		return fmt.Errorf("inspect Git commit identity columns: %w", err)
+	}
+	existing := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		existing[column] = true
+	}
+	for _, column := range []string{"commit_name", "commit_email"} {
+		if existing[column] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, "ALTER TABLE credential_profiles ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("migrate Git commit identity column %s: %w", column, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error      { return s.DB.Close() }
