@@ -84,6 +84,7 @@ import type {
 } from "./types";
 
 type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "monitoring" | "settings";
+type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
 type ComposerImage = { id: string; dataURL: string };
@@ -691,6 +692,7 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const sourceEvents = events.data ?? [];
   const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
+  const displayItems = useMemo(() => groupCommandEvents(chatEvents), [chatEvents]);
   const activeTurn = thread.status === "queued" || thread.status === "running";
   useEffect(() => { setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); }, [thread.id]);
   useEffect(() => { const frame = requestAnimationFrame(() => { if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight; }); return () => cancelAnimationFrame(frame); }, [thread.id, rawEvents, sourceEvents.length]);
@@ -745,7 +747,7 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
   };
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{chatEvents.map(event => <ConversationEventItem key={event.event_id} event={event} onEdit={editMessage} notify={notify} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={editMessage} notify={notify} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     <form className="composer" onSubmit={send}>
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
@@ -795,6 +797,11 @@ function ToolEvent({ event, item }: { event: StreamEvent; item: Record<string, u
   const summary = toolSummary(item, t);
   const detail = toolDetail(item, t);
   return <details className={`tool-event ${type === "fileChange" ? "change" : ""}`}><summary><span>{type === "fileChange" ? <GitBranch size={15} /> : type === "commandExecution" ? <SquareTerminal size={15} /> : <Wrench size={15} />}<strong>{title}</strong>{summary && <small>{summary}</small>}</span><time>{formatTime(event.occurred_at)}</time></summary>{detail && <pre>{detail}</pre>}</details>;
+}
+
+function CommandEventGroup({ events }: { events: StreamEvent[] }) {
+  const { t } = useI18n();
+  return <details className="command-event-group"><summary><SquareTerminal size={16} /><strong>{t("codex.commandsRun", { count: events.length })}</strong><ChevronRight className="command-group-chevron" size={16} /></summary><div className="command-event-group-items">{events.map(event => { const payload = asRecord(event.payload); return <ToolEvent key={event.event_id} event={event} item={asRecord(payload?.item)} />; })}</div></details>;
 }
 
 function RawEventItem({ event }: { event: StreamEvent }) {
@@ -1096,6 +1103,26 @@ function conversationEvents(events: StreamEvent[]) {
     const item = asRecord(payload?.item);
     return completedTypes.has(String(item?.type ?? ""));
   });
+}
+function groupCommandEvents(events: StreamEvent[]): ConversationDisplayItem[] {
+  const result: ConversationDisplayItem[] = [];
+  for (let index = 0; index < events.length;) {
+    if (!isCommandEvent(events[index])) {
+      result.push({ type: "event", event: events[index] });
+      index++;
+      continue;
+    }
+    const commands: StreamEvent[] = [];
+    while (index < events.length && isCommandEvent(events[index])) commands.push(events[index++]);
+    if (commands.length === 1) result.push({ type: "event", event: commands[0] });
+    else result.push({ type: "commandGroup", events: commands });
+  }
+  return result;
+}
+function isCommandEvent(event: StreamEvent) {
+  if (event.kind !== "codex.item.completed") return false;
+  const payload = asRecord(event.payload);
+  return asRecord(payload?.item)?.type === "commandExecution";
 }
 function asRecord(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
 function extractText(payload: unknown): string {

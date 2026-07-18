@@ -295,6 +295,17 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .tool-event summary small { min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .tool-event time, .raw-event time { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
 .tool-event pre, .raw-event pre { max-height: 360px; margin: 0; padding: 11px 13px; overflow: auto; color: #31383d; background: #f4f6f4; border-top: 1px solid var(--line); font-size: 11px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.command-event-group { width: min(82%, 820px); flex: 0 0 auto; align-self: flex-start; margin: 0 0 14px; }
+.command-event-group > summary { width: fit-content; min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 6px 8px; color: #343c41; border-radius: 5px; cursor: pointer; list-style: none; }
+.command-event-group > summary::-webkit-details-marker { display: none; }
+.command-event-group > summary:hover { background: #edf1ed; }
+.command-event-group > summary strong { font-size: 13px; font-weight: 600; }
+.command-event-group > summary > svg:first-child { color: #657078; }
+.command-group-chevron { color: #737d84; transition: transform .15s ease; }
+.command-event-group[open] .command-group-chevron { transform: rotate(90deg); }
+.command-event-group-items { display: flex; flex-direction: column; padding-top: 7px; }
+.command-event-group-items .tool-event { width: 100%; }
+.command-event-group-items .tool-event:last-child { margin-bottom: 0; }
 .raw-stream { display: grid; align-content: start; gap: 8px; }
 .raw-event { width: 100%; }
 .working-indicator { width: fit-content; min-height: 38px; display: flex; align-items: center; gap: 7px; padding: 8px 12px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
@@ -435,7 +446,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .workspace-files { min-height: 180px; }
   .session-panel { min-height: 620px; }
   .event-stream { max-height: 460px; padding: 14px 12px; }
-  .message, .tool-event, .approval-prompt { width: 94%; }
+  .message, .tool-event, .command-event-group, .approval-prompt { width: 94%; }
   .message.user { width: 88%; }
   .composer-bar { align-items: flex-end; }
   .composer-bar > div { min-width: 0; flex-direction: column; }
