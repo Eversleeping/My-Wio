@@ -80,6 +80,60 @@ func TestEnrollmentInventoryAndOperations(t *testing.T) {
 	}
 }
 
+func TestApprovalResolutionAndOperationQueueAreAtomic(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "approval-node", []string{"/srv"}, "approval-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "approval-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "approval-node.local", "approval-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvalID := NewID()
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO approvals(id,thread_id,request_id,kind,detail,status,expires_at) VALUES(?,?,?,?,?,'pending',?)"), approvalID, thread.ID, "request-1", "item/commandExecution/requestApproval", `{}`, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.ApprovalDecisionCommand{ThreadID: thread.ID, RequestID: "request-1", Decision: "approved"}
+	if _, err := database.ResolveApprovalAndQueue(ctx, approvalID, "missing-server", "approved", command); err == nil {
+		t.Fatal("expected operation foreign-key failure")
+	}
+	var status string
+	if err := database.DB.GetContext(ctx, &status, database.Q("SELECT status FROM approvals WHERE id=?"), approvalID); err != nil || status != "pending" {
+		t.Fatalf("failed queue did not roll back approval: status=%q err=%v", status, err)
+	}
+	operationID, err := database.ResolveApprovalAndQueue(ctx, approvalID, server.ID, "approved", command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := database.Operation(ctx, operationID)
+	var operationStatus string
+	if statusErr := database.DB.GetContext(ctx, &operationStatus, database.Q("SELECT status FROM agent_operations WHERE id=?"), operationID); statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if err != nil || operation.Kind != "codex.approval" || operationStatus != "queued" {
+		t.Fatalf("approval operation was not queued: %#v %v", operation, err)
+	}
+	if err := database.DB.GetContext(ctx, &status, database.Q("SELECT status FROM approvals WHERE id=?"), approvalID); err != nil || status != "resolved" {
+		t.Fatalf("approval was not resolved with operation: status=%q err=%v", status, err)
+	}
+}
+
 func TestListServersUsesHeartbeatGracePeriod(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)
@@ -186,5 +240,55 @@ func TestEventsHaveMonotonicSequence(t *testing.T) {
 	}
 	if first.Sequence != 1 || second.Sequence != 2 {
 		t.Fatalf("unexpected sequence: %d, %d", first.Sequence, second.Sequence)
+	}
+	replayed, err := database.AddEvent(ctx, protocol.StreamEvent{EventID: first.EventID, StreamID: first.StreamID, Kind: first.Kind, Payload: first.Payload})
+	if err != nil || replayed.Sequence != first.Sequence {
+		t.Fatalf("replayed event was not deduplicated: %#v %v", replayed, err)
+	}
+	events, err := database.Events(ctx, "thread", 0, 10)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("replayed event created a duplicate: %#v %v", events, err)
+	}
+}
+
+func TestConversationEventsAreNotBlockedByRawEventWindow(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	tx, err := database.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	for sequence := 1; sequence <= 1005; sequence++ {
+		if _, err := tx.ExecContext(ctx, database.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), NewID(), "thread", sequence, "codex.item.agentMessage.delta", now, `{}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, event := range []struct{ kind, payload string }{
+		{"user.message", `{"text":"visible prompt"}`},
+		{"codex.item.completed", `{"item":{"type":"agentMessage","text":"visible answer"}}`},
+		{"codex.turn.completed", `{"turn":{"status":"completed"}}`},
+	} {
+		if _, err := tx.ExecContext(ctx, database.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), NewID(), "thread", 1006+index, event.kind, now, event.payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := database.ConversationEvents(ctx, "thread", 0, 10000)
+	if err != nil || len(conversation) != 3 || conversation[0].Sequence != 1006 || conversation[2].Sequence != 1008 {
+		t.Fatalf("conversation events were hidden by raw deltas: %#v %v", conversation, err)
+	}
+	recent, err := database.RecentEvents(ctx, "thread", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 1000 {
+		t.Fatalf("unexpected recent raw window length: %d", len(recent))
+	}
+	if recent[0].Sequence != 9 || recent[999].Sequence != 1008 {
+		t.Fatalf("unexpected recent raw window: first=%#v last=%#v", recent[0], recent[999])
 	}
 }

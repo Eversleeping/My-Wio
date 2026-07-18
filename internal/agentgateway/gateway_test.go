@@ -367,6 +367,10 @@ func TestUpsertApprovalStoresAndReopensReusedRequestID(t *testing.T) {
 	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
 		t.Fatal(err)
 	}
+	updatedThread, err := database.Thread(ctx, thread.ID)
+	if err != nil || updatedThread.Status != "interrupted" {
+		t.Fatalf("interrupted completion did not update thread status: %#v %v", updatedThread, err)
+	}
 	var resolved struct {
 		Status   string `db:"status"`
 		Decision string `db:"decision"`
@@ -407,6 +411,24 @@ func TestUpsertApprovalStoresAndReopensReusedRequestID(t *testing.T) {
 	}
 	if resolved.Status != "resolved" || resolved.Decision != "cancelled" {
 		t.Fatalf("duplicate event reopened an already resolved approval: %#v", resolved)
+	}
+}
+
+func TestCompletedTurnStatusUsesOfficialTerminalStatus(t *testing.T) {
+	tests := []struct {
+		payload string
+		want    string
+	}{
+		{`{"turn":{"status":"completed"}}`, "idle"},
+		{`{"turn":{"status":"interrupted"}}`, "interrupted"},
+		{`{"turn":{"status":"failed","error":{"message":"provider disconnected"}}}`, "failed"},
+		{`{"turn":{"status":"inProgress"}}`, "failed"},
+		{`{}`, "failed"},
+	}
+	for _, test := range tests {
+		if got := completedTurnStatus(json.RawMessage(test.payload)); got != test.want {
+			t.Errorf("completedTurnStatus(%s) = %q, want %q", test.payload, got, test.want)
+		}
 	}
 }
 

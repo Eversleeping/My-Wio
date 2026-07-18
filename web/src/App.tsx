@@ -87,6 +87,7 @@ type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "mo
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
 type ComposerImage = { id: string; dataURL: string };
+type StreamRevisions = Record<string, number>;
 
 const defaultCodexModel = "gpt-5.6-sol";
 const codexModelOptions = [
@@ -120,6 +121,8 @@ export default function App() {
   const [view, setView] = useState<View>("dashboard");
   const [mobileNav, setMobileNav] = useState(false);
   const [realtime, setRealtime] = useState(0);
+  const [streamRevisions, setStreamRevisions] = useState<StreamRevisions>({});
+  const [socketConnected, setSocketConnected] = useState(false);
   const [approvalSignal, setApprovalSignal] = useState(0);
   const [toast, setToast] = useState("");
   const approvals = useData<Approval[]>(auth === "authenticated" ? "/approvals" : null, realtime);
@@ -152,17 +155,48 @@ export default function App() {
     if (auth !== "authenticated") return;
     let socket: WebSocket | null = null;
     let timer = 0;
+    let refreshTimer = 0;
     let stopped = false;
+    const pendingStreams = new Set<string>();
+    const scheduleRefresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = 0;
+        setRealtime(value => value + 1);
+        if (pendingStreams.size > 0) {
+          const streams = Array.from(pendingStreams);
+          pendingStreams.clear();
+          setStreamRevisions(current => {
+            const next = { ...current };
+            for (const streamID of streams) next[streamID] = (next[streamID] ?? 0) + 1;
+            return next;
+          });
+        }
+      }, 100);
+    };
     const connect = () => {
       if (stopped) return;
       socket = new WebSocket(socketURL());
-      socket.onmessage = () => setRealtime(value => value + 1);
-      socket.onclose = () => { timer = window.setTimeout(connect, 2500); };
+      socket.onopen = () => { setSocketConnected(true); pendingStreams.add("*"); scheduleRefresh(); };
+      socket.onmessage = messageEvent => {
+        try {
+          const event = JSON.parse(String(messageEvent.data)) as Partial<StreamEvent>;
+          pendingStreams.add(event.stream_id || "*");
+        } catch {
+          pendingStreams.add("*");
+        }
+        scheduleRefresh();
+      };
+      socket.onclose = () => {
+        setSocketConnected(false);
+        if (!stopped) timer = window.setTimeout(connect, 2500);
+      };
     };
     connect();
     return () => {
       stopped = true;
       clearTimeout(timer);
+      clearTimeout(refreshTimer);
       socket?.close();
     };
   }, [auth]);
@@ -186,7 +220,7 @@ export default function App() {
     dashboard: <Dashboard realtime={realtime} onNavigate={selectView} />,
     servers: <ServersPage realtime={realtime} notify={setToast} />,
     projects: <ProjectsPage realtime={realtime} notify={setToast} />,
-    codex: <CodexPage realtime={realtime} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} />,
+    codex: <CodexPage realtime={realtime} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} />,
     deployments: <DeploymentsPage realtime={realtime} notify={setToast} />,
     monitoring: <MonitoringPage realtime={realtime} />,
     settings: <SettingsPage realtime={realtime} notify={setToast} />
@@ -210,7 +244,7 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} title={t("nav.open")}><Menu size={20} /></button>
           <div><p className="eyebrow">{t("app.controlPlane")}</p><h1>{t(navigation.find(item => item.id === view)?.labelKey ?? "nav.overview")}</h1></div>
-          <div className="topbar-actions"><LanguageSwitch /><span className="connection"><Wifi size={15} /> {t("app.live")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
+          <div className="topbar-actions"><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`}>{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
         </header>
         <div className="page-content">{page}</div>
       </main>
@@ -515,7 +549,7 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   <Dialog open={dialog} title={t("project.import")} onClose={close}><form onSubmit={submit}><div className="segmented-control" role="tablist" aria-label={t("project.importMode")}><button type="button" role="tab" aria-selected={mode === "clone"} className={mode === "clone" ? "active" : ""} onClick={() => setMode("clone")}><GitBranch size={15} />{t("project.cloneMode")}</button><button type="button" role="tab" aria-selected={mode === "discover"} className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")}><ServerIcon size={15} />{t("project.discoverMode")}</button></div>{mode === "clone" ? <><Field label={t("project.remoteURL")}><input value={form.remote_url} onChange={e => setForm({ ...form, remote_url: e.target.value })} placeholder="https://git.example.com/team/project.git" required /></Field><div className="form-grid"><Field label={t("project.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field><Field label={t("project.targetServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field></div><Field label={t("project.destination")}><input value={form.destination} onChange={e => setForm({ ...form, destination: e.target.value })} placeholder={t("common.optional")} /></Field></> : <Field label={t("project.existingServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field>}<DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : mode === "clone" ? <GitBranch size={16} /> : <Search size={16} />}{busy ? t("project.working") : mode === "clone" ? t("project.queue") : t("project.scan")}</button></DialogActions></form></Dialog></div>;
 }
 
-function CodexPage({ realtime, approvals, approvalSignal, reloadApprovals, notify }: PageProps & { approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void }) {
+function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloadApprovals, notify }: PageProps & { streamRevisions: StreamRevisions; approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void }) {
   const { t } = useI18n();
   const threads = useData<Thread[]>("/threads", realtime);
   const workspaces = useData<Workspace[]>("/workspaces", realtime);
@@ -524,7 +558,7 @@ function CodexPage({ realtime, approvals, approvalSignal, reloadApprovals, notif
   const [approvalOpen, setApprovalOpen] = useState(approvals.length > 0);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [deletingThread, setDeletingThread] = useState("");
-  const active = (threads.data ?? []).find(thread => thread.id === selected) ?? threads.data?.[0];
+  const active = selected ? (threads.data ?? []).find(thread => thread.id === selected) : threads.data?.[0];
   const threadGroups = useMemo(() => groupThreadsByProject(threads.data ?? []), [threads.data]);
   const approvalKey = approvals.map(item => item.id).join(",");
   useEffect(() => { if (!selected && threads.data?.[0]) setSelected(threads.data[0].id); }, [threads.data, selected]);
@@ -548,9 +582,9 @@ function CodexPage({ realtime, approvals, approvalSignal, reloadApprovals, notif
   };
   return <div className="codex-layout">
     <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{threadGroups.length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong><span>{group.threads.length}</span></button>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; return <div key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"}><button type="button" className="thread-select" onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span></button><div className="thread-actions"><Status value={thread.status} /><button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div></div>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} /></aside>
-    <section className="session-panel">{active ? <SessionView thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={realtime} reloadApprovals={reloadApprovals} notify={notify} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>
+    <section className="session-panel">{threads.error && !threads.data ? <ErrorState error={threads.error} reload={threads.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
-    <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={() => { setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
+    <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { setSelected(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
   </div>;
 }
@@ -631,20 +665,23 @@ function buildFileTree(files: WorkspaceFile[]): FileTreeNode[] {
   return convert(root);
 }
 
-function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCreated: () => void }) {
+function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCreated: (thread: Thread) => void }) {
   const { t } = useI18n();
   const [workspaceID, setWorkspaceID] = useState("");
-  return <form onSubmit={async e => { e.preventDefault(); await post("/threads", { workspace_id: workspaceID }); onCreated(); }}><Field label={t("codex.workspace")}><select value={workspaceID} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button"><Plus size={16} />{t("codex.createSession")}</button></DialogActions></form>;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/threads", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;
 }
 
-function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: { thread: Thread; approvals: Approval[]; realtime: number; reloadApprovals: () => void; notify: (text: string) => void }) {
+function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: { thread: Thread; approvals: Approval[]; realtime: unknown; reloadApprovals: () => void; notify: (text: string) => void }) {
   const { t } = useI18n();
-  const events = useData<StreamEvent[]>(`/threads/${thread.id}/events`, realtime + thread.id);
   const [rawEvents, setRawEvents] = useState(false);
+  const events = useData<StreamEvent[]>(`/threads/${thread.id}/events?view=${rawEvents ? "raw" : "conversation"}`, realtime);
   const [prompt, setPrompt] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
   const [sending, setSending] = useState(false);
+  const [interrupting, setInterrupting] = useState(false);
   const [editingEventID, setEditingEventID] = useState("");
   const [model, setModel] = useState(defaultCodexModel);
   const [reasoningEffort, setReasoningEffort] = useState("");
@@ -694,9 +731,21 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
     });
     notify(t("codex.messageReadyToEdit"));
   };
+  const interrupt = async () => {
+    if (interrupting) return;
+    setInterrupting(true);
+    try {
+      await post(`/threads/${thread.id}/interrupt`, {});
+      notify(t("codex.interruptQueued"));
+    } catch (error) {
+      notify(message(error));
+    } finally {
+      setInterrupting(false);
+    }
+  };
   return <>
-    <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" title={t("codex.interrupt")} onClick={async () => { await post(`/threads/${thread.id}/interrupt`, {}); notify(t("codex.interruptQueued")); }}><Ban size={16} /></button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{chatEvents.map(event => <ConversationEventItem key={event.event_id} event={event} onEdit={editMessage} notify={notify} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{chatEvents.map(event => <ConversationEventItem key={event.event_id} event={event} onEdit={editMessage} notify={notify} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     <form className="composer" onSubmit={send}>
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
@@ -723,7 +772,13 @@ function ConversationEventItem({ event, onEdit, notify }: { event: StreamEvent; 
   const kind = event.kind;
   const payload = asRecord(event.payload);
   if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } }; return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} />}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button></div></article>; }
-  if (kind === "codex.error" || kind === "codex.turn.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t("codex.turnFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
+  if (kind === "codex.error" || kind === "codex.turn.failed" || kind === "codex.interrupt.failed" || kind === "codex.approval.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t(kind === "codex.turn.failed" || kind === "codex.error" ? "codex.turnFailed" : "codex.actionFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
+  if (kind === "codex.turn.completed") {
+    const turn = asRecord(payload?.turn);
+    const status = String(turn?.status ?? "failed");
+    if (status === "interrupted") return <article className="message interrupted"><header><Ban size={15} /><strong>{t("codex.turnInterrupted")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{t("codex.turnInterruptedDetail")}</div></article>;
+    return <article className="message error"><header><AlertTriangle size={15} /><strong>{t("codex.turnFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(turn) || t("codex.unknownError")}</div></article>;
+  }
   const item = asRecord(payload?.item);
   if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><MarkdownContent text={extractText(item)} /></article>;
   return <ToolEvent event={event} item={item} />;
@@ -968,10 +1023,12 @@ function ErrorState({ error, reload }: { error: string; reload: () => void }) { 
 
 interface PageProps { realtime: number; notify: (text: string) => void }
 function useData<T>(path: string | null, dependency: unknown) {
-  const [data, setData] = useState<T | null>(null); const [error, setError] = useState(""); const [loading, setLoading] = useState(Boolean(path)); const [version, setVersion] = useState(0);
+  const [result, setResult] = useState<{ path: string | null; data: T | null }>({ path: null, data: null }); const [failure, setFailure] = useState<{ path: string | null; text: string }>({ path: null, text: "" }); const [settledPath, setSettledPath] = useState<string | null>(null); const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion(value => value + 1), []);
-  useEffect(() => { if (!path) { setLoading(false); return; } let active = true; setLoading(data === null); api<T>(path).then(value => { if (active) { setData(value); setError(""); } }).catch(err => { if (active) setError(message(err)); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [path, dependency, version]);
-  return { data, error, loading, reload };
+  useEffect(() => { if (!path) { setSettledPath(null); return; } const controller = new AbortController(); api<T>(path, { signal: controller.signal }).then(value => { setResult({ path, data: value }); setFailure({ path, text: "" }); }).catch(err => { if (err instanceof DOMException && err.name === "AbortError") return; setFailure({ path, text: message(err) }); }).finally(() => { if (!controller.signal.aborted) setSettledPath(path); }); return () => controller.abort(); }, [path, dependency, version]);
+  const data = result.path === path ? result.data : null;
+  const error = failure.path === path ? failure.text : "";
+  return { data, error, loading: Boolean(path) && data === null && settledPath !== path, reload };
 }
 
 function message(error: unknown) { return error instanceof Error ? error.message : "Request failed"; }
@@ -1028,9 +1085,13 @@ async function copyText(value: string) {
 function conversationEvents(events: StreamEvent[]) {
   const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch"]);
   return events.filter(event => {
-    if (event.kind === "user.message" || event.kind === "codex.turn.failed") return true;
+    if (event.kind === "user.message" || event.kind === "codex.turn.failed" || event.kind === "codex.interrupt.failed" || event.kind === "codex.approval.failed") return true;
     const payload = asRecord(event.payload);
     if (event.kind === "codex.error") return payload?.willRetry !== true;
+    if (event.kind === "codex.turn.completed") {
+      const turn = asRecord(payload?.turn);
+      return turn?.status === "failed" || turn?.status === "interrupted";
+    }
     if (event.kind !== "codex.item.completed") return false;
     const item = asRecord(payload?.item);
     return completedTypes.has(String(item?.type ?? ""));

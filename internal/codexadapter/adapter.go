@@ -111,16 +111,32 @@ func (a *Adapter) RewriteTurn(ctx context.Context, command protocol.RewriteTurnC
 }
 
 func (a *Adapter) rewriteTurn(ctx context.Context, command protocol.RewriteTurnCommand, request requestFunc) error {
-	codexThread, err := a.prepareCodexThread(ctx, command.Start, request)
+	originalThread, err := a.prepareCodexThread(ctx, command.Start, request)
 	if err != nil {
 		return err
 	}
+	result, err := request(ctx, "thread/fork", threadResumeParams(command.Start, originalThread))
+	if err != nil {
+		return err
+	}
+	codexThread, err := responseThreadID(result, "thread/fork")
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.threads[codexThread] = command.Start.ThreadID
+	a.mu.Unlock()
 	if command.NumTurns > 0 {
 		if _, err := request(ctx, "thread/rollback", map[string]any{"threadId": codexThread, "numTurns": command.NumTurns}); err != nil {
 			return err
 		}
 	}
-	return a.startPreparedTurn(ctx, command.Start, codexThread, request)
+	return a.startPreparedTurn(ctx, command.Start, codexThread, map[string]any{
+		"edit_event_id":        command.EditEventID,
+		"replacement_event_id": command.ReplacementEventID,
+		"replacement_payload":  command.ReplacementPayload,
+		"cutoff_sequence":      command.CutoffSequence,
+	}, request)
 }
 
 func (a *Adapter) startTurn(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) error {
@@ -128,10 +144,10 @@ func (a *Adapter) startTurn(ctx context.Context, command protocol.StartTurnComma
 	if err != nil {
 		return err
 	}
-	return a.startPreparedTurn(ctx, command, codexThread, request)
+	return a.startPreparedTurn(ctx, command, codexThread, nil, request)
 }
 
-func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartTurnCommand, codexThread string, request requestFunc) error {
+func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartTurnCommand, codexThread string, acceptedMetadata map[string]any, request requestFunc) error {
 	a.mu.Lock()
 	a.threads[codexThread] = command.ThreadID
 	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, Active: true}
@@ -159,10 +175,25 @@ func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartT
 		a.mu.Unlock()
 		return err
 	}
+	if response.Turn.ID == "" {
+		a.mu.Lock()
+		state := a.turns[command.ThreadID]
+		state.Active = false
+		a.turns[command.ThreadID] = state
+		a.mu.Unlock()
+		return errors.New("turn/start returned no turn id")
+	}
 	a.mu.Lock()
 	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, TurnID: response.Turn.ID, Active: true}
+	if command.CodexThread != "" && command.CodexThread != codexThread {
+		delete(a.threads, command.CodexThread)
+	}
 	a.mu.Unlock()
-	return a.emitEvent(command.ThreadID, "turn.accepted", map[string]string{"codex_thread_id": codexThread, "turn_id": response.Turn.ID})
+	accepted := map[string]any{"codex_thread_id": codexThread, "turn_id": response.Turn.ID}
+	for key, value := range acceptedMetadata {
+		accepted[key] = value
+	}
+	return a.emitEvent(command.ThreadID, "turn.accepted", accepted)
 }
 
 func (a *Adapter) prepareCodexThread(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) (string, error) {
@@ -197,9 +228,6 @@ func (a *Adapter) startCodexThread(ctx context.Context, command protocol.StartTu
 	}
 	codexThread, err := responseThreadID(result, "thread/start")
 	if err != nil {
-		return "", err
-	}
-	if err := a.emitEvent(command.ThreadID, "thread.bound", map[string]string{"codex_thread_id": codexThread}); err != nil {
 		return "", err
 	}
 	return codexThread, nil
@@ -288,15 +316,18 @@ func (a *Adapter) interrupt(ctx context.Context, command protocol.InterruptTurnC
 func (a *Adapter) Decide(command protocol.ApprovalDecisionCommand) error {
 	a.mu.Lock()
 	request, ok := a.approve[command.RequestID]
-	if ok {
-		delete(a.approve, command.RequestID)
-	}
 	a.mu.Unlock()
 	if !ok {
 		return errors.New("approval request is no longer pending")
 	}
 	decision := approvalDecision(request.Method, command.Decision)
-	return a.write(map[string]any{"id": request.ID, "result": map[string]any{"decision": decision}})
+	if err := a.write(map[string]any{"id": request.ID, "result": map[string]any{"decision": decision}}); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	delete(a.approve, command.RequestID)
+	a.mu.Unlock()
+	return nil
 }
 
 func (a *Adapter) Close() error {
@@ -524,11 +555,6 @@ func (a *Adapter) handleServerRequest(message rpcMessage) {
 	a.mu.Lock()
 	wioThread := a.threads[codexThread]
 	a.approve[requestID] = approvalRequest{ID: append(json.RawMessage(nil), message.ID...), Method: message.Method}
-	if wioThread == "" && len(a.turns) == 1 {
-		for threadID := range a.turns {
-			wioThread = threadID
-		}
-	}
 	a.mu.Unlock()
 	if wioThread == "" {
 		a.mu.Lock()
@@ -542,24 +568,39 @@ func (a *Adapter) handleServerRequest(message rpcMessage) {
 
 func (a *Adapter) handleNotification(message rpcMessage) {
 	codexThread := findString(message.Params, "threadId", "conversationId")
+	turnID := notificationTurnID(message.Params)
+	ignore := false
 	a.mu.Lock()
 	wioThread := a.threads[codexThread]
-	if wioThread == "" && len(a.turns) == 1 {
-		for threadID := range a.turns {
-			wioThread = threadID
-		}
+	if wioThread != "" && message.Method == "turn/started" && turnID != "" {
+		state := a.turns[wioThread]
+		state.CodexThread = codexThread
+		state.TurnID = turnID
+		state.Active = true
+		a.turns[wioThread] = state
 	}
 	if wioThread != "" && terminalTurnNotification(message.Method) {
 		state := a.turns[wioThread]
-		state.Active = false
-		a.turns[wioThread] = state
+		if turnID != "" && state.TurnID != "" && state.TurnID != turnID {
+			ignore = true
+		} else {
+			state.Active = false
+			a.turns[wioThread] = state
+		}
 	}
 	a.mu.Unlock()
-	if wioThread == "" {
+	if wioThread == "" || ignore {
+		return
+	}
+	if !persistNotification(message.Method) {
 		return
 	}
 	kind := "codex." + strings.ReplaceAll(message.Method, "/", ".")
 	_ = a.emit(protocol.StreamEvent{StreamID: wioThread, Kind: kind, OccurredAt: time.Now().UTC(), Payload: append(json.RawMessage(nil), message.Params...)})
+}
+
+func persistNotification(method string) bool {
+	return !strings.HasSuffix(strings.ToLower(method), "delta")
 }
 
 func terminalTurnNotification(method string) bool {
@@ -581,6 +622,7 @@ func (a *Adapter) emitEvent(streamID, kind string, payload any) error {
 
 func (a *Adapter) reset(reason error) {
 	a.mu.Lock()
+	failed := a.activeTurnsLocked()
 	a.process = nil
 	a.stdin = nil
 	a.cancel = nil
@@ -592,6 +634,7 @@ func (a *Adapter) reset(reason error) {
 	a.threads = make(map[string]string)
 	a.turns = make(map[string]turnState)
 	a.mu.Unlock()
+	a.emitDisconnectedTurns(failed, reason)
 	if reason != nil {
 		a.log.Debug("Codex adapter reset", "reason", reason)
 	}
@@ -603,6 +646,7 @@ func (a *Adapter) resetProcess(process *exec.Cmd, reason error) {
 		a.mu.Unlock()
 		return
 	}
+	failed := a.activeTurnsLocked()
 	a.process = nil
 	a.stdin = nil
 	a.cancel = nil
@@ -614,8 +658,32 @@ func (a *Adapter) resetProcess(process *exec.Cmd, reason error) {
 	a.threads = make(map[string]string)
 	a.turns = make(map[string]turnState)
 	a.mu.Unlock()
+	a.emitDisconnectedTurns(failed, reason)
 	if reason != nil {
 		a.log.Debug("Codex adapter reset", "reason", reason)
+	}
+}
+
+func (a *Adapter) activeTurnsLocked() map[string]turnState {
+	active := make(map[string]turnState)
+	for threadID, state := range a.turns {
+		if state.Active {
+			active[threadID] = state
+		}
+	}
+	return active
+}
+
+func (a *Adapter) emitDisconnectedTurns(turns map[string]turnState, reason error) {
+	if reason == nil {
+		return
+	}
+	for threadID, state := range turns {
+		_ = a.emitEvent(threadID, "codex.turn.failed", map[string]any{
+			"threadId": state.CodexThread,
+			"turnId":   state.TurnID,
+			"error":    map[string]string{"message": reason.Error()},
+		})
 	}
 }
 
@@ -675,4 +743,20 @@ func findString(raw json.RawMessage, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func notificationTurnID(raw json.RawMessage) string {
+	var value struct {
+		TurnID string `json:"turnId"`
+		Turn   struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	if value.TurnID != "" {
+		return value.TurnID
+	}
+	return value.Turn.ID
 }

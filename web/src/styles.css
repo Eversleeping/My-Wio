@@ -54,6 +54,7 @@ h2 { font-size: 15px; line-height: 1.35; font-weight: 700; }
 .language-switch button.active { color: #1f4f3e; background: #fff; box-shadow: 0 1px 3px rgba(26, 32, 36, .12); }
 .connection, .approval-pill { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .connection { color: var(--green); font-size: 12px; font-weight: 650; }
+.connection.offline { color: #93611a; }
 .approval-pill { height: 32px; padding: 0 10px; color: #7e330f; background: var(--amber-soft); border: 1px solid #edce9f; border-radius: 16px; font-size: 12px; font-weight: 650; }
 .mobile-menu { display: none !important; }
 .page-content { width: min(1500px, 100%); margin: 0 auto; padding: 24px 28px 48px; }
@@ -243,18 +244,20 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-tree-error span { overflow-wrap: anywhere; }
 .file-tree-note { margin: 7px 9px 0; padding: 7px 8px; color: #77561b; background: var(--amber-soft); border: 1px solid #ead5ac; border-radius: 5px; font-size: 10px; }
 .session-panel { min-width: 0; display: grid; grid-template-rows: auto minmax(280px, 1fr) auto; }
+.session-panel > .error-state, .session-panel > .empty { grid-row: 1 / -1; }
 .session-header { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-.session-header > div:first-child { min-width: 0; display: grid; gap: 4px; }
+.session-header > div:first-child { min-width: 0; display: grid; flex: 1 1 auto; gap: 4px; }
 .session-header h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-header span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
 .session-header i { width: 3px; height: 3px; background: #aab0b5; border-radius: 50%; }
-.session-actions { display: flex; align-items: center; gap: 4px; }
+.session-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; }
 .event-stream { min-height: 0; max-height: calc(100vh - 370px); overflow-y: auto; padding: 20px 18px; scroll-behavior: smooth; background: #f7f8f6; }
 .conversation-stream { display: flex; flex-direction: column; align-items: stretch; }
 .message { width: min(82%, 820px); flex: 0 0 auto; align-self: flex-start; margin: 0 0 14px; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 1px 2px rgba(28, 35, 38, .03); }
 .message.user { width: min(74%, 720px); align-self: flex-end; color: #173e31; background: #e8f4ed; border-color: #c4dfd1; }
 .message.assistant { border-left: 3px solid var(--green); }
 .message.error { color: #8e2d34; background: var(--red-soft); border-color: #efc3c6; border-left: 3px solid var(--red); }
+.message.interrupted { color: #735012; background: var(--amber-soft); border-color: #ead5ac; border-left: 3px solid #c1872e; }
 .message header { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; color: var(--muted); font-size: 11px; }
 .message header time { margin-left: auto; }
 .message-content { font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -314,13 +317,16 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .composer-images img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .composer-images button { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; display: grid; place-items: center; padding: 0; color: #fff; background: rgba(28, 32, 35, .78); border: 0; border-radius: 50%; }
 .hidden-input { display: none !important; }
-.composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; border-top: 1px solid #eceeeb; }
-.composer-bar > div { display: flex; gap: 7px; }
+.composer-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-top: 8px; border-top: 1px solid #eceeeb; }
+.composer-bar > div { min-width: 0; display: flex; flex: 1 1 360px; flex-wrap: wrap; gap: 7px; }
 .composer-bar select, .composer-bar input { width: auto; min-height: 32px; padding: 5px 8px; font-size: 11px; }
+.composer-bar > div > select { min-width: 118px; max-width: 180px; flex: 1 1 128px; }
 .composer-bar input { max-width: 150px; }
 .codex-model-picker { min-width: 0; display: flex; gap: 7px; }
 .codex-model-picker select { min-width: 190px; }
 .codex-model-picker input { min-width: 140px; }
+.composer-bar .codex-model-picker { flex: 1 1 170px; }
+.composer-bar .codex-model-picker select { width: 100%; min-width: 130px; }
 .approval-drawer-button { position: absolute; top: 12px; right: 12px; z-index: 4; min-height: 34px; display: none; align-items: center; gap: 6px; padding: 0 10px; color: #8a5206; background: var(--amber-soft); border: 1px solid #edce9f; border-radius: 6px; font-size: 12px; font-weight: 670; }
 .approval-drawer-button.visible { display: flex; }
 .approval-item { padding: 15px 17px; border-bottom: 1px solid var(--line); }

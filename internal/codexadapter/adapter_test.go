@@ -3,6 +3,7 @@ package codexadapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -17,6 +18,18 @@ func TestApprovalDecisionCompatibility(t *testing.T) {
 	}
 	if got := approvalDecision("execCommandApproval", "denied"); got != "denied" {
 		t.Fatalf("unexpected legacy decision: %s", got)
+	}
+}
+
+func TestFailedApprovalWriteKeepsRequestPending(t *testing.T) {
+	adapter := &Adapter{
+		approve: map[string]approvalRequest{"request-1": {ID: json.RawMessage(`1`), Method: "item/commandExecution/requestApproval"}},
+	}
+	if err := adapter.Decide(protocol.ApprovalDecisionCommand{RequestID: "request-1", Decision: "approved"}); err == nil {
+		t.Fatal("expected write failure without an app-server process")
+	}
+	if _, ok := adapter.approve["request-1"]; !ok {
+		t.Fatal("failed write discarded the pending approval")
 	}
 }
 
@@ -60,7 +73,20 @@ func TestStartTurnParamsOmitDefaultReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestRewriteTurnRollsBackBeforeStartingReplacement(t *testing.T) {
+func TestPersistNotificationDropsIncrementalDeltas(t *testing.T) {
+	for _, method := range []string{"item/agentMessage/delta", "item/commandExecution/outputDelta", "item/reasoning/summaryTextDelta"} {
+		if persistNotification(method) {
+			t.Errorf("incremental notification %q should not be persisted", method)
+		}
+	}
+	for _, method := range []string{"item/completed", "turn/completed", "error"} {
+		if !persistNotification(method) {
+			t.Errorf("authoritative notification %q was dropped", method)
+		}
+	}
+}
+
+func TestRewriteTurnForksBeforeRollingBackAndStartingReplacement(t *testing.T) {
 	var methods []string
 	var rollbackParams map[string]any
 	var emitted protocol.StreamEvent
@@ -74,23 +100,26 @@ func TestRewriteTurnRollsBackBeforeStartingReplacement(t *testing.T) {
 	}
 	request := func(_ context.Context, method string, raw any) (json.RawMessage, error) {
 		methods = append(methods, method)
+		if method == "thread/fork" {
+			return json.RawMessage(`{"thread":{"id":"forked-thread"}}`), nil
+		}
 		if method == "thread/rollback" {
 			rollbackParams = raw.(map[string]any)
-			return json.RawMessage(`{"thread":{"id":"codex-thread"}}`), nil
+			return json.RawMessage(`{"thread":{"id":"forked-thread"}}`), nil
 		}
 		return json.RawMessage(`{"turn":{"id":"replacement-turn"}}`), nil
 	}
-	command := protocol.RewriteTurnCommand{Start: protocol.StartTurnCommand{ThreadID: "wio-thread", CodexThread: "codex-thread", Prompt: "revised prompt"}, NumTurns: 2}
+	command := protocol.RewriteTurnCommand{Start: protocol.StartTurnCommand{ThreadID: "wio-thread", CodexThread: "codex-thread", Prompt: "revised prompt"}, NumTurns: 2, EditEventID: "message-id", ReplacementEventID: "replacement-id", ReplacementPayload: json.RawMessage(`{"text":"revised prompt"}`), CutoffSequence: 12}
 	if err := adapter.rewriteTurn(context.Background(), command, request); err != nil {
 		t.Fatal(err)
 	}
-	if len(methods) != 2 || methods[0] != "thread/rollback" || methods[1] != "turn/start" {
+	if len(methods) != 3 || methods[0] != "thread/fork" || methods[1] != "thread/rollback" || methods[2] != "turn/start" {
 		t.Fatalf("unexpected rewrite request order: %#v", methods)
 	}
-	if rollbackParams["threadId"] != "codex-thread" || rollbackParams["numTurns"] != uint32(2) {
+	if rollbackParams["threadId"] != "forked-thread" || rollbackParams["numTurns"] != uint32(2) {
 		t.Fatalf("unexpected rollback params: %#v", rollbackParams)
 	}
-	if emitted.Kind != "turn.accepted" || !strings.Contains(string(emitted.Payload), "replacement-turn") {
+	if emitted.Kind != "turn.accepted" || !strings.Contains(string(emitted.Payload), "replacement-turn") || !strings.Contains(string(emitted.Payload), "replacement-id") || !strings.Contains(string(emitted.Payload), "cutoff_sequence") {
 		t.Fatalf("replacement turn was not accepted: %#v", emitted)
 	}
 }
@@ -153,17 +182,61 @@ func TestPrepareCodexThreadRebindsWhenStoredThreadIsMissing(t *testing.T) {
 		if method == "thread/resume" {
 			return nil, &rpcRequestError{Method: method, Code: -32600, Message: "thread not found: missing-thread"}
 		}
+		if method == "turn/start" {
+			return json.RawMessage(`{"turn":{"id":"replacement-turn"}}`), nil
+		}
 		return json.RawMessage(`{"thread":{"id":"replacement-thread"}}`), nil
 	}
-	threadID, err := adapter.prepareCodexThread(context.Background(), command, request)
-	if err != nil {
+	if err := adapter.startTurn(context.Background(), command, request); err != nil {
 		t.Fatal(err)
 	}
-	if threadID != "replacement-thread" || len(methods) != 2 || methods[0] != "thread/resume" || methods[1] != "thread/start" {
-		t.Fatalf("unexpected fallback: thread=%q methods=%#v", threadID, methods)
+	if len(methods) != 3 || methods[0] != "thread/resume" || methods[1] != "thread/start" || methods[2] != "turn/start" {
+		t.Fatalf("unexpected fallback methods=%#v", methods)
 	}
-	if emitted.StreamID != "wio-thread" || emitted.Kind != "thread.bound" || !json.Valid(emitted.Payload) {
+	if emitted.StreamID != "wio-thread" || emitted.Kind != "turn.accepted" || !strings.Contains(string(emitted.Payload), "replacement-thread") {
 		t.Fatalf("unexpected binding event: %#v", emitted)
+	}
+}
+
+func TestUnknownThreadNotificationIsNeverGuessedFromSingleActiveTurn(t *testing.T) {
+	var emitted []protocol.StreamEvent
+	adapter := &Adapter{
+		threads: map[string]string{"codex-a": "wio-a"},
+		turns:   map[string]turnState{"wio-a": {CodexThread: "codex-a", TurnID: "turn-a", Active: true}},
+		emit:    func(event protocol.StreamEvent) error { emitted = append(emitted, event); return nil },
+	}
+	adapter.handleNotification(rpcMessage{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"codex-b","turn":{"id":"turn-b","status":"completed"}}`)})
+	if len(emitted) != 0 || !adapter.turns["wio-a"].Active {
+		t.Fatalf("unknown notification affected active thread: emitted=%#v state=%#v", emitted, adapter.turns["wio-a"])
+	}
+}
+
+func TestStaleCompletionDoesNotFinishNewerTurn(t *testing.T) {
+	var emitted []protocol.StreamEvent
+	adapter := &Adapter{
+		threads: map[string]string{"codex-thread": "wio-thread"},
+		turns:   map[string]turnState{"wio-thread": {CodexThread: "codex-thread", TurnID: "new-turn", Active: true}},
+		emit:    func(event protocol.StreamEvent) error { emitted = append(emitted, event); return nil },
+	}
+	adapter.handleNotification(rpcMessage{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"codex-thread","turn":{"id":"old-turn","status":"completed"}}`)})
+	if !adapter.turns["wio-thread"].Active || len(emitted) != 0 {
+		t.Fatalf("stale completion affected the newer turn: state=%#v events=%#v", adapter.turns["wio-thread"], emitted)
+	}
+}
+
+func TestResetEmitsFailureForEveryActiveTurn(t *testing.T) {
+	var emitted []protocol.StreamEvent
+	adapter := New("codex", slog.New(slog.NewTextHandler(io.Discard, nil)), func(event protocol.StreamEvent) error { emitted = append(emitted, event); return nil })
+	adapter.turns["wio-a"] = turnState{CodexThread: "codex-a", TurnID: "turn-a", Active: true}
+	adapter.turns["wio-b"] = turnState{CodexThread: "codex-b", TurnID: "turn-b", Active: true}
+	adapter.reset(errors.New("app-server disconnected"))
+	if len(emitted) != 2 {
+		t.Fatalf("expected one failure per active turn, got %#v", emitted)
+	}
+	for _, event := range emitted {
+		if event.Kind != "codex.turn.failed" || !strings.Contains(string(event.Payload), "app-server disconnected") {
+			t.Fatalf("unexpected reset event: %#v", event)
+		}
 	}
 }
 

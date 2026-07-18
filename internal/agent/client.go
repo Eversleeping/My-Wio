@@ -44,15 +44,23 @@ type Client struct {
 	codex       *codexadapter.Adapter
 	deployer    *deployer.Deployer
 	seenMu      sync.Mutex
-	seen        map[string]bool
+	seen        map[string]*operationExecution
 	codexPathMu sync.RWMutex
 	codexPath   string
 }
 
+type operationExecution struct {
+	done   chan struct{}
+	result protocol.OperationResult
+}
+
 func NewClient(config Config, log *slog.Logger) *Client {
 	codexPath := effectiveCodexPath(config)
-	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath), seen: make(map[string]bool), codexPath: codexPath}
+	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath), seen: make(map[string]*operationExecution), codexPath: codexPath}
 	client.codex = codexadapter.NewWithEnvironment(codexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
+		if event.EventID == "" {
+			event.EventID = uuid.NewString()
+		}
 		return client.queue("event", event, true)
 	})
 	return client
@@ -209,11 +217,22 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		return
 	}
 	c.seenMu.Lock()
-	if c.seen[envelope.OperationID] {
+	execution, seen := c.seen[envelope.OperationID]
+	if seen {
+		done := execution.done
 		c.seenMu.Unlock()
+		select {
+		case <-done:
+			c.seenMu.Lock()
+			result := execution.result
+			c.seenMu.Unlock()
+			_ = c.queue("operation_result", result, true)
+		case <-parent.Done():
+		}
 		return
 	}
-	c.seen[envelope.OperationID] = true
+	execution = &operationExecution{done: make(chan struct{})}
+	c.seen[envelope.OperationID] = execution
 	c.seenMu.Unlock()
 	timeout := 10 * time.Minute
 	if strings.HasPrefix(envelope.Kind, "deploy.") {
@@ -252,14 +271,23 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		message = err.Error()
 		c.log.Warn("operation failed", "operation_id", envelope.OperationID, "kind", envelope.Kind, "error", err)
 	}
-	if queueErr := c.queue("operation_result", protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192), Data: resultData}, true); queueErr != nil {
+	result := protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192), Data: resultData}
+	c.seenMu.Lock()
+	execution.result = result
+	close(execution.done)
+	c.seenMu.Unlock()
+	if queueErr := c.queue("operation_result", result, true); queueErr != nil {
 		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
 	}
 	if err == nil && restartPath != "" {
 		time.Sleep(750 * time.Millisecond)
 		if restartErr := activateStagedUpdate(c.config.StateDir, restartPath); restartErr != nil {
 			c.log.Error("could not restart into Agent update", "operation_id", envelope.OperationID, "error", restartErr)
-			_ = c.queue("operation_result", protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: truncate(restartErr.Error(), 8192)}, true)
+			failure := protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: truncate(restartErr.Error(), 8192)}
+			c.seenMu.Lock()
+			execution.result = failure
+			c.seenMu.Unlock()
+			_ = c.queue("operation_result", failure, true)
 		}
 	}
 }

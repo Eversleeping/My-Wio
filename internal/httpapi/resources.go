@@ -531,7 +531,18 @@ func (a *API) deleteThread(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
-	events, err := a.store.Events(r.Context(), chi.URLParam(r, "threadID"), after, 1000)
+	threadID := chi.URLParam(r, "threadID")
+	var events []protocol.StreamEvent
+	var err error
+	if r.URL.Query().Get("view") == "raw" {
+		if after > 0 {
+			events, err = a.store.Events(r.Context(), threadID, after, 1000)
+		} else {
+			events, err = a.store.RecentEvents(r.Context(), threadID, 1000)
+		}
+	} else {
+		events, err = a.store.ConversationEvents(r.Context(), threadID, after, 10000)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load session events")
 		return
@@ -600,7 +611,7 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 	}
 	command := protocol.StartTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: input.Prompt, Images: input.Images, Model: input.Model, ReasoningEffort: input.ReasoningEffort, ApprovalMode: input.ApprovalMode}
 	if input.EditEventID != "" {
-		operationID, event, err := a.store.RewriteThread(r.Context(), thread, input.EditEventID, command, eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images)}))
+		operationID, _, err := a.store.RewriteThread(r.Context(), thread, input.EditEventID, command, eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images)}))
 		if errors.Is(err, store.ErrThreadActive) {
 			writeError(w, http.StatusConflict, "active Codex session must finish before editing an earlier message")
 			return
@@ -613,7 +624,6 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 			writeError(w, http.StatusInternalServerError, "could not rewrite Codex session")
 			return
 		}
-		a.hub.Publish(event)
 		a.gateway.Wake(thread.ServerID)
 		session := currentSession(r)
 		_ = a.store.Audit(r.Context(), session.UserID, "codex.turn.rewrite", "thread", thread.ID, map[string]string{"operation_id": operationID, "edit_event_id": input.EditEventID}, clientIP(r))
@@ -744,18 +754,12 @@ func (a *API) decideApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "pending approval not found")
 		return
 	}
-	result, err := a.store.DB.ExecContext(r.Context(), a.store.Q("UPDATE approvals SET status='resolved',decision=?,resolved_at=? WHERE id=? AND status='pending'"), input.Decision, time.Now().UTC(), approval.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not resolve approval")
-		return
-	}
-	rows, _ := result.RowsAffected()
-	if rows != 1 {
+	command := protocol.ApprovalDecisionCommand{ThreadID: approval.ThreadID, RequestID: approval.RequestID, Decision: input.Decision}
+	operationID, err := a.store.ResolveApprovalAndQueue(r.Context(), approval.ID, approval.ServerID, input.Decision, command)
+	if errors.Is(err, store.ErrApprovalResolved) {
 		writeError(w, http.StatusConflict, "approval was already resolved")
 		return
 	}
-	command := protocol.ApprovalDecisionCommand{ThreadID: approval.ThreadID, RequestID: approval.RequestID, Decision: input.Decision}
-	operationID, err := a.store.QueueOperation(r.Context(), approval.ServerID, "codex.approval", command, "approval:"+approval.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not send approval decision")
 		return

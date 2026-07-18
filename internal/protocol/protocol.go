@@ -100,8 +100,12 @@ type StartTurnCommand struct {
 }
 
 type RewriteTurnCommand struct {
-	Start    StartTurnCommand `json:"start"`
-	NumTurns uint32           `json:"num_turns"`
+	Start              StartTurnCommand `json:"start"`
+	NumTurns           uint32           `json:"num_turns"`
+	EditEventID        string           `json:"edit_event_id,omitempty"`
+	ReplacementEventID string           `json:"replacement_event_id,omitempty"`
+	ReplacementPayload json.RawMessage  `json:"replacement_payload,omitempty"`
+	CutoffSequence     int64            `json:"cutoff_sequence,omitempty"`
 }
 
 type TurnImage struct {

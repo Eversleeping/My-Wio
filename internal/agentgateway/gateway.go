@@ -170,6 +170,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			_ = g.updateThreadTitle(ctx, event)
 		}
 		if event.Kind == "codex.turn.started" || event.Kind == "turn.accepted" {
+			if event.Kind == "turn.accepted" {
+				if err := g.acceptCodexTurn(ctx, event); err != nil {
+					return err
+				}
+			}
 			saved, err := g.store.AddEvent(ctx, event)
 			if err != nil {
 				return err
@@ -182,7 +187,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		if event.Kind == "codex.turn.completed" {
 			_ = g.setThreadTitleFromFirstResponse(ctx, event.StreamID)
-			_ = g.store.SetThreadStatus(ctx, event.StreamID, "idle")
+			_ = g.store.SetThreadStatus(ctx, event.StreamID, completedTurnStatus(event.Payload))
+			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
+		}
+		if event.Kind == "codex.turn.failed" {
+			_ = g.store.SetThreadStatus(ctx, event.StreamID, "failed")
 			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
 		return g.publish(ctx, event)
@@ -228,6 +237,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		if (operation.Kind == "codex.turn.interrupt" || operation.Kind == "codex.approval") && result.Status == "failed" {
+			if err := g.failCodexControlOperation(ctx, operation, result); err != nil {
+				return err
+			}
+		}
 		payload, err := json.Marshal(result)
 		if err != nil {
 			return err
@@ -248,6 +262,83 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		return g.publish(ctx, protocol.StreamEvent{StreamID: p.DeploymentID, Kind: "deployment." + p.Status, Payload: payload})
 	default:
 		return errors.New("unsupported agent message kind")
+	}
+}
+
+func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store.Operation, result protocol.OperationResult) error {
+	var threadID, kind string
+	switch operation.Kind {
+	case "codex.turn.interrupt":
+		var command protocol.InterruptTurnCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+			return err
+		}
+		threadID = command.ThreadID
+		kind = "codex.interrupt.failed"
+	case "codex.approval":
+		var command protocol.ApprovalDecisionCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+			return err
+		}
+		threadID = command.ThreadID
+		kind = "codex.approval.failed"
+	}
+	if threadID == "" {
+		return errors.New("failed Codex control operation has no thread id")
+	}
+	payload, err := json.Marshal(map[string]string{"operation_id": result.OperationID, "text": result.Message})
+	if err != nil {
+		return err
+	}
+	return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":control-failed", StreamID: threadID, Kind: kind, Payload: security.RedactJSON(payload)})
+}
+
+func (g *Gateway) acceptCodexTurn(ctx context.Context, event protocol.StreamEvent) error {
+	var payload struct {
+		CodexThreadID      string          `json:"codex_thread_id"`
+		EditEventID        string          `json:"edit_event_id"`
+		ReplacementID      string          `json:"replacement_event_id"`
+		ReplacementPayload json.RawMessage `json:"replacement_payload"`
+		CutoffSequence     int64           `json:"cutoff_sequence"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return err
+	}
+	if payload.CodexThreadID == "" {
+		return errors.New("accepted Codex turn has no thread id")
+	}
+	if payload.EditEventID == "" && payload.ReplacementID == "" {
+		return g.bindCodexThread(ctx, event)
+	}
+	if payload.EditEventID == "" || payload.ReplacementID == "" || len(payload.ReplacementPayload) == 0 {
+		return errors.New("accepted Codex rewrite has incomplete commit metadata")
+	}
+	replacement, changed, err := g.store.CommitThreadRewrite(ctx, event.StreamID, payload.CodexThreadID, payload.EditEventID, payload.ReplacementID, payload.ReplacementPayload, payload.CutoffSequence)
+	if err != nil {
+		return err
+	}
+	if changed {
+		g.hub.Publish(replacement)
+	}
+	return nil
+}
+
+func completedTurnStatus(payload json.RawMessage) string {
+	var value struct {
+		Turn struct {
+			Status string `json:"status"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(payload, &value) != nil {
+		return "failed"
+	}
+	switch value.Turn.Status {
+	case "completed":
+		return "idle"
+	case "interrupted", "failed":
+		return value.Turn.Status
+	default:
+		return "failed"
 	}
 }
 
@@ -276,7 +367,7 @@ func (g *Gateway) failCodexTurn(ctx context.Context, operation store.Operation, 
 	if err != nil {
 		return err
 	}
-	return g.publish(ctx, protocol.StreamEvent{StreamID: threadID, Kind: "codex.turn.failed", Payload: security.RedactJSON(payload)})
+	return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":turn-failed", StreamID: threadID, Kind: "codex.turn.failed", Payload: security.RedactJSON(payload)})
 }
 
 func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID string) error {

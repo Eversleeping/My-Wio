@@ -619,9 +619,18 @@ func (s *Store) AddEvent(ctx context.Context, event protocol.StreamEvent) (proto
 			return event, err
 		}
 	}
-	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?) ON CONFLICT(stream_id,sequence) DO NOTHING"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(event.Payload))
+	result, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(event.Payload))
 	if err != nil {
 		return event, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return event, err
+	}
+	if rows == 0 {
+		if err := tx.GetContext(ctx, &event.Sequence, s.Q("SELECT sequence FROM events WHERE event_id=? AND stream_id=?"), event.EventID, event.StreamID); err != nil {
+			return event, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return event, err
@@ -641,13 +650,55 @@ func (s *Store) Events(ctx context.Context, streamID string, after int64, limit 
 		Sequence   int64     `db:"sequence"`
 		OccurredAt time.Time `db:"occurred_at"`
 	}
-	err := s.DB.SelectContext(ctx, &rows, s.Q("SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE (?='' OR stream_id=?) AND sequence>? ORDER BY occurred_at,sequence LIMIT ?"), streamID, streamID, after, limit)
+	var err error
+	if streamID == "" {
+		err = s.DB.SelectContext(ctx, &rows, s.Q("SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE sequence>? ORDER BY occurred_at,sequence LIMIT ?"), after, limit)
+	} else {
+		err = s.DB.SelectContext(ctx, &rows, s.Q("SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND sequence>? ORDER BY sequence LIMIT ?"), streamID, after, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
 	out := make([]protocol.StreamEvent, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, protocol.StreamEvent{EventID: r.EventID, StreamID: r.StreamID, Sequence: r.Sequence, Kind: r.Kind, OccurredAt: r.OccurredAt, Payload: json.RawMessage(r.Payload)})
+	}
+	return out, nil
+}
+
+func (s *Store) ConversationEvents(ctx context.Context, streamID string, after int64, limit int) ([]protocol.StreamEvent, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 10000
+	}
+	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
+		WHERE stream_id=? AND sequence>? AND kind IN ('user.message','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed')
+		ORDER BY sequence LIMIT ?`), streamID, after, limit)
+}
+
+func (s *Store) RecentEvents(ctx context.Context, streamID string, limit int) ([]protocol.StreamEvent, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 1000
+	}
+	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM (
+		SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE stream_id=? ORDER BY sequence DESC LIMIT ?
+	) recent ORDER BY sequence`), streamID, limit)
+}
+
+func (s *Store) eventRows(ctx context.Context, query string, args ...any) ([]protocol.StreamEvent, error) {
+	var rows []struct {
+		EventID    string    `db:"event_id"`
+		StreamID   string    `db:"stream_id"`
+		Kind       string    `db:"kind"`
+		Payload    string    `db:"payload"`
+		Sequence   int64     `db:"sequence"`
+		OccurredAt time.Time `db:"occurred_at"`
+	}
+	if err := s.DB.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, err
+	}
+	out := make([]protocol.StreamEvent, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, protocol.StreamEvent{EventID: row.EventID, StreamID: row.StreamID, Sequence: row.Sequence, Kind: row.Kind, OccurredAt: row.OccurredAt, Payload: json.RawMessage(row.Payload)})
 	}
 	return out, nil
 }
@@ -701,42 +752,95 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 	if target.Kind != "user.message" {
 		return "", protocol.StreamEvent{}, ErrInvalidEditTarget
 	}
-	var earlierMessages int
-	if err := tx.GetContext(ctx, &earlierMessages, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='user.message' AND sequence<?"), thread.ID, target.Sequence); err != nil {
-		return "", protocol.StreamEvent{}, err
-	}
 	var numTurns uint32
 	if err := tx.GetContext(ctx, &numTurns, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='turn.accepted' AND sequence>?"), thread.ID, target.Sequence); err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
-	rewrite := protocol.RewriteTurnCommand{Start: command, NumTurns: numTurns}
+	var cutoffSequence int64
+	if err := tx.GetContext(ctx, &cutoffSequence, s.Q("SELECT COALESCE(MAX(sequence),0) FROM events WHERE stream_id=?"), thread.ID); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	replacement := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: target.Sequence, Kind: "user.message", OccurredAt: time.Now().UTC(), Payload: userPayload}
+	rewrite := protocol.RewriteTurnCommand{
+		Start:              command,
+		NumTurns:           numTurns,
+		EditEventID:        editEventID,
+		ReplacementEventID: replacement.EventID,
+		ReplacementPayload: userPayload,
+		CutoffSequence:     cutoffSequence,
+	}
 	operationPayload, err := json.Marshal(rewrite)
 	if err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=? AND sequence>=?"), thread.ID, target.Sequence); err != nil {
-		return "", protocol.StreamEvent{}, err
-	}
 	now := time.Now().UTC()
-	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: target.Sequence, Kind: "user.message", OccurredAt: now, Payload: userPayload}
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(event.Payload)); err != nil {
-		return "", protocol.StreamEvent{}, err
-	}
 	operationID := NewID()
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, thread.ServerID, "codex.turn.rewrite", string(operationPayload), "codex-rewrite:"+NewID(), now); err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
-	title := thread.Title
-	if earlierMessages == 0 {
-		title = "New session"
-	}
-	if _, err := tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',title=?,updated_at=? WHERE id=?"), title, now, thread.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',updated_at=? WHERE id=?"), now, thread.ID); err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
-	return operationID, event, nil
+	return operationID, replacement, nil
+}
+
+func (s *Store) CommitThreadRewrite(ctx context.Context, threadID, codexThreadID, editEventID, replacementEventID string, replacementPayload json.RawMessage, cutoffSequence int64) (protocol.StreamEvent, bool, error) {
+	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	defer tx.Rollback()
+	var target struct {
+		Sequence int64  `db:"sequence"`
+		Kind     string `db:"kind"`
+	}
+	if err := tx.GetContext(ctx, &target, s.Q("SELECT sequence,kind FROM events WHERE stream_id=? AND event_id=?"), threadID, editEventID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return protocol.StreamEvent{}, false, err
+		}
+		var existing struct {
+			Sequence   int64     `db:"sequence"`
+			Kind       string    `db:"kind"`
+			OccurredAt time.Time `db:"occurred_at"`
+			Payload    string    `db:"payload"`
+		}
+		if err := tx.GetContext(ctx, &existing, s.Q("SELECT sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND event_id=?"), threadID, replacementEventID); err != nil {
+			return protocol.StreamEvent{}, false, err
+		}
+		return protocol.StreamEvent{EventID: replacementEventID, StreamID: threadID, Sequence: existing.Sequence, Kind: existing.Kind, OccurredAt: existing.OccurredAt, Payload: json.RawMessage(existing.Payload)}, false, nil
+	}
+	if target.Kind != "user.message" {
+		return protocol.StreamEvent{}, false, ErrInvalidEditTarget
+	}
+	if cutoffSequence < target.Sequence {
+		return protocol.StreamEvent{}, false, ErrInvalidEditTarget
+	}
+	var earlierMessages int
+	if err := tx.GetContext(ctx, &earlierMessages, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='user.message' AND sequence<?"), threadID, target.Sequence); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=? AND sequence>=? AND sequence<=?"), threadID, target.Sequence, cutoffSequence); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	now := time.Now().UTC()
+	event := protocol.StreamEvent{EventID: replacementEventID, StreamID: threadID, Sequence: target.Sequence, Kind: "user.message", OccurredAt: now, Payload: replacementPayload}
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(event.Payload)); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	title := ""
+	if earlierMessages == 0 {
+		title = "New session"
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET codex_thread_id=?,status='running',title=CASE WHEN ?='' THEN title ELSE ? END,updated_at=? WHERE id=?"), codexThreadID, title, title, now, threadID); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	return event, true, nil
 }
 
 func (s *Store) SaveMetrics(ctx context.Context, serverID string, m protocol.Metrics) error {

@@ -335,7 +335,7 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestRewriteTurnTruncatesEventsAndQueuesRollback(t *testing.T) {
+func TestRewriteTurnPreservesHistoryUntilForkIsAccepted(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "rewrite-turn-token")
 	ctx := context.Background()
@@ -379,8 +379,8 @@ func TestRewriteTurnTruncatesEventsAndQueuesRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 5 || events[4].Kind != "user.message" || events[4].Sequence != target.Sequence || !strings.Contains(string(events[4].Payload), "revised second") {
-		t.Fatalf("unexpected rewritten events: %#v", events)
+	if len(events) != 11 || events[4].EventID != target.EventID || !strings.Contains(string(events[4].Payload), "second") {
+		t.Fatalf("rewrite changed history before Codex accepted the fork: %#v", events)
 	}
 	operations, err := database.PendingOperations(ctx, server.ID)
 	if err != nil || len(operations) != 1 || operations[0].Kind != "codex.turn.rewrite" {
@@ -390,14 +390,33 @@ func TestRewriteTurnTruncatesEventsAndQueuesRollback(t *testing.T) {
 	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil {
 		t.Fatal(err)
 	}
-	if command.NumTurns != 2 || command.Start.Prompt != "revised second" || command.Start.ThreadID != thread.ID {
+	if command.NumTurns != 2 || command.Start.Prompt != "revised second" || command.Start.ThreadID != thread.ID || command.EditEventID != target.EventID || command.ReplacementEventID == "" || command.CutoffSequence != 11 {
 		t.Fatalf("unexpected rewrite command: %#v", command)
 	}
 	updated, err := database.Thread(ctx, thread.ID)
 	if err != nil || updated.Status != "queued" {
 		t.Fatalf("rewrite did not queue thread: %#v %v", updated, err)
 	}
-	conflict := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "again", "approval_mode": "on-request", "edit_event_id": events[4].EventID}, api.startTurn)
+	postCutoff, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.item.completed", Payload: json.RawMessage(`{"item":{"type":"agentMessage","text":"replacement answer"}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, changed, err := database.CommitThreadRewrite(ctx, thread.ID, "forked-thread", command.EditEventID, command.ReplacementEventID, command.ReplacementPayload, command.CutoffSequence)
+	if err != nil || !changed {
+		t.Fatalf("could not commit accepted rewrite: changed=%v event=%#v err=%v", changed, replacement, err)
+	}
+	events, err = database.Events(ctx, thread.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 6 || events[4].EventID != command.ReplacementEventID || events[4].Sequence != target.Sequence || !strings.Contains(string(events[4].Payload), "revised second") || events[5].EventID != postCutoff.EventID {
+		t.Fatalf("accepted rewrite did not replace only the old branch: %#v", events)
+	}
+	updated, err = database.Thread(ctx, thread.ID)
+	if err != nil || updated.CodexThreadID != "forked-thread" || updated.Status != "running" {
+		t.Fatalf("accepted rewrite did not bind fork: %#v %v", updated, err)
+	}
+	conflict := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "again", "approval_mode": "on-request", "edit_event_id": replacement.EventID}, api.startTurn)
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("active rewrite returned %d: %s", conflict.Code, conflict.Body.String())
 	}

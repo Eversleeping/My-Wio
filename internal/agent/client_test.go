@@ -1,12 +1,16 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 func TestCodexEnvironmentIsScopedFromKeyFile(t *testing.T) {
@@ -21,6 +25,25 @@ func TestCodexEnvironmentIsScopedFromKeyFile(t *testing.T) {
 	}
 	if environment := codexEnvironment(Config{CodexAPIKeyFile: filepath.Join(t.TempDir(), "missing")}, log); environment != nil {
 		t.Fatalf("expected no environment, got %#v", environment)
+	}
+}
+
+func TestRedeliveredOperationReplaysCachedResult(t *testing.T) {
+	client := &Client{
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		outbound: make(chan *protocol.AgentEnvelope, 2),
+		seen:     make(map[string]*operationExecution),
+	}
+	operation := &protocol.ControlEnvelope{OperationID: "operation-1", Kind: "unsupported"}
+	client.handleOperation(context.Background(), operation)
+	first := <-client.outbound
+	client.handleOperation(context.Background(), operation)
+	second := <-client.outbound
+	for index, envelope := range []*protocol.AgentEnvelope{first, second} {
+		var result protocol.OperationResult
+		if envelope.Kind != "operation_result" || json.Unmarshal(envelope.PayloadJSON, &result) != nil || result.OperationID != operation.OperationID || result.Status != "failed" {
+			t.Fatalf("unexpected replay %d: %#v payload=%s", index, envelope, envelope.PayloadJSON)
+		}
 	}
 }
 
