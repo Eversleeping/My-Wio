@@ -481,4 +481,26 @@ func TestWorkspaceFilesOperationStoresAgentSnapshot(t *testing.T) {
 	if err != nil || snapshot.Status != "succeeded" || !strings.Contains(snapshot.Files, "README.md") {
 		t.Fatalf("unexpected workspace snapshot: %#v %v", snapshot, err)
 	}
+	previewID, err := database.QueueOperation(ctx, server.ID, "workspace.file.preview", protocol.WorkspaceFilePreviewCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: "README.md"}, "preview-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.BeginWorkspaceFilePreview(ctx, workspace.ID, "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	previewData, err := json.Marshal(protocol.WorkspaceFilePreviewResult{Path: "README.md", Content: "# Preview\n", Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewPayload, err := json.Marshal(protocol.OperationResult{OperationID: previewID, Status: "succeeded", Data: previewData})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: previewPayload}); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := database.WorkspaceFilePreview(ctx, workspace.ID, "README.md")
+	if err != nil || preview.Status != "succeeded" || preview.Content != "# Preview\n" {
+		t.Fatalf("unexpected workspace preview: %#v %v", preview, err)
+	}
 }

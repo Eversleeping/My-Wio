@@ -67,6 +67,19 @@ func TestCodexConfiguration(t *testing.T) {
 	}
 }
 
+func TestAgentServiceUnitAllowsExplicitSudo(t *testing.T) {
+	base := []byte("NoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nRestrictSUIDSGID=true\n")
+	if got := string(agentServiceUnit(base, false)); got != string(base) {
+		t.Fatalf("default unit changed: %q", got)
+	}
+	enabled := string(agentServiceUnit(base, true))
+	for _, expected := range []string{"NoNewPrivileges=false", "ProtectSystem=false", "ProtectHome=false", "RestrictSUIDSGID=false"} {
+		if !strings.Contains(enabled, expected) {
+			t.Fatalf("sudo-enabled unit missing %q: %s", expected, enabled)
+		}
+	}
+}
+
 func TestEnrollmentServerID(t *testing.T) {
 	id := "6d22a53c-6a88-46ec-a201-1fd24dd83bea"
 	if actual := enrollmentServerID("Enrolled server " + id + "; configuration written"); actual != id {

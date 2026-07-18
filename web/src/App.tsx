@@ -1,4 +1,4 @@
-import { FormEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -18,6 +18,7 @@ import {
   Cpu,
   Database,
   File as FileIcon,
+  FileCode2,
   Folder,
   FolderOpen,
   FolderTree,
@@ -34,6 +35,7 @@ import {
   MapPin,
   Menu,
   MemoryStick,
+  MessageSquare,
   MonitorDot,
   Paperclip,
   Pencil,
@@ -80,6 +82,7 @@ import type {
   Thread,
   Workspace,
   WorkspaceFile,
+  WorkspaceFilePreview,
   WorkspaceFilesSnapshot
 } from "./types";
 
@@ -88,6 +91,8 @@ type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
 type ComposerImage = { id: string; dataURL: string };
+type FilePreviewSelection = { path: string; line?: number };
+const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 type StreamRevisions = Record<string, number>;
 
 const defaultCodexModel = "gpt-5.6-sol";
@@ -359,7 +364,7 @@ function ServersPage({ realtime, notify }: PageProps) {
   const [metadataForm, setMetadataForm] = useState({ address: "", configuration: "", notes: "" });
   const [form, setForm] = useState({
     name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
-    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: "", gitProfileID: ""
+    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: "", gitProfileID: "", allowSudo: false
   });
   useEffect(() => {
     const firstCodexProfile = credentialProfiles.data?.find(profile => profile.kind === "codex");
@@ -367,7 +372,7 @@ function ServersPage({ realtime, notify }: PageProps) {
   }, [credentialProfiles.data, dialog]);
   const reset = () => {
     setStep("form"); setError(""); setHostKey(null); setResult(null); setInstallLogs([]); setBusy(false);
-    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: codexProfiles[0]?.id ?? "", gitProfileID: "" });
+    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: codexProfiles[0]?.id ?? "", gitProfileID: "", allowSudo: false });
   };
   const open = () => { reset(); setDialog(true); };
   const close = () => { if (busy) return; setDialog(false); reset(); };
@@ -393,7 +398,7 @@ function ServersPage({ realtime, notify }: PageProps) {
         private_key_passphrase: form.authMethod === "private_key" ? form.privateKeyPassphrase : "",
         configuration: form.configuration.trim(), notes: form.notes.trim(),
         host_key_fingerprint: hostKey.fingerprint,
-        codex_profile_id: form.codexProfileID, git_profile_id: form.gitProfileID
+        codex_profile_id: form.codexProfileID, git_profile_id: form.gitProfileID, allow_sudo: form.allowSudo
       }, event => {
         if (event.type === "progress" && event.step) {
           setInstallLogs(current => {
@@ -481,6 +486,7 @@ function ServersPage({ realtime, notify }: PageProps) {
     {form.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={e => void choosePrivateKey(e.target.files?.[0])} required={!form.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={form.privateKeyPassphrase} onChange={e => setForm({ ...form, privateKeyPassphrase: e.target.value })} placeholder={t("common.optional")} /></Field></div> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field>}
     <div className="form-divider"><span>{t("server.credentialProfiles")}</span></div>
     <div className="form-grid"><Field label={t("server.codexProfile")}><select value={form.codexProfileID} onChange={e => setForm({ ...form, codexProfileID: e.target.value })} required><option value="">{t(codexProfiles.length ? "server.selectCodexProfile" : "server.noCodexProfiles")}</option>{codexProfiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} · {profile.model}</option>)}</select></Field><Field label={t("server.gitProfile")}><select value={form.gitProfileID} onChange={e => setForm({ ...form, gitProfileID: e.target.value })}><option value="">{t("server.noGitProfile")}</option>{gitProfiles.map(profile => { const ready = Boolean(profile.commit_name && profile.commit_email); return <option value={profile.id} key={profile.id} disabled={!ready}>{profile.name} · {profile.username}{ready ? "" : ` · ${t("settings.gitIdentityMissing")}`}</option>; })}</select></Field></div>
+    <label className={`agent-sudo-option ${form.allowSudo ? "enabled" : ""}`}><input type="checkbox" checked={form.allowSudo} onChange={event => setForm({ ...form, allowSudo: event.target.checked })} /><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
     <DialogActions><button type="button" className="secondary-button" onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{busy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
   </form> : step === "fingerprint" && hostKey ? <div className="enrollment-step">
     {error && <ErrorBanner text={error} />}
@@ -559,12 +565,16 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   const [approvalOpen, setApprovalOpen] = useState(approvals.length > 0);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [deletingThread, setDeletingThread] = useState("");
+  const [preview, setPreview] = useState<FilePreviewSelection | null>(null);
+  const [activePane, setActivePane] = useState<"conversation" | "preview">("conversation");
   const active = selected ? (threads.data ?? []).find(thread => thread.id === selected) : threads.data?.[0];
   const threadGroups = useMemo(() => groupThreadsByProject(threads.data ?? []), [threads.data]);
   const approvalKey = approvals.map(item => item.id).join(",");
   useEffect(() => { if (!selected && threads.data?.[0]) setSelected(threads.data[0].id); }, [threads.data, selected]);
   useEffect(() => { if (approvalKey) setApprovalOpen(true); }, [approvalKey, approvalSignal]);
+  useEffect(() => { setPreview(null); setActivePane("conversation"); }, [active?.workspace_id]);
   const toggleProject = (projectID: string) => setCollapsedProjects(current => { const next = new Set(current); if (next.has(projectID)) next.delete(projectID); else next.add(projectID); return next; });
+  const openFile = (selection: FilePreviewSelection) => { setPreview(selection); setActivePane("preview"); };
   const deleteSession = async (thread: Thread) => {
     if (thread.status === "queued" || thread.status === "running") return;
     if (!confirm(t("codex.confirmDeleteSession", { title: thread.title }))) return;
@@ -582,8 +592,8 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
     }
   };
   return <div className="codex-layout">
-    <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{threadGroups.length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong><span>{group.threads.length}</span></button>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; return <div key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"}><button type="button" className="thread-select" onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span></button><div className="thread-actions"><Status value={thread.status} /><button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div></div>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} /></aside>
-    <section className="session-panel">{threads.error && !threads.data ? <ErrorState error={threads.error} reload={threads.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>
+    <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{threadGroups.length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong><span>{group.threads.length}</span></button>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; return <div key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"}><button type="button" className="thread-select" onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span></button><div className="thread-actions"><Status value={thread.status} /><button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div></div>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} onOpenFile={path => openFile({ path })} /></aside>
+    <section className="session-area">{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}><FileCode2 size={15} />{t("codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{threads.error && !threads.data ? <ErrorState error={threads.error} reload={threads.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />}</div></section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { setSelected(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
@@ -602,7 +612,7 @@ function groupThreadsByProject(threads: Thread[]) {
 
 type FileTreeNode = { name: string; path: string; kind: WorkspaceFile["kind"]; size?: number; children: FileTreeNode[] };
 
-function WorkspaceFilesPanel({ workspaceID, realtime, notify }: { workspaceID: string | null; realtime: number; notify: (text: string) => void }) {
+function WorkspaceFilesPanel({ workspaceID, realtime, notify, activePath, onOpenFile }: { workspaceID: string | null; realtime: number; notify: (text: string) => void; activePath: string; onOpenFile: (path: string) => void }) {
   const { t } = useI18n();
   const snapshot = useData<WorkspaceFilesSnapshot>(workspaceID ? `/workspaces/${workspaceID}/files` : null, `${realtime}:${workspaceID}`);
   const [requestedWorkspace, setRequestedWorkspace] = useState("");
@@ -631,14 +641,14 @@ function WorkspaceFilesPanel({ workspaceID, realtime, notify }: { workspaceID: s
   }, [currentSnapshot?.status, refresh, requestedWorkspace, workspaceID]);
   const tree = useMemo(() => buildFileTree(currentSnapshot?.files ?? []), [currentSnapshot?.files]);
   const toggle = (path: string) => setExpanded(current => { const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next; });
-  return <section className="workspace-files"><div className="panel-heading"><div><FolderTree size={17} /><h2>{t("codex.projectFiles")}</h2></div><button className="icon-button" type="button" disabled={!workspaceID || scanning} title={t("codex.refreshFiles")} onClick={() => void refresh()}>{scanning ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div><div className="workspace-file-body">{!workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : scanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div></section>;
+  return <section className="workspace-files"><div className="panel-heading"><div><FolderTree size={17} /><h2>{t("codex.projectFiles")}</h2></div><button className="icon-button" type="button" disabled={!workspaceID || scanning} title={t("codex.refreshFiles")} onClick={() => void refresh()}>{scanning ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div><div className="workspace-file-body">{!workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : scanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} activePath={activePath} onOpenFile={onOpenFile} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div></section>;
 }
 
-function FileTreeItem({ node, depth, expanded, onToggle }: { node: FileTreeNode; depth: number; expanded: Set<string>; onToggle: (path: string) => void }) {
+function FileTreeItem({ node, depth, expanded, onToggle, activePath, onOpenFile }: { node: FileTreeNode; depth: number; expanded: Set<string>; onToggle: (path: string) => void; activePath: string; onOpenFile: (path: string) => void }) {
   const directory = node.kind === "directory";
   const open = directory && expanded.has(node.path);
   const content = <><span className="file-tree-chevron">{directory ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}</span>{directory ? open ? <FolderOpen size={15} /> : <Folder size={15} /> : <FileIcon size={14} />}<span title={node.path}>{node.name}</span></>;
-  return <>{directory ? <button type="button" className="file-tree-row" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => onToggle(node.path)}>{content}</button> : <div className="file-tree-row" style={{ paddingLeft: 8 + depth * 14 }}>{content}</div>}{open && node.children.map(child => <FileTreeItem key={child.path} node={child} depth={depth + 1} expanded={expanded} onToggle={onToggle} />)}</>;
+  return <>{<button type="button" className={`file-tree-row ${!directory && activePath === node.path ? "active" : ""}`} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => directory ? onToggle(node.path) : onOpenFile(node.path)}>{content}</button>}{open && node.children.map(child => <FileTreeItem key={child.path} node={child} depth={depth + 1} expanded={expanded} onToggle={onToggle} activePath={activePath} onOpenFile={onOpenFile} />)}</>;
 }
 
 function buildFileTree(files: WorkspaceFile[]): FileTreeNode[] {
@@ -674,7 +684,7 @@ function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCr
   return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/threads", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;
 }
 
-function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: { thread: Thread; approvals: Approval[]; realtime: unknown; reloadApprovals: () => void; notify: (text: string) => void }) {
+function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onOpenFile }: { thread: Thread; approvals: Approval[]; realtime: unknown; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void }) {
   const { t } = useI18n();
   const [rawEvents, setRawEvents] = useState(false);
   const events = useData<StreamEvent[]>(`/threads/${thread.id}/events?view=${rawEvents ? "raw" : "conversation"}`, realtime);
@@ -747,7 +757,7 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
   };
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={editMessage} notify={notify} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     <form className="composer" onSubmit={send}>
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
@@ -769,11 +779,11 @@ function ApprovalActions({ item, onDecided, notify }: { item: Approval; onDecide
   return <div className="approval-actions"><button type="button" className="secondary-button danger" disabled={busy} onClick={() => void decide("denied")}><Ban size={16} />{t("codex.deny")}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void decide("approved")}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("codex.approveOnce")}</button></div>;
 }
 
-function ConversationEventItem({ event, onEdit, notify }: { event: StreamEvent; onEdit: (eventID: string, text: string) => void; notify: (text: string) => void }) {
+function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFile }: { event: StreamEvent; onEdit: (eventID: string, text: string) => void; notify: (text: string) => void; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void }) {
   const { t } = useI18n();
   const kind = event.kind;
   const payload = asRecord(event.payload);
-  if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } }; return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} />}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button></div></article>; }
+  if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } }; return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button></div></article>; }
   if (kind === "codex.error" || kind === "codex.turn.failed" || kind === "codex.interrupt.failed" || kind === "codex.approval.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t(kind === "codex.turn.failed" || kind === "codex.error" ? "codex.turnFailed" : "codex.actionFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
   if (kind === "codex.turn.completed") {
     const turn = asRecord(payload?.turn);
@@ -782,12 +792,106 @@ function ConversationEventItem({ event, onEdit, notify }: { event: StreamEvent; 
     return <article className="message error"><header><AlertTriangle size={15} /><strong>{t("codex.turnFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(turn) || t("codex.unknownError")}</div></article>;
   }
   const item = asRecord(payload?.item);
-  if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><MarkdownContent text={extractText(item)} /></article>;
+  if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><MarkdownContent text={extractText(item)} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} /></article>;
   return <ToolEvent event={event} item={item} />;
 }
 
-function MarkdownContent({ text }: { text: string }) {
-  return <div className="message-content markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>;
+function MarkdownContent({ text, workspaceRoot, onOpenFile }: { text: string; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void }) {
+  const { t } = useI18n();
+  return <div className="message-content markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children, node: _node, ...props }) => { const selection = workspaceFileLink(href, workspaceRoot); if (selection) return <a {...props} href={href} onClick={event => { event.preventDefault(); onOpenFile(selection); }}>{children}</a>; if (isExternalLink(href)) return <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>; if (href?.startsWith("#")) return <a {...props} href={href}>{children}</a>; return <a {...props} className="unavailable-link" href={href} aria-disabled="true" title={t("codex.linkUnavailable")} onClick={event => event.preventDefault()}>{children}</a>; } }}>{text}</ReactMarkdown></div>;
+}
+
+function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; onClose: () => void }) {
+  const { t } = useI18n();
+  const [requestVersion, setRequestVersion] = useState(0);
+  const [requesting, setRequesting] = useState(false);
+  const [requestError, setRequestError] = useState("");
+  const endpoint = `/workspaces/${workspaceID}/file-preview?path=${encodeURIComponent(selection.path)}`;
+  const preview = useData<WorkspaceFilePreview>(endpoint, `${realtime}:${requestVersion}`);
+  const requestPreview = useCallback(async () => {
+    setRequesting(true);
+    setRequestError("");
+    try {
+      await post(`/workspaces/${workspaceID}/file-preview`, { path: selection.path });
+      preview.reload();
+    } catch (error) {
+      setRequestError(message(error));
+    } finally {
+      setRequesting(false);
+    }
+  }, [preview.reload, selection.path, workspaceID]);
+  useEffect(() => { void requestPreview(); }, [requestPreview]);
+  const data = preview.data?.path === selection.path ? preview.data : null;
+  const loading = requesting || preview.loading || !data || data.status === "idle" || data.status === "loading";
+  const error = requestError || preview.error || data?.error || "";
+  const language = previewLanguage(selection.path);
+  const fileName = selection.path.split("/").pop() || selection.path;
+  return <section className="file-preview-panel"><header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}</div></section>;
+}
+
+function workspaceFileLink(href: string | undefined, workspaceRoot: string): FilePreviewSelection | null {
+  if (!href || href.startsWith("#") || isExternalLink(href)) return null;
+  let value = href;
+  try { value = decodeURIComponent(value); } catch { return null; }
+  value = value.replace(/^file:\/\//i, "");
+  let line: number | undefined;
+  const hashIndex = value.indexOf("#");
+  if (hashIndex >= 0) {
+    const match = value.slice(hashIndex).match(/^#L?(\d+)/i);
+    if (match) line = Number(match[1]);
+    value = value.slice(0, hashIndex);
+  }
+  value = value.split("?", 1)[0];
+  const lineMatch = value.match(/:(\d+)(?::\d+)?$/);
+  if (lineMatch) {
+    line = Number(lineMatch[1]);
+    value = value.slice(0, lineMatch.index);
+  }
+  const root = workspaceRoot.replaceAll("\\", "/").replace(/\/$/, "");
+  value = value.replaceAll("\\", "/");
+  if (value.startsWith(root + "/")) value = value.slice(root.length + 1);
+  else if (value.startsWith("/")) return null;
+  const parts: string[] = [];
+  for (const part of value.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else parts.push(part);
+  }
+  return parts.length > 0 ? { path: parts.join("/"), line } : null;
+}
+
+function isExternalLink(href: string | undefined) {
+  if (!href) return false;
+  if (href.startsWith("//")) return true;
+  const scheme = href.match(/^([a-z][a-z0-9+.-]*):/i)?.[1]?.toLowerCase();
+  return Boolean(scheme && scheme !== "file");
+}
+
+function previewLanguage(path: string) {
+  const fileName = path.split("/").pop()?.toLowerCase() ?? "";
+  const extension = fileName.includes(".") ? fileName.split(".").pop() ?? "" : "";
+  const special: Record<string, { id: string; label: string }> = {
+    dockerfile: { id: "docker", label: "Dockerfile" }, makefile: { id: "makefile", label: "Makefile" },
+    ".env": { id: "bash", label: "Environment" }, "go.mod": { id: "go", label: "Go module" }, "go.sum": { id: "plain", label: "Go checksum" }
+  };
+  if (special[fileName]) return special[fileName];
+  const languages: Record<string, { id: string; label: string }> = {
+    js: { id: "javascript", label: "JavaScript" }, jsx: { id: "jsx", label: "JSX" }, ts: { id: "typescript", label: "TypeScript" }, tsx: { id: "tsx", label: "TSX" },
+    css: { id: "css", label: "CSS" }, scss: { id: "css", label: "SCSS" }, html: { id: "markup", label: "HTML" }, xml: { id: "markup", label: "XML" }, svg: { id: "markup", label: "SVG" },
+    go: { id: "go", label: "Go" }, py: { id: "python", label: "Python" }, java: { id: "java", label: "Java" }, c: { id: "c", label: "C" }, h: { id: "c", label: "C header" }, cpp: { id: "cpp", label: "C++" }, cc: { id: "cpp", label: "C++" }, rs: { id: "rust", label: "Rust" }, swift: { id: "swift", label: "Swift" },
+    sh: { id: "bash", label: "Shell" }, bash: { id: "bash", label: "Bash" }, ps1: { id: "powershell", label: "PowerShell" }, sql: { id: "sql", label: "SQL" },
+    json: { id: "json", label: "JSON" }, jsonc: { id: "json", label: "JSON" }, yaml: { id: "yaml", label: "YAML" }, yml: { id: "yaml", label: "YAML" }, toml: { id: "toml", label: "TOML" }, ini: { id: "plain", label: "INI" },
+    md: { id: "markdown", label: "Markdown" }, mdx: { id: "markdown", label: "MDX" }, txt: { id: "plain", label: "Text" }
+  };
+  return languages[extension] ?? { id: "plain", label: extension ? extension.toUpperCase() : "Text" };
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function ToolEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> | null }) {

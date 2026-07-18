@@ -1,9 +1,11 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -11,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -89,37 +92,9 @@ func ListWorkspaceFiles(ctx context.Context, root string, allowedRoots []string,
 	if limit <= 0 {
 		limit = 4000
 	}
-	root, err := filepath.Abs(filepath.Clean(root))
+	root, err := resolveWorkspaceRoot(root, allowedRoots)
 	if err != nil {
 		return protocol.WorkspaceFilesResult{}, err
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return protocol.WorkspaceFilesResult{}, err
-	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return protocol.WorkspaceFilesResult{}, err
-	}
-	if !info.IsDir() {
-		return protocol.WorkspaceFilesResult{}, errors.New("workspace path is not a directory")
-	}
-	allowed := false
-	for _, candidate := range allowedRoots {
-		candidate, candidateErr := filepath.Abs(filepath.Clean(candidate))
-		if candidateErr != nil {
-			continue
-		}
-		if resolved, resolveErr := filepath.EvalSymlinks(candidate); resolveErr == nil {
-			candidate = resolved
-		}
-		if within(candidate, root) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return protocol.WorkspaceFilesResult{}, errors.New("workspace path is outside the configured scan roots")
 	}
 
 	result := protocol.WorkspaceFilesResult{Files: make([]protocol.WorkspaceFile, 0)}
@@ -184,6 +159,89 @@ func ListWorkspaceFiles(ctx context.Context, root string, allowedRoots []string,
 	}
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
 	return result, nil
+}
+
+func ReadWorkspaceFile(ctx context.Context, root, relative string, allowedRoots []string, limit int64) (protocol.WorkspaceFilePreviewResult, error) {
+	if limit <= 0 {
+		limit = 1024 * 1024
+	}
+	root, err := resolveWorkspaceRoot(root, allowedRoots)
+	if err != nil {
+		return protocol.WorkspaceFilePreviewResult{}, err
+	}
+	relative = filepath.FromSlash(strings.TrimSpace(relative))
+	clean := filepath.Clean(relative)
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return protocol.WorkspaceFilePreviewResult{}, errors.New("file path must stay inside the workspace")
+	}
+	target, err := filepath.EvalSymlinks(filepath.Join(root, clean))
+	if err != nil {
+		return protocol.WorkspaceFilePreviewResult{}, err
+	}
+	if !within(root, target) {
+		return protocol.WorkspaceFilePreviewResult{}, errors.New("file path resolves outside the workspace")
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return protocol.WorkspaceFilePreviewResult{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return protocol.WorkspaceFilePreviewResult{}, errors.New("file preview only supports regular files")
+	}
+	if err := ctx.Err(); err != nil {
+		return protocol.WorkspaceFilePreviewResult{}, err
+	}
+	file, err := os.Open(target)
+	if err != nil {
+		return protocol.WorkspaceFilePreviewResult{}, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return protocol.WorkspaceFilePreviewResult{}, err
+	}
+	truncated := int64(len(data)) > limit
+	if truncated {
+		data = data[:limit]
+		for removed := 0; removed < utf8.UTFMax && len(data) > 0 && !utf8.Valid(data); removed++ {
+			data = data[:len(data)-1]
+		}
+	}
+	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
+		return protocol.WorkspaceFilePreviewResult{}, errors.New("file preview only supports UTF-8 text files")
+	}
+	return protocol.WorkspaceFilePreviewResult{Path: filepath.ToSlash(clean), Content: string(data), Size: info.Size(), Truncated: truncated}, nil
+}
+
+func resolveWorkspaceRoot(root string, allowedRoots []string) (string, error) {
+	root, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("workspace path is not a directory")
+	}
+	for _, candidate := range allowedRoots {
+		candidate, candidateErr := filepath.Abs(filepath.Clean(candidate))
+		if candidateErr != nil {
+			continue
+		}
+		if resolved, resolveErr := filepath.EvalSymlinks(candidate); resolveErr == nil {
+			candidate = resolved
+		}
+		if within(candidate, root) {
+			return root, nil
+		}
+	}
+	return "", errors.New("workspace path is outside the configured scan roots")
 }
 
 func inspect(ctx context.Context, repositoryPath string) protocol.Repository {

@@ -67,6 +67,7 @@ type InstallRequest struct {
 	GitToken            string
 	GitCommitName       string
 	GitCommitEmail      string
+	AllowSudo           bool
 	Progress            func(InstallProgress)
 }
 
@@ -152,6 +153,7 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: %v", ErrAssetsUnavailable, err)
 	}
+	unit = agentServiceUnit(unit, request.AllowSudo)
 
 	root := isRoot(client)
 	request.report("uploading_agent", 0, int64(len(agentBinary)))
@@ -174,6 +176,17 @@ usermod -aG docker wio-agent
 install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent
 install -d -o wio-agent -g wio-agent -m 0700 /var/lib/wio-agent/.codex
 install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
+	if request.AllowSudo {
+		setup += `
+command -v sudo >/dev/null 2>&1 || { echo 'sudo is required when Agent sudo is enabled' >&2; exit 1; }
+install -d -o root -g root -m 0755 /etc/sudoers.d
+printf '%s\n' 'wio-agent ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wio-agent
+chmod 0440 /etc/sudoers.d/wio-agent
+if command -v visudo >/dev/null 2>&1; then visudo -cf /etc/sudoers.d/wio-agent >/dev/null; fi`
+	} else {
+		setup += `
+rm -f /etc/sudoers.d/wio-agent`
+	}
 	if _, err := run(client, elevated(root, setup)); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
@@ -261,6 +274,22 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 		result.Warnings = append(result.Warnings, "codex_unavailable")
 	}
 	return result, nil
+}
+
+func agentServiceUnit(unit []byte, allowSudo bool) []byte {
+	if !allowSudo {
+		return unit
+	}
+	content := string(unit)
+	for from, to := range map[string]string{
+		"NoNewPrivileges=true":  "NoNewPrivileges=false",
+		"ProtectSystem=strict":  "ProtectSystem=false",
+		"ProtectHome=read-only": "ProtectHome=false",
+		"RestrictSUIDSGID=true": "RestrictSUIDSGID=false",
+	} {
+		content = strings.ReplaceAll(content, from, to)
+	}
+	return []byte(content)
 }
 
 func (request InstallRequest) report(step string, current, total int64) {

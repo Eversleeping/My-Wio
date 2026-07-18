@@ -105,6 +105,18 @@ CREATE TABLE IF NOT EXISTS workspace_file_snapshots (
   updated_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS workspace_file_previews (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  path TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  size BIGINT NOT NULL DEFAULT 0,
+  truncated INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   stream_id TEXT NOT NULL,

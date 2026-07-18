@@ -78,6 +78,19 @@ type WorkspaceFilesResult struct {
 	Truncated bool            `json:"truncated"`
 }
 
+type WorkspaceFilePreviewCommand struct {
+	WorkspaceID string `json:"workspace_id"`
+	Root        string `json:"root"`
+	Path        string `json:"path"`
+}
+
+type WorkspaceFilePreviewResult struct {
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	Size      int64  `json:"size"`
+	Truncated bool   `json:"truncated"`
+}
+
 type StreamEvent struct {
 	EventID    string          `json:"event_id"`
 	StreamID   string          `json:"stream_id"`

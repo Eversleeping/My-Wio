@@ -224,6 +224,26 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		if operation.Kind == "workspace.file.preview" {
+			var command protocol.WorkspaceFilePreviewCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status == "succeeded" {
+				var preview protocol.WorkspaceFilePreviewResult
+				if err := json.Unmarshal(result.Data, &preview); err != nil {
+					return err
+				}
+				if preview.Path != command.Path {
+					return errors.New("workspace file preview path mismatch")
+				}
+				if err := g.store.SaveWorkspaceFilePreview(ctx, command.WorkspaceID, command.Path, preview); err != nil {
+					return err
+				}
+			} else if err := g.store.FailWorkspaceFilePreview(ctx, command.WorkspaceID, command.Path, result.Message); err != nil {
+				return err
+			}
+		}
 		if operation.Kind == "credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
 		} else {

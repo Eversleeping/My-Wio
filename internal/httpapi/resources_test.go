@@ -148,6 +148,62 @@ func TestWorkspaceFilesQueuesAgentScanAndReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFilePreviewQueuesAgentReadAndReturnsContent(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "workspace-preview-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.12"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	workspace := workspaces[0]
+	api := resourceTestAPI(database)
+
+	initial := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspace.ID+"/file-preview?path=README.md", workspace.ID, nil, api.workspaceFilePreview)
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"status":"idle"`) {
+		t.Fatalf("unexpected initial preview: %d %s", initial.Code, initial.Body.String())
+	}
+	queued := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/file-preview", workspace.ID, map[string]string{"path": "docs/../README.md"}, api.requestWorkspaceFilePreview)
+	if queued.Code != http.StatusAccepted || !strings.Contains(queued.Body.String(), `"path":"README.md"`) {
+		t.Fatalf("preview returned %d: %s", queued.Code, queued.Body.String())
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 || operations[0].Kind != "workspace.file.preview" {
+		t.Fatalf("unexpected preview operations: %#v %v", operations, err)
+	}
+	var command protocol.WorkspaceFilePreviewCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil || command.WorkspaceID != workspace.ID || command.Root != workspace.Path || command.Path != "README.md" {
+		t.Fatalf("unexpected preview command: %#v %v", command, err)
+	}
+	if err := database.SaveWorkspaceFilePreview(ctx, workspace.ID, command.Path, protocol.WorkspaceFilePreviewResult{Path: command.Path, Content: "# Project\n", Size: 10}); err != nil {
+		t.Fatal(err)
+	}
+	completed := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspace.ID+"/file-preview?path=README.md", workspace.ID, nil, api.workspaceFilePreview)
+	if completed.Code != http.StatusOK || !strings.Contains(completed.Body.String(), `"content":"# Project\n"`) || !strings.Contains(completed.Body.String(), `"status":"succeeded"`) {
+		t.Fatalf("unexpected completed preview: %d %s", completed.Code, completed.Body.String())
+	}
+	invalid := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/file-preview", workspace.ID, map[string]string{"path": "../secret"}, api.requestWorkspaceFilePreview)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid path returned %d: %s", invalid.Code, invalid.Body.String())
+	}
+	if err := database.BeginWorkspaceFilePreview(ctx, workspace.ID, "src/new.ts"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SaveWorkspaceFilePreview(ctx, workspace.ID, "README.md", protocol.WorkspaceFilePreviewResult{Path: "README.md", Content: "stale"}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := database.WorkspaceFilePreview(ctx, workspace.ID, "src/new.ts")
+	if err != nil || current.Status != "loading" || current.Content != "" {
+		t.Fatalf("stale preview overwrote current selection: %#v %v", current, err)
+	}
+}
+
 func TestListProjectsIncludesLatestFailedImport(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "import-status-token")

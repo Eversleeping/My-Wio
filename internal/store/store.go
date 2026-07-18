@@ -525,6 +525,44 @@ func (s *Store) FailWorkspaceFileScan(ctx context.Context, workspaceID, message 
 	return err
 }
 
+type WorkspaceFilePreview struct {
+	WorkspaceID string     `db:"workspace_id" json:"workspace_id"`
+	Path        string     `db:"path" json:"path"`
+	Content     string     `db:"content" json:"content"`
+	Size        int64      `db:"size" json:"size"`
+	Truncated   int        `db:"truncated" json:"truncated"`
+	Status      string     `db:"status" json:"status"`
+	Error       string     `db:"error" json:"error"`
+	RequestedAt *time.Time `db:"requested_at" json:"requested_at"`
+	UpdatedAt   *time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Store) WorkspaceFilePreview(ctx context.Context, workspaceID, path string) (WorkspaceFilePreview, error) {
+	var preview WorkspaceFilePreview
+	err := s.DB.GetContext(ctx, &preview, s.Q("SELECT workspace_id,path,content,size,truncated,status,error,requested_at,updated_at FROM workspace_file_previews WHERE workspace_id=? AND path=?"), workspaceID, path)
+	return preview, err
+}
+
+func (s *Store) BeginWorkspaceFilePreview(ctx context.Context, workspaceID, path string) error {
+	now := time.Now().UTC()
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_file_previews(workspace_id,path,content,size,truncated,status,error,requested_at) VALUES(?,?,'',0,0,'loading','',?) ON CONFLICT(workspace_id) DO UPDATE SET path=excluded.path,content='',size=0,truncated=0,status='loading',error='',requested_at=excluded.requested_at,updated_at=NULL`), workspaceID, path, now)
+	return err
+}
+
+func (s *Store) SaveWorkspaceFilePreview(ctx context.Context, workspaceID, path string, result protocol.WorkspaceFilePreviewResult) error {
+	truncated := 0
+	if result.Truncated {
+		truncated = 1
+	}
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_file_previews SET content=?,size=?,truncated=?,status='succeeded',error='',updated_at=? WHERE workspace_id=? AND path=?"), result.Content, result.Size, truncated, time.Now().UTC(), workspaceID, path)
+	return err
+}
+
+func (s *Store) FailWorkspaceFilePreview(ctx context.Context, workspaceID, path, message string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_file_previews SET content='',size=0,truncated=0,status='failed',error=?,updated_at=? WHERE workspace_id=? AND path=?"), message, time.Now().UTC(), workspaceID, path)
+	return err
+}
+
 func (s *Store) QueueOperation(ctx context.Context, serverID, kind string, payload any, idempotency string) (string, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {

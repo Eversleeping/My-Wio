@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -469,6 +470,92 @@ func (a *API) refreshWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "workspace.files.scan", "workspace", workspace.ID, map[string]string{"operation_id": operationID}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
+func (a *API) workspaceFilePreview(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	if _, err := a.store.Workspace(r.Context(), workspaceID); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	path, ok := normalizeWorkspaceFilePath(r.URL.Query().Get("path"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid workspace file path")
+		return
+	}
+	preview, err := a.store.WorkspaceFilePreview(r.Context(), workspaceID, path)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusOK, map[string]any{"workspace_id": workspaceID, "path": path, "content": "", "size": 0, "truncated": false, "status": "idle", "error": "", "requested_at": nil, "updated_at": nil})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace file preview")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": preview.WorkspaceID, "path": preview.Path, "content": preview.Content, "size": preview.Size, "truncated": preview.Truncated != 0, "status": preview.Status, "error": preview.Error, "requested_at": preview.RequestedAt, "updated_at": preview.UpdatedAt})
+}
+
+func (a *API) requestWorkspaceFilePreview(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	workspace, err := a.store.Workspace(r.Context(), workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	var input struct {
+		Path string `json:"path"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	path, ok := normalizeWorkspaceFilePath(input.Path)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid workspace file path")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	if err := a.store.BeginWorkspaceFilePreview(r.Context(), workspace.ID, path); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start workspace file preview")
+		return
+	}
+	command := protocol.WorkspaceFilePreviewCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path}
+	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.file.preview", command, "workspace-file-preview:"+workspace.ID+":"+store.NewID())
+	if err != nil {
+		_ = a.store.FailWorkspaceFilePreview(r.Context(), workspace.ID, path, "could not queue workspace file preview")
+		writeError(w, http.StatusInternalServerError, "could not queue workspace file preview")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "workspace.file.preview", "workspace", workspace.ID, map[string]string{"operation_id": operationID, "path": path}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "path": path})
+}
+
+func normalizeWorkspaceFilePath(value string) (string, bool) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if value == "" || len(value) > 1024 || strings.HasPrefix(value, "/") {
+		return "", false
+	}
+	clean := pathpkg.Clean(value)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false
+	}
+	return clean, true
 }
 
 func (a *API) threads(w http.ResponseWriter, r *http.Request) {

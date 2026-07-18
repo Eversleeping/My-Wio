@@ -95,6 +95,42 @@ func TestListWorkspaceFilesFiltersGeneratedDirectoriesAndEnforcesRoots(t *testin
 	}
 }
 
+func TestReadWorkspaceFileEnforcesWorkspaceAndTextLimits(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "project")
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.ts"), []byte("export const answer = 42;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "binary.dat"), []byte{'a', 0, 'b'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ReadWorkspaceFile(context.Background(), root, "src/main.ts", []string{base}, 12)
+	if err != nil || result.Path != "src/main.ts" || result.Content != "export const" || !result.Truncated || result.Size != 26 {
+		t.Fatalf("unexpected preview: %#v %v", result, err)
+	}
+	if _, err := ReadWorkspaceFile(context.Background(), root, "../outside.txt", []string{base}, 1024); err == nil {
+		t.Fatal("workspace traversal was accepted")
+	}
+	if _, err := ReadWorkspaceFile(context.Background(), root, "binary.dat", []string{base}, 1024); err == nil {
+		t.Fatal("binary file was accepted")
+	}
+
+	outside := filepath.Join(base, "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "outside-link.txt")
+	if err := os.Symlink(outside, link); err == nil {
+		if _, err := ReadWorkspaceFile(context.Background(), root, "outside-link.txt", []string{base}, 1024); err == nil {
+			t.Fatal("symlink outside the workspace was accepted")
+		}
+	}
+}
+
 func runGit(t *testing.T, directory string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, args...)...)

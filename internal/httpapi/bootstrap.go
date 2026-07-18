@@ -56,6 +56,7 @@ type sshBootstrapInput struct {
 	GitCommitEmail     string   `json:"-"`
 	CodexProfileName   string   `json:"-"`
 	GitProfileName     string   `json:"-"`
+	AllowSudo          bool     `json:"allow_sudo"`
 }
 
 type bootstrapStreamEvent struct {
@@ -253,6 +254,7 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 		GitToken:            input.GitToken,
 		GitCommitName:       input.GitCommitName,
 		GitCommitEmail:      input.GitCommitEmail,
+		AllowSudo:           input.AllowSudo,
 		Progress:            progress,
 	})
 	if err != nil {
@@ -272,7 +274,7 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 	_ = a.store.Audit(r.Context(), session.UserID, "server.ssh.bootstrap", "server", result.ServerID, map[string]any{
 		"name": input.Name, "host": strings.TrimSpace(input.Host), "port": input.Port, "user": strings.TrimSpace(input.User),
 		"architecture": result.Architecture, "scan_roots": input.ScanRoots, "codex_api_url": strings.TrimSpace(input.CodexAPIURL), "codex_model": strings.TrimSpace(input.CodexModel),
-		"codex_profile_id": input.CodexProfileID, "codex_profile_name": input.CodexProfileName, "git_profile_id": input.GitProfileID, "git_profile_name": input.GitProfileName, "warnings": result.Warnings,
+		"codex_profile_id": input.CodexProfileID, "codex_profile_name": input.CodexProfileName, "git_profile_id": input.GitProfileID, "git_profile_name": input.GitProfileName, "allow_sudo": input.AllowSudo, "warnings": result.Warnings,
 	}, clientIP(r))
 	return result, nil
 }

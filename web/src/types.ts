@@ -8,6 +8,7 @@ export interface Project { id: string; name: string; remote_url: string; updated
 export interface Workspace { id: string; project_id: string; server_id: string; path: string; branch: string; commit_sha: string; dirty: number; server_name: string; project_name: string }
 export interface WorkspaceFile { path: string; kind: "directory" | "file" | "symlink"; size?: number }
 export interface WorkspaceFilesSnapshot { workspace_id: string; files: WorkspaceFile[]; truncated: boolean; status: "idle" | "scanning" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
+export interface WorkspaceFilePreview { workspace_id: string; path: string; content: string; size: number; truncated: boolean; status: "idle" | "loading" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
 export interface Thread { id: string; workspace_id: string; project_id: string; codex_thread_id: string; title: string; status: string; path: string; server_id: string; server_name: string; project_name: string; created_at: string; updated_at: string }
 export interface StreamEvent { event_id: string; stream_id: string; sequence: number; kind: string; occurred_at: string; payload: unknown }
 export interface Approval { id: string; thread_id: string; request_id: string; kind: string; detail: unknown; status: string; title: string; expires_at: string }
