@@ -99,6 +99,11 @@ type StartTurnCommand struct {
 	ApprovalMode    string      `json:"approval_mode"`
 }
 
+type RewriteTurnCommand struct {
+	Start    StartTurnCommand `json:"start"`
+	NumTurns uint32           `json:"num_turns"`
+}
+
 type TurnImage struct {
 	DataURL string `json:"data_url"`
 }
@@ -112,6 +117,7 @@ type ApprovalDecisionCommand struct {
 type InterruptTurnCommand struct {
 	ThreadID    string `json:"thread_id"`
 	CodexThread string `json:"codex_thread_id"`
+	TurnID      string `json:"turn_id,omitempty"`
 }
 
 type GitImportCommand struct {

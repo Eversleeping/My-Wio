@@ -601,6 +601,8 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
   const [prompt, setPrompt] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [editingEventID, setEditingEventID] = useState("");
   const [model, setModel] = useState(defaultCodexModel);
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [approvalMode, setApprovalMode] = useState("on-request");
@@ -609,7 +611,8 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const sourceEvents = events.data ?? [];
   const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
-  useEffect(() => { setRawEvents(false); setImages([]); }, [thread.id]);
+  const activeTurn = thread.status === "queued" || thread.status === "running";
+  useEffect(() => { setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); }, [thread.id]);
   useEffect(() => { const frame = requestAnimationFrame(() => { if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight; }); return () => cancelAnimationFrame(frame); }, [thread.id, rawEvents, sourceEvents.length]);
   const addImages = async (files: File[]) => {
     const available = 4 - images.length;
@@ -628,15 +631,18 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
   };
   const send = async (event: FormEvent) => {
     event.preventDefault();
-    if ((!prompt.trim() && images.length === 0) || imageBusy) return;
+    if ((!prompt.trim() && images.length === 0) || imageBusy || sending) return;
+    if (activeTurn) { notify(t("codex.waitForTurn")); return; }
+    setSending(true);
     try {
-      await post(`/threads/${thread.id}/turns`, { prompt, images: images.map(image => ({ data_url: image.dataURL })), model, reasoning_effort: reasoningEffort, approval_mode: approvalMode });
-      setPrompt(""); setImages([]); notify(t("codex.turnQueued"));
-    } catch (err) { notify(message(err)); }
+      await post(`/threads/${thread.id}/turns`, { prompt, images: images.map(image => ({ data_url: image.dataURL })), model, reasoning_effort: reasoningEffort, approval_mode: approvalMode, edit_event_id: editingEventID });
+      setPrompt(""); setImages([]); setEditingEventID(""); notify(t(editingEventID ? "codex.rewriteQueued" : "codex.turnQueued"));
+    } catch (err) { notify(message(err)); } finally { setSending(false); }
   };
-  const editMessage = (text: string) => {
+  const editMessage = (eventID: string, text: string) => {
     setPrompt(text);
     setImages([]);
+    setEditingEventID(eventID);
     requestAnimationFrame(() => {
       promptRef.current?.focus();
       promptRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -648,9 +654,10 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" title={t("codex.interrupt")} onClick={async () => { await post(`/threads/${thread.id}/interrupt`, {}); notify(t("codex.interruptQueued")); }}><Ban size={16} /></button>}</div></div>
     <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{chatEvents.map(event => <ConversationEventItem key={event.event_id} event={event} onEdit={editMessage} notify={notify} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     <form className="composer" onSubmit={send}>
+      {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
       <textarea ref={promptRef} value={prompt} onChange={event => setPrompt(event.target.value)} onPaste={event => { const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} placeholder={t("codex.messagePlaceholder")} rows={3} />
-      <div className="composer-bar"><div><input ref={imageInputRef} className="hidden-input" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) void addImages(files); }} /><button type="button" className="icon-button" disabled={imageBusy || images.length >= 4} title={t("codex.attachImage")} onClick={() => imageInputRef.current?.click()}>{imageBusy ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}</button><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={event => setApprovalMode(event.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" disabled={(!prompt.trim() && images.length === 0) || imageBusy}><ChevronRight size={17} />{t("codex.send")}</button></div>
+      <div className="composer-bar"><div><input ref={imageInputRef} className="hidden-input" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) void addImages(files); }} /><button type="button" className="icon-button" disabled={imageBusy || images.length >= 4} title={t("codex.attachImage")} onClick={() => imageInputRef.current?.click()}>{imageBusy ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}</button><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={event => setApprovalMode(event.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" title={activeTurn ? t("codex.waitForTurn") : t("codex.send")} disabled={(!prompt.trim() && images.length === 0) || imageBusy || sending || activeTurn}>{sending ? <LoaderCircle className="spin" size={17} /> : <ChevronRight size={17} />}{t("codex.send")}</button></div>
     </form>
   </>;
 }
@@ -667,11 +674,11 @@ function ApprovalActions({ item, onDecided, notify }: { item: Approval; onDecide
   return <div className="approval-actions"><button type="button" className="secondary-button danger" disabled={busy} onClick={() => void decide("denied")}><Ban size={16} />{t("codex.deny")}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void decide("approved")}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("codex.approveOnce")}</button></div>;
 }
 
-function ConversationEventItem({ event, onEdit, notify }: { event: StreamEvent; onEdit: (text: string) => void; notify: (text: string) => void }) {
+function ConversationEventItem({ event, onEdit, notify }: { event: StreamEvent; onEdit: (eventID: string, text: string) => void; notify: (text: string) => void }) {
   const { t } = useI18n();
   const kind = event.kind;
   const payload = asRecord(event.payload);
-  if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } }; return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} />}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(text)}><Pencil size={14} /></button></div></article>; }
+  if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } }; return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} />}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button></div></article>; }
   if (kind === "codex.error" || kind === "codex.turn.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t("codex.turnFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
   const item = asRecord(payload?.item);
   if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><MarkdownContent text={extractText(item)} /></article>;

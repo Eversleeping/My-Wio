@@ -170,7 +170,15 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			_ = g.updateThreadTitle(ctx, event)
 		}
 		if event.Kind == "codex.turn.started" || event.Kind == "turn.accepted" {
-			_ = g.store.SetThreadStatus(ctx, event.StreamID, "running")
+			saved, err := g.store.AddEvent(ctx, event)
+			if err != nil {
+				return err
+			}
+			if err := g.store.SetThreadStatus(ctx, event.StreamID, "running"); err != nil {
+				return err
+			}
+			g.hub.Publish(saved)
+			return nil
 		}
 		if event.Kind == "codex.turn.completed" {
 			_ = g.setThreadTitleFromFirstResponse(ctx, event.StreamID)
@@ -210,7 +218,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if err := g.store.CompleteOperation(ctx, result); err != nil {
 			return err
 		}
-		if operation.Kind == "codex.turn.start" && result.Status == "failed" {
+		if (operation.Kind == "codex.turn.start" || operation.Kind == "codex.turn.rewrite") && result.Status == "failed" {
 			if err := g.failCodexTurn(ctx, operation, result); err != nil {
 				return err
 			}
@@ -239,21 +247,31 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 }
 
 func (g *Gateway) failCodexTurn(ctx context.Context, operation store.Operation, result protocol.OperationResult) error {
-	var command protocol.StartTurnCommand
-	if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
-		return err
+	var threadID string
+	if operation.Kind == "codex.turn.rewrite" {
+		var command protocol.RewriteTurnCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+			return err
+		}
+		threadID = command.Start.ThreadID
+	} else {
+		var command protocol.StartTurnCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+			return err
+		}
+		threadID = command.ThreadID
 	}
-	if command.ThreadID == "" {
+	if threadID == "" {
 		return errors.New("Codex turn operation has no thread id")
 	}
-	if err := g.store.SetThreadStatus(ctx, command.ThreadID, "failed"); err != nil {
+	if err := g.store.SetThreadStatus(ctx, threadID, "failed"); err != nil {
 		return err
 	}
 	payload, err := json.Marshal(map[string]string{"operation_id": result.OperationID, "text": result.Message})
 	if err != nil {
 		return err
 	}
-	return g.publish(ctx, protocol.StreamEvent{StreamID: command.ThreadID, Kind: "codex.turn.failed", Payload: security.RedactJSON(payload)})
+	return g.publish(ctx, protocol.StreamEvent{StreamID: threadID, Kind: "codex.turn.failed", Payload: security.RedactJSON(payload)})
 }
 
 func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID string) error {

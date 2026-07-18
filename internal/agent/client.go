@@ -278,6 +278,12 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.codex.StartTurn(ctx, command)
+	case "codex.turn.rewrite":
+		var command protocol.RewriteTurnCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.codex.RewriteTurn(ctx, command)
 	case "codex.turn.interrupt":
 		var command protocol.InterruptTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

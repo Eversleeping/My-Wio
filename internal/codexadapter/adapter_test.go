@@ -3,6 +3,7 @@ package codexadapter
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -54,6 +55,60 @@ func TestStartTurnParamsOmitDefaultReasoningEffort(t *testing.T) {
 	params := turnStartParams(protocol.StartTurnCommand{Prompt: "test"}, "thread-123")
 	if _, ok := params["effort"]; ok {
 		t.Fatal("turn/start should omit an empty reasoning effort")
+	}
+}
+
+func TestRewriteTurnRollsBackBeforeStartingReplacement(t *testing.T) {
+	var methods []string
+	var rollbackParams map[string]any
+	var emitted protocol.StreamEvent
+	adapter := &Adapter{
+		threads: map[string]string{"codex-thread": "wio-thread"},
+		turns:   map[string]turnState{"wio-thread": {CodexThread: "codex-thread"}},
+		emit: func(event protocol.StreamEvent) error {
+			emitted = event
+			return nil
+		},
+	}
+	request := func(_ context.Context, method string, raw any) (json.RawMessage, error) {
+		methods = append(methods, method)
+		if method == "thread/rollback" {
+			rollbackParams = raw.(map[string]any)
+			return json.RawMessage(`{"thread":{"id":"codex-thread"}}`), nil
+		}
+		return json.RawMessage(`{"turn":{"id":"replacement-turn"}}`), nil
+	}
+	command := protocol.RewriteTurnCommand{Start: protocol.StartTurnCommand{ThreadID: "wio-thread", CodexThread: "codex-thread", Prompt: "revised prompt"}, NumTurns: 2}
+	if err := adapter.rewriteTurn(context.Background(), command, request); err != nil {
+		t.Fatal(err)
+	}
+	if len(methods) != 2 || methods[0] != "thread/rollback" || methods[1] != "turn/start" {
+		t.Fatalf("unexpected rewrite request order: %#v", methods)
+	}
+	if rollbackParams["threadId"] != "codex-thread" || rollbackParams["numTurns"] != uint32(2) {
+		t.Fatalf("unexpected rollback params: %#v", rollbackParams)
+	}
+	if emitted.Kind != "turn.accepted" || !strings.Contains(string(emitted.Payload), "replacement-turn") {
+		t.Fatalf("replacement turn was not accepted: %#v", emitted)
+	}
+}
+
+func TestInterruptUsesCapturedTurnInsteadOfLatestAdapterState(t *testing.T) {
+	adapter := &Adapter{turns: map[string]turnState{"wio-thread": {CodexThread: "codex-thread", TurnID: "new-turn"}}}
+	var params map[string]string
+	request := func(_ context.Context, method string, raw any) (json.RawMessage, error) {
+		if method != "turn/interrupt" {
+			t.Fatalf("unexpected method: %s", method)
+		}
+		params = raw.(map[string]string)
+		return json.RawMessage(`{}`), nil
+	}
+	command := protocol.InterruptTurnCommand{ThreadID: "wio-thread", CodexThread: "codex-thread", TurnID: "old-turn"}
+	if err := adapter.interrupt(context.Background(), command, request); err != nil {
+		t.Fatal(err)
+	}
+	if params["turnId"] != "old-turn" {
+		t.Fatalf("interrupt targeted the wrong turn: %#v", params)
 	}
 }
 

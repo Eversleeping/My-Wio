@@ -195,6 +195,22 @@ func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
 	if events[0].Kind != "codex.turn.failed" || !strings.Contains(string(events[0].Payload), "thread not found") {
 		t.Fatalf("unexpected failure event: %#v", events[0])
 	}
+	rewriteID, err := database.QueueOperation(ctx, server.ID, "codex.turn.rewrite", protocol.RewriteTurnCommand{Start: command, NumTurns: 1}, "failed-codex-rewrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewriteResult := protocol.OperationResult{OperationID: rewriteID, Status: "failed", Message: "rollback failed"}
+	payload, err = json.Marshal(rewriteResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	events, err = database.Events(ctx, thread.ID, 0, 10)
+	if err != nil || len(events) != 2 || !strings.Contains(string(events[1].Payload), "rollback failed") {
+		t.Fatalf("rewrite failure was not published: %#v %v", events, err)
+	}
 }
 
 func TestCodexFirstResponseGeneratesTitleAndExplicitNameOverridesIt(t *testing.T) {

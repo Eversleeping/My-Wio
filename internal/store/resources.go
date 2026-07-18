@@ -9,6 +9,7 @@ import (
 )
 
 var ErrThreadActive = errors.New("Codex session is active")
+var ErrInvalidEditTarget = errors.New("invalid Codex message edit target")
 
 type Thread struct {
 	ID            string    `db:"id" json:"id"`
@@ -82,6 +83,21 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 func (s *Store) SetThreadStatus(ctx context.Context, id, status string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET status=?,updated_at=? WHERE id=?"), status, time.Now().UTC(), id)
 	return err
+}
+
+func (s *Store) ClaimThreadForTurn(ctx context.Context, id string) error {
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',updated_at=? WHERE id=? AND status NOT IN ('queued','running')"), time.Now().UTC(), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrThreadActive
+	}
+	return nil
 }
 
 func (s *Store) SetThreadTitle(ctx context.Context, id, title string) error {

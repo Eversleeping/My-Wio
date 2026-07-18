@@ -538,6 +538,7 @@ func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 		Model           string               `json:"model"`
 		ReasoningEffort string               `json:"reasoning_effort"`
 		ApprovalMode    string               `json:"approval_mode"`
+		EditEventID     string               `json:"edit_event_id"`
 	}
 	if !decodeJSONLimit(w, r, &input, 6<<20) {
 		return
@@ -574,12 +575,40 @@ func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.StartTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: input.Prompt, Images: input.Images, Model: input.Model, ReasoningEffort: input.ReasoningEffort, ApprovalMode: input.ApprovalMode}
+	if input.EditEventID != "" {
+		operationID, event, err := a.store.RewriteThread(r.Context(), thread, input.EditEventID, command, eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images)}))
+		if errors.Is(err, store.ErrThreadActive) {
+			writeError(w, http.StatusConflict, "active Codex session must finish before editing an earlier message")
+			return
+		}
+		if errors.Is(err, store.ErrInvalidEditTarget) {
+			writeError(w, http.StatusBadRequest, "message is no longer available to edit")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not rewrite Codex session")
+			return
+		}
+		a.hub.Publish(event)
+		a.gateway.Wake(thread.ServerID)
+		session := currentSession(r)
+		_ = a.store.Audit(r.Context(), session.UserID, "codex.turn.rewrite", "thread", thread.ID, map[string]string{"operation_id": operationID, "edit_event_id": input.EditEventID}, clientIP(r))
+		writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+		return
+	}
+	if err := a.store.ClaimThreadForTurn(r.Context(), thread.ID); errors.Is(err, store.ErrThreadActive) {
+		writeError(w, http.StatusConflict, "active Codex session must finish before starting another turn")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not reserve Codex session")
+		return
+	}
 	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.turn.start", command, "codex-turn:"+store.NewID())
 	if err != nil {
+		_ = a.store.SetThreadStatus(r.Context(), thread.ID, thread.Status)
 		writeError(w, http.StatusInternalServerError, "could not queue Codex turn")
 		return
 	}
-	_ = a.store.SetThreadStatus(r.Context(), thread.ID, "queued")
 	event, _ := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images)})})
 	a.hub.Publish(event)
 	a.gateway.Wake(thread.ServerID)
@@ -625,7 +654,16 @@ func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
 		return
 	}
-	command := protocol.InterruptTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID}
+	turnID, err := a.store.LatestActiveTurnID(r.Context(), thread.ID)
+	if errors.Is(err, sql.ErrNoRows) || turnID == "" {
+		writeError(w, http.StatusConflict, "active Codex turn is not ready to interrupt")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not identify active Codex turn")
+		return
+	}
+	command := protocol.InterruptTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, TurnID: turnID}
 	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.turn.interrupt", command, "codex-interrupt:"+store.NewID())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue interrupt")

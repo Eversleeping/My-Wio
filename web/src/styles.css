@@ -298,6 +298,9 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .approval-prompt > small { display: block; margin: 7px 0; color: var(--muted); font-size: 10px; }
 .approval-prompt pre { max-height: 220px; margin: 0 0 10px; padding: 10px; overflow: auto; color: #31383d; background: rgba(255, 255, 255, .72); border: 1px solid #e6cda6; border-radius: 5px; font-size: 11px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .composer { padding: 12px; background: #fff; border-top: 1px solid var(--line); }
+.composer-editing { min-height: 34px; display: flex; align-items: center; gap: 7px; margin: -2px 0 8px; padding: 4px 6px 4px 9px; color: #76520d; background: #fff8e7; border: 1px solid #ead49d; border-radius: 5px; font-size: 11px; }
+.composer-editing span { min-width: 0; flex: 1; }
+.composer-editing .icon-button { width: 26px; height: 26px; flex: 0 0 26px; }
 .composer textarea { min-height: 67px; border: 0; box-shadow: none; }
 .composer-images { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 4px 10px; }
 .composer-images figure { position: relative; width: 58px; height: 58px; overflow: hidden; background: #eef0ed; border: 1px solid var(--line); border-radius: 6px; }

@@ -598,6 +598,93 @@ func (s *Store) Events(ctx context.Context, streamID string, after int64, limit 
 	return out, nil
 }
 
+func (s *Store) LatestActiveTurnID(ctx context.Context, threadID string) (string, error) {
+	var event struct {
+		Kind    string `db:"kind"`
+		Payload string `db:"payload"`
+	}
+	if err := s.DB.GetContext(ctx, &event, s.Q("SELECT kind,payload FROM events WHERE stream_id=? AND kind IN ('turn.accepted','codex.turn.started') ORDER BY sequence DESC LIMIT 1"), threadID); err != nil {
+		return "", err
+	}
+	var value struct {
+		TurnID string `json:"turn_id"`
+		Turn   struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal([]byte(event.Payload), &value); err != nil {
+		return "", err
+	}
+	if event.Kind == "codex.turn.started" {
+		return value.Turn.ID, nil
+	}
+	return value.TurnID, nil
+}
+
+func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID string, command protocol.StartTurnCommand, userPayload json.RawMessage) (string, protocol.StreamEvent, error) {
+	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.GetContext(ctx, &status, s.Q("SELECT status FROM codex_threads WHERE id=?"), thread.ID); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	if status == "queued" || status == "running" {
+		return "", protocol.StreamEvent{}, ErrThreadActive
+	}
+	var target struct {
+		Sequence int64  `db:"sequence"`
+		Kind     string `db:"kind"`
+	}
+	if err := tx.GetContext(ctx, &target, s.Q("SELECT sequence,kind FROM events WHERE stream_id=? AND event_id=?"), thread.ID, editEventID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", protocol.StreamEvent{}, ErrInvalidEditTarget
+		}
+		return "", protocol.StreamEvent{}, err
+	}
+	if target.Kind != "user.message" {
+		return "", protocol.StreamEvent{}, ErrInvalidEditTarget
+	}
+	var earlierMessages int
+	if err := tx.GetContext(ctx, &earlierMessages, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='user.message' AND sequence<?"), thread.ID, target.Sequence); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	var numTurns uint32
+	if err := tx.GetContext(ctx, &numTurns, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='turn.accepted' AND sequence>?"), thread.ID, target.Sequence); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	rewrite := protocol.RewriteTurnCommand{Start: command, NumTurns: numTurns}
+	operationPayload, err := json.Marshal(rewrite)
+	if err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=? AND sequence>=?"), thread.ID, target.Sequence); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	now := time.Now().UTC()
+	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: target.Sequence, Kind: "user.message", OccurredAt: now, Payload: userPayload}
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(event.Payload)); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	operationID := NewID()
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, thread.ServerID, "codex.turn.rewrite", string(operationPayload), "codex-rewrite:"+NewID(), now); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	title := thread.Title
+	if earlierMessages == 0 {
+		title = "New session"
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',title=?,updated_at=? WHERE id=?"), title, now, thread.ID); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
+	return operationID, event, nil
+}
+
 func (s *Store) SaveMetrics(ctx context.Context, serverID string, m protocol.Metrics) error {
 	now := time.Now().UTC().Truncate(time.Minute)
 	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO metric_rollups(server_id,bucket_at,resolution,cpu_percent,memory_percent,disk_percent,load_1,net_rx_bytes,net_tx_bytes,samples) VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(server_id,bucket_at,resolution) DO UPDATE SET cpu_percent=(metric_rollups.cpu_percent*metric_rollups.samples+excluded.cpu_percent)/(metric_rollups.samples+1),memory_percent=(metric_rollups.memory_percent*metric_rollups.samples+excluded.memory_percent)/(metric_rollups.samples+1),disk_percent=(metric_rollups.disk_percent*metric_rollups.samples+excluded.disk_percent)/(metric_rollups.samples+1),load_1=(metric_rollups.load_1*metric_rollups.samples+excluded.load_1)/(metric_rollups.samples+1),net_rx_bytes=excluded.net_rx_bytes,net_tx_bytes=excluded.net_tx_bytes,samples=metric_rollups.samples+1`), serverID, now, "minute", m.CPUPercent, m.MemoryPercent, m.DiskPercent, m.Load1, m.NetRxBytes, m.NetTxBytes)

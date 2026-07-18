@@ -99,16 +99,44 @@ func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnComma
 	if err := a.ensureStarted(ctx); err != nil {
 		return err
 	}
-	codexThread, err := a.prepareCodexThread(ctx, command, a.request)
+	return a.startTurn(ctx, command, a.request)
+}
+
+func (a *Adapter) RewriteTurn(ctx context.Context, command protocol.RewriteTurnCommand) error {
+	if err := a.ensureStarted(ctx); err != nil {
+		return err
+	}
+	return a.rewriteTurn(ctx, command, a.request)
+}
+
+func (a *Adapter) rewriteTurn(ctx context.Context, command protocol.RewriteTurnCommand, request requestFunc) error {
+	codexThread, err := a.prepareCodexThread(ctx, command.Start, request)
 	if err != nil {
 		return err
 	}
+	if command.NumTurns > 0 {
+		if _, err := request(ctx, "thread/rollback", map[string]any{"threadId": codexThread, "numTurns": command.NumTurns}); err != nil {
+			return err
+		}
+	}
+	return a.startPreparedTurn(ctx, command.Start, codexThread, request)
+}
+
+func (a *Adapter) startTurn(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) error {
+	codexThread, err := a.prepareCodexThread(ctx, command, request)
+	if err != nil {
+		return err
+	}
+	return a.startPreparedTurn(ctx, command, codexThread, request)
+}
+
+func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartTurnCommand, codexThread string, request requestFunc) error {
 	a.mu.Lock()
 	a.threads[codexThread] = command.ThreadID
 	a.turns[command.ThreadID] = turnState{CodexThread: codexThread}
 	a.mu.Unlock()
 	params := turnStartParams(command, codexThread)
-	result, err := a.request(ctx, "turn/start", params)
+	result, err := request(ctx, "turn/start", params)
 	if err != nil {
 		return err
 	}
@@ -226,16 +254,23 @@ func (a *Adapter) Interrupt(ctx context.Context, command protocol.InterruptTurnC
 	if err := a.ensureStarted(ctx); err != nil {
 		return err
 	}
+	return a.interrupt(ctx, command, a.request)
+}
+
+func (a *Adapter) interrupt(ctx context.Context, command protocol.InterruptTurnCommand, request requestFunc) error {
 	a.mu.Lock()
 	state := a.turns[command.ThreadID]
 	a.mu.Unlock()
-	if state.CodexThread == "" {
+	if command.CodexThread != "" {
 		state.CodexThread = command.CodexThread
+	}
+	if command.TurnID != "" {
+		state.TurnID = command.TurnID
 	}
 	if state.CodexThread == "" || state.TurnID == "" {
 		return errors.New("no active turn is known for this session")
 	}
-	_, err := a.request(ctx, "turn/interrupt", map[string]string{"threadId": state.CodexThread, "turnId": state.TurnID})
+	_, err := request(ctx, "turn/interrupt", map[string]string{"threadId": state.CodexThread, "turnId": state.TurnID})
 	return err
 }
 

@@ -329,6 +329,120 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 	if len(command.Images) != 1 || command.Images[0].DataURL != image {
 		t.Fatalf("unexpected turn images: %#v", command.Images)
 	}
+	duplicate := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "duplicate", "approval_mode": "on-request"}, api.startTurn)
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("duplicate active turn returned %d: %s", duplicate.Code, duplicate.Body.String())
+	}
+}
+
+func TestRewriteTurnTruncatesEventsAndQueuesRollback(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "rewrite-turn-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/rewrite", Name: "rewrite"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "rewrite test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := func(kind, payload string) protocol.StreamEvent {
+		t.Helper()
+		event, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: kind, Payload: json.RawMessage(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return event
+	}
+	add("user.message", `{"text":"first"}`)
+	add("turn.accepted", `{"turn_id":"turn-1"}`)
+	add("codex.item.completed", `{"item":{"type":"agentMessage","text":"first answer"}}`)
+	add("codex.turn.completed", `{"turn":{"status":"completed"}}`)
+	target := add("user.message", `{"text":"second"}`)
+	add("turn.accepted", `{"turn_id":"turn-2"}`)
+	add("codex.item.completed", `{"item":{"type":"agentMessage","text":"second answer"}}`)
+	add("codex.turn.completed", `{"turn":{"status":"interrupted"}}`)
+	add("user.message", `{"text":"third"}`)
+	add("turn.accepted", `{"turn_id":"turn-3"}`)
+	add("codex.item.completed", `{"item":{"type":"agentMessage","text":"third answer"}}`)
+
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "revised second", "approval_mode": "on-request", "edit_event_id": target.EventID}, api.startTurn)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("rewrite returned %d: %s", response.Code, response.Body.String())
+	}
+	events, err := database.Events(ctx, thread.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 5 || events[4].Kind != "user.message" || events[4].Sequence != target.Sequence || !strings.Contains(string(events[4].Payload), "revised second") {
+		t.Fatalf("unexpected rewritten events: %#v", events)
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 || operations[0].Kind != "codex.turn.rewrite" {
+		t.Fatalf("unexpected rewrite operations: %#v %v", operations, err)
+	}
+	var command protocol.RewriteTurnCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.NumTurns != 2 || command.Start.Prompt != "revised second" || command.Start.ThreadID != thread.ID {
+		t.Fatalf("unexpected rewrite command: %#v", command)
+	}
+	updated, err := database.Thread(ctx, thread.ID)
+	if err != nil || updated.Status != "queued" {
+		t.Fatalf("rewrite did not queue thread: %#v %v", updated, err)
+	}
+	conflict := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "again", "approval_mode": "on-request", "edit_event_id": events[4].EventID}, api.startTurn)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("active rewrite returned %d: %s", conflict.Code, conflict.Body.String())
+	}
+}
+
+func TestInterruptQueuesTheCurrentlyAcceptedTurnID(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "interrupt-turn-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/interrupt", Name: "interrupt"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "interrupt test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "turn.accepted", Payload: json.RawMessage(`{"turn_id":"old-turn"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.started", Payload: json.RawMessage(`{"threadId":"codex-thread","turn":{"id":"captured-turn"}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetThreadStatus(ctx, thread.ID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/interrupt", thread.ID, nil, api.interruptTurn)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("interrupt returned %d: %s", response.Code, response.Body.String())
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 {
+		t.Fatalf("unexpected interrupt operations: %#v %v", operations, err)
+	}
+	var command protocol.InterruptTurnCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.TurnID != "captured-turn" {
+		t.Fatalf("interrupt did not capture the active turn: %#v", command)
+	}
 }
 
 func TestCreateThreadIgnoresLegacyClientTitle(t *testing.T) {
