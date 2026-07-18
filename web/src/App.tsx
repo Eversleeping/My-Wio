@@ -63,6 +63,7 @@ import type {
   Alert,
   Approval,
   AuditEntry,
+  CodexCLISettings,
   CredentialProfile,
   Deployment,
   DeploymentTarget,
@@ -416,14 +417,26 @@ function ServersPage({ realtime, notify }: PageProps) {
   };
   const updateAgent = async (server: Server) => {
     if (!server.agent_update_available || !confirm(t("server.confirmUpdate", { name: server.name, version: server.agent_target_version }))) return;
-    setUpdatingServer(server.id);
+    setUpdatingServer(`agent:${server.id}`);
     try {
       await post(`/servers/${server.id}/agent-update`, {});
       notify(t("server.updateQueued", { version: server.agent_target_version }));
     } catch (err) { notify(message(err)); } finally { setUpdatingServer(""); }
   };
+  const updateCodex = async (server: Server) => {
+    if (!server.codex_update_available || !confirm(t("server.confirmCodexUpdate", { name: server.name, version: server.codex_target_version }))) return;
+    setUpdatingServer(`codex:${server.id}`);
+    try {
+      await post(`/servers/${server.id}/codex-update`, {});
+      notify(t("server.codexUpdateQueued", { version: server.codex_target_version }));
+    } catch (err) { notify(message(err)); } finally { setUpdatingServer(""); }
+  };
   return <div className="page-stack"><Section title={t("server.registered")} icon={<ServerIcon size={18} />} action={<button className="primary-button" onClick={open}><Plus size={17} />{t("server.enroll")}</button>}>
-    <DataTable headers={[t("column.server"), t("server.information"), t("column.connectivity"), t("column.agent"), t("column.codex"), t("column.lastSeen"), ""]} empty={t("server.none")}>{(servers.data ?? []).map(server => { const updateTitle = server.status !== "online" ? t("server.updateOffline") : server.agent_update_available ? t("server.updateAgent", { version: server.agent_target_version }) : !server.agent_version ? t("common.awaitingHeartbeat") : !server.agent_update_supported ? t("server.updateRequiresReinstall") : server.agent_version === server.agent_target_version ? t("server.agentLatest") : t("server.updateUnavailable"); return <tr key={server.id}><td><div className="cell-main"><strong>{server.name}</strong><small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" disabled={server.status !== "online" || !server.agent_update_available || updatingServer !== ""} title={updateTitle} onClick={() => void updateAgent(server)}><RefreshCw className={updatingServer === server.id ? "spin" : ""} size={15} /></button><button className="icon-button" disabled={server.status !== "online" || updatingServer !== ""} title={server.status === "online" ? t("server.editCredentials") : t("server.credentialsOffline")} onClick={() => editCredentials(server)}><KeyRound size={15} /></button><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button><button className="icon-button danger" title={t("server.revoke")} onClick={async () => { if (!confirm(t("server.confirmRevoke", { name: server.name }))) return; await remove(`/servers/${server.id}`); notify(t("server.revoked")); servers.reload(); }}><X size={16} /></button></div></td></tr>; })}</DataTable>
+    <DataTable headers={[t("column.server"), t("server.information"), t("column.connectivity"), t("column.agent"), t("column.codex"), t("column.lastSeen"), ""]} empty={t("server.none")}>{(servers.data ?? []).map(server => {
+      const agentUpdateTitle = server.status !== "online" ? t("server.updateOffline") : server.agent_update_available ? t("server.updateAgent", { version: server.agent_target_version }) : !server.agent_version ? t("common.awaitingHeartbeat") : !server.agent_update_supported ? t("server.updateRequiresReinstall") : server.agent_version === server.agent_target_version ? t("server.agentLatest") : t("server.updateUnavailable");
+      const codexUpdateTitle = server.status !== "online" ? t("server.codexUpdateOffline") : !server.codex_update_supported ? t("server.codexUpdateRequiresAgent") : server.codex_update_available ? t("server.updateCodex", { version: server.codex_target_version }) : t("server.codexLatest", { version: server.codex_target_version });
+      return <tr key={server.id}><td><div className="cell-main"><strong>{server.name}</strong><small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" disabled={server.status !== "online" || !server.agent_update_available || updatingServer !== ""} title={agentUpdateTitle} onClick={() => void updateAgent(server)}><RefreshCw className={updatingServer === `agent:${server.id}` ? "spin" : ""} size={15} /></button><button className="icon-button" disabled={server.status !== "online" || !server.codex_update_available || updatingServer !== ""} title={codexUpdateTitle} onClick={() => void updateCodex(server)}>{updatingServer === `codex:${server.id}` ? <LoaderCircle className="spin" size={15} /> : <SquareTerminal size={15} />}</button><button className="icon-button" disabled={server.status !== "online" || updatingServer !== ""} title={server.status === "online" ? t("server.editCredentials") : t("server.credentialsOffline")} onClick={() => editCredentials(server)}><KeyRound size={15} /></button><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button><button className="icon-button danger" title={t("server.revoke")} onClick={async () => { if (!confirm(t("server.confirmRevoke", { name: server.name }))) return; await remove(`/servers/${server.id}`); notify(t("server.revoked")); servers.reload(); }}><X size={16} /></button></div></td></tr>;
+    })}</DataTable>
   </Section><Dialog open={dialog} title={t("server.enrollLinux")} onClose={close} wide>{step === "form" ? <form onSubmit={probe}>
     {error && <ErrorBanner text={error} />}
     <div className="form-grid"><Field label={t("server.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></Field><Field label={t("server.scanRoots")}><input value={form.roots} onChange={e => setForm({ ...form, roots: e.target.value })} required /></Field></div>
@@ -794,6 +807,7 @@ function MonitoringPage({ realtime }: { realtime: number }) {
 
 function SettingsPage({ realtime, notify }: PageProps) {
   const { t } = useI18n();
+  const codexSettings = useData<CodexCLISettings>("/settings/codex-cli", realtime);
   const profiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
   const secrets = useData<SecretSet[]>("/secret-sets", realtime);
   const audit = useData<AuditEntry[]>("/audit", realtime);
@@ -803,6 +817,9 @@ function SettingsPage({ realtime, notify }: PageProps) {
   const [secretDialog, setSecretDialog] = useState(false);
   const [name, setName] = useState("");
   const [lines, setLines] = useState("");
+  const [codexTargetVersion, setCodexTargetVersion] = useState("0.144.4");
+  const [codexTargetBusy, setCodexTargetBusy] = useState(false);
+  useEffect(() => { if (codexSettings.data?.target_version) setCodexTargetVersion(codexSettings.data.target_version); }, [codexSettings.data?.target_version]);
   const openProfile = (profile?: CredentialProfile) => {
     setProfileForm(profile ? { id: profile.id, kind: profile.kind, name: profile.name, endpoint: profile.endpoint, username: profile.username, model: profile.kind === "codex" ? profile.model || defaultCodexModel : "", commit_name: profile.commit_name, commit_email: profile.commit_email, secret: "" } : { id: "", kind: "codex", name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, commit_name: "", commit_email: "", secret: "" });
     setProfileDialog(true);
@@ -816,7 +833,11 @@ function SettingsPage({ realtime, notify }: PageProps) {
     } catch (err) { notify(message(err)); } finally { setProfileBusy(false); }
   };
   const submitSecretSet = async (event: FormEvent) => { event.preventDefault(); const values: Record<string, string> = {}; for (const line of lines.split("\n")) { const index = line.indexOf("="); if (index > 0) values[line.slice(0, index).trim()] = line.slice(index + 1); } try { await post("/secret-sets", { name, values }); setSecretDialog(false); secrets.reload(); setLines(""); notify(t("settings.secretSaved")); } catch (err) { notify(message(err)); } };
+  const saveCodexTarget = async (event: FormEvent) => { event.preventDefault(); setCodexTargetBusy(true); try { await post("/settings/codex-cli", { target_version: codexTargetVersion.trim() }); codexSettings.reload(); notify(t("settings.codexVersionSaved")); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
   return <div className="page-stack">
+    <Section title={t("settings.codexCLIManagement")} icon={<SquareTerminal size={18} />}>
+      <form className="settings-form" onSubmit={saveCodexTarget}><Field label={t("settings.codexTargetVersion")}><input value={codexTargetVersion} onChange={event => setCodexTargetVersion(event.target.value)} inputMode="decimal" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" placeholder="0.144.4" required /></Field><button className="primary-button" disabled={codexTargetBusy}>{codexTargetBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("settings.saveCodexVersion")}</button></form>
+    </Section>
     <Section title={t("settings.credentialProfiles")} icon={<KeyRound size={18} />} action={<button className="primary-button" onClick={() => openProfile()}><Plus size={17} />{t("settings.newProfile")}</button>}>
       <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code">{profile.endpoint}</code></td><td>{profile.kind === "codex" ? <code>{profile.model}</code> : <div className="cell-main"><span className="inline"><UserRound size={14} />{profile.username}</span><small>{profile.commit_name && profile.commit_email ? `${profile.commit_name} · ${profile.commit_email}` : t("settings.gitIdentityMissing")}</small></div>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} onClick={async () => { if (!confirm(t("settings.confirmDeleteProfile", { name: profile.name }))) return; await remove(`/credential-profiles/${profile.id}`); profiles.reload(); notify(t("settings.profileDeleted")); }}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
     </Section>

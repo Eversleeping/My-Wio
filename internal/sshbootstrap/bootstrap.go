@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/gitidentity"
 )
 
@@ -208,11 +209,17 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 	}
 
 	codexReady := probe.CodexReady
+	codexPath := "codex"
 	resultWarnings := make([]string, 0, 4)
-	if !codexReady && probe.NPMReady {
+	if probe.NPMReady {
 		request.report("installing_codex", 0, 0)
-		if _, installErr := run(client, elevated(root, "npm install --global @openai/codex@0.139.0")); installErr == nil {
-			codexReady = commandAvailable(client, "codex")
+		prefix := "/var/lib/wio-agent/codex/versions/" + codexcli.DefaultTargetVersion
+		packageName := "@openai/codex@" + codexcli.DefaultTargetVersion
+		install := "su -s /bin/sh -c " + shellQuote("npm install --prefix "+shellQuote(prefix)+" --omit=dev "+shellQuote(packageName)) + " wio-agent"
+		managedPath := prefix + "/node_modules/.bin/codex"
+		if _, installErr := run(client, elevated(root, install)); installErr == nil && commandAvailable(client, managedPath) {
+			codexReady = true
+			codexPath = managedPath
 		} else {
 			resultWarnings = append(resultWarnings, "codex_install_failed")
 		}
@@ -222,7 +229,7 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 	}
 
 	request.report("enrolling_agent", 0, 0)
-	enroll := "/usr/local/bin/wio-agent enroll --url " + shellQuote(request.ControlURL) + " --token " + shellQuote(request.EnrollmentToken)
+	enroll := "/usr/local/bin/wio-agent enroll --url " + shellQuote(request.ControlURL) + " --token " + shellQuote(request.EnrollmentToken) + " --codex " + shellQuote(codexPath)
 	output, err := run(client, elevated(root, enroll))
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: agent enrollment was rejected", ErrInstallation)

@@ -5,9 +5,10 @@ import (
 	"strings"
 )
 
-var Version = "0.2.8"
+var Version = "0.2.9"
 
 const MinimumSelfUpdateVersion = "0.2.0"
+const MinimumCodexUpdateVersion = "0.2.9"
 
 func SupportsSelfUpdate(version string) bool {
 	current, ok := parseVersion(version)
@@ -38,6 +39,24 @@ func UpdateAvailable(current, target string) bool {
 		}
 	}
 	return false
+}
+
+func SupportsCodexUpdate(version string) bool {
+	return atLeast(version, MinimumCodexUpdateVersion)
+}
+
+func atLeast(currentValue, minimumValue string) bool {
+	current, currentOK := parseVersion(currentValue)
+	minimum, minimumOK := parseVersion(minimumValue)
+	if !currentOK || !minimumOK {
+		return false
+	}
+	for index := range current {
+		if current[index] != minimum[index] {
+			return current[index] > minimum[index]
+		}
+	}
+	return true
 }
 
 func parseVersion(value string) ([3]int, bool) {

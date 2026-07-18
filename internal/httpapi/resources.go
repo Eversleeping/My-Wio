@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/store"
@@ -68,10 +69,18 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 		_, packagesErr := a.agentUpdates.Command()
 		packagesAvailable = packagesErr == nil
 	}
+	codexTarget, err := a.store.Setting(r.Context(), codexCLITargetSetting, codexcli.DefaultTargetVersion)
+	if err != nil || !codexcli.ValidTargetVersion(codexTarget) {
+		writeError(w, http.StatusInternalServerError, "could not load Codex CLI settings")
+		return
+	}
 	for index := range servers {
 		servers[index].AgentTargetVersion = buildinfo.Version
 		servers[index].AgentUpdateSupported = buildinfo.SupportsSelfUpdate(servers[index].AgentVersion)
 		servers[index].AgentUpdateAvailable = packagesAvailable && buildinfo.UpdateAvailable(servers[index].AgentVersion, buildinfo.Version)
+		servers[index].CodexTargetVersion = codexTarget
+		servers[index].CodexUpdateSupported = buildinfo.SupportsCodexUpdate(servers[index].AgentVersion)
+		servers[index].CodexUpdateAvailable = servers[index].CodexUpdateSupported && (servers[index].CodexVersion == "" || codexcli.UpdateAvailable(servers[index].CodexVersion, codexTarget))
 	}
 	writeJSON(w, http.StatusOK, servers)
 }

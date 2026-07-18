@@ -211,3 +211,13 @@ func TestCompletedTurnAllowsEnvironmentReconfiguration(t *testing.T) {
 		t.Fatalf("completed turn did not allow reconfiguration: updated=%v environment=%#v err=%v", updated, adapter.environment, err)
 	}
 }
+
+func TestReconfigureCommandRejectsActiveTurn(t *testing.T) {
+	adapter := New("codex", slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.StreamEvent) error { return nil })
+	adapter.turns["wio-thread"] = turnState{CodexThread: "codex-thread", TurnID: "turn-id", Active: true}
+	updated := false
+	err := adapter.ReconfigureCommand("/managed/codex", func() error { updated = true; return nil })
+	if err == nil || updated || adapter.command != "codex" {
+		t.Fatalf("active turn did not block CLI update: command=%q updated=%v err=%v", adapter.command, updated, err)
+	}
+}

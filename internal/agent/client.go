@@ -38,18 +38,21 @@ import (
 const initialReconnectBackoff = time.Second
 
 type Client struct {
-	config   Config
-	log      *slog.Logger
-	outbound chan *protocol.AgentEnvelope
-	codex    *codexadapter.Adapter
-	deployer *deployer.Deployer
-	seenMu   sync.Mutex
-	seen     map[string]bool
+	config      Config
+	log         *slog.Logger
+	outbound    chan *protocol.AgentEnvelope
+	codex       *codexadapter.Adapter
+	deployer    *deployer.Deployer
+	seenMu      sync.Mutex
+	seen        map[string]bool
+	codexPathMu sync.RWMutex
+	codexPath   string
 }
 
 func NewClient(config Config, log *slog.Logger) *Client {
-	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath), seen: make(map[string]bool)}
-	client.codex = codexadapter.NewWithEnvironment(config.CodexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
+	codexPath := effectiveCodexPath(config)
+	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath), seen: make(map[string]bool), codexPath: codexPath}
+	client.codex = codexadapter.NewWithEnvironment(codexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
 		return client.queue("event", event, true)
 	})
 	return client
@@ -217,6 +220,8 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		timeout = time.Hour
 	} else if envelope.Kind == "agent.update" {
 		timeout = 30 * time.Minute
+	} else if envelope.Kind == "codex.update" {
+		timeout = 30 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -302,6 +307,15 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.configureCredentials(command)
+	case "codex.update":
+		var command protocol.CodexUpdateCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		if err := c.updateCodexCLI(ctx, command); err != nil {
+			return err
+		}
+		return c.enqueueHeartbeat(ctx)
 	case "deploy.start":
 		var command protocol.DeployCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
@@ -343,8 +357,21 @@ func (c *Client) runRollback(ctx context.Context, command protocol.RollbackComma
 
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	hostname, _ := os.Hostname()
-	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, c.config.CodexPath), CodexReady: commandAvailable(c.config.CodexPath), ScanRoots: c.inventoryRoots()}
+	codexPath := c.currentCodexPath()
+	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots()}
 	return c.queue("heartbeat", heartbeat, false)
+}
+
+func (c *Client) currentCodexPath() string {
+	c.codexPathMu.RLock()
+	defer c.codexPathMu.RUnlock()
+	return c.codexPath
+}
+
+func (c *Client) setCodexPath(path string) {
+	c.codexPathMu.Lock()
+	c.codexPath = path
+	c.codexPathMu.Unlock()
 }
 
 func (c *Client) enqueueMetrics(ctx context.Context) error {

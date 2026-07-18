@@ -170,6 +170,9 @@ type Server struct {
 	AgentTargetVersion   string     `db:"-" json:"agent_target_version"`
 	AgentUpdateAvailable bool       `db:"-" json:"agent_update_available"`
 	AgentUpdateSupported bool       `db:"-" json:"agent_update_supported"`
+	CodexTargetVersion   string     `db:"-" json:"codex_target_version"`
+	CodexUpdateAvailable bool       `db:"-" json:"codex_update_available"`
+	CodexUpdateSupported bool       `db:"-" json:"codex_update_supported"`
 	CodexProfileID       string     `db:"codex_profile_id" json:"codex_profile_id"`
 	CodexProfileName     string     `db:"codex_profile_name" json:"codex_profile_name"`
 	GitProfileID         string     `db:"git_profile_id" json:"git_profile_id"`
@@ -574,6 +577,20 @@ func (s *Store) HasActiveOperation(ctx context.Context, serverID, kind string) (
 	var count int
 	err := s.DB.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind=? AND status IN ('queued','delivered')"), serverID, kind)
 	return count > 0, err
+}
+
+func (s *Store) Setting(ctx context.Context, key, fallback string) (string, error) {
+	var value string
+	err := s.DB.GetContext(ctx, &value, s.Q("SELECT value FROM control_settings WHERE key=?"), key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fallback, nil
+	}
+	return value, err
+}
+
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO control_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`), key, value, time.Now().UTC())
+	return err
 }
 
 func (s *Store) MarkDelivered(ctx context.Context, id string) error {

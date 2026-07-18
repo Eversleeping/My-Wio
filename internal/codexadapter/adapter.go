@@ -325,6 +325,28 @@ func (a *Adapter) ReconfigureEnvironment(environment []string, update func() err
 	return nil
 }
 
+func (a *Adapter) ReconfigureCommand(command string, update func() error) error {
+	if strings.TrimSpace(command) == "" {
+		return errors.New("Codex command is required")
+	}
+	a.startMu.Lock()
+	defer a.startMu.Unlock()
+	a.mu.Lock()
+	for _, turn := range a.turns {
+		if turn.Active {
+			a.mu.Unlock()
+			return errors.New("Codex has an active turn; retry the CLI update after it completes")
+		}
+	}
+	a.mu.Unlock()
+	if err := update(); err != nil {
+		return err
+	}
+	a.command = command
+	a.stopLocked(errors.New("Codex CLI changed"))
+	return nil
+}
+
 func (a *Adapter) stopLocked(reason error) {
 	if a.cancel != nil {
 		a.cancel()

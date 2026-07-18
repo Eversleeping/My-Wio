@@ -138,6 +138,10 @@ type AgentUpdateCommand struct {
 	Packages map[string]AgentUpdatePackage `json:"packages"`
 }
 
+type CodexUpdateCommand struct {
+	Version string `json:"version"`
+}
+
 type ConfigureCredentialsCommand struct {
 	CodexAPIURL    string `json:"codex_api_url"`
 	CodexAPIKey    string `json:"codex_api_key"`

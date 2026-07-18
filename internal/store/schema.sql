@@ -146,6 +146,12 @@ CREATE TABLE IF NOT EXISTS agent_operations (
 
 CREATE INDEX IF NOT EXISTS operations_server_idx ON agent_operations(server_id, status, created_at);
 
+CREATE TABLE IF NOT EXISTS control_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS secret_sets (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
