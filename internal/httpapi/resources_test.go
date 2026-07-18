@@ -371,7 +371,7 @@ func TestRewriteTurnTruncatesEventsAndQueuesRollback(t *testing.T) {
 	add("codex.item.completed", `{"item":{"type":"agentMessage","text":"third answer"}}`)
 
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "revised second", "approval_mode": "on-request", "edit_event_id": target.EventID}, api.startTurn)
+	response := rewriteResourceRequest(t, thread.ID, target.EventID, map[string]any{"prompt": "revised second", "approval_mode": "on-request"}, api.rewriteTurn)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("rewrite returned %d: %s", response.Code, response.Body.String())
 	}
@@ -569,6 +569,18 @@ func threadResourceRequest(t *testing.T, method, target, threadID string, body a
 	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
 	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
 	return directJSONRequest(t, method, target, body, nil, func(w http.ResponseWriter, r *http.Request) {
+		handler(w, r.WithContext(requestContext))
+	})
+}
+
+func rewriteResourceRequest(t *testing.T, threadID, eventID string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+	route := chi.NewRouteContext()
+	route.URLParams.Add("threadID", threadID)
+	route.URLParams.Add("eventID", eventID)
+	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
+	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
+	return directJSONRequest(t, http.MethodPost, "/api/threads/"+threadID+"/events/"+eventID+"/rewrite", body, nil, func(w http.ResponseWriter, r *http.Request) {
 		handler(w, r.WithContext(requestContext))
 	})
 }

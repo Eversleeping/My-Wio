@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/agentgateway"
 	"github.com/wio-platform/wio/internal/agentupdate"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
@@ -39,6 +42,7 @@ type API struct {
 	vault        *security.Vault
 	log          *slog.Logger
 	frontend     fs.FS
+	frontendHash string
 	bootstrapper serverBootstrapper
 	agentUpdates *agentupdate.Store
 	publicURL    string
@@ -65,6 +69,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 		vault:        vault,
 		log:          log,
 		frontend:     frontend,
+		frontendHash: fingerprintFrontend(frontend),
 		bootstrapper: sshbootstrap.New(assetDir),
 		agentUpdates: agentupdate.New(assetDir),
 		publicURL:    strings.TrimRight(strings.TrimSpace(publicURL), "/"),
@@ -107,6 +112,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Delete("/threads/{threadID}", api.deleteThread)
 			private.Get("/threads/{threadID}/events", api.threadEvents)
 			private.Post("/threads/{threadID}/turns", api.startTurn)
+			private.Post("/threads/{threadID}/events/{eventID}/rewrite", api.rewriteTurn)
 			private.Post("/threads/{threadID}/interrupt", api.interruptTurn)
 			private.Get("/approvals", api.approvals)
 			private.Post("/approvals/{approvalID}/decision", api.decideApproval)
@@ -151,13 +157,26 @@ func (a *API) securityHeaders(next http.Handler) http.Handler {
 }
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := a.store.DB.PingContext(ctx); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "time": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "time": time.Now().UTC(), "version": buildinfo.Version, "frontend_version": a.frontendHash})
+}
+
+func fingerprintFrontend(frontend fs.FS) string {
+	if frontend == nil {
+		return ""
+	}
+	data, err := fs.ReadFile(frontend, "index.html")
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
 }
 
 func (a *API) setupStatus(w http.ResponseWriter, r *http.Request) {
@@ -433,6 +452,9 @@ func (a *API) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
+	}
+	if name == "index.html" && a.frontendHash != "" {
+		data = []byte(strings.ReplaceAll(string(data), "__WIO_FRONTEND_VERSION__", a.frontendHash))
 	}
 	isServiceWorker := name == "sw.js" || strings.HasPrefix(name, "sw-") &&
 		(strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".js.map"))

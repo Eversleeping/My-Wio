@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -97,6 +98,30 @@ func TestServiceWorkerIsNotLongTermCached(t *testing.T) {
 				t.Fatalf("service worker Cloudflare cache control = %q", cloudflareCacheControl)
 			}
 		})
+	}
+}
+
+func TestFrontendVersionIsExposedAndInjected(t *testing.T) {
+	frontend := fstest.MapFS{"index.html": {Data: []byte(`<meta name="wio-frontend-version" content="__WIO_FRONTEND_VERSION__">`)}}
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	api := &API{store: database, frontend: frontend, frontendHash: fingerprintFrontend(frontend)}
+	if api.frontendHash == "" {
+		t.Fatal("frontend fingerprint is empty")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	api.serveFrontend(response, request)
+	if !strings.Contains(response.Body.String(), `content="`+api.frontendHash+`"`) || strings.Contains(response.Body.String(), "__WIO_FRONTEND_VERSION__") {
+		t.Fatalf("frontend version was not injected: %q", response.Body.String())
+	}
+	healthResponse := httptest.NewRecorder()
+	api.health(healthResponse, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if healthResponse.Header().Get("Cache-Control") != "no-store" || !strings.Contains(healthResponse.Body.String(), `"frontend_version":"`+api.frontendHash+`"`) {
+		t.Fatalf("frontend version was not exposed by health endpoint: headers=%v body=%s", healthResponse.Header(), healthResponse.Body.String())
 	}
 }
 

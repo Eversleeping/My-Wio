@@ -531,6 +531,14 @@ func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
+	a.handleTurn(w, r, "")
+}
+
+func (a *API) rewriteTurn(w http.ResponseWriter, r *http.Request) {
+	a.handleTurn(w, r, chi.URLParam(r, "eventID"))
+}
+
+func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventID string) {
 	threadID := chi.URLParam(r, "threadID")
 	var input struct {
 		Prompt          string               `json:"prompt"`
@@ -542,6 +550,13 @@ func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if !decodeJSONLimit(w, r, &input, 6<<20) {
 		return
+	}
+	if routeEditEventID != "" {
+		if input.EditEventID != "" && input.EditEventID != routeEditEventID {
+			writeError(w, http.StatusBadRequest, "conflicting edit target")
+			return
+		}
+		input.EditEventID = routeEditEventID
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	input.Model = strings.TrimSpace(input.Model)

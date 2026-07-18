@@ -635,7 +635,8 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
     if (activeTurn) { notify(t("codex.waitForTurn")); return; }
     setSending(true);
     try {
-      await post(`/threads/${thread.id}/turns`, { prompt, images: images.map(image => ({ data_url: image.dataURL })), model, reasoning_effort: reasoningEffort, approval_mode: approvalMode, edit_event_id: editingEventID });
+      const turnPath = editingEventID ? `/threads/${thread.id}/events/${editingEventID}/rewrite` : `/threads/${thread.id}/turns`;
+      await post(turnPath, { prompt, images: images.map(image => ({ data_url: image.dataURL })), model, reasoning_effort: reasoningEffort, approval_mode: approvalMode });
       setPrompt(""); setImages([]); setEditingEventID(""); notify(t(editingEventID ? "codex.rewriteQueued" : "codex.turnQueued"));
     } catch (err) { notify(message(err)); } finally { setSending(false); }
   };
