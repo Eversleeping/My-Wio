@@ -55,6 +55,8 @@ import {
   X
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, APIError, patch, post, postStream, remove, setSession, socketURL } from "./api";
 import { currentLocale, useI18n } from "./i18n";
 import type {
@@ -477,17 +479,47 @@ function CodexPage({ realtime, approvals, approvalSignal, reloadApprovals, notif
   const [selected, setSelected] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(approvals.length > 0);
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  const [deletingThread, setDeletingThread] = useState("");
   const active = (threads.data ?? []).find(thread => thread.id === selected) ?? threads.data?.[0];
+  const threadGroups = useMemo(() => groupThreadsByProject(threads.data ?? []), [threads.data]);
   const approvalKey = approvals.map(item => item.id).join(",");
   useEffect(() => { if (!selected && threads.data?.[0]) setSelected(threads.data[0].id); }, [threads.data, selected]);
   useEffect(() => { if (approvalKey) setApprovalOpen(true); }, [approvalKey, approvalSignal]);
+  const toggleProject = (projectID: string) => setCollapsedProjects(current => { const next = new Set(current); if (next.has(projectID)) next.delete(projectID); else next.add(projectID); return next; });
+  const deleteSession = async (thread: Thread) => {
+    if (thread.status === "queued" || thread.status === "running") return;
+    if (!confirm(t("codex.confirmDeleteSession", { title: thread.title }))) return;
+    setDeletingThread(thread.id);
+    try {
+      await remove(`/threads/${thread.id}`);
+      const next = (threads.data ?? []).find(item => item.id !== thread.id);
+      if (active?.id === thread.id) setSelected(next?.id ?? "");
+      threads.reload();
+      notify(t("codex.sessionDeleted"));
+    } catch (error) {
+      notify(message(error));
+    } finally {
+      setDeletingThread("");
+    }
+  };
   return <div className="codex-layout">
-    <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{(threads.data ?? []).length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : (threads.data ?? []).map(thread => <button key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.project_name} · {thread.server_name}</small></span><Status value={thread.status} /></button>)}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} /></aside>
+    <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{threadGroups.length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong><span>{group.threads.length}</span></button>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; return <div key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"}><button type="button" className="thread-select" onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span></button><div className="thread-actions"><Status value={thread.status} /><button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div></div>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} /></aside>
     <section className="session-panel">{active ? <SessionView thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={realtime} reloadApprovals={reloadApprovals} notify={notify} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={() => { setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
   </div>;
+}
+
+function groupThreadsByProject(threads: Thread[]) {
+  const groups = new Map<string, { projectID: string; projectName: string; threads: Thread[] }>();
+  for (const thread of threads) {
+    const group = groups.get(thread.project_id) ?? { projectID: thread.project_id, projectName: thread.project_name, threads: [] };
+    group.threads.push(thread);
+    groups.set(thread.project_id, group);
+  }
+  return Array.from(groups.values());
 }
 
 type FileTreeNode = { name: string; path: string; kind: WorkspaceFile["kind"]; size?: number; children: FileTreeNode[] };
@@ -574,6 +606,7 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
   const [approvalMode, setApprovalMode] = useState("on-request");
   const streamRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const sourceEvents = events.data ?? [];
   const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
   useEffect(() => { setRawEvents(false); setImages([]); }, [thread.id]);
@@ -601,12 +634,22 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: {
       setPrompt(""); setImages([]); notify(t("codex.turnQueued"));
     } catch (err) { notify(message(err)); }
   };
+  const editMessage = (text: string) => {
+    setPrompt(text);
+    setImages([]);
+    requestAnimationFrame(() => {
+      promptRef.current?.focus();
+      promptRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      promptRef.current?.setSelectionRange(text.length, text.length);
+    });
+    notify(t("codex.messageReadyToEdit"));
+  };
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" title={t("codex.interrupt")} onClick={async () => { await post(`/threads/${thread.id}/interrupt`, {}); notify(t("codex.interruptQueued")); }}><Ban size={16} /></button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{chatEvents.map(event => <ConversationEventItem key={event.event_id} event={event} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{chatEvents.map(event => <ConversationEventItem key={event.event_id} event={event} onEdit={editMessage} notify={notify} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     <form className="composer" onSubmit={send}>
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
-      <textarea value={prompt} onChange={event => setPrompt(event.target.value)} onPaste={event => { const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} placeholder={t("codex.messagePlaceholder")} rows={3} />
+      <textarea ref={promptRef} value={prompt} onChange={event => setPrompt(event.target.value)} onPaste={event => { const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} placeholder={t("codex.messagePlaceholder")} rows={3} />
       <div className="composer-bar"><div><input ref={imageInputRef} className="hidden-input" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) void addImages(files); }} /><button type="button" className="icon-button" disabled={imageBusy || images.length >= 4} title={t("codex.attachImage")} onClick={() => imageInputRef.current?.click()}>{imageBusy ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}</button><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={event => setApprovalMode(event.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" disabled={(!prompt.trim() && images.length === 0) || imageBusy}><ChevronRight size={17} />{t("codex.send")}</button></div>
     </form>
   </>;
@@ -624,15 +667,19 @@ function ApprovalActions({ item, onDecided, notify }: { item: Approval; onDecide
   return <div className="approval-actions"><button type="button" className="secondary-button danger" disabled={busy} onClick={() => void decide("denied")}><Ban size={16} />{t("codex.deny")}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void decide("approved")}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("codex.approveOnce")}</button></div>;
 }
 
-function ConversationEventItem({ event }: { event: StreamEvent }) {
+function ConversationEventItem({ event, onEdit, notify }: { event: StreamEvent; onEdit: (text: string) => void; notify: (text: string) => void }) {
   const { t } = useI18n();
   const kind = event.kind;
   const payload = asRecord(event.payload);
-  if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <div className="message-content">{text}</div>}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}</article>; }
+  if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } }; return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} />}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(text)}><Pencil size={14} /></button></div></article>; }
   if (kind === "codex.error" || kind === "codex.turn.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t("codex.turnFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
   const item = asRecord(payload?.item);
-  if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{extractText(item)}</div></article>;
+  if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><MarkdownContent text={extractText(item)} /></article>;
   return <ToolEvent event={event} item={item} />;
+}
+
+function MarkdownContent({ text }: { text: string }) {
+  return <div className="message-content markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>;
 }
 
 function ToolEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> | null }) {
@@ -866,6 +913,21 @@ async function compressImage(file: File): Promise<string> {
   } finally { URL.revokeObjectURL(sourceURL); }
 }
 function blobDataURL(blob: Blob) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error("Could not read image")); reader.readAsDataURL(blob); }); }
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Could not copy message");
+}
 function conversationEvents(events: StreamEvent[]) {
   const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch"]);
   return events.filter(event => {

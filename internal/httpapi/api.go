@@ -104,6 +104,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Delete("/projects/{projectID}", api.deleteProject)
 			private.Get("/threads", api.threads)
 			private.Post("/threads", api.createThread)
+			private.Delete("/threads/{threadID}", api.deleteThread)
 			private.Get("/threads/{threadID}/events", api.threadEvents)
 			private.Post("/threads/{threadID}/turns", api.startTurn)
 			private.Post("/threads/{threadID}/interrupt", api.interruptTurn)

@@ -2,13 +2,18 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 )
+
+var ErrThreadActive = errors.New("Codex session is active")
 
 type Thread struct {
 	ID            string    `db:"id" json:"id"`
 	WorkspaceID   string    `db:"workspace_id" json:"workspace_id"`
+	ProjectID     string    `db:"project_id" json:"project_id"`
 	CodexThreadID string    `db:"codex_thread_id" json:"codex_thread_id"`
 	Title         string    `db:"title" json:"title"`
 	Status        string    `db:"status" json:"status"`
@@ -22,13 +27,13 @@ type Thread struct {
 
 func (s *Store) ListThreads(ctx context.Context) ([]Thread, error) {
 	var out []Thread
-	err := s.DB.SelectContext(ctx, &out, `SELECT t.id,t.workspace_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY t.updated_at DESC`)
+	err := s.DB.SelectContext(ctx, &out, `SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY t.updated_at DESC`)
 	return out, err
 }
 
 func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
 	var out Thread
-	err := s.DB.GetContext(ctx, &out, s.Q(`SELECT t.id,t.workspace_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE t.id=?`), id)
+	err := s.DB.GetContext(ctx, &out, s.Q(`SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE t.id=?`), id)
 	return out, err
 }
 
@@ -42,6 +47,36 @@ func (s *Store) CreateThread(ctx context.Context, workspaceID, title string) (Th
 		return Thread{}, err
 	}
 	return s.Thread(ctx, id)
+}
+
+func (s *Store) DeleteThread(ctx context.Context, id string) error {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM codex_threads WHERE id=? AND status NOT IN ('queued','running')"), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		var count int
+		if err := tx.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM codex_threads WHERE id=?"), id); err != nil {
+			return err
+		}
+		if count == 0 {
+			return sql.ErrNoRows
+		}
+		return ErrThreadActive
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=?"), id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetThreadStatus(ctx context.Context, id, status string) error {

@@ -331,6 +331,56 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestDeleteThreadCleansEventsAndRejectsActiveSessions(t *testing.T) {
+	for _, status := range []string{"idle", "running"} {
+		t.Run(status, func(t *testing.T) {
+			database := openBootstrapTestStore(t)
+			server := enrollResourceTestServer(t, database, "delete-thread-"+status)
+			ctx := context.Background()
+			if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+				t.Fatal(err)
+			}
+			workspaces, err := database.ListWorkspaces(ctx)
+			if err != nil || len(workspaces) != 1 {
+				t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+			}
+			thread, err := database.CreateThread(ctx, workspaces[0].ID, "delete me")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: json.RawMessage(`{"text":"hello"}`)}); err != nil {
+				t.Fatal(err)
+			}
+			if status == "running" {
+				if err := database.SetThreadStatus(ctx, thread.ID, status); err != nil {
+					t.Fatal(err)
+				}
+			}
+			api := resourceTestAPI(database)
+			response := threadResourceRequest(t, http.MethodDelete, "/api/threads/"+thread.ID, thread.ID, nil, api.deleteThread)
+			if status == "running" {
+				if response.Code != http.StatusConflict {
+					t.Fatalf("active delete returned %d: %s", response.Code, response.Body.String())
+				}
+				if _, err := database.Thread(ctx, thread.ID); err != nil {
+					t.Fatalf("active thread was deleted: %v", err)
+				}
+				return
+			}
+			if response.Code != http.StatusOK {
+				t.Fatalf("delete returned %d: %s", response.Code, response.Body.String())
+			}
+			if _, err := database.Thread(ctx, thread.ID); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("thread still exists: %v", err)
+			}
+			events, err := database.Events(ctx, thread.ID, 0, 10)
+			if err != nil || len(events) != 0 {
+				t.Fatalf("thread events were not deleted: %#v %v", events, err)
+			}
+		})
+	}
+}
+
 func TestValidTurnImages(t *testing.T) {
 	valid := protocol.TurnImage{DataURL: "data:image/png;base64,iVBORw0KGgo="}
 	if !validTurnImages([]protocol.TurnImage{valid}) {

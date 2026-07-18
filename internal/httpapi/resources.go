@@ -493,6 +493,32 @@ func (a *API) createThread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, thread)
 }
 
+func (a *API) deleteThread(w http.ResponseWriter, r *http.Request) {
+	threadID := chi.URLParam(r, "threadID")
+	thread, err := a.store.Thread(r.Context(), threadID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Codex session")
+		return
+	}
+	if err := a.store.DeleteThread(r.Context(), threadID); errors.Is(err, store.ErrThreadActive) {
+		writeError(w, http.StatusConflict, "active Codex session must be interrupted before deletion")
+		return
+	} else if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete Codex session")
+		return
+	}
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.delete", "thread", thread.ID, map[string]string{"title": thread.Title, "workspace_id": thread.WorkspaceID}, clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	events, err := a.store.Events(r.Context(), chi.URLParam(r, "threadID"), after, 1000)
