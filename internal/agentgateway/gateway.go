@@ -166,10 +166,14 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if event.Kind == "thread.bound" {
 			_ = g.bindCodexThread(ctx, event)
 		}
+		if event.Kind == "codex.thread.name.updated" {
+			_ = g.updateThreadTitle(ctx, event)
+		}
 		if event.Kind == "codex.turn.started" || event.Kind == "turn.accepted" {
 			_ = g.store.SetThreadStatus(ctx, event.StreamID, "running")
 		}
 		if event.Kind == "codex.turn.completed" {
+			_ = g.setThreadTitleFromFirstResponse(ctx, event.StreamID)
 			_ = g.store.SetThreadStatus(ctx, event.StreamID, "idle")
 			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
@@ -314,6 +318,65 @@ func (g *Gateway) bindCodexThread(ctx context.Context, event protocol.StreamEven
 	}
 	_, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE codex_threads SET codex_thread_id=?,updated_at=? WHERE id=?"), p.CodexThreadID, time.Now().UTC(), event.StreamID)
 	return err
+}
+
+func (g *Gateway) updateThreadTitle(ctx context.Context, event protocol.StreamEvent) error {
+	var p struct {
+		ThreadName *string `json:"threadName"`
+	}
+	if json.Unmarshal(event.Payload, &p) != nil || p.ThreadName == nil {
+		return nil
+	}
+	title := strings.TrimSpace(*p.ThreadName)
+	if title == "" {
+		return nil
+	}
+	return g.store.SetThreadTitle(ctx, event.StreamID, title)
+}
+
+func (g *Gateway) setThreadTitleFromFirstResponse(ctx context.Context, threadID string) error {
+	var payloads []string
+	if err := g.store.DB.SelectContext(ctx, &payloads, g.store.Q("SELECT payload FROM events WHERE stream_id=? AND kind='codex.item.completed' ORDER BY sequence DESC LIMIT 100"), threadID); err != nil {
+		return err
+	}
+	var p struct {
+		Item struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"item"`
+	}
+	for _, payload := range payloads {
+		p.Item.Type = ""
+		p.Item.Text = ""
+		if json.Unmarshal([]byte(payload), &p) != nil || p.Item.Type != "agentMessage" {
+			continue
+		}
+		title := firstResponseTitle(p.Item.Text)
+		if title != "" {
+			return g.store.SetThreadTitleIfDefault(ctx, threadID, title)
+		}
+	}
+	return nil
+}
+
+func firstResponseTitle(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		title := strings.TrimSpace(line)
+		if title == "" || strings.HasPrefix(title, "```") {
+			continue
+		}
+		title = strings.TrimSpace(strings.TrimLeft(title, "#>*- "))
+		title = strings.TrimSpace(strings.Trim(title, "`*_"))
+		if title == "" {
+			continue
+		}
+		runes := []rune(title)
+		if len(runes) > 48 {
+			title = strings.TrimSpace(string(runes[:48])) + "..."
+		}
+		return title
+	}
+	return ""
 }
 
 func (g *Gateway) evaluateMetrics(ctx context.Context, serverID string, m protocol.Metrics) {

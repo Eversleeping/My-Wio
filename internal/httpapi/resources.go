@@ -474,7 +474,8 @@ func (a *API) threads(w http.ResponseWriter, r *http.Request) {
 func (a *API) createThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		WorkspaceID string `json:"workspace_id"`
-		Title       string `json:"title"`
+		// Kept for compatibility with older cached web clients. Codex now names threads.
+		Title string `json:"title"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -483,7 +484,7 @@ func (a *API) createThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return
 	}
-	thread, err := a.store.CreateThread(r.Context(), input.WorkspaceID, strings.TrimSpace(input.Title))
+	thread, err := a.store.CreateThread(r.Context(), input.WorkspaceID, "")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "could not create Codex session")
 		return

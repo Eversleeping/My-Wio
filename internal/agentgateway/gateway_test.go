@@ -197,6 +197,107 @@ func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
 	}
 }
 
+func TestCodexFirstResponseGeneratesTitleAndExplicitNameOverridesIt(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "codex-node", []string{"/srv"}, "title-enrollment-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "title-enrollment-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "codex-node.local", "title-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := protocol.StreamEvent{EventID: "progress-response", StreamID: thread.ID, Kind: "codex.item.completed", Payload: json.RawMessage(`{"item":{"type":"agentMessage","text":"I will inspect the deployment flow first."}}`)}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	event = protocol.StreamEvent{EventID: "final-response", StreamID: thread.ID, Kind: "codex.item.completed", Payload: json.RawMessage(`{"item":{"type":"agentMessage","text":"## Fix deployment timeout\n\nThe upload no longer has a fixed deadline."}}`)}
+	payload, err = json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	event = protocol.StreamEvent{EventID: "first-turn-completed", StreamID: thread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"status":"completed"}}`)}
+	payload, err = json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.Thread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Fix deployment timeout" {
+		t.Fatalf("unexpected generated title: %q", updated.Title)
+	}
+	event = protocol.StreamEvent{EventID: "later-response", StreamID: thread.ID, Kind: "codex.item.completed", Payload: json.RawMessage(`{"item":{"type":"agentMessage","text":"## This must not replace the first title"}}`)}
+	payload, err = json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	event = protocol.StreamEvent{EventID: "later-turn-completed", StreamID: thread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"status":"completed"}}`)}
+	payload, err = json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err = database.Thread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Fix deployment timeout" {
+		t.Fatalf("later turn replaced the generated title: %q", updated.Title)
+	}
+	event = protocol.StreamEvent{EventID: "explicit-title", StreamID: thread.ID, Kind: "codex.thread.name.updated", Payload: json.RawMessage(`{"threadId":"codex-thread","threadName":"  Deployment timeout  "}`)}
+	payload, err = json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err = database.Thread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Deployment timeout" {
+		t.Fatalf("explicit Codex title did not override generated title: %q", updated.Title)
+	}
+}
+
 func TestUpsertApprovalStoresAndReopensReusedRequestID(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {

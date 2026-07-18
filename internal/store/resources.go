@@ -84,6 +84,16 @@ func (s *Store) SetThreadStatus(ctx context.Context, id, status string) error {
 	return err
 }
 
+func (s *Store) SetThreadTitle(ctx context.Context, id, title string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET title=?,updated_at=? WHERE id=?"), title, time.Now().UTC(), id)
+	return err
+}
+
+func (s *Store) SetThreadTitleIfDefault(ctx context.Context, id, title string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET title=?,updated_at=? WHERE id=? AND title='New session'"), title, time.Now().UTC(), id)
+	return err
+}
+
 func (s *Store) ResolvePendingApprovals(ctx context.Context, threadID, decision string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE approvals SET status='resolved',decision=?,resolved_at=? WHERE thread_id=? AND status='pending'"), decision, time.Now().UTC(), threadID)
 	return err

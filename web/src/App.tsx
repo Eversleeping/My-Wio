@@ -590,8 +590,8 @@ function buildFileTree(files: WorkspaceFile[]): FileTreeNode[] {
 
 function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCreated: () => void }) {
   const { t } = useI18n();
-  const [workspaceID, setWorkspaceID] = useState(""); const [title, setTitle] = useState("");
-  return <form onSubmit={async e => { e.preventDefault(); await post("/threads", { workspace_id: workspaceID, title }); onCreated(); }}><Field label={t("codex.workspace")}><select value={workspaceID} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><Field label={t("codex.sessionTitle")}><input value={title} onChange={e => setTitle(e.target.value)} placeholder={t("codex.newSession")} /></Field><DialogActions><button className="primary-button"><Plus size={16} />{t("codex.createSession")}</button></DialogActions></form>;
+  const [workspaceID, setWorkspaceID] = useState("");
+  return <form onSubmit={async e => { e.preventDefault(); await post("/threads", { workspace_id: workspaceID }); onCreated(); }}><Field label={t("codex.workspace")}><select value={workspaceID} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button"><Plus size={16} />{t("codex.createSession")}</button></DialogActions></form>;
 }
 
 function SessionView({ thread, approvals, realtime, reloadApprovals, notify }: { thread: Thread; approvals: Approval[]; realtime: number; reloadApprovals: () => void; notify: (text: string) => void }) {

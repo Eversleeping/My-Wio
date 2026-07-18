@@ -331,6 +331,31 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestCreateThreadIgnoresLegacyClientTitle(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "create-thread-title")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	api := resourceTestAPI(database)
+	response := directJSONRequest(t, http.MethodPost, "/api/threads", map[string]string{"workspace_id": workspaces[0].ID, "title": "legacy custom title"}, &store.Session{UserID: "test-user"}, api.createThread)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create returned %d: %s", response.Code, response.Body.String())
+	}
+	var thread store.Thread
+	if err := json.Unmarshal(response.Body.Bytes(), &thread); err != nil {
+		t.Fatal(err)
+	}
+	if thread.Title != "New session" {
+		t.Fatalf("legacy client title was not ignored: %q", thread.Title)
+	}
+}
+
 func TestDeleteThreadCleansEventsAndRejectsActiveSessions(t *testing.T) {
 	for _, status := range []string{"idle", "running"} {
 		t.Run(status, func(t *testing.T) {
