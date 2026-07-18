@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -196,7 +197,7 @@ func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
 	}
 }
 
-func TestUpsertApprovalStoresSnakeCaseRequestID(t *testing.T) {
+func TestUpsertApprovalStoresAndReopensReusedRequestID(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +227,7 @@ func TestUpsertApprovalStoresSnakeCaseRequestID(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	event := protocol.StreamEvent{StreamID: thread.ID, Kind: "approval.requested", Payload: json.RawMessage(`{"request_id":"request-123","kind":"item/commandExecution/requestApproval","detail":{"command":"npm test"}}`)}
+	event := protocol.StreamEvent{StreamID: thread.ID, Kind: "approval.requested", Payload: json.RawMessage(`{"request_id":"0","kind":"item/commandExecution/requestApproval","detail":{"command":"npm test","itemId":"call-old","turnId":"turn-old"}}`)}
 	if err := gateway.upsertApproval(ctx, event); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +239,7 @@ func TestUpsertApprovalStoresSnakeCaseRequestID(t *testing.T) {
 	if err := database.DB.GetContext(ctx, &approval, "SELECT request_id,kind,detail FROM approvals WHERE thread_id=?", thread.ID); err != nil {
 		t.Fatal(err)
 	}
-	if approval.RequestID != "request-123" || approval.Kind != "item/commandExecution/requestApproval" || !strings.Contains(approval.Detail, "npm test") {
+	if approval.RequestID != "0" || approval.Kind != "item/commandExecution/requestApproval" || !strings.Contains(approval.Detail, "npm test") {
 		t.Fatalf("unexpected approval: %#v", approval)
 	}
 	completed := protocol.StreamEvent{EventID: "completed-event", StreamID: thread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"status":"interrupted"}}`)}
@@ -258,5 +259,36 @@ func TestUpsertApprovalStoresSnakeCaseRequestID(t *testing.T) {
 	}
 	if resolved.Status != "resolved" || resolved.Decision != "cancelled" {
 		t.Fatalf("approval was not resolved with its turn: %#v", resolved)
+	}
+
+	reused := protocol.StreamEvent{StreamID: thread.ID, Kind: "approval.requested", Payload: json.RawMessage(`{"request_id":"0","kind":"item/commandExecution/requestApproval","detail":{"command":"ps aux","itemId":"call-new","turnId":"turn-new"}}`)}
+	if err := gateway.upsertApproval(ctx, reused); err != nil {
+		t.Fatal(err)
+	}
+	var reopened struct {
+		Status     string         `db:"status"`
+		Decision   sql.NullString `db:"decision"`
+		ResolvedAt sql.NullTime   `db:"resolved_at"`
+		Detail     string         `db:"detail"`
+		Count      int            `db:"approval_count"`
+	}
+	if err := database.DB.GetContext(ctx, &reopened, `SELECT status,decision,resolved_at,detail,(SELECT COUNT(*) FROM approvals WHERE thread_id=?) AS approval_count FROM approvals WHERE thread_id=?`, thread.ID, thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Status != "pending" || reopened.Decision.Valid || reopened.ResolvedAt.Valid || reopened.Count != 1 || !strings.Contains(reopened.Detail, "call-new") {
+		t.Fatalf("reused request id did not reopen approval: %#v", reopened)
+	}
+
+	if err := database.ResolvePendingApprovals(ctx, thread.ID, "cancelled"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.upsertApproval(ctx, reused); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.GetContext(ctx, &resolved, "SELECT status,decision FROM approvals WHERE thread_id=?", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != "resolved" || resolved.Decision != "cancelled" {
+		t.Fatalf("duplicate event reopened an already resolved approval: %#v", resolved)
 	}
 }

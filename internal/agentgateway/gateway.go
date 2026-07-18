@@ -159,7 +159,9 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		event.Payload = security.RedactJSON(event.Payload)
 		if strings.Contains(event.Kind, "approval.requested") {
-			_ = g.upsertApproval(ctx, event)
+			if err := g.upsertApproval(ctx, event); err != nil {
+				g.log.Error("could not persist approval request", "thread_id", event.StreamID, "error", err)
+			}
 		}
 		if event.Kind == "thread.bound" {
 			_ = g.bindCodexThread(ctx, event)
@@ -274,7 +276,15 @@ func (g *Gateway) upsertApproval(ctx context.Context, event protocol.StreamEvent
 	if len(p.Detail) == 0 {
 		p.Detail = event.Payload
 	}
-	_, err := g.store.DB.ExecContext(ctx, g.store.Q(`INSERT INTO approvals(id,thread_id,request_id,kind,detail,status,expires_at) VALUES(?,?,?,?,?,'pending',?) ON CONFLICT(thread_id,request_id) DO NOTHING`), store.NewID(), event.StreamID, p.RequestID, p.Kind, string(p.Detail), time.Now().UTC().Add(15*time.Minute))
+	_, err := g.store.DB.ExecContext(ctx, g.store.Q(`INSERT INTO approvals(id,thread_id,request_id,kind,detail,status,expires_at) VALUES(?,?,?,?,?,'pending',?)
+		ON CONFLICT(thread_id,request_id) DO UPDATE SET
+			kind=excluded.kind,
+			detail=excluded.detail,
+			status='pending',
+			expires_at=excluded.expires_at,
+			resolved_at=NULL,
+			decision=NULL
+		WHERE approvals.detail<>excluded.detail`), store.NewID(), event.StreamID, p.RequestID, p.Kind, string(p.Detail), time.Now().UTC().Add(15*time.Minute))
 	return err
 }
 
