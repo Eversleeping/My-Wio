@@ -102,6 +102,52 @@ func TestDiscoverProjectsRejectsMissingAndOfflineServers(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFilesQueuesAgentScanAndReturnsSnapshot(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "workspace-files-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.5"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project", RemoteURL: "https://example.com/project.git"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	workspace := workspaces[0]
+	api := resourceTestAPI(database)
+
+	initial := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspace.ID+"/files", workspace.ID, nil, api.workspaceFiles)
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"status":"idle"`) {
+		t.Fatalf("unexpected initial snapshot: %d %s", initial.Code, initial.Body.String())
+	}
+	queued := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/files/refresh", workspace.ID, map[string]any{}, api.refreshWorkspaceFiles)
+	if queued.Code != http.StatusAccepted {
+		t.Fatalf("file scan returned %d: %s", queued.Code, queued.Body.String())
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 || operations[0].Kind != "workspace.files" {
+		t.Fatalf("unexpected operations: %#v %v", operations, err)
+	}
+	var command protocol.WorkspaceFilesCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil || command.WorkspaceID != workspace.ID || command.Path != workspace.Path {
+		t.Fatalf("unexpected scan command: %#v %v", command, err)
+	}
+	snapshot, err := database.WorkspaceFileSnapshot(ctx, workspace.ID)
+	if err != nil || snapshot.Status != "scanning" {
+		t.Fatalf("unexpected scanning snapshot: %#v %v", snapshot, err)
+	}
+	if err := database.SaveWorkspaceFiles(ctx, workspace.ID, protocol.WorkspaceFilesResult{Files: []protocol.WorkspaceFile{{Path: "src", Kind: "directory"}, {Path: "src/main.ts", Kind: "file", Size: 12}}, Truncated: true}); err != nil {
+		t.Fatal(err)
+	}
+	completed := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspace.ID+"/files", workspace.ID, nil, api.workspaceFiles)
+	if completed.Code != http.StatusOK || !strings.Contains(completed.Body.String(), `"path":"src/main.ts"`) || !strings.Contains(completed.Body.String(), `"truncated":true`) {
+		t.Fatalf("unexpected completed snapshot: %d %s", completed.Code, completed.Body.String())
+	}
+}
+
 func TestListProjectsIncludesLatestFailedImport(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "import-status-token")
@@ -331,6 +377,17 @@ func threadResourceRequest(t *testing.T, method, target, threadID string, body a
 	t.Helper()
 	route := chi.NewRouteContext()
 	route.URLParams.Add("threadID", threadID)
+	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
+	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
+	return directJSONRequest(t, method, target, body, nil, func(w http.ResponseWriter, r *http.Request) {
+		handler(w, r.WithContext(requestContext))
+	})
+}
+
+func workspaceResourceRequest(t *testing.T, method, target, workspaceID string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+	route := chi.NewRouteContext()
+	route.URLParams.Add("workspaceID", workspaceID)
 	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
 	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
 	return directJSONRequest(t, method, target, body, nil, func(w http.ResponseWriter, r *http.Request) {

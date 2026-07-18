@@ -292,3 +292,54 @@ func TestUpsertApprovalStoresAndReopensReusedRequestID(t *testing.T) {
 		t.Fatalf("duplicate event reopened an already resolved approval: %#v", resolved)
 	}
 }
+
+func TestWorkspaceFilesOperationStoresAgentSnapshot(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "files-node", []string{"/srv"}, "files-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "files-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "files-node.local", "files-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	workspace := workspaces[0]
+	operationID, err := database.QueueOperation(ctx, server.ID, "workspace.files", protocol.WorkspaceFilesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}, "files-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.BeginWorkspaceFileScan(ctx, workspace.ID); err != nil {
+		t.Fatal(err)
+	}
+	resultData, err := json.Marshal(protocol.WorkspaceFilesResult{Files: []protocol.WorkspaceFile{{Path: "README.md", Kind: "file", Size: 42}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultPayload, err := json.Marshal(protocol.OperationResult{OperationID: operationID, Status: "succeeded", Data: resultData})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: resultPayload}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := database.WorkspaceFileSnapshot(ctx, workspace.ID)
+	if err != nil || snapshot.Status != "succeeded" || !strings.Contains(snapshot.Files, "README.md") {
+		t.Fatalf("unexpected workspace snapshot: %#v %v", snapshot, err)
+	}
+}

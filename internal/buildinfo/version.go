@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.2.4"
+var Version = "0.2.5"
 
 const MinimumSelfUpdateVersion = "0.2.0"
 

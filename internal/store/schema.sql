@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS codex_threads (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS workspace_file_snapshots (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  files TEXT NOT NULL DEFAULT '[]',
+  truncated INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   stream_id TEXT NOT NULL,

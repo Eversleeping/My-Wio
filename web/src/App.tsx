@@ -10,12 +10,17 @@ import {
   Boxes,
   Braces,
   Check,
+  ChevronDown,
   ChevronRight,
   Clipboard,
   Code2,
   Copy,
   Cpu,
   Database,
+  File as FileIcon,
+  Folder,
+  FolderOpen,
+  FolderTree,
   GitBranch,
   Gauge,
   HardDrive,
@@ -69,7 +74,9 @@ import type {
   StreamEvent,
   Summary,
   Thread,
-  Workspace
+  Workspace,
+  WorkspaceFile,
+  WorkspaceFilesSnapshot
 } from "./types";
 
 type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "monitoring" | "settings";
@@ -475,12 +482,78 @@ function CodexPage({ realtime, approvals, approvalSignal, reloadApprovals, notif
   useEffect(() => { if (!selected && threads.data?.[0]) setSelected(threads.data[0].id); }, [threads.data, selected]);
   useEffect(() => { if (approvalKey) setApprovalOpen(true); }, [approvalKey, approvalSignal]);
   return <div className="codex-layout">
-    <section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div>{(threads.data ?? []).length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : (threads.data ?? []).map(thread => <button key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.project_name} · {thread.server_name}</small></span><Status value={thread.status} /></button>)}</section>
+    <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{(threads.data ?? []).length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : (threads.data ?? []).map(thread => <button key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.project_name} · {thread.server_name}</small></span><Status value={thread.status} /></button>)}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} /></aside>
     <section className="session-panel">{active ? <SessionView thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={realtime} reloadApprovals={reloadApprovals} notify={notify} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={() => { setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
   </div>;
+}
+
+type FileTreeNode = { name: string; path: string; kind: WorkspaceFile["kind"]; size?: number; children: FileTreeNode[] };
+
+function WorkspaceFilesPanel({ workspaceID, realtime, notify }: { workspaceID: string | null; realtime: number; notify: (text: string) => void }) {
+  const { t } = useI18n();
+  const snapshot = useData<WorkspaceFilesSnapshot>(workspaceID ? `/workspaces/${workspaceID}/files` : null, `${realtime}:${workspaceID}`);
+  const [requestedWorkspace, setRequestedWorkspace] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const currentSnapshot = snapshot.data?.workspace_id === workspaceID ? snapshot.data : null;
+  const scanning = currentSnapshot?.status === "scanning";
+  const refresh = useCallback(async (silent = false) => {
+    if (!workspaceID) return;
+    try {
+      await post(`/workspaces/${workspaceID}/files/refresh`, {});
+      snapshot.reload();
+      if (!silent) notify(t("codex.fileScanQueued"));
+    } catch (error) {
+      notify(message(error));
+    }
+  }, [notify, snapshot.reload, t, workspaceID]);
+  useEffect(() => {
+    setExpanded(new Set());
+    setRequestedWorkspace("");
+  }, [workspaceID]);
+  useEffect(() => {
+    if (workspaceID && currentSnapshot?.status === "idle" && requestedWorkspace !== workspaceID) {
+      setRequestedWorkspace(workspaceID);
+      void refresh(true);
+    }
+  }, [currentSnapshot?.status, refresh, requestedWorkspace, workspaceID]);
+  const tree = useMemo(() => buildFileTree(currentSnapshot?.files ?? []), [currentSnapshot?.files]);
+  const toggle = (path: string) => setExpanded(current => { const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next; });
+  return <section className="workspace-files"><div className="panel-heading"><div><FolderTree size={17} /><h2>{t("codex.projectFiles")}</h2></div><button className="icon-button" type="button" disabled={!workspaceID || scanning} title={t("codex.refreshFiles")} onClick={() => void refresh()}>{scanning ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div><div className="workspace-file-body">{!workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : scanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div></section>;
+}
+
+function FileTreeItem({ node, depth, expanded, onToggle }: { node: FileTreeNode; depth: number; expanded: Set<string>; onToggle: (path: string) => void }) {
+  const directory = node.kind === "directory";
+  const open = directory && expanded.has(node.path);
+  const content = <><span className="file-tree-chevron">{directory ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}</span>{directory ? open ? <FolderOpen size={15} /> : <Folder size={15} /> : <FileIcon size={14} />}<span title={node.path}>{node.name}</span></>;
+  return <>{directory ? <button type="button" className="file-tree-row" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => onToggle(node.path)}>{content}</button> : <div className="file-tree-row" style={{ paddingLeft: 8 + depth * 14 }}>{content}</div>}{open && node.children.map(child => <FileTreeItem key={child.path} node={child} depth={depth + 1} expanded={expanded} onToggle={onToggle} />)}</>;
+}
+
+function buildFileTree(files: WorkspaceFile[]): FileTreeNode[] {
+  type MutableNode = Omit<FileTreeNode, "children"> & { children: Map<string, MutableNode> };
+  const root = new Map<string, MutableNode>();
+  for (const entry of files) {
+    const parts = entry.path.split("/").filter(Boolean);
+    let children = root;
+    for (let index = 0; index < parts.length; index++) {
+      const name = parts[index];
+      const path = parts.slice(0, index + 1).join("/");
+      const last = index === parts.length - 1;
+      let node = children.get(name);
+      if (!node) {
+        node = { name, path, kind: last ? entry.kind : "directory", size: last ? entry.size : undefined, children: new Map() };
+        children.set(name, node);
+      } else if (last) {
+        node.kind = entry.kind;
+        node.size = entry.size;
+      }
+      children = node.children;
+    }
+  }
+  const convert = (items: Map<string, MutableNode>): FileTreeNode[] => Array.from(items.values()).sort((left, right) => left.kind === right.kind ? left.name.localeCompare(right.name) : left.kind === "directory" ? -1 : 1).map(node => ({ ...node, children: convert(node.children) }));
+  return convert(root);
 }
 
 function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCreated: () => void }) {
@@ -566,8 +639,8 @@ function ToolEvent({ event, item }: { event: StreamEvent; item: Record<string, u
   const { t } = useI18n();
   const type = String(item?.type ?? "tool");
   const title = type === "commandExecution" ? t("codex.command") : type === "fileChange" ? t("codex.changes") : type === "webSearch" ? t("codex.webSearch") : type === "mcpToolCall" ? `${String(item?.server ?? "MCP")} / ${String(item?.tool ?? t("codex.toolCall"))}` : String(item?.tool ?? t("codex.toolCall"));
-  const summary = toolSummary(item);
-  const detail = toolDetail(item);
+  const summary = toolSummary(item, t);
+  const detail = toolDetail(item, t);
   return <details className={`tool-event ${type === "fileChange" ? "change" : ""}`}><summary><span>{type === "fileChange" ? <GitBranch size={15} /> : type === "commandExecution" ? <SquareTerminal size={15} /> : <Wrench size={15} />}<strong>{title}</strong>{summary && <small>{summary}</small>}</span><time>{formatTime(event.occurred_at)}</time></summary>{detail && <pre>{detail}</pre>}</details>;
 }
 
@@ -815,17 +888,23 @@ function extractText(payload: unknown): string {
   return "";
 }
 function errorText(payload: Record<string, unknown> | null) { return extractText(payload?.error) || extractText(payload); }
-function toolSummary(item: Record<string, unknown> | null) {
+function toolSummary(item: Record<string, unknown> | null, translate: (key: string, values?: Record<string, string | number>) => string) {
   if (!item) return "";
   const type = String(item.type ?? "");
   const primary = type === "commandExecution" ? String(item.command ?? "") : type === "webSearch" ? String(item.query ?? "") : type === "fileChange" && Array.isArray(item.changes) ? String(item.changes.length) : "";
   const status = typeof item.status === "string" ? item.status : "";
-  return [primary, status].filter(Boolean).join(" · ");
+  const statusLabel = status ? translate(`status.${status}`) : "";
+  const exitCode = type === "commandExecution" && typeof item.exitCode === "number" ? translate("codex.exitCode", { code: item.exitCode }) : "";
+  return [primary, statusLabel, exitCode].filter(Boolean).join(" · ");
 }
-function toolDetail(item: Record<string, unknown> | null) {
+function toolDetail(item: Record<string, unknown> | null, translate: (key: string, values?: Record<string, string | number>) => string) {
   if (!item) return "";
   const type = String(item.type ?? "");
-  if (type === "commandExecution") return [`$ ${String(item.command ?? "")}`, typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : ""].filter(Boolean).join("\n\n");
+  if (type === "commandExecution") {
+    const output = typeof item.aggregatedOutput === "string" && item.aggregatedOutput.trim() ? item.aggregatedOutput : translate("codex.noCommandOutput");
+    const exitCode = typeof item.exitCode === "number" ? translate("codex.exitCode", { code: item.exitCode }) : "";
+    return [`$ ${String(item.command ?? "")}`, output, exitCode].filter(Boolean).join("\n\n");
+  }
   if (type === "fileChange" && Array.isArray(item.changes)) return item.changes.map(change => { const value = asRecord(change); return value ? `${String(value.kind ?? "updated")} ${String(value.path ?? "")}\n${String(value.diff ?? "")}`.trim() : pretty(change); }).join("\n\n");
   if (type === "webSearch") return String(item.query ?? "");
   return pretty({ arguments: item.arguments, result: item.result, error: item.error });

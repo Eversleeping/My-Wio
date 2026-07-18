@@ -186,6 +186,23 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if operation.ServerID != serverID {
 			return errors.New("operation result server mismatch")
 		}
+		if operation.Kind == "workspace.files" {
+			var command protocol.WorkspaceFilesCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status == "succeeded" {
+				var files protocol.WorkspaceFilesResult
+				if err := json.Unmarshal(result.Data, &files); err != nil {
+					return err
+				}
+				if err := g.store.SaveWorkspaceFiles(ctx, command.WorkspaceID, files); err != nil {
+					return err
+				}
+			} else if err := g.store.FailWorkspaceFileScan(ctx, command.WorkspaceID, result.Message); err != nil {
+				return err
+			}
+		}
 		if err := g.store.CompleteOperation(ctx, result); err != nil {
 			return err
 		}

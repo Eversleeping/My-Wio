@@ -96,6 +96,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/servers/{serverID}/metrics", api.metrics)
 			private.Get("/projects", api.projects)
 			private.Get("/workspaces", api.workspaces)
+			private.Get("/workspaces/{workspaceID}/files", api.workspaceFiles)
+			private.Post("/workspaces/{workspaceID}/files/refresh", api.refreshWorkspaceFiles)
 			private.Post("/projects/import", api.importProject)
 			private.Post("/projects/discover", api.discoverProjects)
 			private.Post("/projects/{projectID}/retry-import", api.retryProjectImport)

@@ -62,6 +62,22 @@ type Inventory struct {
 	Repositories []Repository `json:"repositories"`
 }
 
+type WorkspaceFilesCommand struct {
+	WorkspaceID string `json:"workspace_id"`
+	Path        string `json:"path"`
+}
+
+type WorkspaceFile struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+	Size int64  `json:"size,omitempty"`
+}
+
+type WorkspaceFilesResult struct {
+	Files     []WorkspaceFile `json:"files"`
+	Truncated bool            `json:"truncated"`
+}
+
 type StreamEvent struct {
 	EventID    string          `json:"event_id"`
 	StreamID   string          `json:"stream_id"`
@@ -144,9 +160,10 @@ type HealthCheck struct {
 }
 
 type OperationResult struct {
-	OperationID string `json:"operation_id"`
-	Status      string `json:"status"`
-	Message     string `json:"message,omitempty"`
+	OperationID string          `json:"operation_id"`
+	Status      string          `json:"status"`
+	Message     string          `json:"message,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
 }
 
 type jsonCodec struct{}

@@ -438,6 +438,53 @@ func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	return out, err
 }
 
+func (s *Store) Workspace(ctx context.Context, id string) (Workspace, error) {
+	var workspace Workspace
+	err := s.DB.GetContext(ctx, &workspace, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.branch,w.commit_sha,w.dirty,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE w.id=?`), id)
+	return workspace, err
+}
+
+type WorkspaceFileSnapshot struct {
+	WorkspaceID string     `db:"workspace_id" json:"workspace_id"`
+	Files       string     `db:"files" json:"-"`
+	Truncated   int        `db:"truncated" json:"truncated"`
+	Status      string     `db:"status" json:"status"`
+	Error       string     `db:"error" json:"error"`
+	RequestedAt *time.Time `db:"requested_at" json:"requested_at"`
+	UpdatedAt   *time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Store) WorkspaceFileSnapshot(ctx context.Context, workspaceID string) (WorkspaceFileSnapshot, error) {
+	var snapshot WorkspaceFileSnapshot
+	err := s.DB.GetContext(ctx, &snapshot, s.Q("SELECT workspace_id,files,truncated,status,error,requested_at,updated_at FROM workspace_file_snapshots WHERE workspace_id=?"), workspaceID)
+	return snapshot, err
+}
+
+func (s *Store) BeginWorkspaceFileScan(ctx context.Context, workspaceID string) error {
+	now := time.Now().UTC()
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_file_snapshots(workspace_id,status,error,requested_at) VALUES(?,'scanning','',?) ON CONFLICT(workspace_id) DO UPDATE SET status='scanning',error='',requested_at=excluded.requested_at`), workspaceID, now)
+	return err
+}
+
+func (s *Store) SaveWorkspaceFiles(ctx context.Context, workspaceID string, result protocol.WorkspaceFilesResult) error {
+	files, err := json.Marshal(result.Files)
+	if err != nil {
+		return err
+	}
+	truncated := 0
+	if result.Truncated {
+		truncated = 1
+	}
+	now := time.Now().UTC()
+	_, err = s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_file_snapshots(workspace_id,files,truncated,status,error,requested_at,updated_at) VALUES(?,?,?,'succeeded','',?,?) ON CONFLICT(workspace_id) DO UPDATE SET files=excluded.files,truncated=excluded.truncated,status='succeeded',error='',updated_at=excluded.updated_at`), workspaceID, string(files), truncated, now, now)
+	return err
+}
+
+func (s *Store) FailWorkspaceFileScan(ctx context.Context, workspaceID, message string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_file_snapshots(workspace_id,status,error,requested_at) VALUES(?,'failed',?,?) ON CONFLICT(workspace_id) DO UPDATE SET status='failed',error=excluded.error`), workspaceID, message, time.Now().UTC())
+	return err
+}
+
 func (s *Store) QueueOperation(ctx context.Context, serverID, kind string, payload any, idempotency string) (string, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {

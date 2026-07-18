@@ -49,6 +49,52 @@ func TestWithinRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestListWorkspaceFilesFiltersGeneratedDirectoriesAndEnforcesRoots(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "project")
+	for _, directory := range []string{filepath.Join(root, "src"), filepath.Join(root, "node_modules", "package"), filepath.Join(root, ".git")} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{
+		filepath.Join(root, "README.md"):                       "readme",
+		filepath.Join(root, "src", "main.ts"):                  "export {}",
+		filepath.Join(root, "node_modules", "package", "x.js"): "ignored",
+		filepath.Join(root, ".git", "config"):                  "ignored",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := ListWorkspaceFiles(context.Background(), root, []string{base}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]string{}
+	for _, entry := range result.Files {
+		entries[entry.Path] = entry.Kind
+	}
+	if entries["README.md"] != "file" || entries["src"] != "directory" || entries["src/main.ts"] != "file" {
+		t.Fatalf("expected source files were not returned: %#v", entries)
+	}
+	if _, exists := entries["node_modules"]; exists {
+		t.Fatalf("node_modules was included: %#v", entries)
+	}
+	if _, exists := entries[".git"]; exists {
+		t.Fatalf(".git was included: %#v", entries)
+	}
+
+	limited, err := ListWorkspaceFiles(context.Background(), root, []string{base}, 2)
+	if err != nil || !limited.Truncated || len(limited.Files) != 2 {
+		t.Fatalf("unexpected limited result: %#v %v", limited, err)
+	}
+	if _, err := ListWorkspaceFiles(context.Background(), root, []string{filepath.Join(base, "other")}, 100); err == nil {
+		t.Fatal("workspace outside the configured roots was accepted")
+	}
+}
+
 func runGit(t *testing.T, directory string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, args...)...)

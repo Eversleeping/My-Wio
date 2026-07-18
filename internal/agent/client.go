@@ -221,11 +221,21 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	var restartPath string
+	var resultData json.RawMessage
 	var err error
 	if envelope.Kind == "agent.update" {
 		var command protocol.AgentUpdateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			restartPath, err = c.stageAgentUpdate(ctx, command)
+		}
+	} else if envelope.Kind == "workspace.files" {
+		var command protocol.WorkspaceFilesCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var result protocol.WorkspaceFilesResult
+			result, err = scanner.ListWorkspaceFiles(ctx, command.Path, c.inventoryRoots(), 4000)
+			if err == nil {
+				resultData, err = json.Marshal(result)
+			}
 		}
 	} else {
 		err = c.execute(ctx, envelope)
@@ -237,7 +247,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		message = err.Error()
 		c.log.Warn("operation failed", "operation_id", envelope.OperationID, "kind", envelope.Kind, "error", err)
 	}
-	if queueErr := c.queue("operation_result", protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192)}, true); queueErr != nil {
+	if queueErr := c.queue("operation_result", protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192), Data: resultData}, true); queueErr != nil {
 		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
 	}
 	if err == nil && restartPath != "" {

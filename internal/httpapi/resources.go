@@ -400,6 +400,68 @@ func (a *API) discoverProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
 }
 
+func (a *API) workspaceFiles(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	if _, err := a.store.Workspace(r.Context(), workspaceID); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	snapshot, err := a.store.WorkspaceFileSnapshot(r.Context(), workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusOK, map[string]any{"workspace_id": workspaceID, "files": []protocol.WorkspaceFile{}, "truncated": false, "status": "idle", "error": "", "requested_at": nil, "updated_at": nil})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace files")
+		return
+	}
+	var files []protocol.WorkspaceFile
+	if err := json.Unmarshal([]byte(snapshot.Files), &files); err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace file snapshot is invalid")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": workspaceID, "files": files, "truncated": snapshot.Truncated != 0, "status": snapshot.Status, "error": snapshot.Error, "requested_at": snapshot.RequestedAt, "updated_at": snapshot.UpdatedAt})
+}
+
+func (a *API) refreshWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	workspace, err := a.store.Workspace(r.Context(), workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	command := protocol.WorkspaceFilesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}
+	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.files", command, "workspace-files:"+workspace.ID+":"+store.NewID())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue workspace file scan")
+		return
+	}
+	if err := a.store.BeginWorkspaceFileScan(r.Context(), workspace.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start workspace file scan")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "workspace.files.scan", "workspace", workspace.ID, map[string]string{"operation_id": operationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
 func (a *API) threads(w http.ResponseWriter, r *http.Request) {
 	threads, err := a.store.ListThreads(r.Context())
 	if err != nil {
