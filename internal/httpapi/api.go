@@ -26,6 +26,7 @@ import (
 	"github.com/wio-platform/wio/internal/agentgateway"
 	"github.com/wio-platform/wio/internal/agentupdate"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
@@ -36,21 +37,22 @@ import (
 const sessionCookie = "wio_session"
 
 type API struct {
-	store        *store.Store
-	hub          *realtime.Hub
-	gateway      *agentgateway.Gateway
-	vault        *security.Vault
-	log          *slog.Logger
-	frontend     fs.FS
-	frontendHash string
-	bootstrapper serverBootstrapper
-	agentUpdates *agentupdate.Store
-	publicURL    string
-	secureCookie bool
-	setupMu      sync.Mutex
-	loginMu      sync.Mutex
-	bootstrapMu  sync.Mutex
-	login        map[string]*loginAttempt
+	store         *store.Store
+	hub           *realtime.Hub
+	gateway       *agentgateway.Gateway
+	vault         *security.Vault
+	log           *slog.Logger
+	frontend      fs.FS
+	frontendHash  string
+	bootstrapper  serverBootstrapper
+	agentUpdates  *agentupdate.Store
+	codexReleases *codexcli.ReleaseChecker
+	publicURL     string
+	secureCookie  bool
+	setupMu       sync.Mutex
+	loginMu       sync.Mutex
+	bootstrapMu   sync.Mutex
+	login         map[string]*loginAttempt
 }
 
 type loginAttempt struct {
@@ -63,18 +65,19 @@ type sessionContextKey struct{}
 func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool) http.Handler {
 	assetDir := os.Getenv("WIO_AGENT_ASSET_DIR")
 	api := &API{
-		store:        s,
-		hub:          hub,
-		gateway:      gateway,
-		vault:        vault,
-		log:          log,
-		frontend:     frontend,
-		frontendHash: fingerprintFrontend(frontend),
-		bootstrapper: sshbootstrap.New(assetDir),
-		agentUpdates: agentupdate.New(assetDir),
-		publicURL:    strings.TrimRight(strings.TrimSpace(publicURL), "/"),
-		secureCookie: strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
-		login:        make(map[string]*loginAttempt),
+		store:         s,
+		hub:           hub,
+		gateway:       gateway,
+		vault:         vault,
+		log:           log,
+		frontend:      frontend,
+		frontendHash:  fingerprintFrontend(frontend),
+		bootstrapper:  sshbootstrap.New(assetDir),
+		agentUpdates:  agentupdate.New(assetDir),
+		codexReleases: codexcli.NewReleaseChecker(nil, ""),
+		publicURL:     strings.TrimRight(strings.TrimSpace(publicURL), "/"),
+		secureCookie:  strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
+		login:         make(map[string]*loginAttempt),
 	}
 	router := chi.NewRouter()
 	router.Use(api.recoverer, api.securityHeaders)
@@ -125,7 +128,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/credential-profiles", api.saveCredentialProfile)
 			private.Delete("/credential-profiles/{profileID}", api.deleteCredentialProfile)
 			private.Get("/settings/codex-cli", api.codexCLISettings)
-			private.Post("/settings/codex-cli", api.saveCodexCLISettings)
+			private.Post("/settings/codex-cli/check-updates", api.checkCodexCLIUpdates)
 			private.Get("/deployment-targets", api.deploymentTargets)
 			private.Post("/deployment-targets", api.createDeploymentTarget)
 			private.Get("/deployments", api.deployments)

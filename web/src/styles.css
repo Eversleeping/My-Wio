@@ -152,9 +152,11 @@ textarea { resize: vertical; line-height: 1.5; }
 input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0 0 0 3px rgba(43, 144, 108, .12); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid.thirds { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.settings-form { display: flex; align-items: end; gap: 10px; padding: 16px; }
-.settings-form .field { width: min(320px, 100%); margin: 0; }
-.settings-form button { flex: 0 0 auto; }
+.codex-version-control { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; }
+.codex-version-summary { min-width: 0; display: grid; grid-template-columns: auto auto; align-items: center; gap: 5px 12px; }
+.codex-version-summary small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; font-weight: 680; text-transform: uppercase; }
+.codex-version-summary strong { font-size: 22px; letter-spacing: 0; }
+.codex-version-summary span { display: inline-flex; align-items: center; gap: 5px; color: var(--green); font-size: 12px; font-weight: 680; }
 .segmented-control { min-height: 42px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 17px; padding: 3px; background: #eef0ed; border: 1px solid #d8dcd8; border-radius: 6px; }
 .segmented-control button { min-width: 0; min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 8px; color: #656c72; background: transparent; border: 0; border-radius: 4px; font-size: 12px; font-weight: 680; line-height: 1.25; }
 .segmented-control button.active { color: #1f4f3e; background: #fff; box-shadow: 0 1px 3px rgba(26, 32, 36, .12); }
@@ -413,7 +415,8 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .timeseries-chart, .timeseries-chart:nth-child(3) { grid-column: auto; border-right: 0; }
   .timeseries-chart.resource-chart { grid-column: auto; }
   .form-grid, .form-grid.thirds { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  .settings-form { align-items: stretch; flex-direction: column; }
+  .codex-version-control { align-items: stretch; flex-direction: column; }
+  .codex-version-control .primary-button { width: 100%; }
   .totp-grid { grid-template-columns: minmax(0, 1fr); }
   .qr { margin: 0 auto; }
   .codex-layout { min-height: calc(100vh - 111px); grid-template-columns: 1fr; }

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -18,6 +17,8 @@ const codexCLITargetSetting = "codex_cli_target_version"
 
 type codexCLISettingsResponse struct {
 	TargetVersion string `json:"target_version"`
+	LatestVersion string `json:"latest_version,omitempty"`
+	Updated       bool   `json:"updated,omitempty"`
 }
 
 func (a *API) codexCLISettings(w http.ResponseWriter, r *http.Request) {
@@ -29,23 +30,33 @@ func (a *API) codexCLISettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, codexCLISettingsResponse{TargetVersion: version})
 }
 
-func (a *API) saveCodexCLISettings(w http.ResponseWriter, r *http.Request) {
-	var input codexCLISettingsResponse
-	if !decodeJSON(w, r, &input) {
+func (a *API) checkCodexCLIUpdates(w http.ResponseWriter, r *http.Request) {
+	current, err := a.store.Setting(r.Context(), codexCLITargetSetting, codexcli.DefaultTargetVersion)
+	if err != nil || !codexcli.ValidTargetVersion(current) {
+		writeError(w, http.StatusInternalServerError, "could not load Codex CLI settings")
 		return
 	}
-	input.TargetVersion = strings.TrimSpace(input.TargetVersion)
-	if !codexcli.ValidTargetVersion(input.TargetVersion) {
-		writeError(w, http.StatusBadRequest, "target_version must be a stable semantic version such as 0.144.4")
+	if a.codexReleases == nil {
+		writeError(w, http.StatusServiceUnavailable, "Codex CLI release checks are unavailable")
 		return
 	}
-	if err := a.store.SetSetting(r.Context(), codexCLITargetSetting, input.TargetVersion); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save Codex CLI settings")
+	latest, err := a.codexReleases.LatestStable(r.Context())
+	if err != nil {
+		a.log.Warn("could not check Codex CLI releases", "error", err)
+		writeError(w, http.StatusBadGateway, "could not check Codex CLI releases")
 		return
+	}
+	updated := codexcli.UpdateAvailable(current, latest)
+	if updated {
+		if err := a.store.SetSetting(r.Context(), codexCLITargetSetting, latest); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not save Codex CLI target version")
+			return
+		}
+		current = latest
 	}
 	session := currentSession(r)
-	_ = a.store.Audit(r.Context(), session.UserID, "codex.cli.target.update", "setting", codexCLITargetSetting, map[string]string{"version": input.TargetVersion}, clientIP(r))
-	writeJSON(w, http.StatusOK, input)
+	_ = a.store.Audit(r.Context(), session.UserID, "codex.cli.release.check", "setting", codexCLITargetSetting, map[string]any{"target_version": current, "latest_version": latest, "updated": updated}, clientIP(r))
+	writeJSON(w, http.StatusOK, codexCLISettingsResponse{TargetVersion: current, LatestVersion: latest, Updated: updated})
 }
 
 func (a *API) updateCodexCLI(w http.ResponseWriter, r *http.Request) {

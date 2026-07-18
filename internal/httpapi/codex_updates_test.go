@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -41,15 +41,34 @@ func TestCodexUpdateQueuesConfiguredTargetVersion(t *testing.T) {
 	}
 }
 
-func TestCodexTargetSettingRejectsNonSemanticVersion(t *testing.T) {
+func TestCheckCodexCLIUpdatesSavesLatestStableRelease(t *testing.T) {
 	database := openBootstrapTestStore(t)
+	if err := database.SetSetting(context.Background(), codexCLITargetSetting, "0.144.4"); err != nil {
+		t.Fatal(err)
+	}
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"tag_name":"rust-v0.145.0-alpha.1","prerelease":false},
+			{"tag_name":"rust-v0.144.5","prerelease":false}
+		]`))
+	}))
+	defer releases.Close()
 	api := resourceTestAPI(database)
-	request := httptest.NewRequest(http.MethodPost, "/api/settings/codex-cli", strings.NewReader(`{"target_version":"0.144.4; shutdown"}`))
+	api.codexReleases = codexcli.NewReleaseChecker(releases.Client(), releases.URL)
+	request := httptest.NewRequest(http.MethodPost, "/api/settings/codex-cli/check-updates", nil)
 	request = request.WithContext(context.WithValue(request.Context(), sessionContextKey{}, store.Session{UserID: "test-user"}))
 	response := httptest.NewRecorder()
-	api.saveCodexCLISettings(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("invalid target returned %d: %s", response.Code, response.Body.String())
+	api.checkCodexCLIUpdates(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("release check returned %d: %s", response.Code, response.Body.String())
+	}
+	var result codexCLISettingsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.TargetVersion != "0.144.5" || result.LatestVersion != "0.144.5" || !result.Updated {
+		t.Fatalf("unexpected release check result: %#v %v", result, err)
+	}
+	stored, err := database.Setting(context.Background(), codexCLITargetSetting, "")
+	if err != nil || stored != "0.144.5" {
+		t.Fatalf("latest release was not saved: %q %v", stored, err)
 	}
 }
 
