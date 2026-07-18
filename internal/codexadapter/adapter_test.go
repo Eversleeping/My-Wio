@@ -3,6 +3,8 @@ package codexadapter
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -186,5 +188,26 @@ func TestResetForcesPersistedThreadResume(t *testing.T) {
 	adapter.reset(nil)
 	if len(adapter.threads) != 0 || len(adapter.turns) != 0 {
 		t.Fatalf("adapter retained stale thread state: threads=%#v turns=%#v", adapter.threads, adapter.turns)
+	}
+}
+
+func TestReconfigureEnvironmentRejectsActiveTurn(t *testing.T) {
+	adapter := NewWithEnvironment("codex", []string{"OLD=value"}, slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.StreamEvent) error { return nil })
+	adapter.turns["wio-thread"] = turnState{CodexThread: "codex-thread", TurnID: "turn-id", Active: true}
+	updated := false
+	err := adapter.ReconfigureEnvironment([]string{"NEW=value"}, func() error { updated = true; return nil })
+	if err == nil || updated {
+		t.Fatalf("active turn did not block reconfiguration: updated=%v err=%v", updated, err)
+	}
+}
+
+func TestCompletedTurnAllowsEnvironmentReconfiguration(t *testing.T) {
+	adapter := NewWithEnvironment("codex", []string{"OLD=value"}, slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.StreamEvent) error { return nil })
+	adapter.threads["codex-thread"] = "wio-thread"
+	adapter.turns["wio-thread"] = turnState{CodexThread: "codex-thread", TurnID: "turn-id", Active: true}
+	adapter.handleNotification(rpcMessage{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"codex-thread"}`)})
+	updated := false
+	if err := adapter.ReconfigureEnvironment([]string{"NEW=value"}, func() error { updated = true; return nil }); err != nil || !updated || len(adapter.environment) != 1 || adapter.environment[0] != "NEW=value" {
+		t.Fatalf("completed turn did not allow reconfiguration: updated=%v environment=%#v err=%v", updated, adapter.environment, err)
 	}
 }

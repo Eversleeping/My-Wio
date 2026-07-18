@@ -257,6 +257,11 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 		a.log.Warn("SSH server bootstrap failed", "host", strings.TrimSpace(input.Host), "error", err)
 		return sshbootstrap.InstallResult{}, err
 	}
+	if input.CodexProfileID != "" {
+		if err := a.store.SetServerCredentialProfiles(r.Context(), result.ServerID, input.CodexProfileID, input.GitProfileID); err != nil {
+			a.log.Warn("could not record installed server credential profiles", "server_id", result.ServerID, "error", err)
+		}
+	}
 
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "server.ssh.bootstrap", "server", result.ServerID, map[string]any{

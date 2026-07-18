@@ -215,7 +215,12 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if err := g.store.CompleteOperation(ctx, result); err != nil {
+		if operation.Kind == "credentials.configure" {
+			err = g.store.CompleteCredentialUpdate(ctx, result)
+		} else {
+			err = g.store.CompleteOperation(ctx, result)
+		}
+		if err != nil {
 			return err
 		}
 		if (operation.Kind == "codex.turn.start" || operation.Kind == "codex.turn.rewrite") && result.Status == "failed" {

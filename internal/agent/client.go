@@ -296,6 +296,12 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.codex.Decide(command)
+	case "credentials.configure":
+		var command protocol.ConfigureCredentialsCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.configureCredentials(command)
 	case "deploy.start":
 		var command protocol.DeployCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

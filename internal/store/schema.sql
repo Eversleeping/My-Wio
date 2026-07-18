@@ -169,6 +169,21 @@ CREATE TABLE IF NOT EXISTS credential_profiles (
   UNIQUE(kind, name)
 );
 
+CREATE TABLE IF NOT EXISTS server_credential_profiles (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  codex_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  git_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS server_credential_updates (
+  operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  codex_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  git_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS deployment_targets (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

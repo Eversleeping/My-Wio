@@ -3,7 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"strings"
 	"time"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 type CredentialProfile struct {
@@ -15,6 +19,56 @@ type CredentialProfile struct {
 	Model      string    `db:"model" json:"model"`
 	Ciphertext string    `db:"ciphertext" json:"-"`
 	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Store) SetServerCredentialProfiles(ctx context.Context, serverID, codexProfileID, gitProfileID string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,?,NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`), serverID, codexProfileID, gitProfileID, time.Now().UTC())
+	return err
+}
+
+func (s *Store) QueueCredentialUpdate(ctx context.Context, serverID, ciphertext, codexProfileID, gitProfileID, idempotency string) (string, error) {
+	if !strings.HasPrefix(ciphertext, "v1:") {
+		return "", errors.New("encrypted operation payload must use a supported Vault format")
+	}
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	operationID := NewID()
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, serverID, "credentials.configure", ciphertext, idempotency, now); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO server_credential_updates(operation_id,server_id,codex_profile_id,git_profile_id,created_at) VALUES(?,?,?,NULLIF(?,''),?)"), operationID, serverID, codexProfileID, gitProfileID, now); err != nil {
+		return "", err
+	}
+	return operationID, tx.Commit()
+}
+
+func (s *Store) CompleteCredentialUpdate(ctx context.Context, result protocol.OperationResult) error {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,completed_at=? WHERE id=?"), result.Status, result.Message, time.Now().UTC(), result.OperationID); err != nil {
+		return err
+	}
+	if result.Status == "succeeded" {
+		dbResult, err := tx.ExecContext(ctx, s.Q(`INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) SELECT server_id,codex_profile_id,git_profile_id,? FROM server_credential_updates WHERE operation_id=? ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`), time.Now().UTC(), result.OperationID)
+		if err != nil {
+			return err
+		}
+		rows, err := dbResult.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return sql.ErrNoRows
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ListCredentialProfiles(ctx context.Context) ([]CredentialProfile, error) {

@@ -137,6 +137,10 @@ type Server struct {
 	AgentTargetVersion   string     `db:"-" json:"agent_target_version"`
 	AgentUpdateAvailable bool       `db:"-" json:"agent_update_available"`
 	AgentUpdateSupported bool       `db:"-" json:"agent_update_supported"`
+	CodexProfileID       string     `db:"codex_profile_id" json:"codex_profile_id"`
+	CodexProfileName     string     `db:"codex_profile_name" json:"codex_profile_name"`
+	GitProfileID         string     `db:"git_profile_id" json:"git_profile_id"`
+	GitProfileName       string     `db:"git_profile_name" json:"git_profile_name"`
 }
 
 type ServerMetadata struct {
@@ -147,13 +151,13 @@ type ServerMetadata struct {
 
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
-	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id WHERE s.revoked_at IS NULL ORDER BY s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	return out, err
 }
 
 func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	var server Server
-	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	return server, err
 }
 

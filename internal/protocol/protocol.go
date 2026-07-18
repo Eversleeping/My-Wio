@@ -138,6 +138,16 @@ type AgentUpdateCommand struct {
 	Packages map[string]AgentUpdatePackage `json:"packages"`
 }
 
+type ConfigureCredentialsCommand struct {
+	CodexAPIURL string `json:"codex_api_url"`
+	CodexAPIKey string `json:"codex_api_key"`
+	CodexModel  string `json:"codex_model"`
+	GitEndpoint string `json:"git_endpoint,omitempty"`
+	GitUsername string `json:"git_username,omitempty"`
+	GitToken    string `json:"git_token,omitempty"`
+	RemoveGit   bool   `json:"remove_git,omitempty"`
+}
+
 type DeployCommand struct {
 	DeploymentID string            `json:"deployment_id"`
 	TargetID     string            `json:"target_id"`

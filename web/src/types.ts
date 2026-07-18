@@ -1,5 +1,5 @@
 export interface Session { username: string; csrf_token: string; expires_at: string }
-export interface Server { id: string; name: string; hostname: string; status: string; agent_version: string; agent_target_version: string; agent_update_available: boolean; agent_update_supported: boolean; codex_version: string; codex_ready: number; address: string; configuration: string; notes: string; last_seen_at: string | null; created_at: string }
+export interface Server { id: string; name: string; hostname: string; status: string; agent_version: string; agent_target_version: string; agent_update_available: boolean; agent_update_supported: boolean; codex_version: string; codex_ready: number; address: string; configuration: string; notes: string; codex_profile_id: string; codex_profile_name: string; git_profile_id: string; git_profile_name: string; last_seen_at: string | null; created_at: string }
 export interface SSHHostKey { fingerprint: string; key_type: string }
 export interface SSHBootstrapResult { server_id: string; hostname: string; architecture: string; warnings: string[] }
 export interface SSHBootstrapStreamEvent { type: "progress" | "heartbeat" | "complete" | "error"; step?: string; current?: number; total?: number; code?: string; error?: string; detail?: string; result?: SSHBootstrapResult }

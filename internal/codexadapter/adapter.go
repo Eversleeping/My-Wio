@@ -42,6 +42,7 @@ type Adapter struct {
 type turnState struct {
 	CodexThread string
 	TurnID      string
+	Active      bool
 }
 
 type approvalRequest struct {
@@ -133,11 +134,16 @@ func (a *Adapter) startTurn(ctx context.Context, command protocol.StartTurnComma
 func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartTurnCommand, codexThread string, request requestFunc) error {
 	a.mu.Lock()
 	a.threads[codexThread] = command.ThreadID
-	a.turns[command.ThreadID] = turnState{CodexThread: codexThread}
+	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, Active: true}
 	a.mu.Unlock()
 	params := turnStartParams(command, codexThread)
 	result, err := request(ctx, "turn/start", params)
 	if err != nil {
+		a.mu.Lock()
+		state := a.turns[command.ThreadID]
+		state.Active = false
+		a.turns[command.ThreadID] = state
+		a.mu.Unlock()
 		return err
 	}
 	var response struct {
@@ -146,10 +152,15 @@ func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartT
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(result, &response); err != nil {
+		a.mu.Lock()
+		state := a.turns[command.ThreadID]
+		state.Active = false
+		a.turns[command.ThreadID] = state
+		a.mu.Unlock()
 		return err
 	}
 	a.mu.Lock()
-	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, TurnID: response.Turn.ID}
+	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, TurnID: response.Turn.ID, Active: true}
 	a.mu.Unlock()
 	return a.emitEvent(command.ThreadID, "turn.accepted", map[string]string{"codex_thread_id": codexThread, "turn_id": response.Turn.ID})
 }
@@ -291,6 +302,30 @@ func (a *Adapter) Decide(command protocol.ApprovalDecisionCommand) error {
 func (a *Adapter) Close() error {
 	a.startMu.Lock()
 	defer a.startMu.Unlock()
+	a.stopLocked(errors.New("Codex app-server closed"))
+	return nil
+}
+
+func (a *Adapter) ReconfigureEnvironment(environment []string, update func() error) error {
+	a.startMu.Lock()
+	defer a.startMu.Unlock()
+	a.mu.Lock()
+	for _, turn := range a.turns {
+		if turn.Active {
+			a.mu.Unlock()
+			return errors.New("Codex has an active turn; retry the credential update after it completes")
+		}
+	}
+	a.mu.Unlock()
+	if err := update(); err != nil {
+		return err
+	}
+	a.environment = append([]string(nil), environment...)
+	a.stopLocked(errors.New("Codex credentials changed"))
+	return nil
+}
+
+func (a *Adapter) stopLocked(reason error) {
 	if a.cancel != nil {
 		a.cancel()
 	}
@@ -300,8 +335,7 @@ func (a *Adapter) Close() error {
 	if a.process != nil && a.process.Process != nil {
 		_ = a.process.Process.Kill()
 	}
-	a.reset(errors.New("Codex app-server closed"))
-	return nil
+	a.reset(reason)
 }
 
 func (a *Adapter) ensureStarted(ctx context.Context) error {
@@ -345,7 +379,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	go func() {
 		err := process.Wait()
 		a.log.Warn("Codex app-server exited", "error", err)
-		a.reset(fmt.Errorf("Codex app-server exited: %w", err))
+		a.resetProcess(process, fmt.Errorf("Codex app-server exited: %w", err))
 	}()
 	initializeContext, initializeCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer initializeCancel()
@@ -493,12 +527,26 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 			wioThread = threadID
 		}
 	}
+	if wioThread != "" && terminalTurnNotification(message.Method) {
+		state := a.turns[wioThread]
+		state.Active = false
+		a.turns[wioThread] = state
+	}
 	a.mu.Unlock()
 	if wioThread == "" {
 		return
 	}
 	kind := "codex." + strings.ReplaceAll(message.Method, "/", ".")
 	_ = a.emit(protocol.StreamEvent{StreamID: wioThread, Kind: kind, OccurredAt: time.Now().UTC(), Payload: append(json.RawMessage(nil), message.Params...)})
+}
+
+func terminalTurnNotification(method string) bool {
+	switch method {
+	case "turn/completed", "turn/failed", "turn/cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *Adapter) emitEvent(streamID, kind string, payload any) error {
@@ -511,6 +559,28 @@ func (a *Adapter) emitEvent(streamID, kind string, payload any) error {
 
 func (a *Adapter) reset(reason error) {
 	a.mu.Lock()
+	a.process = nil
+	a.stdin = nil
+	a.cancel = nil
+	for key, response := range a.pending {
+		delete(a.pending, key)
+		close(response)
+	}
+	a.approve = make(map[string]approvalRequest)
+	a.threads = make(map[string]string)
+	a.turns = make(map[string]turnState)
+	a.mu.Unlock()
+	if reason != nil {
+		a.log.Debug("Codex adapter reset", "reason", reason)
+	}
+}
+
+func (a *Adapter) resetProcess(process *exec.Cmd, reason error) {
+	a.mu.Lock()
+	if a.process != process {
+		a.mu.Unlock()
+		return
+	}
 	a.process = nil
 	a.stdin = nil
 	a.cancel = nil
