@@ -251,11 +251,12 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-tree-error span { overflow-wrap: anywhere; }
 .file-tree-note { margin: 7px 9px 0; padding: 7px 8px; color: #77561b; background: var(--amber-soft); border: 1px solid #ead5ac; border-radius: 5px; font-size: 10px; }
 .session-area { min-width: 0; min-height: 0; display: grid; overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
-.session-pane-tabs { display: none; align-items: center; gap: 3px; padding: 7px 9px; background: #f4f6f3; border-bottom: 1px solid var(--line); }
+.session-pane-tabs { display: flex; align-items: center; gap: 3px; padding: 7px 9px; background: #f4f6f3; border-bottom: 1px solid var(--line); }
 .session-pane-tabs button { min-height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 10px; color: #5c666d; background: transparent; border: 0; border-radius: 5px; font-size: 11px; }
 .session-pane-tabs button.active { color: #174c3a; background: #fff; box-shadow: 0 0 0 1px #cfd8d2; }
 .session-panes { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
-.session-panes.has-preview { grid-template-columns: repeat(2, minmax(340px, 1fr)); }
+.session-panes.has-preview.conversation-active .file-preview-panel { display: none; }
+.session-panes.has-preview.preview-active .session-panel { display: none; }
 .session-panel { min-width: 0; min-height: 0; display: grid; overflow: hidden; grid-template-rows: auto minmax(280px, 1fr) auto; }
 .session-panel > .error-state, .session-panel > .empty { grid-row: 1 / -1; }
 .session-header { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
@@ -264,7 +265,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .session-header span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
 .session-header i { width: 3px; height: 3px; background: #aab0b5; border-radius: 50%; }
 .session-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; }
-.file-preview-panel { min-width: 0; min-height: 0; display: grid; overflow: hidden; background: #fbfcfb; border-left: 1px solid var(--line); grid-template-rows: auto minmax(0, 1fr); }
+.file-preview-panel { min-width: 0; min-height: 0; display: grid; overflow: hidden; background: #fbfcfb; grid-template-rows: auto minmax(0, 1fr); }
 .file-preview-header { min-width: 0; min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px 8px 14px; background: #fff; border-bottom: 1px solid var(--line); }
 .file-preview-header > div:first-child { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .file-preview-header > div:first-child > svg { flex: 0 0 auto; color: #657078; }
@@ -432,14 +433,6 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .nav-scrim { display: none; }
-
-@media (max-width: 1180px) {
-  .session-pane-tabs { display: flex; }
-  .session-panes.has-preview { grid-template-columns: minmax(0, 1fr); }
-  .session-panes.has-preview.conversation-active .file-preview-panel { display: none; }
-  .session-panes.has-preview.preview-active .session-panel { display: none; }
-  .file-preview-panel { border-left: 0; }
-}
 
 @media (max-width: 1120px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
