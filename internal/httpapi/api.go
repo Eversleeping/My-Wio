@@ -129,6 +129,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Delete("/credential-profiles/{profileID}", api.deleteCredentialProfile)
 			private.Get("/settings/codex-cli", api.codexCLISettings)
 			private.Post("/settings/codex-cli/check-updates", api.checkCodexCLIUpdates)
+			private.Post("/settings/codex-cli/select-version", api.selectCodexCLIVersion)
 			private.Get("/deployment-targets", api.deploymentTargets)
 			private.Post("/deployment-targets", api.createDeploymentTarget)
 			private.Get("/deployments", api.deployments)

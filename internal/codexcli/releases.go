@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,20 +40,49 @@ func NewReleaseChecker(client *http.Client, url string) *ReleaseChecker {
 }
 
 func (c *ReleaseChecker) LatestStable(ctx context.Context) (string, error) {
+	versions, err := c.RecentStable(ctx, 1)
+	if err != nil {
+		return "", err
+	}
+	return versions[0], nil
+}
+
+// RecentStable returns the newest formal Rust-tagged releases in descending
+// semantic-version order. Preview, draft, and non-Rust tags are ignored.
+func (c *ReleaseChecker) RecentStable(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+	seen := make(map[string]struct{})
+	versions := make([]string, 0, limit)
 	for page := 1; page <= githubReleaseMaxPages; page++ {
 		releases, err := c.loadPage(ctx, page)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		latest := latestStableVersion(releases)
-		if latest != "" {
-			return latest, nil
+		for _, release := range releases {
+			version, ok := stableVersion(release)
+			if !ok {
+				continue
+			}
+			if _, ok := seen[version]; ok {
+				continue
+			}
+			seen[version] = struct{}{}
+			versions = append(versions, version)
 		}
-		if len(releases) < githubReleasePageSize {
+		if len(versions) >= limit || len(releases) < githubReleasePageSize {
 			break
 		}
 	}
-	return "", ErrNoStableRelease
+	if len(versions) == 0 {
+		return nil, ErrNoStableRelease
+	}
+	sort.Slice(versions, func(i, j int) bool { return versionGreater(versions[i], versions[j]) })
+	if len(versions) > limit {
+		versions = versions[:limit]
+	}
+	return versions, nil
 }
 
 type githubRelease struct {
@@ -99,19 +129,14 @@ func (c *ReleaseChecker) loadPage(ctx context.Context, page int) ([]githubReleas
 	return releases, nil
 }
 
-func latestStableVersion(releases []githubRelease) string {
-	latest := ""
-	for _, release := range releases {
-		if release.Draft || release.Prerelease || !strings.HasPrefix(release.TagName, "rust-v") {
-			continue
-		}
-		version := strings.TrimPrefix(release.TagName, "rust-v")
-		if !ValidTargetVersion(version) {
-			continue
-		}
-		if latest == "" || UpdateAvailable(latest, version) {
-			latest = version
-		}
+func stableVersion(release githubRelease) (string, bool) {
+	if release.Draft || release.Prerelease || !strings.HasPrefix(release.TagName, "rust-v") {
+		return "", false
 	}
-	return latest
+	version := strings.TrimPrefix(release.TagName, "rust-v")
+	return version, ValidTargetVersion(version)
+}
+
+func versionGreater(left, right string) bool {
+	return UpdateAvailable(right, left)
 }
