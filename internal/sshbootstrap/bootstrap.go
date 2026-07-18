@@ -59,6 +59,9 @@ type InstallRequest struct {
 	CodexAPIURL         string
 	CodexAPIKey         string
 	CodexModel          string
+	GitEndpoint         string
+	GitUsername         string
+	GitToken            string
 	Progress            func(InstallProgress)
 }
 
@@ -179,6 +182,23 @@ install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
 	if _, err := run(client, elevated(root, "chown wio-agent:wio-agent /var/lib/wio-agent/.codex/config.toml")); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not protect Codex configuration", ErrInstallation)
 	}
+	if request.GitEndpoint != "" {
+		request.report("configuring_git", 0, 0)
+		credential, err := gitCredential(request.GitEndpoint, request.GitUsername, request.GitToken)
+		if err != nil {
+			return InstallResult{}, ErrInvalidTarget
+		}
+		if err := upload(client, root, "/var/lib/wio-agent/.git-credentials", "0600", []byte(credential+"\n"), nil); err != nil {
+			return InstallResult{}, fmt.Errorf("%w: could not install Git credentials: %v", ErrInstallation, err)
+		}
+		gitConfig := "[credential]\n\thelper = store --file=/var/lib/wio-agent/.git-credentials\n"
+		if err := upload(client, root, "/var/lib/wio-agent/.gitconfig", "0600", []byte(gitConfig), nil); err != nil {
+			return InstallResult{}, fmt.Errorf("%w: could not install Git configuration: %v", ErrInstallation, err)
+		}
+		if _, err := run(client, elevated(root, "chown wio-agent:wio-agent /var/lib/wio-agent/.git-credentials /var/lib/wio-agent/.gitconfig")); err != nil {
+			return InstallResult{}, fmt.Errorf("%w: could not protect Git credentials", ErrInstallation)
+		}
+	}
 
 	codexReady := probe.CodexReady
 	resultWarnings := make([]string, 0, 4)
@@ -244,6 +264,11 @@ func validateInstallRequest(request InstallRequest) error {
 	}
 	if !validAPIURL(request.CodexAPIURL) || !validAPIKey(request.CodexAPIKey) || !validModel(request.CodexModel) {
 		return ErrInvalidTarget
+	}
+	if request.GitEndpoint != "" {
+		if !validAPIURL(request.GitEndpoint) || strings.TrimSpace(request.GitUsername) == "" || len(request.GitUsername) > 256 || strings.ContainsAny(request.GitUsername, "\r\n\x00") || !validAPIKey(request.GitToken) {
+			return ErrInvalidTarget
+		}
 	}
 	return nil
 }
@@ -505,6 +530,8 @@ func upload(client *ssh.Client, root bool, destination, mode string, content []b
 		"/etc/systemd/system/wio-agent.service": "0644",
 		"/etc/wio-agent/codex.key":              "0600",
 		"/var/lib/wio-agent/.codex/config.toml": "0600",
+		"/var/lib/wio-agent/.git-credentials":   "0600",
+		"/var/lib/wio-agent/.gitconfig":         "0600",
 	}
 	if allowed[destination] != mode {
 		return ErrInstallation
@@ -606,6 +633,15 @@ func codexConfiguration(apiURL, model string) string {
 	// Codex omits the entire reasoning object for custom model names unless this
 	// capability is forced on, even when turn/start contains an explicit effort.
 	return fmt.Sprintf("model = %s\nmodel_provider = \"wio_api\"\nmodel_supports_reasoning_summaries = true\n\n[model_providers.wio_api]\nname = \"Wio API\"\nbase_url = %s\nenv_key = \"WIO_CODEX_API_KEY\"\nwire_api = \"responses\"\n", strconv.Quote(strings.TrimSpace(model)), strconv.Quote(strings.TrimRight(strings.TrimSpace(apiURL), "/")))
+}
+
+func gitCredential(endpoint, username, token string) (string, error) {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(endpoint), "/"))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", ErrInvalidTarget
+	}
+	parsed.User = url.UserPassword(strings.TrimSpace(username), token)
+	return parsed.String(), nil
 }
 
 func runTrimmed(client *ssh.Client, command string) (string, error) {

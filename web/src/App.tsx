@@ -63,6 +63,7 @@ import type {
   Alert,
   Approval,
   AuditEntry,
+  CredentialProfile,
   Deployment,
   DeploymentTarget,
   Metric,
@@ -301,6 +302,9 @@ function Dashboard({ realtime, onNavigate }: { realtime: number; onNavigate: (vi
 function ServersPage({ realtime, notify }: PageProps) {
   const { t } = useI18n();
   const servers = useData<Server[]>("/servers", realtime);
+  const credentialProfiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
+  const codexProfiles = (credentialProfiles.data ?? []).filter(profile => profile.kind === "codex");
+  const gitProfiles = (credentialProfiles.data ?? []).filter(profile => profile.kind === "git");
   const [dialog, setDialog] = useState(false);
   const [step, setStep] = useState<"form" | "fingerprint" | "complete">("form");
   const [busy, setBusy] = useState(false);
@@ -315,11 +319,15 @@ function ServersPage({ realtime, notify }: PageProps) {
   const [metadataForm, setMetadataForm] = useState({ address: "", configuration: "", notes: "" });
   const [form, setForm] = useState({
     name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
-    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: defaultCodexModel
+    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: "", gitProfileID: ""
   });
+  useEffect(() => {
+    const firstCodexProfile = credentialProfiles.data?.find(profile => profile.kind === "codex");
+    if (dialog && firstCodexProfile) setForm(current => current.codexProfileID ? current : { ...current, codexProfileID: firstCodexProfile.id });
+  }, [credentialProfiles.data, dialog]);
   const reset = () => {
     setStep("form"); setError(""); setHostKey(null); setResult(null); setInstallLogs([]); setBusy(false);
-    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexAPIURL: "https://api.openai.com/v1", codexAPIKey: "", codexModel: defaultCodexModel });
+    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: codexProfiles[0]?.id ?? "", gitProfileID: "" });
   };
   const open = () => { reset(); setDialog(true); };
   const close = () => { if (busy) return; setDialog(false); reset(); };
@@ -345,7 +353,7 @@ function ServersPage({ realtime, notify }: PageProps) {
         private_key_passphrase: form.authMethod === "private_key" ? form.privateKeyPassphrase : "",
         configuration: form.configuration.trim(), notes: form.notes.trim(),
         host_key_fingerprint: hostKey.fingerprint,
-        codex_api_url: form.codexAPIURL.trim(), codex_api_key: form.codexAPIKey, codex_model: form.codexModel.trim()
+        codex_profile_id: form.codexProfileID, git_profile_id: form.gitProfileID
       }, event => {
         if (event.type === "progress" && event.step) {
           setInstallLogs(current => {
@@ -364,7 +372,7 @@ function ServersPage({ realtime, notify }: PageProps) {
       if (streamedFailure) throw streamedFailure;
       if (!installed) throw new APIError(502, t("server.error.stream_incomplete"), "stream_incomplete");
       setResult(installed); setStep("complete"); servers.reload(); notify(t("server.installed"));
-      setForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", codexAPIKey: "" }));
+      setForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "" }));
     } catch (err) { setError(enrollmentMessage(err, t)); } finally { setBusy(false); }
   };
   const choosePrivateKey = async (file?: File) => {
@@ -403,9 +411,8 @@ function ServersPage({ realtime, notify }: PageProps) {
     <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={form.port} onChange={e => setForm({ ...form, port: e.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} placeholder="root / ubuntu / ec2-user" required /></Field></div>
     <Field label={t("server.authMethod")}><select value={form.authMethod} onChange={e => setForm({ ...form, authMethod: e.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option></select></Field>
     {form.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={e => void choosePrivateKey(e.target.files?.[0])} required={!form.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={form.privateKeyPassphrase} onChange={e => setForm({ ...form, privateKeyPassphrase: e.target.value })} placeholder={t("common.optional")} /></Field></div> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field>}
-    <div className="form-divider"><span>{t("server.codexAPI")}</span></div>
-    <div className="form-grid"><Field label={t("server.codexAPIURL")}><input type="url" value={form.codexAPIURL} onChange={e => setForm({ ...form, codexAPIURL: e.target.value })} required /></Field><Field label={t("server.codexModel")}><CodexModelPicker value={form.codexModel} onChange={codexModel => setForm({ ...form, codexModel })} required /></Field></div>
-    <Field label={t("server.codexAPIKey")}><input type="password" autoComplete="new-password" value={form.codexAPIKey} onChange={e => setForm({ ...form, codexAPIKey: e.target.value })} required /></Field>
+    <div className="form-divider"><span>{t("server.credentialProfiles")}</span></div>
+    <div className="form-grid"><Field label={t("server.codexProfile")}><select value={form.codexProfileID} onChange={e => setForm({ ...form, codexProfileID: e.target.value })} required><option value="">{t(codexProfiles.length ? "server.selectCodexProfile" : "server.noCodexProfiles")}</option>{codexProfiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} · {profile.model}</option>)}</select></Field><Field label={t("server.gitProfile")}><select value={form.gitProfileID} onChange={e => setForm({ ...form, gitProfileID: e.target.value })}><option value="">{t("server.noGitProfile")}</option>{gitProfiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} · {profile.username}</option>)}</select></Field></div>
     <DialogActions><button type="button" className="secondary-button" onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{busy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
   </form> : step === "fingerprint" && hostKey ? <div className="enrollment-step">
     {error && <ErrorBanner text={error} />}
@@ -764,11 +771,43 @@ function MonitoringPage({ realtime }: { realtime: number }) {
 
 function SettingsPage({ realtime, notify }: PageProps) {
   const { t } = useI18n();
+  const profiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
   const secrets = useData<SecretSet[]>("/secret-sets", realtime);
   const audit = useData<AuditEntry[]>("/audit", realtime);
-  const [dialog, setDialog] = useState(false); const [name, setName] = useState(""); const [lines, setLines] = useState("");
-  const submit = async (event: FormEvent) => { event.preventDefault(); const values: Record<string, string> = {}; for (const line of lines.split("\n")) { const index = line.indexOf("="); if (index > 0) values[line.slice(0, index).trim()] = line.slice(index + 1); } try { await post("/secret-sets", { name, values }); setDialog(false); secrets.reload(); setLines(""); notify(t("settings.secretSaved")); } catch (err) { notify(message(err)); } };
-  return <div className="page-stack"><Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} onClick={async () => { if (!confirm(t("settings.confirmDelete", { name: item.name }))) return; await remove(`/secret-sets/${item.id}`); secrets.reload(); }}><X size={16} /></button></td></tr>)}</DataTable></Section><Section title={t("settings.auditLog")} icon={<Clipboard size={18} />}><DataTable headers={[t("column.action"), t("column.resource"), t("column.address"), t("column.time")]} empty={t("settings.noAudit")}>{(audit.data ?? []).map(item => <tr key={item.id}><td><code>{item.action}</code></td><td>{item.resource_type}{item.resource_id ? ` · ${shortSHA(item.resource_id)}` : ""}</td><td><code>{item.ip_address}</code></td><td>{formatDate(item.occurred_at)}</td></tr>)}</DataTable></Section><Dialog open={dialog} title={t("settings.secretSetTitle")} onClose={() => setDialog(false)}><form onSubmit={submit}><Field label={t("settings.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("settings.environmentValues")}><textarea value={lines} onChange={e => setLines(e.target.value)} rows={8} placeholder={"DATABASE_URL=...\nAPI_TOKEN=..."} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("settings.encryptSave")}</button></DialogActions></form></Dialog></div>;
+  const [profileDialog, setProfileDialog] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileForm, setProfileForm] = useState({ id: "", kind: "codex" as "codex" | "git", name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, secret: "" });
+  const [secretDialog, setSecretDialog] = useState(false);
+  const [name, setName] = useState("");
+  const [lines, setLines] = useState("");
+  const openProfile = (profile?: CredentialProfile) => {
+    setProfileForm(profile ? { id: profile.id, kind: profile.kind, name: profile.name, endpoint: profile.endpoint, username: profile.username, model: profile.kind === "codex" ? profile.model || defaultCodexModel : "", secret: "" } : { id: "", kind: "codex", name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, secret: "" });
+    setProfileDialog(true);
+  };
+  const changeProfileKind = (kind: "codex" | "git") => setProfileForm(current => current.id ? current : { ...current, kind, endpoint: kind === "codex" ? "https://api.openai.com/v1" : "https://github.com", username: "", model: kind === "codex" ? defaultCodexModel : "", secret: "" });
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault(); setProfileBusy(true);
+    try {
+      await post("/credential-profiles", profileForm);
+      setProfileDialog(false); profiles.reload(); notify(t("settings.profileSaved"));
+    } catch (err) { notify(message(err)); } finally { setProfileBusy(false); }
+  };
+  const submitSecretSet = async (event: FormEvent) => { event.preventDefault(); const values: Record<string, string> = {}; for (const line of lines.split("\n")) { const index = line.indexOf("="); if (index > 0) values[line.slice(0, index).trim()] = line.slice(index + 1); } try { await post("/secret-sets", { name, values }); setSecretDialog(false); secrets.reload(); setLines(""); notify(t("settings.secretSaved")); } catch (err) { notify(message(err)); } };
+  return <div className="page-stack">
+    <Section title={t("settings.credentialProfiles")} icon={<KeyRound size={18} />} action={<button className="primary-button" onClick={() => openProfile()}><Plus size={17} />{t("settings.newProfile")}</button>}>
+      <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code">{profile.endpoint}</code></td><td>{profile.kind === "codex" ? <code>{profile.model}</code> : <span className="inline"><UserRound size={14} />{profile.username}</span>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} onClick={async () => { if (!confirm(t("settings.confirmDeleteProfile", { name: profile.name }))) return; await remove(`/credential-profiles/${profile.id}`); profiles.reload(); notify(t("settings.profileDeleted")); }}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
+    </Section>
+    <Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setSecretDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} onClick={async () => { if (!confirm(t("settings.confirmDelete", { name: item.name }))) return; await remove(`/secret-sets/${item.id}`); secrets.reload(); }}><X size={16} /></button></td></tr>)}</DataTable></Section>
+    <Section title={t("settings.auditLog")} icon={<Clipboard size={18} />}><DataTable headers={[t("column.action"), t("column.resource"), t("column.address"), t("column.time")]} empty={t("settings.noAudit")}>{(audit.data ?? []).map(item => <tr key={item.id}><td><code>{item.action}</code></td><td>{item.resource_type}{item.resource_id ? ` · ${shortSHA(item.resource_id)}` : ""}</td><td><code>{item.ip_address}</code></td><td>{formatDate(item.occurred_at)}</td></tr>)}</DataTable></Section>
+    <Dialog open={profileDialog} title={t(profileForm.id ? "settings.editProfile" : "settings.newProfile")} onClose={() => { if (!profileBusy) setProfileDialog(false); }} wide><form onSubmit={saveProfile}>
+      <div className="segmented-control" role="tablist" aria-label={t("settings.type")}><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "codex"} aria-selected={profileForm.kind === "codex"} className={profileForm.kind === "codex" ? "active" : ""} onClick={() => changeProfileKind("codex")}><Code2 size={15} />{t("settings.codexType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "git"} aria-selected={profileForm.kind === "git"} className={profileForm.kind === "git" ? "active" : ""} onClick={() => changeProfileKind("git")}><GitBranch size={15} />{t("settings.gitType")}</button></div>
+      <div className="form-grid"><Field label={t("settings.name")}><input value={profileForm.name} onChange={e => setProfileForm({ ...profileForm, name: e.target.value })} required /></Field><Field label={t("settings.endpoint")}><input type="url" value={profileForm.endpoint} onChange={e => setProfileForm({ ...profileForm, endpoint: e.target.value })} required /></Field></div>
+      {profileForm.kind === "codex" ? <Field label={t("server.codexModel")}><CodexModelPicker value={profileForm.model} onChange={model => setProfileForm({ ...profileForm, model })} required /></Field> : <Field label={t("settings.gitUsername")}><input value={profileForm.username} onChange={e => setProfileForm({ ...profileForm, username: e.target.value })} autoComplete="username" required /></Field>}
+      <Field label={t(profileForm.kind === "codex" ? "server.codexAPIKey" : "settings.gitToken")}><input type="password" autoComplete="new-password" value={profileForm.secret} onChange={e => setProfileForm({ ...profileForm, secret: e.target.value })} placeholder={profileForm.id ? t("settings.keepExistingSecret") : ""} required={!profileForm.id} /></Field>
+      <DialogActions><button type="button" className="secondary-button" disabled={profileBusy} onClick={() => setProfileDialog(false)}>{t("common.cancel")}</button><button className="primary-button" disabled={profileBusy}>{profileBusy ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />}{t("settings.encryptSave")}</button></DialogActions>
+    </form></Dialog>
+    <Dialog open={secretDialog} title={t("settings.secretSetTitle")} onClose={() => setSecretDialog(false)}><form onSubmit={submitSecretSet}><Field label={t("settings.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("settings.environmentValues")}><textarea value={lines} onChange={e => setLines(e.target.value)} rows={8} placeholder={"DATABASE_URL=...\nAPI_TOKEN=..."} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setSecretDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("settings.encryptSave")}</button></DialogActions></form></Dialog>
+  </div>;
 }
 
 type ChartPoint = { time: string; values: number[] };

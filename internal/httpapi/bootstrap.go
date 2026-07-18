@@ -46,6 +46,13 @@ type sshBootstrapInput struct {
 	CodexAPIURL        string   `json:"codex_api_url"`
 	CodexAPIKey        string   `json:"codex_api_key"`
 	CodexModel         string   `json:"codex_model"`
+	CodexProfileID     string   `json:"codex_profile_id"`
+	GitProfileID       string   `json:"git_profile_id"`
+	GitEndpoint        string   `json:"-"`
+	GitUsername        string   `json:"-"`
+	GitToken           string   `json:"-"`
+	CodexProfileName   string   `json:"-"`
+	GitProfileName     string   `json:"-"`
 }
 
 type bootstrapStreamEvent struct {
@@ -60,8 +67,9 @@ type bootstrapStreamEvent struct {
 }
 
 var (
-	errEnrollmentToken = errors.New("could not create enrollment token")
-	errEnrollmentStore = errors.New("could not create enrollment")
+	errEnrollmentToken   = errors.New("could not create enrollment token")
+	errEnrollmentStore   = errors.New("could not create enrollment")
+	errCredentialProfile = errors.New("credential profile is invalid")
 )
 
 func (input sshConnectionInput) target() sshbootstrap.Target {
@@ -212,6 +220,11 @@ func decodeSSHBootstrapInput(w http.ResponseWriter, r *http.Request) (sshBootstr
 }
 
 func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progress func(sshbootstrap.InstallProgress)) (sshbootstrap.InstallResult, error) {
+	var err error
+	input, err = a.resolveBootstrapCredentialProfiles(r.Context(), input)
+	if err != nil {
+		return sshbootstrap.InstallResult{}, err
+	}
 	token, err := security.RandomToken(24)
 	if err != nil {
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentToken, err)
@@ -232,6 +245,9 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 		CodexAPIURL:         strings.TrimSpace(input.CodexAPIURL),
 		CodexAPIKey:         input.CodexAPIKey,
 		CodexModel:          strings.TrimSpace(input.CodexModel),
+		GitEndpoint:         input.GitEndpoint,
+		GitUsername:         input.GitUsername,
+		GitToken:            input.GitToken,
 		Progress:            progress,
 	})
 	if err != nil {
@@ -245,9 +261,44 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "server.ssh.bootstrap", "server", result.ServerID, map[string]any{
 		"name": input.Name, "host": strings.TrimSpace(input.Host), "port": input.Port, "user": strings.TrimSpace(input.User),
-		"architecture": result.Architecture, "scan_roots": input.ScanRoots, "codex_api_url": strings.TrimSpace(input.CodexAPIURL), "codex_model": strings.TrimSpace(input.CodexModel), "warnings": result.Warnings,
+		"architecture": result.Architecture, "scan_roots": input.ScanRoots, "codex_api_url": strings.TrimSpace(input.CodexAPIURL), "codex_model": strings.TrimSpace(input.CodexModel),
+		"codex_profile_id": input.CodexProfileID, "codex_profile_name": input.CodexProfileName, "git_profile_id": input.GitProfileID, "git_profile_name": input.GitProfileName, "warnings": result.Warnings,
 	}, clientIP(r))
 	return result, nil
+}
+
+func (a *API) resolveBootstrapCredentialProfiles(ctx context.Context, input sshBootstrapInput) (sshBootstrapInput, error) {
+	input.CodexProfileID = strings.TrimSpace(input.CodexProfileID)
+	input.GitProfileID = strings.TrimSpace(input.GitProfileID)
+	if input.CodexProfileID != "" {
+		profile, err := a.store.CredentialProfile(ctx, input.CodexProfileID)
+		if err != nil || profile.Kind != "codex" || a.vault == nil {
+			return sshBootstrapInput{}, errCredentialProfile
+		}
+		var secret string
+		if err := a.vault.Decrypt(profile.Ciphertext, &secret); err != nil {
+			return sshBootstrapInput{}, errCredentialProfile
+		}
+		input.CodexAPIURL = profile.Endpoint
+		input.CodexAPIKey = secret
+		input.CodexModel = profile.Model
+		input.CodexProfileName = profile.Name
+	}
+	if input.GitProfileID != "" {
+		profile, err := a.store.CredentialProfile(ctx, input.GitProfileID)
+		if err != nil || profile.Kind != "git" || a.vault == nil {
+			return sshBootstrapInput{}, errCredentialProfile
+		}
+		var secret string
+		if err := a.vault.Decrypt(profile.Ciphertext, &secret); err != nil {
+			return sshBootstrapInput{}, errCredentialProfile
+		}
+		input.GitEndpoint = profile.Endpoint
+		input.GitUsername = profile.Username
+		input.GitToken = secret
+		input.GitProfileName = profile.Name
+	}
+	return input, nil
 }
 
 func (a *API) agentControlURL(r *http.Request) string {
@@ -271,6 +322,8 @@ func (a *API) writeBootstrapError(w http.ResponseWriter, err error) {
 
 func bootstrapErrorInfo(err error) (int, string, string) {
 	switch {
+	case errors.Is(err, errCredentialProfile):
+		return http.StatusBadRequest, "credential_profile_invalid", "the selected credential profile is unavailable or invalid"
 	case errors.Is(err, errEnrollmentToken):
 		return http.StatusInternalServerError, "enrollment_token_failed", "could not create enrollment token"
 	case errors.Is(err, errEnrollmentStore):

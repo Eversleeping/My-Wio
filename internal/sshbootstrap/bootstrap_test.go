@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,6 +74,21 @@ func TestEnrollmentServerID(t *testing.T) {
 	}
 	if actual := enrollmentServerID("unexpected output"); actual != "" {
 		t.Fatalf("got %q", actual)
+	}
+}
+
+func TestGitCredentialEscapesUsernameAndToken(t *testing.T) {
+	credential, err := gitCredential("https://github.com", "user@example.com", "token:/with special")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, ok := parsed.User.Password()
+	if !ok || parsed.User.Username() != "user@example.com" || password != "token:/with special" || parsed.Host != "github.com" {
+		t.Fatalf("unexpected Git credential URL: %q", credential)
 	}
 }
 
