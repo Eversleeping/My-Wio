@@ -215,7 +215,6 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		Username string `json:"username"`
-		Password string `json:"password"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -225,7 +224,14 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "username must contain 3 to 64 characters")
 		return
 	}
-	passwordHash, err := security.HashPassword(input.Password)
+	// Keep the legacy non-null database field populated with a random, unusable
+	// value. Authentication is intentionally TOTP-only.
+	passwordToken, err := security.RandomToken(32)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not generate administrator credential")
+		return
+	}
+	passwordHash, err := security.HashPassword(passwordToken)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -264,14 +270,13 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		Username string `json:"username"`
-		Password string `json:"password"`
 		Code     string `json:"code"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
 	user, err := a.store.UserByName(r.Context(), strings.TrimSpace(input.Username))
-	if err != nil || !security.VerifyPassword(user.PasswordHash, input.Password) {
+	if err != nil {
 		a.loginFailed(ip)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return

@@ -23,8 +23,8 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 
 ## 功能特性
 
-- 单管理员密码加 TOTP 认证，并提供一次性恢复码
-- Argon2id 密码哈希、会话与 Agent 令牌哈希、CSRF 防护、严格 Cookie 和登录限流
+- 单管理员用户名加 TOTP 认证，并提供一次性恢复码；登录不再需要密码
+- 会话与 Agent 令牌哈希、CSRF 防护、严格 Cookie 和登录限流
 - 使用 AES-256-GCM Vault 保护 TOTP 密钥和命名部署密钥集
 - 使用短期一次性令牌注册 Linux Agent
 - 采集心跳、CPU、内存、磁盘和网络指标，维护仓库清单并产生阈值告警
@@ -102,7 +102,7 @@ go build ./cmd/controlplane ./cmd/agent
    docker compose --env-file .env -f deploy/docker-compose.yml ps
    ```
 
-4. 打开 `https://<WIO_DOMAIN>`，创建管理员，扫描 TOTP 二维码，并离线保存恢复码。
+4. 打开 `https://<WIO_DOMAIN>`，创建管理员，扫描 TOTP 二维码，并离线保存恢复码。登录时只需要用户名和动态验证码；恢复码可作为一次性备用登录凭据。
 
 生产镜像会将 Vite 构建结果嵌入 Go 二进制文件。PostgreSQL 数据、Caddy 证书和 Caddy 状态均使用命名卷保存。
 
@@ -163,6 +163,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec -T postgres \
 ## 安全边界
 
 - Wio 面向可信的单管理员环境。
+- 管理员登录仅校验 TOTP 或一次性恢复码；TOTP 密钥或任一未使用恢复码泄露即等同于管理员凭据泄露。
 - Agent 令牌和注册令牌只显示一次，控制面仅保存其哈希值。
 - SSH 主机指纹必须经过确认；SSH 密码和私钥仅在单次注册请求内使用，不写入控制面数据库。
 - Vault 密钥集及服务器凭据预设保存后，浏览器不会再次收到其中的明文；Codex API Key 与 Git Token 只以 Vault 密文写入数据库。

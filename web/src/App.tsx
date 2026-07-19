@@ -267,13 +267,12 @@ function LoadingScreen() {
 function SetupScreen({ onReady }: { onReady: () => void }) {
   const { t } = useI18n();
   const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("");
   const [result, setResult] = useState<{ totp_uri: string; totp_secret: string; recovery_codes: string[] } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
-    try { setResult(await post("/setup", { username, password })); } catch (err) { setError(message(err)); } finally { setBusy(false); }
+    try { setResult(await post("/setup", { username })); } catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
   return <div className="auth-layout">
     <section className="auth-panel">
@@ -281,7 +280,6 @@ function SetupScreen({ onReady }: { onReady: () => void }) {
       {!result ? <form onSubmit={submit}>
         <div className="section-heading"><h1>{t("auth.createAdmin")}</h1><span className="status-tag neutral"><LockKeyhole size={14} />{t("auth.singleAdmin")}</span></div>
         <Field label={t("auth.username")}><input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required /></Field>
-        <Field label={t("auth.password")}><input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" minLength={12} required /></Field>
         {error && <ErrorBanner text={error} />}
         <button className="primary-button full" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ShieldCheck size={17} />}{t("auth.createAdmin")}</button>
       </form> : <div>
@@ -296,19 +294,17 @@ function SetupScreen({ onReady }: { onReady: () => void }) {
 function LoginScreen({ onLogin }: { onLogin: (session: Session) => void }) {
   const { t } = useI18n();
   const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
-    try { onLogin(await post<Session>("/auth/login", { username, password, code })); } catch (err) { setError(message(err)); } finally { setBusy(false); }
+    try { onLogin(await post<Session>("/auth/login", { username, code })); } catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
   return <div className="auth-layout"><section className="auth-panel compact">
     <div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong><LanguageSwitch /></div>
     <form onSubmit={submit}><h1>{t("auth.signIn")}</h1>
       <Field label={t("auth.username")}><input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required /></Field>
-      <Field label={t("auth.password")}><input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /></Field>
       <Field label={t("auth.code")}><input value={code} onChange={e => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" required /></Field>
       {error && <ErrorBanner text={error} />}
       <button className="primary-button full" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <LockKeyhole size={17} />}{t("auth.signIn")}</button>

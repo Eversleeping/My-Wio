@@ -35,7 +35,7 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 	frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
 	handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true)
 
-	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"username": "admin", "password": "correct horse battery staple"}, nil)
+	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"username": "admin"}, nil)
 	if setup.Code != http.StatusCreated {
 		t.Fatalf("setup returned %d: %s", setup.Code, setup.Body.String())
 	}
@@ -49,7 +49,7 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	login := requestJSON(t, handler, http.MethodPost, "/api/auth/login", map[string]string{"username": "admin", "password": "correct horse battery staple", "code": code}, nil)
+	login := requestJSON(t, handler, http.MethodPost, "/api/auth/login", map[string]string{"username": "admin", "code": code}, nil)
 	if login.Code != http.StatusOK {
 		t.Fatalf("login returned %d: %s", login.Code, login.Body.String())
 	}
