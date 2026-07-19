@@ -1301,6 +1301,14 @@ function extractImageSources(payload: unknown): string[] {
   const seenSources = new Set<string>();
   const seenObjects = new Set<object>();
   const visit = (value: unknown) => {
+    const directSource = safeImageSource(value);
+    if (directSource) {
+      if (!seenSources.has(directSource)) {
+        seenSources.add(directSource);
+        sources.push(directSource);
+      }
+      return;
+    }
     if (Array.isArray(value)) {
       for (const item of value) visit(item);
       return;
