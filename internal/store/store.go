@@ -652,6 +652,48 @@ func (s *Store) FailWorkspaceFilePreview(ctx context.Context, workspaceID, path,
 	return err
 }
 
+type CodexSnapshot struct {
+	ScopeType    string     `db:"scope_type" json:"scope_type"`
+	ScopeID      string     `db:"scope_id" json:"scope_id"`
+	Kind         string     `db:"kind" json:"kind"`
+	Data         string     `db:"data" json:"-"`
+	Supported    int        `db:"supported" json:"supported"`
+	Reason       string     `db:"reason" json:"reason"`
+	CodexVersion string     `db:"codex_version" json:"codex_version"`
+	Status       string     `db:"status" json:"status"`
+	Error        string     `db:"error" json:"error"`
+	RequestedAt  *time.Time `db:"requested_at" json:"requested_at"`
+	UpdatedAt    *time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Store) CodexSnapshot(ctx context.Context, scopeType, scopeID, kind string) (CodexSnapshot, error) {
+	var snapshot CodexSnapshot
+	err := s.DB.GetContext(ctx, &snapshot, s.Q("SELECT scope_type,scope_id,kind,data,supported,reason,codex_version,status,error,requested_at,updated_at FROM codex_snapshots WHERE scope_type=? AND scope_id=? AND kind=?"), scopeType, scopeID, kind)
+	return snapshot, err
+}
+
+func (s *Store) BeginCodexSnapshot(ctx context.Context, scopeType, scopeID, kind string) error {
+	now := time.Now().UTC()
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO codex_snapshots(scope_type,scope_id,kind,status,error,requested_at) VALUES(?,?,?,'loading','',?) ON CONFLICT(scope_type,scope_id,kind) DO UPDATE SET status='loading',error='',requested_at=excluded.requested_at`), scopeType, scopeID, kind, now)
+	return err
+}
+
+func (s *Store) SaveCodexSnapshot(ctx context.Context, scopeType, scopeID, kind string, result protocol.CodexCapabilityResult) error {
+	data := result.Data
+	if len(data) == 0 { data = json.RawMessage(`{}`) }
+	var valid any
+	if err := json.Unmarshal(data, &valid); err != nil { return err }
+	supported := 0; if result.Supported { supported = 1 }
+	now := time.Now().UTC()
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO codex_snapshots(scope_type,scope_id,kind,data,supported,reason,codex_version,status,error,requested_at,updated_at) VALUES(?,?,?,?,?,?,?,'succeeded','',?,?) ON CONFLICT(scope_type,scope_id,kind) DO UPDATE SET data=excluded.data,supported=excluded.supported,reason=excluded.reason,codex_version=excluded.codex_version,status='succeeded',error='',updated_at=excluded.updated_at`), scopeType, scopeID, kind, string(data), supported, result.Reason, result.CodexVersion, now, now)
+	return err
+}
+
+func (s *Store) FailCodexSnapshot(ctx context.Context, scopeType, scopeID, kind, message string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO codex_snapshots(scope_type,scope_id,kind,status,error,requested_at) VALUES(?,?,?,'failed',?,?) ON CONFLICT(scope_type,scope_id,kind) DO UPDATE SET status='failed',error=excluded.error,updated_at=excluded.requested_at`), scopeType, scopeID, kind, message, time.Now().UTC())
+	return err
+}
+
 func (s *Store) QueueOperation(ctx context.Context, serverID, kind string, payload any, idempotency string) (string, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {

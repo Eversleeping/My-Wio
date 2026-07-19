@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,25 @@ func TestOpenMigratesLegacyCredentialProfilesWithCommitIdentity(t *testing.T) {
 	profile, err := database.CredentialProfile(context.Background(), "legacy-git")
 	if err != nil || profile.CommitName != "" || profile.CommitEmail != "" {
 		t.Fatalf("legacy profile migration failed: %#v %v", profile, err)
+	}
+}
+
+func TestFailedCodexSnapshotRetainsCachedData(t *testing.T) {
+	database := testStore(t)
+	ctx := context.Background()
+	result := protocol.CodexCapabilityResult{Supported: true, CodexVersion: "0.139.0", Data: json.RawMessage(`{"goal":{"objective":"ship"}}`)}
+	if err := database.SaveCodexSnapshot(ctx, "thread", "thread-1", "goal", result); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.FailCodexSnapshot(ctx, "thread", "thread-1", "goal", "timeout"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := database.CodexSnapshot(ctx, "thread", "thread-1", "goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status != "failed" || snapshot.Error != "timeout" || !strings.Contains(snapshot.Data, "ship") {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 }
 

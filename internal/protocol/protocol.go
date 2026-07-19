@@ -91,6 +91,71 @@ type WorkspaceFilePreviewResult struct {
 	Truncated bool   `json:"truncated"`
 }
 
+type CodexSnapshotCommand struct {
+	ScopeType    string `json:"scope_type"`
+	ScopeID      string `json:"scope_id"`
+	ThreadID     string `json:"thread_id,omitempty"`
+	CodexThread  string `json:"codex_thread_id,omitempty"`
+	Workspace    string `json:"workspace,omitempty"`
+	CodexVersion string `json:"codex_version,omitempty"`
+}
+
+type CodexGoalSetCommand struct {
+	CodexSnapshotCommand
+	Objective   *string `json:"objective"`
+	Status      *string `json:"status,omitempty"`
+	TokenBudget *int64  `json:"token_budget,omitempty"`
+}
+
+type CodexCapabilityResult struct {
+	Supported    bool            `json:"supported"`
+	Reason       string          `json:"reason,omitempty"`
+	CodexVersion string          `json:"codex_version,omitempty"`
+	Data         json.RawMessage `json:"data,omitempty"`
+}
+
+type CodexGoal struct {
+	ThreadID        string `json:"thread_id"`
+	Objective       string `json:"objective"`
+	Status          string `json:"status"`
+	TokenBudget     *int64 `json:"token_budget"`
+	TokensUsed      int64  `json:"tokens_used"`
+	TimeUsedSeconds int64  `json:"time_used_seconds"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
+}
+
+type CodexSkill struct {
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Path             string `json:"path"`
+	Scope            string `json:"scope"`
+	Enabled          bool   `json:"enabled"`
+	DisplayName      string `json:"display_name,omitempty"`
+	ShortDescription string `json:"short_description,omitempty"`
+}
+
+type CodexMCPServer struct {
+	Name                  string   `json:"name"`
+	AuthStatus            string   `json:"auth_status"`
+	ServerName            string   `json:"server_name"`
+	ServerVersion         string   `json:"server_version"`
+	Tools                 []string `json:"tools"`
+	ResourceCount         int      `json:"resource_count"`
+	ResourceTemplateCount int      `json:"resource_template_count"`
+}
+
+type CodexRateLimit struct {
+	Name        string `json:"name"`
+	UsedPercent *int64 `json:"used_percent,omitempty"`
+	ResetsAt    string `json:"resets_at,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+}
+
+type CodexStatusSnapshot struct {
+	RateLimits []CodexRateLimit `json:"rate_limits"`
+}
+
 type StreamEvent struct {
 	EventID    string          `json:"event_id"`
 	StreamID   string          `json:"stream_id"`

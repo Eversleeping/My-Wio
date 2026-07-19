@@ -10,6 +10,12 @@ export interface WorkspaceFile { path: string; kind: "directory" | "file" | "sym
 export interface WorkspaceFilesSnapshot { workspace_id: string; files: WorkspaceFile[]; truncated: boolean; status: "idle" | "scanning" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
 export interface WorkspaceFilePreview { workspace_id: string; path: string; content: string; size: number; truncated: boolean; status: "idle" | "loading" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
 export interface Thread { id: string; workspace_id: string; project_id: string; codex_thread_id: string; title: string; status: string; path: string; server_id: string; server_name: string; project_name: string; created_at: string; updated_at: string; pinned_at: string | null; project_pinned_at: string | null; project_hidden_at: string | null }
+export type CodexSnapshotState = "idle" | "loading" | "refreshing" | "succeeded" | "failed" | "unsupported";
+export interface CodexSnapshot<T> { status: CodexSnapshotState; supported: boolean; reason: string; codex_version: string; data: T | null; error: string; requested_at: string | null; updated_at: string | null }
+export interface CodexGoal { thread_id: string; objective: string; status: string; token_budget: number | null; tokens_used: number; time_used_seconds: number; created_at: number; updated_at: number }
+export interface CodexStatusData { model?: string; reasoning_effort?: string; approval_policy?: string; rate_limits?: Array<{ name: string; used_percent?: number; resets_at?: string; detail?: string }>; [key: string]: unknown }
+export interface CodexMCPServer { name: string; auth_status: string; server_name: string; server_version: string; tools: string[]; resource_count: number; resource_template_count: number }
+export interface CodexSkill { name: string; description: string; path: string; scope: "user" | "repo" | "system" | "admin" | string; enabled: boolean; display_name?: string; short_description?: string }
 export interface StreamEvent { event_id: string; stream_id: string; sequence: number; kind: string; occurred_at: string; payload: unknown }
 export interface Approval { id: string; thread_id: string; request_id: string; kind: string; detail: unknown; status: string; title: string; expires_at: string }
 export interface SecretSet { id: string; name: string; updated_at: string }

@@ -806,6 +806,47 @@ func enrollResourceTestServer(t *testing.T, database *store.Store, token string)
 	return server
 }
 
+func TestCodexGoalRefreshQueuesFixedOperation(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "codex-goal-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.9", CodexVersion: "codex-cli 0.144.5", CodexReady: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "Goal test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	route := chi.NewRouteContext()
+	route.URLParams.Add("threadID", thread.ID)
+	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
+	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
+	response := directJSONRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/goal/refresh", map[string]any{}, nil, func(w http.ResponseWriter, r *http.Request) { api.refreshThreadGoal(w, r.WithContext(requestContext)) })
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("refresh returned %d: %s", response.Code, response.Body.String())
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 || operations[0].Kind != "codex.goal.get" {
+		t.Fatalf("unexpected operations: %#v %v", operations, err)
+	}
+	var command protocol.CodexSnapshotCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil || command.ScopeID != thread.ID || command.CodexVersion != "codex-cli 0.144.5" {
+		t.Fatalf("unexpected command: %#v %v", command, err)
+	}
+	snapshot, err := database.CodexSnapshot(ctx, "thread", thread.ID, "goal")
+	if err != nil || snapshot.Status != "loading" {
+		t.Fatalf("unexpected snapshot: %#v %v", snapshot, err)
+	}
+}
+
 func resourceTestAPI(database *store.Store) *API {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	vault := security.DevVault()

@@ -120,6 +120,21 @@ CREATE TABLE IF NOT EXISTS workspace_file_previews (
   updated_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS codex_snapshots (
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}',
+  supported INTEGER NOT NULL DEFAULT 1,
+  reason TEXT NOT NULL DEFAULT '',
+  codex_version TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP,
+  PRIMARY KEY(scope_type, scope_id, kind)
+);
+
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   stream_id TEXT NOT NULL,

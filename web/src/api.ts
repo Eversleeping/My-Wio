@@ -40,6 +40,10 @@ export function patch<T>(path: string, body: unknown): Promise<T> {
   return api<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 }
 
+export function put<T>(path: string, body: unknown): Promise<T> {
+  return api<T>(path, { method: "PUT", body: JSON.stringify(body) });
+}
+
 export async function postStream<T>(path: string, body: unknown, onEvent: (event: T) => void): Promise<void> {
   const headers = new Headers({ "Content-Type": "application/json" });
   if (csrfToken) headers.set("X-CSRF-Token", csrfToken);

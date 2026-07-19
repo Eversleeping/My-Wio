@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -108,6 +109,299 @@ func (a *Adapter) RewriteTurn(ctx context.Context, command protocol.RewriteTurnC
 		return err
 	}
 	return a.rewriteTurn(ctx, command, a.request)
+}
+
+func (a *Adapter) CodexOperation(ctx context.Context, kind string, payload json.RawMessage) (protocol.CodexCapabilityResult, error) {
+	if err := a.ensureStarted(ctx); err != nil {
+		return protocol.CodexCapabilityResult{}, err
+	}
+	return a.codexOperation(ctx, kind, payload, a.request)
+}
+
+func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.RawMessage, request requestFunc) (protocol.CodexCapabilityResult, error) {
+	var base protocol.CodexSnapshotCommand
+	if err := json.Unmarshal(payload, &base); err != nil {
+		return protocol.CodexCapabilityResult{}, err
+	}
+	method := ""
+	var params any
+	switch kind {
+	case "codex.goal.get", "codex.goal.clear":
+		if base.CodexThread == "" {
+			return unsupported(base.CodexVersion, "Codex thread is not initialized"), nil
+		}
+		method = map[string]string{"codex.goal.get": "thread/goal/get", "codex.goal.clear": "thread/goal/clear"}[kind]
+		params = map[string]string{"threadId": base.CodexThread}
+	case "codex.goal.set":
+		var command protocol.CodexGoalSetCommand
+		if err := json.Unmarshal(payload, &command); err != nil {
+			return protocol.CodexCapabilityResult{}, err
+		}
+		if command.CodexThread == "" {
+			return unsupported(command.CodexVersion, "Codex thread is not initialized"), nil
+		}
+		method = "thread/goal/set"
+		params = map[string]any{"threadId": command.CodexThread, "objective": command.Objective, "status": command.Status, "tokenBudget": command.TokenBudget}
+	case "codex.skills.list":
+		method, params = "skills/list", map[string]any{"cwds": []string{base.Workspace}, "forceReload": true}
+	case "codex.mcp.list":
+		method, params = "mcpServerStatus/list", map[string]any{"threadId": nullableString(base.CodexThread), "limit": 100, "detail": "toolsAndAuthOnly"}
+	case "codex.status.snapshot":
+		method, params = "account/rateLimits/read", map[string]any{}
+	default:
+		return protocol.CodexCapabilityResult{}, fmt.Errorf("unsupported Codex operation %q", kind)
+	}
+	raw, err := request(ctx, method, params)
+	if err != nil {
+		var rpcErr *rpcRequestError
+		if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 || strings.Contains(strings.ToLower(rpcErr.Message), "not found") || strings.Contains(strings.ToLower(rpcErr.Message), "unsupported")) {
+			return unsupported(base.CodexVersion, "This Codex version does not support "+method), nil
+		}
+		return protocol.CodexCapabilityResult{}, err
+	}
+	clean, err := sanitizeCodexResult(kind, raw)
+	if err != nil {
+		return protocol.CodexCapabilityResult{}, fmt.Errorf("invalid %s response: %w", method, err)
+	}
+	return protocol.CodexCapabilityResult{Supported: true, CodexVersion: base.CodexVersion, Data: clean}, nil
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+func unsupported(version, reason string) protocol.CodexCapabilityResult {
+	return protocol.CodexCapabilityResult{Supported: false, Reason: reason, CodexVersion: version}
+}
+
+func sanitizeCodexResult(kind string, raw json.RawMessage) (json.RawMessage, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	switch kind {
+	case "codex.goal.get", "codex.goal.set", "codex.goal.clear":
+		return sanitizeGoalResult(value)
+	case "codex.skills.list":
+		return sanitizeSkillsResult(value)
+	case "codex.mcp.list":
+		return sanitizeMCPResult(value)
+	case "codex.status.snapshot":
+		return sanitizeStatusResult(value)
+	}
+	allowed := map[string]bool{}
+	switch kind {
+	case "codex.goal.get", "codex.goal.set", "codex.goal.clear":
+		for _, k := range []string{"goal", "threadId", "objective", "status", "tokenBudget", "tokensUsed", "timeUsedSeconds", "createdAt", "updatedAt"} {
+			allowed[k] = true
+		}
+	case "codex.skills.list":
+		for _, k := range []string{"data", "cwd", "errors", "skills", "name", "description", "path", "scope", "enabled", "interface", "displayName", "shortDescription"} {
+			allowed[k] = true
+		}
+	case "codex.mcp.list":
+		for _, k := range []string{"data", "nextCursor", "name", "authStatus", "auth_status", "serverInfo", "server_info", "version", "tools", "resourceCount", "resource_count", "resourceTemplateCount", "resource_template_count"} {
+			allowed[k] = true
+		}
+	case "codex.status.snapshot":
+		for _, k := range []string{"rateLimits", "rate_limits", "rateLimitResetCredits", "primary", "secondary", "credits", "individualLimit", "limitId", "limit_id", "limitName", "limit_name", "planType", "plan_type", "rateLimitReachedType", "usedPercent", "used_percent", "windowDurationMins", "window_duration_mins", "resetsAt", "resets_at", "hasCredits", "has_credits", "unlimited", "balance", "availableCount", "limit", "remainingPercent", "used"} {
+			allowed[k] = true
+		}
+	}
+	clean := sanitizeValue(value, allowed)
+	return json.Marshal(clean)
+}
+
+func sanitizeGoalResult(value any) (json.RawMessage, error) {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return nil, errors.New("expected object")
+	}
+	raw, exists := root["goal"]
+	if !exists || raw == nil {
+		return json.RawMessage(`null`), nil
+	}
+	goal, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("expected goal object")
+	}
+	out := protocol.CodexGoal{ThreadID: stringField(goal, "threadId"), Objective: stringField(goal, "objective"), Status: stringField(goal, "status"), TokensUsed: int64Field(goal, "tokensUsed"), TimeUsedSeconds: int64Field(goal, "timeUsedSeconds"), CreatedAt: int64Field(goal, "createdAt"), UpdatedAt: int64Field(goal, "updatedAt")}
+	if budget, ok := numberField(goal, "tokenBudget"); ok {
+		converted := int64(budget)
+		out.TokenBudget = &converted
+	}
+	return json.Marshal(out)
+}
+
+func sanitizeSkillsResult(value any) (json.RawMessage, error) {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return nil, errors.New("expected object")
+	}
+	groups, _ := root["data"].([]any)
+	out := make([]protocol.CodexSkill, 0)
+	for _, rawGroup := range groups {
+		group, ok := rawGroup.(map[string]any)
+		if !ok {
+			continue
+		}
+		skills, _ := group["skills"].([]any)
+		for _, rawSkill := range skills {
+			skill, ok := rawSkill.(map[string]any)
+			if !ok {
+				continue
+			}
+			item := protocol.CodexSkill{Name: stringField(skill, "name"), Description: stringField(skill, "description"), Path: stringField(skill, "path"), Scope: stringField(skill, "scope"), Enabled: boolFieldDefault(skill, "enabled", true)}
+			if detail, ok := skill["interface"].(map[string]any); ok {
+				item.DisplayName = stringField(detail, "displayName")
+				item.ShortDescription = stringField(detail, "shortDescription")
+			}
+			if item.Name != "" {
+				out = append(out, item)
+			}
+		}
+	}
+	return json.Marshal(out)
+}
+
+func sanitizeMCPResult(value any) (json.RawMessage, error) {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return nil, errors.New("expected object")
+	}
+	items, _ := root["data"].([]any)
+	clean := make([]protocol.CodexMCPServer, 0, len(items))
+	for _, item := range items {
+		server, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		entry := protocol.CodexMCPServer{Name: stringField(server, "name"), AuthStatus: stringField(server, "authStatus"), Tools: []string{}, ResourceCount: collectionLength(server["resources"]), ResourceTemplateCount: collectionLength(server["resourceTemplates"])}
+		if info, ok := server["serverInfo"].(map[string]any); ok {
+			entry.ServerName = stringField(info, "name")
+			entry.ServerVersion = stringField(info, "version")
+		}
+		if tools, ok := server["tools"].(map[string]any); ok {
+			names := make([]string, 0, len(tools))
+			for name := range tools {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			entry.Tools = names
+		}
+		if entry.Name != "" {
+			clean = append(clean, entry)
+		}
+	}
+	return json.Marshal(clean)
+}
+
+func sanitizeStatusResult(value any) (json.RawMessage, error) {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return nil, errors.New("expected object")
+	}
+	snapshot := protocol.CodexStatusSnapshot{RateLimits: []protocol.CodexRateLimit{}}
+	appendSnapshot := func(raw any, suffix string) {
+		limit, ok := raw.(map[string]any)
+		if !ok {
+			return
+		}
+		base := stringField(limit, "limitName")
+		if base == "" {
+			base = stringField(limit, "limitId")
+		}
+		for _, windowName := range []string{"primary", "secondary"} {
+			window, ok := limit[windowName].(map[string]any)
+			if !ok {
+				continue
+			}
+			name := strings.TrimSpace(strings.Join([]string{base, suffix, windowName}, " "))
+			used, hasUsed := numberField(window, "usedPercent")
+			item := protocol.CodexRateLimit{Name: name}
+			if hasUsed {
+				converted := int64(used)
+				item.UsedPercent = &converted
+			}
+			if resets, ok := numberField(window, "resetsAt"); ok {
+				item.ResetsAt = time.Unix(int64(resets), 0).UTC().Format(time.RFC3339)
+			}
+			snapshot.RateLimits = append(snapshot.RateLimits, item)
+		}
+	}
+	if buckets, ok := root["rateLimitsByLimitId"].(map[string]any); ok && len(buckets) > 0 {
+		keys := make([]string, 0, len(buckets))
+		for key := range buckets {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, key := range keys {
+			appendSnapshot(buckets[key], "")
+		}
+	} else {
+		appendSnapshot(root["rateLimits"], "")
+	}
+	return json.Marshal(snapshot)
+}
+
+func stringField(object map[string]any, key string) string {
+	value, _ := object[key].(string)
+	if len(value) > 4096 {
+		return value[:4096]
+	}
+	return value
+}
+func numberField(object map[string]any, key string) (float64, bool) {
+	value, ok := object[key].(float64)
+	return value, ok
+}
+func int64Field(object map[string]any, key string) int64 {
+	value, _ := numberField(object, key)
+	return int64(value)
+}
+func boolFieldDefault(object map[string]any, key string, fallback bool) bool {
+	value, ok := object[key].(bool)
+	if !ok {
+		return fallback
+	}
+	return value
+}
+
+func collectionLength(value any) int {
+	if values, ok := value.([]any); ok {
+		return len(values)
+	}
+	return 0
+}
+
+func sanitizeValue(value any, allowed map[string]bool) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for key, child := range typed {
+			if allowed[key] {
+				out[key] = sanitizeValue(child, allowed)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i := range typed {
+			out[i] = sanitizeValue(typed[i], allowed)
+		}
+		return out
+	case string:
+		if len(typed) > 4096 {
+			return typed[:4096]
+		}
+		return typed
+	case float64, bool, nil:
+		return typed
+	default:
+		return nil
+	}
 }
 
 func (a *Adapter) rewriteTurn(ctx context.Context, command protocol.RewriteTurnCommand, request requestFunc) error {

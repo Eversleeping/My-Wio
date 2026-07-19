@@ -8,6 +8,7 @@ export type SlashCommandItem = {
   icon: ComponentType<LucideProps>;
   detail?: string;
   selected?: boolean;
+  section?: string;
   onSelect: () => void;
 };
 
@@ -46,7 +47,7 @@ export function SlashCommandMenu({ items, query, label, backLabel, onBack, onDis
   return <div className="slash-command-menu" role="listbox" aria-label={label}>
     {onBack && <button type="button" className="slash-command-back" onMouseDown={event => event.preventDefault()} onClick={onBack}><ArrowLeft size={15} />{backLabel}</button>}
     <div className="slash-command-items">
-      {filtered.map((item, index) => { const Icon = item.icon; return <button type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} key={item.id} ref={node => { itemRefs.current[index] = node; }} onMouseEnter={() => setActiveIndex(index)} onMouseDown={event => event.preventDefault()} onClick={item.onSelect}><Icon size={18} /><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.detail && <em>{item.detail}</em>}{item.selected && <Check size={16} />}</button>; })}
+      {filtered.map((item, index) => { const Icon = item.icon; const previous = filtered[index - 1]; return <div className="slash-command-entry" key={item.id}>{item.section && item.section !== previous?.section && <div className="slash-command-section">{item.section}</div>}<button type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} ref={node => { itemRefs.current[index] = node; }} onMouseEnter={() => setActiveIndex(index)} onMouseDown={event => event.preventDefault()} onClick={item.onSelect}><Icon size={18} /><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.detail && <em>{item.detail}</em>}{item.selected && <Check size={16} />}</button></div>; })}
     </div>
   </div>;
 }

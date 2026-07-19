@@ -40,6 +40,75 @@ func TestFindString(t *testing.T) {
 	}
 }
 
+func TestCodexOperationReturnsUnsupportedForMissingMethod(t *testing.T) {
+	a := &Adapter{}
+	request := func(context.Context, string, any) (json.RawMessage, error) {
+		return nil, &rpcRequestError{Method: "thread/goal/get", Code: -32601, Message: "method not found"}
+	}
+	payload := json.RawMessage(`{"codex_thread_id":"thread-1","codex_version":"codex-cli 0.139.0"}`)
+	result, err := a.codexOperation(context.Background(), "codex.goal.get", payload, request)
+	if err != nil || result.Supported || result.CodexVersion != "codex-cli 0.139.0" {
+		t.Fatalf("unexpected result: %#v %v", result, err)
+	}
+}
+
+func TestMCPResultDropsSchemasAndRawResources(t *testing.T) {
+	raw := json.RawMessage(`{"data":[{"name":"github","authStatus":"authenticated","tools":{"search":{"name":"search","inputSchema":{"secret":"no"}}},"resources":[{"uri":"secret"}],"resourceTemplates":[{"uriTemplate":"secret"}]}]}`)
+	clean, err := sanitizeCodexResult("codex.mcp.list", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(clean)
+	if strings.Contains(text, "inputSchema") || strings.Contains(text, "uri") || !strings.Contains(text, `"tools":["search"]`) || !strings.Contains(text, `"resource_count":1`) || strings.Contains(text, `"data"`) {
+		t.Fatalf("unexpected clean result: %s", text)
+	}
+}
+
+func TestGoalResultIsDirectSnakeCaseDTO(t *testing.T) {
+	raw := json.RawMessage(`{"goal":{"threadId":"thr","objective":"Ship","status":"active","tokenBudget":1000,"tokensUsed":25,"timeUsedSeconds":9,"createdAt":11,"updatedAt":12}}`)
+	clean, err := sanitizeCodexResult("codex.goal.get", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goal protocol.CodexGoal
+	if err := json.Unmarshal(clean, &goal); err != nil {
+		t.Fatal(err)
+	}
+	if goal.ThreadID != "thr" || goal.Objective != "Ship" || goal.TokenBudget == nil || *goal.TokenBudget != 1000 || strings.Contains(string(clean), "threadId") {
+		t.Fatalf("unexpected goal: %s", clean)
+	}
+}
+
+func TestSkillsResultFlattensGroupsToSnakeCaseDTOs(t *testing.T) {
+	raw := json.RawMessage(`{"data":[{"cwd":"/repo","errors":[],"skills":[{"name":"review","description":"Review code","path":"/skill","scope":"repo","enabled":true,"interface":{"displayName":"Reviewer","shortDescription":"Checks code"}}]}]}`)
+	clean, err := sanitizeCodexResult("codex.skills.list", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var skills []protocol.CodexSkill
+	if err := json.Unmarshal(clean, &skills); err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 || skills[0].DisplayName != "Reviewer" || !strings.Contains(string(clean), `"display_name":"Reviewer"`) || strings.Contains(string(clean), `"skills"`) {
+		t.Fatalf("unexpected skills: %s", clean)
+	}
+}
+
+func TestStatusResultProducesRateLimitArray(t *testing.T) {
+	raw := json.RawMessage(`{"rateLimits":{"limitId":"codex","limitName":"Codex","primary":{"usedPercent":42,"windowDurationMins":300,"resetsAt":1700000000},"secondary":null},"rateLimitsByLimitId":null}`)
+	clean, err := sanitizeCodexResult("codex.status.snapshot", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status protocol.CodexStatusSnapshot
+	if err := json.Unmarshal(clean, &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.RateLimits) != 1 || status.RateLimits[0].UsedPercent == nil || *status.RateLimits[0].UsedPercent != 42 || status.RateLimits[0].ResetsAt != "2023-11-14T22:13:20Z" {
+		t.Fatalf("unexpected status: %s", clean)
+	}
+}
+
 func TestStartTurnParamsIncludeReasoningEffort(t *testing.T) {
 	command := protocol.StartTurnCommand{
 		Workspace:       "/srv/project",

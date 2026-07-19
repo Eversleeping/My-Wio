@@ -270,6 +270,12 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
+	} else if strings.HasPrefix(envelope.Kind, "codex.goal.") || envelope.Kind == "codex.mcp.list" || envelope.Kind == "codex.skills.list" || envelope.Kind == "codex.status.snapshot" {
+		var result protocol.CodexCapabilityResult
+		result, err = c.codex.CodexOperation(ctx, envelope.Kind, envelope.PayloadJSON)
+		if err == nil {
+			resultData, err = json.Marshal(result)
+		}
 	} else {
 		err = c.execute(ctx, envelope)
 	}

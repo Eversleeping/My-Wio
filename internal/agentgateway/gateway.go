@@ -244,6 +244,27 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		if strings.HasPrefix(operation.Kind, "codex.goal.") || operation.Kind == "codex.mcp.list" || operation.Kind == "codex.skills.list" || operation.Kind == "codex.status.snapshot" {
+			var command protocol.CodexSnapshotCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			kind := strings.TrimPrefix(operation.Kind, "codex.")
+			if strings.HasPrefix(kind, "goal.") {
+				kind = "goal"
+			}
+			if result.Status == "succeeded" {
+				var snapshot protocol.CodexCapabilityResult
+				if err := json.Unmarshal(result.Data, &snapshot); err != nil {
+					return err
+				}
+				if err := g.store.SaveCodexSnapshot(ctx, command.ScopeType, command.ScopeID, kind, snapshot); err != nil {
+					return err
+				}
+			} else if err := g.store.FailCodexSnapshot(ctx, command.ScopeType, command.ScopeID, kind, result.Message); err != nil {
+				return err
+			}
+		}
 		if operation.Kind == "credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
 		} else {

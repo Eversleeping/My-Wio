@@ -40,6 +40,7 @@ import {
   MemoryStick,
   MessageSquare,
   MonitorDot,
+  Network,
   Paperclip,
   Pencil,
   Pin,
@@ -54,6 +55,7 @@ import {
   ShieldCheck,
   SquareTerminal,
   StickyNote,
+  Target,
   Trash2,
   Undo2,
   UserRound,
@@ -65,7 +67,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, APIError, patch, post, postStream, remove, setSession, socketURL } from "./api";
+import { api, APIError, patch, post, postStream, put, remove, setSession, socketURL } from "./api";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { currentLocale, useI18n } from "./i18n";
@@ -74,6 +76,11 @@ import type {
   Approval,
   AuditEntry,
   CodexCLISettings,
+  CodexGoal,
+  CodexMCPServer,
+  CodexSkill,
+  CodexSnapshot,
+  CodexStatusData,
   CredentialProfile,
   Deployment,
   DeploymentTarget,
@@ -794,6 +801,17 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onO
   const [slashMode, setSlashMode] = useState<"commands" | "model" | "reasoning">("commands");
   const [slashDismissedValue, setSlashDismissedValue] = useState("");
   const [statusOpen, setStatusOpen] = useState(false);
+  const [goalOpen, setGoalOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [statusSnapshot, setStatusSnapshot] = useState<CodexSnapshot<CodexStatusData> | null>(null);
+  const [mcpSnapshot, setMcpSnapshot] = useState<CodexSnapshot<CodexMCPServer[]> | null>(null);
+  const [skillsSnapshot, setSkillsSnapshot] = useState<CodexSnapshot<CodexSkill[]> | null>(null);
+  const [goal, setGoal] = useState<CodexGoal | null>(null);
+  const [goalForm, setGoalForm] = useState({ objective: "", status: "active", token_budget: "" });
+  const [nativeBusy, setNativeBusy] = useState("");
+  const [nativeError, setNativeError] = useState("");
   const streamRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -807,6 +825,28 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onO
   const slashQuery = slashMode === "commands" ? prompt.slice(1) : prompt.replace(/^\/(?:model|reasoning)\s*/, "");
   const closeSlash = () => { setSlashDismissedValue(prompt); setSlashMode("commands"); };
   const finishSlash = (action: () => void) => { setPrompt(""); setSlashDismissedValue(""); setSlashMode("commands"); action(); requestAnimationFrame(() => promptRef.current?.focus()); };
+  const loadSnapshot = async <T,>(kind: "status" | "mcp" | "skills", refresh = false) => {
+    const workspacePath = `/workspaces/${thread.workspace_id}/codex/${kind}`;
+    const path = kind === "status" ? `/threads/${thread.id}/codex/status` : workspacePath;
+    const setter = kind === "status" ? setStatusSnapshot : kind === "mcp" ? setMcpSnapshot : setSkillsSnapshot;
+    setNativeBusy(kind); setNativeError("");
+    try {
+      let next = await api<CodexSnapshot<unknown>>(path);
+      const shouldRefresh = refresh || next.status === "idle";
+      if (shouldRefresh) { await post(`${path}/refresh`, {}); next = await api<CodexSnapshot<unknown>>(path); }
+      for (let attempt = 0; shouldRefresh && next.status === "loading" && attempt < 20; attempt++) { await new Promise(resolve => window.setTimeout(resolve, 500)); next = await api<CodexSnapshot<unknown>>(path); }
+      const normalized = { ...next, data: kind === "skills" ? normalizeSkills(next.data) : kind === "mcp" ? normalizeMCP(next.data) : normalizeStatus(next.data) } as CodexSnapshot<T>;
+      setter(normalized as never);
+    }
+    catch (error) { setNativeError(message(error)); }
+    finally { setNativeBusy(""); }
+  };
+  const loadGoal = async () => {
+    setNativeBusy("goal"); setNativeError("");
+    try { const snapshot = await api<CodexSnapshot<unknown>>(`/threads/${thread.id}/goal`); const next = normalizeGoal(snapshot.data); setGoal(next); setGoalForm({ objective: next?.objective ?? "", status: next?.status ?? "active", token_budget: next?.token_budget == null ? "" : String(next.token_budget) }); if (!snapshot.supported) setNativeError(snapshot.reason || t("codex.unsupported")); }
+    catch (error) { setNativeError(message(error)); }
+    finally { setNativeBusy(""); }
+  };
   const modelItems: SlashCommandItem[] = [
     { id: "default", name: t("codex.modelServerDefault"), description: t("codex.slashModelDefaultDescription"), icon: Cpu, selected: model === "", onSelect: () => finishSlash(() => setModel("")) },
     ...codexModelOptions.map(option => ({ id: option.value, name: t(option.labelKey), description: option.value, icon: Cpu, selected: model === option.value, onSelect: () => finishSlash(() => setModel(option.value)) }))
@@ -821,9 +861,16 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onO
     { id: "model", name: "/model", description: t("codex.slashModelDescription"), detail: model || t("codex.modelServerDefault"), icon: Cpu, onSelect: () => { setPrompt("/model "); setSlashMode("model"); } },
     { id: "reasoning", name: "/reasoning", description: t("codex.slashReasoningDescription"), detail: reasoningEffort ? t(codexReasoningOptions.find(option => option.value === reasoningEffort)?.labelKey ?? "codex.reasoningDefault") : t("codex.reasoningDefault"), icon: Gauge, onSelect: () => { setPrompt("/reasoning "); setSlashMode("reasoning"); } },
     { id: "status", name: "/status", description: t("codex.slashStatusDescription"), icon: Activity, onSelect: () => finishSlash(() => setStatusOpen(true)) },
+    { id: "goal", name: "/goal", description: t("codex.slashGoalDescription"), icon: Target, onSelect: () => finishSlash(() => { setGoalOpen(true); void loadGoal(); }) },
+    { id: "mcp", name: "/mcp", description: t("codex.slashMCPDescription"), icon: Network, onSelect: () => finishSlash(() => { setMcpOpen(true); void loadSnapshot<CodexMCPServer[]>("mcp"); }) },
+    { id: "skills", name: "/skills", description: t("codex.slashSkillsDescription"), icon: Boxes, onSelect: () => finishSlash(() => { setSkillsOpen(true); void loadSnapshot<CodexSkill[]>("skills"); }) },
+    { id: "plan", name: "/plan", description: t("codex.slashPlanDescription"), detail: t("codex.unsupported"), icon: StickyNote, onSelect: () => finishSlash(() => setPlanOpen(true)) },
     { id: "project", name: "/project", description: t("codex.slashProjectDescription"), icon: Folder, onSelect: () => finishSlash(onNewTask) }
   ];
-  const slashItems = slashMode === "model" ? modelItems : slashMode === "reasoning" ? reasoningItems : commandItems;
+  const skillItems: SlashCommandItem[] = (skillsSnapshot?.data ?? []).filter(skill => skill.enabled).map(skill => ({ id: `skill:${skill.name}`, name: `$${skill.name}`, description: skill.short_description || skill.description, detail: skill.scope, section: t("codex.availableSkills"), icon: Boxes, onSelect: () => finishSlash(() => { setPrompt(`$${skill.name} `); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.setSelectionRange(skill.name.length + 2, skill.name.length + 2); }); }) }));
+  const slashItems = slashMode === "model" ? modelItems : slashMode === "reasoning" ? reasoningItems : [...commandItems, ...skillItems];
+  useEffect(() => { if (slashOpen && slashMode === "commands" && !skillsSnapshot && nativeBusy !== "skills") void loadSnapshot<CodexSkill[]>("skills"); }, [slashOpen, slashMode, thread.workspace_id]);
+  useEffect(() => { if (statusOpen && !statusSnapshot) void loadSnapshot<CodexStatusData>("status"); }, [statusOpen, thread.id]);
   useEffect(() => { setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); }, [thread.id]);
   useEffect(() => { const frame = requestAnimationFrame(() => { if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight; }); return () => cancelAnimationFrame(frame); }, [thread.id, rawEvents, sourceEvents.length]);
   const addImages = async (files: File[]) => {
@@ -885,8 +932,62 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onO
       <textarea ref={promptRef} value={prompt} onChange={event => { setPrompt(event.target.value); if (event.target.value !== slashDismissedValue) setSlashDismissedValue(""); if (!event.target.value.startsWith("/model ") && !event.target.value.startsWith("/reasoning ")) setSlashMode("commands"); }} onKeyDown={event => { if (slashOpen && slashKeyboardRef.current?.(event)) return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onPaste={event => { const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} placeholder={t("codex.messagePlaceholder")} rows={3} />
       <div className="composer-bar"><div><input ref={imageInputRef} className="hidden-input" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) void addImages(files); }} /><button type="button" className="icon-button" disabled={imageBusy || images.length >= 4} title={t("codex.attachImage")} onClick={() => imageInputRef.current?.click()}>{imageBusy ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}</button><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={event => setApprovalMode(event.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault requestCustom={customModelSignal} /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" title={activeTurn ? t("codex.waitForTurn") : t("codex.send")} disabled={slashOpen || (!prompt.trim() && images.length === 0) || imageBusy || sending || activeTurn}>{sending ? <LoaderCircle className="spin" size={17} /> : <ChevronRight size={17} />}{t("codex.send")}</button></div>
     </form>
-    <Dialog open={statusOpen} title={t("codex.taskStatus")} onClose={() => setStatusOpen(false)}><dl className="task-status-list"><div><dt>{t("codex.statusWioTaskID")}</dt><dd><code>{thread.id}</code></dd></div><div><dt>{t("codex.statusCodexThreadID")}</dt><dd>{thread.codex_thread_id ? <code>{thread.codex_thread_id}</code> : t("codex.notBound")}</dd></div><div><dt>{t("column.project")}</dt><dd>{thread.project_name}</dd></div><div><dt>{t("column.server")}</dt><dd>{thread.server_name}</dd></div><div><dt>{t("codex.statusWorkingDirectory")}</dt><dd><code>{thread.path}</code></dd></div><div><dt>{t("codex.modelOverride")}</dt><dd>{model || t("codex.modelServerDefault")}</dd></div><div><dt>{t("codex.reasoningEffort")}</dt><dd>{reasoningEffort ? t(codexReasoningOptions.find(option => option.value === reasoningEffort)?.labelKey ?? "codex.reasoningDefault") : t("codex.reasoningDefault")}</dd></div><div><dt>{t("codex.statusApprovalPolicy")}</dt><dd>{t(approvalMode === "on-request" ? "codex.approveOnRequest" : approvalMode === "untrusted" ? "codex.untrusted" : "codex.neverApprove")}</dd></div><div><dt>{t("column.state")}</dt><dd><Status value={thread.status} /></dd></div></dl></Dialog>
+    <Dialog open={statusOpen} title={t("codex.taskStatus")} onClose={() => setStatusOpen(false)}><SnapshotNotice snapshot={statusSnapshot} loading={nativeBusy === "status"} error={nativeError} /><dl className="task-status-list"><div><dt>{t("codex.statusWioTaskID")}</dt><dd><code>{thread.id}</code></dd></div><div><dt>{t("codex.statusCodexThreadID")}</dt><dd>{thread.codex_thread_id ? <code>{thread.codex_thread_id}</code> : t("codex.notBound")}</dd></div><div><dt>{t("column.project")}</dt><dd>{thread.project_name}</dd></div><div><dt>{t("column.server")}</dt><dd>{thread.server_name}</dd></div><div><dt>{t("codex.statusWorkingDirectory")}</dt><dd><code>{thread.path}</code></dd></div><div><dt>{t("codex.modelOverride")}</dt><dd>{String(statusSnapshot?.data?.model || model || t("codex.modelServerDefault"))}</dd></div><div><dt>{t("codex.reasoningEffort")}</dt><dd>{String(statusSnapshot?.data?.reasoning_effort || (reasoningEffort ? t(codexReasoningOptions.find(option => option.value === reasoningEffort)?.labelKey ?? "codex.reasoningDefault") : t("codex.reasoningDefault")))}</dd></div><div><dt>{t("codex.statusApprovalPolicy")}</dt><dd>{String(statusSnapshot?.data?.approval_policy || t(approvalMode === "on-request" ? "codex.approveOnRequest" : approvalMode === "untrusted" ? "codex.untrusted" : "codex.neverApprove"))}</dd></div><div><dt>{t("column.state")}</dt><dd><Status value={thread.status} /></dd></div>{(statusSnapshot?.data?.rate_limits ?? []).map(limit => <div key={limit.name}><dt>{limit.name}</dt><dd>{limit.used_percent == null ? limit.detail || "-" : `${limit.used_percent}%${limit.resets_at ? ` · ${t("codex.resetsAt", { time: formatDate(limit.resets_at) })}` : ""}`}</dd></div>)}</dl><DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "status"} onClick={() => void loadSnapshot<CodexStatusData>("status", true)}>{nativeBusy === "status" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{t("common.refresh")}</button></DialogActions></Dialog>
+    <Dialog open={goalOpen} title={t("codex.goalTitle")} onClose={() => setGoalOpen(false)}><SnapshotNotice loading={nativeBusy === "goal"} error={nativeError} /><form onSubmit={async event => { event.preventDefault(); setNativeBusy("goal"); setNativeError(""); try { await put(`/threads/${thread.id}/goal`, { objective: goalForm.objective.trim(), status: goalForm.status, token_budget: goalForm.token_budget ? Number(goalForm.token_budget) : null }); await waitForGoalSnapshot(thread.id); await loadGoal(); notify(t("codex.goalSaved")); } catch (error) { setNativeError(message(error)); } finally { setNativeBusy(""); } }}><Field label={t("codex.goalObjective")}><textarea rows={3} value={goalForm.objective} onChange={event => setGoalForm({ ...goalForm, objective: event.target.value })} required /></Field><div className="form-grid"><Field label={t("column.state")}><select value={goalForm.status} onChange={event => setGoalForm({ ...goalForm, status: event.target.value })}><option value="active">active</option><option value="paused">paused</option><option value="blocked">blocked</option><option value="complete">complete</option></select></Field><Field label={t("codex.goalTokenBudget")}><input type="number" min="1" value={goalForm.token_budget} onChange={event => setGoalForm({ ...goalForm, token_budget: event.target.value })} placeholder={t("codex.noLimit")} /></Field></div>{goal && <p className="snapshot-meta">{t("codex.goalUsage", { tokens: goal.tokens_used, seconds: goal.time_used_seconds })}</p>}<DialogActions>{goal && <button type="button" className="secondary-button danger" disabled={nativeBusy === "goal"} onClick={async () => { setNativeBusy("goal"); try { await remove(`/threads/${thread.id}/goal`); await waitForGoalSnapshot(thread.id); await loadGoal(); notify(t("codex.goalCleared")); } catch (error) { setNativeError(message(error)); } finally { setNativeBusy(""); } }}><Trash2 size={16} />{t("codex.clearGoal")}</button>}<button className="primary-button" disabled={nativeBusy === "goal" || !goalForm.objective.trim()}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={16} /> : <Target size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
+    <Dialog open={mcpOpen} title={t("codex.mcpTitle")} onClose={() => setMcpOpen(false)}><SnapshotNotice snapshot={mcpSnapshot} loading={nativeBusy === "mcp"} error={nativeError} />{mcpSnapshot?.data?.length ? <div className="native-list">{mcpSnapshot.data.map(server => <article key={server.name}><header><strong>{server.name}</strong><Status value={server.auth_status || "unknown"} /></header>{(server.server_name || server.server_version) && <small>{[server.server_name, server.server_version].filter(Boolean).join(" ")}</small>}<p>{server.tools.length ? server.tools.join(", ") : t("codex.noTools")}</p><small>{t("codex.mcpResources", { resources: server.resource_count, templates: server.resource_template_count })}</small></article>)}</div> : !nativeBusy && <Empty icon={<Network size={24} />} text={t("codex.noMCPServers")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "mcp"} onClick={() => void loadSnapshot<CodexMCPServer[]>("mcp", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
+    <Dialog open={skillsOpen} title={t("codex.skillsTitle")} onClose={() => setSkillsOpen(false)}><SnapshotNotice snapshot={skillsSnapshot} loading={nativeBusy === "skills"} error={nativeError} />{skillsSnapshot?.data?.length ? <div className="native-list">{skillsSnapshot.data.map(skill => <article key={`${skill.scope}:${skill.name}`}><header><strong>{skill.display_name || skill.name}</strong><Status value={skill.enabled ? "enabled" : "disabled"} /></header><p>{skill.short_description || skill.description}</p><small>{skill.scope}</small></article>)}</div> : !nativeBusy && <Empty icon={<Boxes size={24} />} text={t("codex.noSkills")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "skills"} onClick={() => void loadSnapshot<CodexSkill[]>("skills", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
+    <Dialog open={planOpen} title={t("codex.planTitle")} onClose={() => setPlanOpen(false)}><div className="unsupported-state"><StickyNote size={24} /><strong>{t("codex.planUnsupportedTitle")}</strong><p>{t("codex.planUnsupportedReason")}</p></div></Dialog>
   </>;
+}
+
+function SnapshotNotice({ snapshot, loading, error }: { snapshot?: CodexSnapshot<unknown> | null; loading: boolean; error: string }) {
+  const { t } = useI18n();
+  if (loading && !snapshot?.data) return <div className="snapshot-notice"><LoaderCircle className="spin" size={16} />{t("common.loading")}</div>;
+  if (error) return <ErrorBanner text={error} />;
+  if (snapshot && (!snapshot.supported || snapshot.status === "unsupported")) return <div className="snapshot-notice warning"><AlertTriangle size={16} />{snapshot.reason || t("codex.unsupported")}</div>;
+  if (snapshot?.status === "failed") return <div className="snapshot-notice warning"><AlertTriangle size={16} />{snapshot.error || t("codex.snapshotFailed")}</div>;
+  if (snapshot?.updated_at) return <p className="snapshot-meta">{loading ? t("codex.refreshing") : t("codex.cachedAt", { time: formatDate(snapshot.updated_at) })}</p>;
+  return null;
+}
+
+async function waitForGoalSnapshot(threadID: string) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const snapshot = await api<CodexSnapshot<unknown>>(`/threads/${threadID}/goal`);
+    if (snapshot.status !== "loading") return snapshot;
+    await new Promise(resolve => window.setTimeout(resolve, 500));
+  }
+}
+
+function normalizeGoal(value: unknown): CodexGoal | null {
+  const root = asRecord(value);
+  const goal = asRecord(root?.goal) ?? (root && typeof root.objective === "string" ? root : null);
+  if (!goal) return null;
+  return { thread_id: String(goal.thread_id ?? goal.threadId ?? ""), objective: String(goal.objective ?? ""), status: String(goal.status ?? "active"), token_budget: typeof (goal.token_budget ?? goal.tokenBudget) === "number" ? Number(goal.token_budget ?? goal.tokenBudget) : null, tokens_used: Number(goal.tokens_used ?? goal.tokensUsed ?? 0), time_used_seconds: Number(goal.time_used_seconds ?? goal.timeUsedSeconds ?? 0), created_at: Number(goal.created_at ?? goal.createdAt ?? 0), updated_at: Number(goal.updated_at ?? goal.updatedAt ?? 0) };
+}
+
+function normalizeSkills(value: unknown): CodexSkill[] {
+  const root = asRecord(value);
+  const groups = Array.isArray(value) ? value : root?.data;
+  if (!Array.isArray(groups)) return [];
+  const skills = Array.isArray(value) ? value : groups.flatMap(groupValue => { const group = asRecord(groupValue); return Array.isArray(group?.skills) ? group.skills : []; });
+  return skills.map(skillValue => {
+    const skill = asRecord(skillValue) ?? {}; const detail = asRecord(skill.interface);
+    return { name: String(skill.name ?? ""), description: String(skill.description ?? ""), path: String(skill.path ?? ""), scope: String(skill.scope ?? ""), enabled: skill.enabled !== false, display_name: String(skill.display_name ?? detail?.displayName ?? ""), short_description: String(skill.short_description ?? detail?.shortDescription ?? "") };
+  }).filter(skill => skill.name);
+}
+
+function normalizeMCP(value: unknown): CodexMCPServer[] {
+  const servers = Array.isArray(value) ? value : asRecord(value)?.data;
+  if (!Array.isArray(servers)) return [];
+  return servers.map(serverValue => { const server = asRecord(serverValue) ?? {}; const info = asRecord(server.serverInfo ?? server.server_info); const tools = Array.isArray(server.tools) ? server.tools.map(tool => typeof tool === "string" ? tool : String(asRecord(tool)?.name ?? "")).filter(Boolean) : []; return { name: String(server.name ?? ""), auth_status: String(server.authStatus ?? server.auth_status ?? "unknown"), server_name: String(server.server_name ?? info?.name ?? ""), server_version: String(server.server_version ?? info?.version ?? ""), tools, resource_count: Number(server.resourceCount ?? server.resource_count ?? 0), resource_template_count: Number(server.resourceTemplateCount ?? server.resource_template_count ?? 0) }; }).filter(server => server.name);
+}
+
+function normalizeStatus(value: unknown): CodexStatusData {
+  const root = asRecord(value) ?? {};
+  if (Array.isArray(root.rate_limits)) return { ...root, rate_limits: root.rate_limits as CodexStatusData["rate_limits"] };
+  const limits = asRecord(root.rateLimits) ?? root;
+  const rate_limits = Object.entries(limits).flatMap(([key, raw]) => { const limit = asRecord(raw); if (!limit || (!key.toLowerCase().includes("primary") && !key.toLowerCase().includes("secondary"))) return []; return [{ name: String(limit.limitName ?? limit.limit_name ?? key), used_percent: typeof (limit.usedPercent ?? limit.used_percent) === "number" ? Number(limit.usedPercent ?? limit.used_percent) : undefined, resets_at: typeof (limit.resetsAt ?? limit.resets_at) === "string" ? String(limit.resetsAt ?? limit.resets_at) : undefined }]; });
+  return { rate_limits };
 }
 
 function ApprovalPrompt({ item, onDecided, notify }: { item: Approval; onDecided: () => void; notify: (text: string) => void }) {
