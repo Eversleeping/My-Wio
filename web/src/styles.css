@@ -314,9 +314,20 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .markdown-content th { background: #eef1ee; }
 .markdown-content a { color: #087757; text-decoration: underline; text-underline-offset: 2px; }
 .markdown-content a.unavailable-link { color: #777f83; cursor: not-allowed; text-decoration-style: dotted; }
+.markdown-image { width: min(100%, 560px); display: block; margin: 10px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #f1f3f1; text-decoration: none !important; }
+.markdown-image img { width: 100%; max-height: 460px; display: block; object-fit: contain; }
 .markdown-content hr { margin: 14px 0; border: 0; border-top: 1px solid var(--line); }
 .markdown-content input[type="checkbox"] { width: auto; min-height: auto; margin-right: 5px; }
 .message-image-count { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; color: #386554; font-size: 11px; }
+.message-images { width: min(100%, 540px); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 9px; }
+.message-images.single { grid-template-columns: minmax(0, 420px); }
+.message-images button { min-width: 0; aspect-ratio: 4 / 3; padding: 0; overflow: hidden; background: #eef1ee; border: 1px solid rgba(56, 83, 71, .2); border-radius: 6px; cursor: zoom-in; }
+.message-images img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.message-images.single button { max-height: 360px; aspect-ratio: auto; }
+.message-images.single img { max-height: 360px; object-fit: contain; }
+.image-lightbox { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 48px 24px 24px; background: rgba(14, 18, 20, .88); }
+.image-lightbox > img { max-width: min(1200px, 94vw); max-height: calc(100vh - 80px); display: block; object-fit: contain; }
+.image-lightbox-close { width: 36px; height: 36px; position: fixed; top: 12px; right: 14px; display: grid; place-items: center; padding: 0; color: #fff; background: rgba(255, 255, 255, .12); border: 1px solid rgba(255, 255, 255, .28); border-radius: 50%; }
 .message-actions { display: flex; align-items: center; gap: 3px; margin-top: 8px; }
 .message-action { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; color: #52635c; background: transparent; border: 0; border-radius: 4px; }
 .message-action:hover { color: #174c3a; background: rgba(255, 255, 255, .65); }

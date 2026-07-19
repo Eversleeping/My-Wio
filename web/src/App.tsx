@@ -57,7 +57,7 @@ import {
   X
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, APIError, patch, post, postStream, remove, setSession, socketURL } from "./api";
 import { currentLocale, useI18n } from "./i18n";
@@ -779,7 +779,13 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
   const { t } = useI18n();
   const kind = event.kind;
   const payload = asRecord(event.payload);
-  if (kind === "user.message") { const text = String(payload?.text ?? ""); const imageCount = Number(payload?.image_count ?? 0); const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } }; return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button></div></article>; }
+  if (kind === "user.message") {
+    const text = String(payload?.text ?? "");
+    const images = extractImageSources(payload?.images);
+    const imageCount = Math.max(images.length, Number(payload?.image_count ?? 0));
+    const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } };
+    return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{images.length > 0 ? <MessageImages sources={images} /> : imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button><button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button></div></article>;
+  }
   if (kind === "codex.error" || kind === "codex.turn.failed" || kind === "codex.interrupt.failed" || kind === "codex.approval.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t(kind === "codex.turn.failed" || kind === "codex.error" ? "codex.turnFailed" : "codex.actionFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
   if (kind === "codex.turn.completed") {
     const turn = asRecord(payload?.turn);
@@ -788,13 +794,32 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
     return <article className="message error"><header><AlertTriangle size={15} /><strong>{t("codex.turnFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(turn) || t("codex.unknownError")}</div></article>;
   }
   const item = asRecord(payload?.item);
-  if (item?.type === "agentMessage" || item?.type === "plan") return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><MarkdownContent text={extractText(item)} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} /></article>;
+  const itemImages = extractImageSources(item);
+  if (item?.type === "agentMessage" || item?.type === "plan" || itemImages.length > 0) {
+    const text = extractText(item);
+    return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{itemImages.length > 0 && <MessageImages sources={itemImages} />}</article>;
+  }
   return <ToolEvent event={event} item={item} />;
 }
 
 function MarkdownContent({ text, workspaceRoot, onOpenFile }: { text: string; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void }) {
   const { t } = useI18n();
-  return <div className="message-content markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children, node: _node, ...props }) => { const selection = workspaceFileLink(href, workspaceRoot); if (selection) return <a {...props} href={href} onClick={event => { event.preventDefault(); onOpenFile(selection); }}>{children}</a>; if (isExternalLink(href)) return <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>; if (href?.startsWith("#")) return <a {...props} href={href}>{children}</a>; return <a {...props} className="unavailable-link" href={href} aria-disabled="true" title={t("codex.linkUnavailable")} onClick={event => event.preventDefault()}>{children}</a>; } }}>{text}</ReactMarkdown></div>;
+  return <div className="message-content markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={(url, key) => key === "src" ? safeImageSource(url) : defaultUrlTransform(url)} components={{
+    a: ({ href, children, node: _node, ...props }) => { const selection = workspaceFileLink(href, workspaceRoot); if (selection) return <a {...props} href={href} onClick={event => { event.preventDefault(); onOpenFile(selection); }}>{children}</a>; if (isExternalLink(href)) return <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>; if (href?.startsWith("#")) return <a {...props} href={href}>{children}</a>; return <a {...props} className="unavailable-link" href={href} aria-disabled="true" title={t("codex.linkUnavailable")} onClick={event => event.preventDefault()}>{children}</a>; },
+    img: ({ src, alt }) => { const source = safeImageSource(src); return source ? <a className="markdown-image" href={source} target="_blank" rel="noreferrer" title={t("codex.openImage")}><img src={source} alt={alt || t("codex.messageImage")} loading="lazy" referrerPolicy="no-referrer" /></a> : null; }
+  }}>{text}</ReactMarkdown></div>;
+}
+
+function MessageImages({ sources }: { sources: string[] }) {
+  const { t } = useI18n();
+  const [active, setActive] = useState("");
+  useEffect(() => {
+    if (!active) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setActive(""); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [active]);
+  return <><div className={"message-images " + (sources.length === 1 ? "single" : "")}>{sources.map((source, index) => <button type="button" key={source.slice(0, 80) + ":" + index} title={t("codex.openImage")} onClick={() => setActive(source)}><img src={source} alt={t("codex.messageImage")} loading="lazy" referrerPolicy="no-referrer" /></button>)}</div>{active && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={t("codex.messageImage")} onClick={() => setActive("")}><button type="button" className="image-lightbox-close" title={t("common.close")} aria-label={t("common.close")} onClick={() => setActive("")}><X size={19} /></button><img src={active} alt={t("codex.messageImage")} referrerPolicy="no-referrer" onClick={event => event.stopPropagation()} /></div>}</>;
 }
 
 function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; onClose: () => void }) {
@@ -1200,18 +1225,44 @@ async function copyText(value: string) {
 }
 function conversationEvents(events: StreamEvent[]) {
   const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch"]);
-  return events.filter(event => {
-    if (event.kind === "user.message" || event.kind === "codex.turn.failed" || event.kind === "codex.interrupt.failed" || event.kind === "codex.approval.failed") return true;
+  const result: StreamEvent[] = [];
+  for (const event of events) {
+    if (event.kind === "user.message") {
+      result.push(event);
+      continue;
+    }
     const payload = asRecord(event.payload);
-    if (event.kind === "codex.error") return payload?.willRetry !== true;
+    if (event.kind === "codex.item.completed") {
+      const item = asRecord(payload?.item);
+      if (item?.type === "userMessage") {
+        const images = extractImageSources(item?.content);
+        const text = extractText(item?.content);
+        if (images.length > 0) {
+          for (let index = result.length - 1; index >= 0; index--) {
+            if (result[index].kind !== "user.message") continue;
+            const messagePayload = asRecord(result[index].payload);
+            if (text && String(messagePayload?.text ?? "") !== text) continue;
+            result[index] = { ...result[index], payload: { ...messagePayload, images, image_count: images.length } };
+            break;
+          }
+        }
+        continue;
+      }
+      if (completedTypes.has(String(item?.type ?? "")) || extractImageSources(item).length > 0) result.push(event);
+      continue;
+    }
+    if (event.kind === "codex.error") {
+      if (payload?.willRetry !== true) result.push(event);
+      continue;
+    }
     if (event.kind === "codex.turn.completed") {
       const turn = asRecord(payload?.turn);
-      return turn?.status === "failed" || turn?.status === "interrupted";
+      if (turn?.status === "failed" || turn?.status === "interrupted") result.push(event);
+      continue;
     }
-    if (event.kind !== "codex.item.completed") return false;
-    const item = asRecord(payload?.item);
-    return completedTypes.has(String(item?.type ?? ""));
-  });
+    if (event.kind === "codex.turn.failed" || event.kind === "codex.interrupt.failed" || event.kind === "codex.approval.failed") result.push(event);
+  }
+  return result;
 }
 function groupCommandEvents(events: StreamEvent[]): ConversationDisplayItem[] {
   const result: ConversationDisplayItem[] = [];
@@ -1234,6 +1285,48 @@ function isCommandEvent(event: StreamEvent) {
   return asRecord(payload?.item)?.type === "commandExecution";
 }
 function asRecord(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
+function safeImageSource(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const source = value.trim();
+  if (/^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(source)) return source;
+  try {
+    const url = new URL(source);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+function extractImageSources(payload: unknown): string[] {
+  const sources: string[] = [];
+  const seenSources = new Set<string>();
+  const seenObjects = new Set<object>();
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    const record = asRecord(value);
+    if (!record || seenObjects.has(record)) return;
+    seenObjects.add(record);
+    const type = String(record.type ?? "").toLowerCase();
+    if (type === "image" || type === "input_image" || type === "output_image" || type === "image_url") {
+      for (const key of ["url", "data_url", "image_url", "data"]) {
+        const candidate = asRecord(record[key])?.url ?? record[key];
+        const source = safeImageSource(candidate);
+        if (source && !seenSources.has(source)) {
+          seenSources.add(source);
+          sources.push(source);
+        }
+      }
+    }
+    for (const [key, child] of Object.entries(record)) {
+      if (key === "text" || key === "delta" || key === "message" || key === "output" || key === "aggregatedOutput") continue;
+      if (typeof child === "object" && child !== null) visit(child);
+    }
+  };
+  visit(payload);
+  return sources.slice(0, 8);
+}
 function extractText(payload: unknown): string {
   if (typeof payload === "string") return payload;
   if (Array.isArray(payload)) return payload.map(extractText).filter(Boolean).join("\n");
