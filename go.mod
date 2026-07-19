@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/jmoiron/sqlx v1.4.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pquerna/otp v1.4.0
 	github.com/shirou/gopsutil/v4 v4.24.5
 	golang.org/x/crypto v0.25.0

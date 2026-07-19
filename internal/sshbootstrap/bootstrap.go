@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/gitidentity"
 )
 
@@ -37,6 +39,8 @@ var (
 const (
 	officialNPMRegistry = "https://registry.npmjs.org"
 	mainlandNPMRegistry = "https://registry.npmmirror.com"
+	playwrightVersion   = "1.61.1"
+	playwrightMirror    = "https://npmmirror.com/mirrors/playwright"
 )
 
 type Target struct {
@@ -195,12 +199,13 @@ rm -f /etc/sudoers.d/wio-agent`
 	if _, err := run(client, elevated(root, setup)); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
-	resultWarnings := make([]string, 0, 5)
+	resultWarnings := make([]string, 0, 10)
+	npmRegistry := officialNPMRegistry
 	if probe.NPMReady {
 		request.report("configuring_npm", 0, 0)
 		countries, _ := run(client, npmCountryDetectionScript())
-		registry := npmRegistryForCountries(countries)
-		if _, err := run(client, elevated(root, npmRegistryConfigurationScript(registry))); err != nil {
+		npmRegistry = npmRegistryForCountries(countries)
+		if _, err := run(client, elevated(root, npmRegistryConfigurationScript(npmRegistry))); err != nil {
 			resultWarnings = append(resultWarnings, "npm_registry_configuration_failed")
 		}
 	}
@@ -208,7 +213,15 @@ rm -f /etc/sudoers.d/wio-agent`
 	if err := upload(client, root, "/etc/wio-agent/codex.key", "0600", []byte(request.CodexAPIKey+"\n"), nil); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install Codex credentials: %v", ErrInstallation, err)
 	}
-	if err := upload(client, root, "/var/lib/wio-agent/.codex/config.toml", "0600", []byte(codexConfiguration(request.CodexAPIURL, request.CodexModel)), nil); err != nil {
+	existingConfig, err := run(client, elevated(root, "if [ -f /var/lib/wio-agent/.codex/config.toml ]; then cat /var/lib/wio-agent/.codex/config.toml; fi"))
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("%w: could not read existing Codex configuration", ErrInstallation)
+	}
+	configuration, err := codexconfig.Merge([]byte(existingConfig), request.CodexAPIURL, request.CodexModel)
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("%w: could not merge Codex configuration: %v", ErrInstallation, err)
+	}
+	if err := upload(client, root, "/var/lib/wio-agent/.codex/config.toml", "0600", configuration, nil); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install Codex configuration: %v", ErrInstallation, err)
 	}
 	if _, err := run(client, elevated(root, "chown wio-agent:wio-agent /var/lib/wio-agent/.codex/config.toml")); err != nil {
@@ -252,6 +265,23 @@ rm -f /etc/sudoers.d/wio-agent`
 	}
 	if !codexReady && !probe.NPMReady {
 		resultWarnings = append(resultWarnings, "codex_install_requires_npm")
+	}
+	if probe.NPMReady {
+		request.report("installing_playwright", 0, 0)
+		if _, err := run(client, elevated(root, playwrightPackageInstallationScript())); err != nil {
+			resultWarnings = append(resultWarnings, "playwright_package_install_failed")
+		} else {
+			if _, err := run(client, elevated(root, playwrightDependenciesInstallationScript())); err != nil {
+				resultWarnings = append(resultWarnings, "playwright_dependencies_install_failed")
+			}
+			if _, err := run(client, elevated(root, playwrightBrowserInstallationScript(npmRegistry))); err != nil {
+				resultWarnings = append(resultWarnings, "playwright_chromium_install_failed")
+			} else if _, err := run(client, elevated(root, playwrightVerificationScript())); err != nil {
+				resultWarnings = append(resultWarnings, "playwright_verification_failed")
+			}
+		}
+	} else {
+		resultWarnings = append(resultWarnings, "playwright_install_requires_npm")
 	}
 
 	request.report("enrolling_agent", 0, 0)
@@ -339,6 +369,49 @@ chown root:root /root/.npmrc
 chmod 0600 /root/.npmrc
 chown wio-agent:wio-agent /var/lib/wio-agent/.npmrc
 chmod 0600 /var/lib/wio-agent/.npmrc`
+}
+
+func playwrightPackageInstallationScript() string {
+	prefix := playwrightPrefix()
+	install := "env HOME=/var/lib/wio-agent npm install --prefix " + shellQuote(prefix) + " --omit=dev " + shellQuote("playwright@"+playwrightVersion)
+	return `set -eu
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/playwright/versions
+su -s /bin/sh -c ` + shellQuote(install) + ` wio-agent
+test -x ` + shellQuote(playwrightCLI()) + `
+ln -sfn ` + shellQuote(playwrightCLI()) + ` /usr/local/bin/playwright`
+}
+
+func playwrightDependenciesInstallationScript() string {
+	return `set -eu
+` + shellQuote(playwrightCLI()) + ` install-deps chromium`
+}
+
+func playwrightBrowserInstallationScript(npmRegistry string) string {
+	environment := "env HOME=/var/lib/wio-agent PLAYWRIGHT_BROWSERS_PATH=/var/lib/wio-agent/.cache/ms-playwright"
+	if npmRegistry == mainlandNPMRegistry {
+		environment += " PLAYWRIGHT_DOWNLOAD_HOST=" + shellQuote(playwrightMirror)
+	}
+	install := environment + " timeout 10m " + shellQuote(playwrightCLI()) + " install chromium"
+	return `set -eu
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/.cache
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/.cache/ms-playwright
+su -s /bin/sh -c ` + shellQuote(install) + ` wio-agent`
+}
+
+func playwrightVerificationScript() string {
+	javascript := `const { chromium } = require(` + strconv.Quote(path.Join(playwrightPrefix(), "node_modules", "playwright")) + `); (async () => { const browser = await chromium.launch({ headless: true }); console.log(await browser.version()); await browser.close(); })().catch(error => { console.error(error); process.exit(1); });`
+	verify := "env HOME=/var/lib/wio-agent PLAYWRIGHT_BROWSERS_PATH=/var/lib/wio-agent/.cache/ms-playwright node -e " + shellQuote(javascript)
+	return `set -eu
+` + shellQuote(playwrightCLI()) + ` --version
+su -s /bin/sh -c ` + shellQuote(verify) + ` wio-agent`
+}
+
+func playwrightPrefix() string {
+	return "/var/lib/wio-agent/playwright/versions/" + playwrightVersion
+}
+
+func playwrightCLI() string {
+	return path.Join(playwrightPrefix(), "node_modules", ".bin", "playwright")
 }
 
 func agentServiceUnit(unit []byte, allowSudo bool) []byte {
@@ -738,12 +811,6 @@ var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 func validModel(value string) bool {
 	return modelPattern.MatchString(strings.TrimSpace(value))
-}
-
-func codexConfiguration(apiURL, model string) string {
-	// Codex omits the entire reasoning object for custom model names unless this
-	// capability is forced on, even when turn/start contains an explicit effort.
-	return fmt.Sprintf("model = %s\nmodel_provider = \"wio_api\"\nmodel_supports_reasoning_summaries = true\n\n[model_providers.wio_api]\nname = \"Wio API\"\nbase_url = %s\nenv_key = \"WIO_CODEX_API_KEY\"\nwire_api = \"responses\"\n", strconv.Quote(strings.TrimSpace(model)), strconv.Quote(strings.TrimRight(strings.TrimSpace(apiURL), "/")))
 }
 
 func gitCredential(endpoint, username, token string) (string, error) {

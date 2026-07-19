@@ -55,18 +55,6 @@ func TestValidateInstallRequest(t *testing.T) {
 	}
 }
 
-func TestCodexConfiguration(t *testing.T) {
-	configuration := codexConfiguration("https://api.example.com/v1/", "custom-model")
-	for _, expected := range []string{`model = "custom-model"`, `model_provider = "wio_api"`, `model_supports_reasoning_summaries = true`, `base_url = "https://api.example.com/v1"`, `env_key = "WIO_CODEX_API_KEY"`, `wire_api = "responses"`} {
-		if !strings.Contains(configuration, expected) {
-			t.Fatalf("configuration missing %q:\n%s", expected, configuration)
-		}
-	}
-	if strings.Contains(configuration, "api-key-value") {
-		t.Fatal("configuration must not contain an API key")
-	}
-}
-
 func TestAgentServiceUnitAllowsExplicitSudo(t *testing.T) {
 	base := []byte("NoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nRestrictSUIDSGID=true\n")
 	if got := string(agentServiceUnit(base, false)); got != string(base) {
@@ -113,6 +101,32 @@ func TestNPMRegistryConfigurationScript(t *testing.T) {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("npm configuration script missing %q:\n%s", expected, script)
 		}
+	}
+}
+
+func TestPlaywrightInstallationScripts(t *testing.T) {
+	packageScript := playwrightPackageInstallationScript()
+	for _, expected := range []string{
+		"playwright@" + playwrightVersion,
+		"su -s /bin/sh",
+		"/usr/local/bin/playwright",
+		playwrightCLI(),
+	} {
+		if !strings.Contains(packageScript, expected) {
+			t.Fatalf("Playwright package script missing %q:\n%s", expected, packageScript)
+		}
+	}
+	if dependencies := playwrightDependenciesInstallationScript(); !strings.Contains(dependencies, "install-deps chromium") {
+		t.Fatalf("Playwright dependency script does not install Chromium dependencies:\n%s", dependencies)
+	}
+	if browser := playwrightBrowserInstallationScript(mainlandNPMRegistry); !strings.Contains(browser, "PLAYWRIGHT_BROWSERS_PATH=/var/lib/wio-agent/.cache/ms-playwright") || !strings.Contains(browser, "PLAYWRIGHT_DOWNLOAD_HOST=") || !strings.Contains(browser, playwrightMirror) || !strings.Contains(browser, "timeout 10m") || !strings.Contains(browser, "install chromium") {
+		t.Fatalf("Playwright browser script does not install Chromium as wio-agent:\n%s", browser)
+	}
+	if browser := playwrightBrowserInstallationScript(officialNPMRegistry); strings.Contains(browser, "PLAYWRIGHT_DOWNLOAD_HOST") {
+		t.Fatalf("international Playwright installation unexpectedly uses the mainland mirror:\n%s", browser)
+	}
+	if verification := playwrightVerificationScript(); !strings.Contains(verification, "chromium.launch") || !strings.Contains(verification, "--version") {
+		t.Fatalf("Playwright verification does not launch Chromium:\n%s", verification)
 	}
 }
 

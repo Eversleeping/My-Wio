@@ -28,6 +28,12 @@ func TestConfigureCredentialsWritesProtectedFilesAndRemovesGit(t *testing.T) {
 		CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "new-codex-secret", CodexModel: "gpt-5.6-sol",
 		GitEndpoint: "https://gitee.com", GitUsername: "user@example.com", GitToken: "token:/with spaces", GitCommitName: "Example User", GitCommitEmail: "user@users.noreply.github.com",
 	}
+	if err := os.MkdirAll(filepath.Join(root, "state", ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "state", ".codex", "config.toml"), []byte("web_search = 'live'\n\n[projects.'/srv/project']\ntrust_level = 'trusted'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := client.configureCredentials(command); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +53,7 @@ func TestConfigureCredentialsWritesProtectedFilesAndRemovesGit(t *testing.T) {
 		t.Fatal(err)
 	}
 	password, _ := parsed.User.Password()
-	if string(key) != "new-codex-secret\n" || !strings.Contains(string(config), `base_url = "https://api.example.com/v1"`) || parsed.User.Username() != command.GitUsername || password != command.GitToken || !strings.Contains(string(gitConfig), `name = "Example User"`) || !strings.Contains(string(gitConfig), `email = "user@users.noreply.github.com"`) {
+	if string(key) != "new-codex-secret\n" || !strings.Contains(string(config), "base_url = 'https://api.example.com/v1'") || !strings.Contains(string(config), "sandbox_mode = 'workspace-write'") || !strings.Contains(string(config), "network_access = true") || !strings.Contains(string(config), "web_search = 'live'") || !strings.Contains(string(config), "trust_level = 'trusted'") || parsed.User.Username() != command.GitUsername || password != command.GitToken || !strings.Contains(string(gitConfig), `name = "Example User"`) || !strings.Contains(string(gitConfig), `email = "user@users.noreply.github.com"`) {
 		t.Fatalf("unexpected credential files: key=%q config=%q credential=%q gitconfig=%q", key, config, credential, gitConfig)
 	}
 	if err := client.configureCredentials(protocol.ConfigureCredentialsCommand{CodexAPIURL: command.CodexAPIURL, CodexAPIKey: command.CodexAPIKey, CodexModel: command.CodexModel, RemoveGit: true}); err != nil {

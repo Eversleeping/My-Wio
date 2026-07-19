@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 
+	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/gitidentity"
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -49,13 +49,17 @@ func (c *Client) configureCredentials(command protocol.ConfigureCredentialsComma
 	if err != nil {
 		return err
 	}
+	configuration, err := codexconfig.Merge(snapshots[1].data, command.CodexAPIURL, command.CodexModel)
+	if err != nil {
+		return err
+	}
 	apply := func() error {
 		if err := os.MkdirAll(filepath.Join(c.config.StateDir, ".codex"), 0o700); err != nil {
 			return err
 		}
 		changes := map[string]*string{
 			paths[0]: pointer(command.CodexAPIKey + "\n"),
-			paths[1]: pointer(codexConfiguration(command.CodexAPIURL, command.CodexModel)),
+			paths[1]: pointer(string(configuration)),
 		}
 		if command.RemoveGit {
 			changes[paths[2]] = nil
@@ -119,10 +123,6 @@ func validateCredentialCommand(command protocol.ConfigureCredentialsCommand) err
 
 func validCredentialValue(value string) bool {
 	return len(value) >= 8 && len(value) <= 16<<10 && !strings.ContainsAny(value, "\r\n\x00")
-}
-
-func codexConfiguration(apiURL, model string) string {
-	return fmt.Sprintf("model = %s\nmodel_provider = \"wio_api\"\nmodel_supports_reasoning_summaries = true\n\n[model_providers.wio_api]\nname = \"Wio API\"\nbase_url = %s\nenv_key = \"WIO_CODEX_API_KEY\"\nwire_api = \"responses\"\n", strconv.Quote(model), strconv.Quote(apiURL))
 }
 
 func snapshotCredentialFiles(paths []string) ([]credentialFileSnapshot, error) {
