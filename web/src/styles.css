@@ -382,6 +382,22 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .approval-prompt > small { display: block; margin: 7px 0; color: var(--muted); font-size: 10px; }
 .approval-prompt pre { max-height: 220px; margin: 0 0 10px; padding: 10px; overflow: auto; color: #31383d; background: rgba(255, 255, 255, .72); border: 1px solid #e6cda6; border-radius: 5px; font-size: 11px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .composer { padding: 12px; background: #fff; border-top: 1px solid var(--line); }
+.slash-command-menu { max-height: min(330px, 42vh); margin: 0 0 8px; overflow: hidden; background: #fff; border: 1px solid #d9ddda; border-radius: 7px; box-shadow: 0 -8px 24px rgba(31, 38, 34, .09); }
+.slash-command-back { width: 100%; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 7px 11px; color: var(--muted); background: #f7f8f6; border: 0; border-bottom: 1px solid var(--line); font-size: 11px; text-align: left; }
+.slash-command-items { max-height: min(292px, 36vh); overflow-y: auto; padding: 5px; }
+.slash-command-items > button { width: 100%; min-height: 48px; display: grid; grid-template-columns: 22px minmax(0, 1fr) minmax(0, auto) 18px; align-items: center; gap: 9px; padding: 7px 9px; color: var(--text); background: transparent; border: 0; border-radius: 5px; text-align: left; }
+.slash-command-items > button:hover, .slash-command-items > button.active { background: #edf3ef; }
+.slash-command-items > button > span { min-width: 0; display: grid; gap: 2px; }
+.slash-command-items strong, .slash-command-items small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slash-command-items strong { font-size: 12px; font-weight: 680; }
+.slash-command-items small { color: var(--muted); font-size: 10px; }
+.slash-command-items em { max-width: 210px; overflow: hidden; color: var(--muted); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.task-status-list { display: grid; margin: 0; }
+.task-status-list > div { min-width: 0; display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 14px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.task-status-list > div:last-child { border-bottom: 0; }
+.task-status-list dt { color: var(--muted); font-size: 11px; }
+.task-status-list dd { min-width: 0; margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.task-status-list code { font-size: 11px; white-space: normal; }
 .composer-editing { min-height: 34px; display: flex; align-items: center; gap: 7px; margin: -2px 0 8px; padding: 4px 6px 4px 9px; color: #76520d; background: #fff8e7; border: 1px solid #ead49d; border-radius: 5px; font-size: 11px; }
 .composer-editing span { min-width: 0; flex: 1; }
 .composer-editing .icon-button { width: 26px; height: 26px; flex: 0 0 26px; }
@@ -512,6 +528,9 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .message, .tool-event, .command-event-group, .approval-prompt { width: 94%; }
   .message.user { width: 88%; }
   .composer-bar { align-items: flex-end; }
+  .slash-command-items > button { grid-template-columns: 22px minmax(0, 1fr) 18px; }
+  .slash-command-items em { display: none; }
+  .task-status-list > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .composer-bar > div { min-width: 0; flex-direction: column; }
   .composer-bar select, .composer-bar input { width: 150px; }
   .codex-model-picker { align-items: flex-start; flex-direction: column; }
