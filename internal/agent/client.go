@@ -31,6 +31,7 @@ import (
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexadapter"
 	"github.com/wio-platform/wio/internal/deployer"
+	"github.com/wio-platform/wio/internal/gitworktree"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/scanner"
 )
@@ -284,6 +285,35 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			if err == nil {
 				resultData, err = json.Marshal(result)
 			}
+		}
+	} else if envelope.Kind == "git.worktree.create" {
+		var command protocol.GitWorktreeCreateCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var result protocol.GitWorktreeCreateResult
+			result, err = gitworktree.Create(ctx, command, c.inventoryRoots())
+			if err == nil && command.TargetThreadID != "" {
+				forkCommand := protocol.ForkThreadCommand{SourceThreadID: command.SourceThreadID, TargetThreadID: command.TargetThreadID, CodexThread: command.CodexThread, WorkspaceID: command.TargetWorkspaceID, Workspace: result.Path, Title: command.Title}
+				var fork protocol.ForkThreadResult
+				fork, err = c.codex.ForkThread(ctx, forkCommand)
+				if err != nil {
+					cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+					cleanupErr := gitworktree.Remove(cleanupContext, command.SourcePath, result.Path, command.Branch, c.inventoryRoots())
+					cancelCleanup()
+					if cleanupErr != nil {
+						err = fmt.Errorf("fork Codex thread: %v; cleanup worktree: %w", err, cleanupErr)
+					}
+				} else {
+					result.CodexThread = fork.CodexThread
+				}
+			}
+			if err == nil {
+				resultData, err = json.Marshal(result)
+			}
+		}
+	} else if envelope.Kind == "git.worktree.cleanup" {
+		var command protocol.GitWorktreeCleanupCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			err = gitworktree.Remove(ctx, command.SourcePath, command.TargetPath, command.Branch, c.inventoryRoots())
 		}
 	} else {
 		err = c.execute(ctx, envelope)

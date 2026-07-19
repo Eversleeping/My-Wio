@@ -629,6 +629,10 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   const [renameTarget, setRenameTarget] = useState<{ kind: "project" | "thread"; id: string; name: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
+  const [worktreeTarget, setWorktreeTarget] = useState<{ kind: "project"; projectID: string; projectName: string } | { kind: "thread"; thread: Thread } | null>(null);
+  const [worktreeForm, setWorktreeForm] = useState({ workspace_id: "", branch: "", path: "", base_ref: "HEAD" });
+  const [worktreeBusy, setWorktreeBusy] = useState(false);
+  const [worktreeError, setWorktreeError] = useState("");
   const [preview, setPreview] = useState<FilePreviewSelection | null>(null);
   const [activePane, setActivePane] = useState<"conversation" | "preview">("conversation");
   const listedActiveThreads = threads.data ?? [];
@@ -702,9 +706,42 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
       notify(t("codex.threadForked"));
     } catch (error) { notify(message(error)); } finally { setThreadAction(""); }
   };
+  const openWorktreeDialog = (target: { kind: "project"; projectID: string; projectName: string } | { kind: "thread"; thread: Thread }) => {
+    const candidates = target.kind === "project" ? (workspaces.data ?? []).filter(workspace => workspace.project_id === target.projectID) : (workspaces.data ?? []).filter(workspace => workspace.id === target.thread.workspace_id);
+    setWorktreeTarget(target);
+    setWorktreeForm({ workspace_id: candidates[0]?.id ?? "", branch: "", path: "", base_ref: "HEAD" });
+    setWorktreeError("");
+  };
+  const closeWorktreeDialog = () => { if (!worktreeBusy) { setWorktreeTarget(null); setWorktreeError(""); } };
+  const submitWorktree = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!worktreeTarget || worktreeBusy || !worktreeForm.workspace_id || !worktreeForm.branch.trim()) return;
+    setWorktreeBusy(true);
+    setWorktreeError("");
+    const payload = { branch: worktreeForm.branch.trim(), path: worktreeForm.path.trim(), base_ref: worktreeForm.base_ref.trim() || "HEAD" };
+    try {
+      if (worktreeTarget.kind === "project") {
+        const result = await post<{ operation_id: string; workspace_id: string }>(`/workspaces/${worktreeForm.workspace_id}/worktrees`, payload);
+        await waitForWorkspace(result.workspace_id, t("codex.worktreeTimeout"));
+        workspaces.reload();
+        notify(t("codex.worktreeCreated"));
+      } else {
+        const result = await post<{ operation_id: string; workspace_id: string; target_thread_id: string }>(`/threads/${worktreeTarget.thread.id}/fork-worktree`, payload);
+        const [, created] = await Promise.all([waitForWorkspace(result.workspace_id, t("codex.worktreeTimeout")), waitForThread(result.target_thread_id, t("codex.worktreeTaskTimeout"))]);
+        setPendingThread(created);
+        workspaces.reload();
+        reloadThreadLists();
+        setShowArchived(false);
+        selectThread(created.id);
+        notify(t("codex.continuedInWorktree"));
+      }
+      setWorktreeTarget(null);
+    } catch (error) { setWorktreeError(message(error)); } finally { setWorktreeBusy(false); }
+  };
   const projectMenuActions = (group: ThreadGroup): ContextMenuAction[] => [
     { id: "pin", label: t(group.pinnedAt ? "codex.unpinProject" : "codex.pinProject"), icon: group.pinnedAt ? PinOff : Pin, onSelect: async () => { try { await patch<Project>(`/projects/${group.projectID}`, { pinned: !group.pinnedAt }); threads.reload(); notify(t(group.pinnedAt ? "codex.projectUnpinned" : "codex.projectPinned")); } catch (error) { notify(message(error)); } } },
     { id: "rename", label: t("codex.renameProject"), icon: Pencil, onSelect: () => beginRename("project", group.projectID, group.projectName) },
+    ...(!showArchived ? [{ id: "create-worktree", label: t("codex.createPermanentWorktree"), icon: GitBranch, disabled: threadAction !== "" || !(workspaces.data ?? []).some(workspace => workspace.project_id === group.projectID), onSelect: () => openWorktreeDialog({ kind: "project", projectID: group.projectID, projectName: group.projectName }) } satisfies ContextMenuAction] : []),
     ...(!showArchived ? [{ id: "archive-tasks", label: t("codex.archiveProjectThreads"), icon: Archive, danger: true, separatorBefore: true, disabled: threadAction !== "", onSelect: () => archiveProjectThreads(group) } satisfies ContextMenuAction] : []),
     { id: "hide", label: t("codex.hideProject"), icon: EyeOff, danger: true, separatorBefore: true, onSelect: async () => { if (!confirm(t("codex.confirmHideProject", { name: group.projectName }))) return; try { await patch<Project>(`/projects/${group.projectID}`, { hidden: true }); if (active?.project_id === group.projectID) selectThread(visibleThreads.find(thread => thread.project_id !== group.projectID)?.id ?? ""); threads.reload(); notify(t("codex.projectHidden")); } catch (error) { notify(message(error)); } } }
   ];
@@ -713,6 +750,7 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
     { id: "pin", label: t(thread.pinned_at ? "codex.unpinThread" : "codex.pinThread"), icon: thread.pinned_at ? PinOff : Pin, onSelect: async () => { try { await patch<Thread>(`/threads/${thread.id}`, { pinned: !thread.pinned_at }); threads.reload(); notify(t(thread.pinned_at ? "codex.threadUnpinned" : "codex.threadPinned")); } catch (error) { notify(message(error)); } } },
     { id: "rename", label: t("codex.renameThread"), icon: Pencil, onSelect: () => beginRename("thread", thread.id, thread.title) },
     { id: "fork", label: t("codex.continueInNewTask"), icon: GitFork, disabled: threadAction !== "" || !thread.codex_thread_id, onSelect: () => continueInNewTask(thread) },
+    { id: "fork-worktree", label: t("codex.continueInNewWorktree"), icon: GitBranch, disabled: threadAction !== "" || !thread.codex_thread_id || thread.status === "queued" || thread.status === "running", onSelect: () => openWorktreeDialog({ kind: "thread", thread }) },
     { id: "archive", label: t("codex.archiveThread"), icon: Archive, danger: true, separatorBefore: true, disabled: threadAction !== "" || thread.status === "queued" || thread.status === "running", onSelect: () => setThreadArchived(thread, true) }
     ]),
     { id: "copy-path", label: t("codex.copyWorkingDirectory"), icon: FolderOpen, separatorBefore: true, disabled: !thread.path, onSelect: () => copyValue(thread.path, t("codex.workingDirectoryCopied")) },
@@ -743,6 +781,7 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
+    <Dialog open={worktreeTarget !== null} title={t(worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")} onClose={closeWorktreeDialog}><form onSubmit={submitWorktree}>{worktreeError && <ErrorBanner text={worktreeError} />}<p className="security-notice">{t(worktreeTarget?.kind === "thread" ? "codex.continueWorktreeDescription" : "codex.createWorktreeDescription")}</p>{worktreeTarget?.kind === "project" && <Field label={t("codex.sourceWorkspace")}><select value={worktreeForm.workspace_id} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, workspace_id: event.target.value })} required><option value="">{t("codex.selectWorkspaceOption")}</option>{(workspaces.data ?? []).filter(workspace => workspace.project_id === worktreeTarget.projectID).map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.server_name} · {workspace.branch || t("project.detached")} · {workspace.path}</option>)}</select></Field>}<div className="form-grid"><Field label={t("codex.worktreeBranch")}><input autoFocus value={worktreeForm.branch} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, branch: event.target.value })} placeholder="feature/my-change" required /></Field><Field label={t("codex.worktreeBaseRef")}><input value={worktreeForm.base_ref} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, base_ref: event.target.value })} placeholder="HEAD" required /></Field></div><Field label={t("codex.worktreePath")}><input value={worktreeForm.path} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, path: event.target.value })} placeholder={t("codex.worktreePathPlaceholder")} /></Field><DialogActions><button type="button" className="secondary-button" disabled={worktreeBusy} onClick={closeWorktreeDialog}>{t("common.cancel")}</button><button className="primary-button" disabled={worktreeBusy || !worktreeForm.workspace_id || !worktreeForm.branch.trim()}>{worktreeBusy ? <LoaderCircle className="spin" size={16} /> : worktreeTarget?.kind === "thread" ? <GitFork size={16} /> : <GitBranch size={16} />}{t(worktreeBusy ? "codex.creatingWorktree" : worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")}</button></DialogActions></form></Dialog>
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
   </div>;
 }
@@ -1015,6 +1054,20 @@ async function waitForThread(threadID: string, timeoutMessage: string) {
     const thread = threads.find(item => item.id === threadID);
     if (thread) return thread;
     await new Promise(resolve => window.setTimeout(resolve, 500));
+  }
+  throw new Error(timeoutMessage);
+}
+
+async function waitForWorkspace(workspaceID: string, timeoutMessage: string) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const workspaces = await api<Workspace[]>("/workspaces");
+      const workspace = workspaces.find(item => item.id === workspaceID);
+      if (workspace) return workspace;
+    } catch (error) {
+      if (error instanceof APIError && error.status >= 400 && error.status < 500) throw error;
+    }
+    await new Promise(resolve => window.setTimeout(resolve, 750));
   }
   throw new Error(timeoutMessage);
 }

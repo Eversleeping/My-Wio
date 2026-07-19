@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -279,6 +280,25 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			}
 			if err := g.store.CommitThreadFork(ctx, command, fork.CodexThread); err != nil {
 				return err
+			}
+		}
+		if operation.Kind == "git.worktree.create" && result.Status == "succeeded" {
+			var command protocol.GitWorktreeCreateCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			var worktree protocol.GitWorktreeCreateResult
+			if err := json.Unmarshal(result.Data, &worktree); err != nil {
+				return err
+			}
+			if commitErr := g.store.CommitGitWorktree(ctx, command, worktree); commitErr != nil {
+				cleanup := protocol.GitWorktreeCleanupCommand{SourcePath: command.SourcePath, TargetPath: worktree.Path, Branch: worktree.Branch}
+				if _, queueErr := g.store.QueueOperation(ctx, serverID, "git.worktree.cleanup", cleanup, "git-worktree-cleanup:"+command.TargetWorkspaceID); queueErr != nil {
+					return fmt.Errorf("commit worktree: %v; queue cleanup: %w", commitErr, queueErr)
+				}
+				g.Wake(serverID)
+				result.Status = "failed"
+				result.Message = "could not persist worktree; cleanup queued: " + commitErr.Error()
 			}
 		}
 		if operation.Kind == "credentials.configure" {

@@ -62,6 +62,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateWorkspaceMetadata(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
 			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
@@ -70,6 +74,37 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateWorkspaceMetadata(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		_, err := db.ExecContext(ctx, `ALTER TABLE workspaces
+			ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'primary',
+			ADD COLUMN IF NOT EXISTS parent_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL`)
+		if err != nil {
+			return fmt.Errorf("migrate workspace metadata: %w", err)
+		}
+		return nil
+	}
+	var columns []string
+	if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info('workspaces')"); err != nil {
+		return fmt.Errorf("inspect workspace metadata columns: %w", err)
+	}
+	existing := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		existing[column] = true
+	}
+	if !existing["kind"] {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'primary'"); err != nil {
+			return fmt.Errorf("migrate workspace kind: %w", err)
+		}
+	}
+	if !existing["parent_workspace_id"] {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE workspaces ADD COLUMN parent_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"); err != nil {
+			return fmt.Errorf("migrate workspace parent: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateProjectThreadPreferences(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -551,26 +586,28 @@ func (s *Store) DeleteProject(ctx context.Context, projectID string) (bool, erro
 }
 
 type Workspace struct {
-	ID          string `db:"id" json:"id"`
-	ProjectID   string `db:"project_id" json:"project_id"`
-	ServerID    string `db:"server_id" json:"server_id"`
-	Path        string `db:"path" json:"path"`
-	Branch      string `db:"branch" json:"branch"`
-	CommitSHA   string `db:"commit_sha" json:"commit_sha"`
-	Dirty       int    `db:"dirty" json:"dirty"`
-	ServerName  string `db:"server_name" json:"server_name"`
-	ProjectName string `db:"project_name" json:"project_name"`
+	ID                string  `db:"id" json:"id"`
+	ProjectID         string  `db:"project_id" json:"project_id"`
+	ServerID          string  `db:"server_id" json:"server_id"`
+	Path              string  `db:"path" json:"path"`
+	Kind              string  `db:"kind" json:"kind"`
+	ParentWorkspaceID *string `db:"parent_workspace_id" json:"parent_workspace_id"`
+	Branch            string  `db:"branch" json:"branch"`
+	CommitSHA         string  `db:"commit_sha" json:"commit_sha"`
+	Dirty             int     `db:"dirty" json:"dirty"`
+	ServerName        string  `db:"server_name" json:"server_name"`
+	ProjectName       string  `db:"project_name" json:"project_name"`
 }
 
 func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	var out []Workspace
-	err := s.DB.SelectContext(ctx, &out, `SELECT w.id,w.project_id,w.server_id,w.path,w.branch,w.commit_sha,w.dirty,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY p.name,s.name`)
+	err := s.DB.SelectContext(ctx, &out, `SELECT w.id,w.project_id,w.server_id,w.path,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY p.name,s.name`)
 	return out, err
 }
 
 func (s *Store) Workspace(ctx context.Context, id string) (Workspace, error) {
 	var workspace Workspace
-	err := s.DB.GetContext(ctx, &workspace, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.branch,w.commit_sha,w.dirty,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE w.id=?`), id)
+	err := s.DB.GetContext(ctx, &workspace, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE w.id=?`), id)
 	return workspace, err
 }
 

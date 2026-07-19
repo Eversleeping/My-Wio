@@ -5,7 +5,7 @@ export interface SSHHostKey { fingerprint: string; key_type: string }
 export interface SSHBootstrapResult { server_id: string; hostname: string; architecture: string; warnings: string[] }
 export interface SSHBootstrapStreamEvent { type: "progress" | "heartbeat" | "complete" | "error"; step?: string; current?: number; total?: number; code?: string; error?: string; detail?: string; result?: SSHBootstrapResult }
 export interface Project { id: string; name: string; remote_url: string; updated_at: string; workspace_count: number; import_status: string; import_message: string; import_server_id: string; import_server_name: string; import_operation_id: string; pinned_at: string | null; hidden_at: string | null }
-export interface Workspace { id: string; project_id: string; server_id: string; path: string; branch: string; commit_sha: string; dirty: number; server_name: string; project_name: string }
+export interface Workspace { id: string; project_id: string; server_id: string; path: string; branch: string; commit_sha: string; dirty: number; kind: "primary" | "worktree" | string; parent_workspace_id: string | null; server_name: string; project_name: string }
 export interface WorkspaceFile { path: string; kind: "directory" | "file" | "symlink"; size?: number }
 export interface WorkspaceFilesSnapshot { workspace_id: string; files: WorkspaceFile[]; truncated: boolean; status: "idle" | "scanning" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
 export interface WorkspaceFilePreview { workspace_id: string; path: string; content: string; size: number; truncated: boolean; status: "idle" | "loading" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }

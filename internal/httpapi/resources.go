@@ -289,6 +289,111 @@ func (a *API) workspaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workspaces)
 }
 
+type createWorktreeInput struct {
+	Branch  string `json:"branch"`
+	Path    string `json:"path"`
+	BaseRef string `json:"base_ref"`
+}
+
+func (a *API) createWorktree(w http.ResponseWriter, r *http.Request) {
+	workspace, err := a.store.Workspace(r.Context(), chi.URLParam(r, "workspaceID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	var input createWorktreeInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	command, err := newWorktreeCommand(workspace, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree:"+command.TargetWorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue worktree creation")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "git.worktree.create", "workspace", workspace.ID, map[string]string{"operation_id": operationID, "target_workspace_id": command.TargetWorkspaceID, "branch": command.Branch}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "workspace_id": command.TargetWorkspaceID})
+}
+
+func (a *API) forkThreadToWorktree(w http.ResponseWriter, r *http.Request) {
+	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Codex session")
+		return
+	}
+	if thread.ArchivedAt != nil || thread.CodexThreadID == "" || thread.Status == "queued" || thread.Status == "running" {
+		writeError(w, http.StatusConflict, "Codex session cannot be continued to a worktree")
+		return
+	}
+	workspace, err := a.store.Workspace(r.Context(), thread.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	var input createWorktreeInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	command, err := newWorktreeCommand(workspace, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	command.SourceThreadID = thread.ID
+	command.TargetThreadID = store.NewID()
+	command.CodexThread = thread.CodexThreadID
+	command.Title = thread.Title + " (continued)"
+	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree-fork:"+command.TargetWorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue worktree continuation")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.fork_worktree", "thread", thread.ID, map[string]string{"operation_id": operationID, "target_workspace_id": command.TargetWorkspaceID, "target_thread_id": command.TargetThreadID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "workspace_id": command.TargetWorkspaceID, "target_thread_id": command.TargetThreadID})
+}
+
+func newWorktreeCommand(workspace store.Workspace, input createWorktreeInput) (protocol.GitWorktreeCreateCommand, error) {
+	branch := strings.TrimSpace(input.Branch)
+	if branch == "" || len(branch) > 240 || strings.ContainsAny(branch, "\x00\r\n") {
+		return protocol.GitWorktreeCreateCommand{}, errors.New("valid branch is required")
+	}
+	target := strings.TrimSpace(input.Path)
+	if target == "" {
+		name := strings.NewReplacer("/", "-", "\\", "-", " ", "-").Replace(branch)
+		target = filepath.Join(filepath.Dir(workspace.Path), filepath.Base(workspace.Path)+"-"+name)
+	}
+	if !filepath.IsAbs(target) {
+		return protocol.GitWorktreeCreateCommand{}, errors.New("worktree path must be absolute")
+	}
+	return protocol.GitWorktreeCreateCommand{SourceWorkspaceID: workspace.ID, TargetWorkspaceID: store.NewID(), ProjectID: workspace.ProjectID, SourcePath: workspace.Path, TargetPath: filepath.Clean(target), Branch: branch, BaseRef: strings.TrimSpace(input.BaseRef)}, nil
+}
+
 func (a *API) importProject(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		ServerID    string `json:"server_id"`

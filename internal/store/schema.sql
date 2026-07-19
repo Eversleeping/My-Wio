@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   path TEXT NOT NULL,
+	 kind TEXT NOT NULL DEFAULT 'primary',
+	 parent_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   branch TEXT NOT NULL DEFAULT '',
   commit_sha TEXT NOT NULL DEFAULT '',
   dirty INTEGER NOT NULL DEFAULT 0,

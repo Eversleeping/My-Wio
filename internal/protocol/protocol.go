@@ -91,6 +91,33 @@ type WorkspaceFilePreviewResult struct {
 	Truncated bool   `json:"truncated"`
 }
 
+type GitWorktreeCreateCommand struct {
+	SourceWorkspaceID string `json:"source_workspace_id"`
+	TargetWorkspaceID string `json:"target_workspace_id"`
+	ProjectID         string `json:"project_id"`
+	SourcePath        string `json:"source_path"`
+	TargetPath        string `json:"target_path"`
+	Branch            string `json:"branch"`
+	BaseRef           string `json:"base_ref,omitempty"`
+	SourceThreadID    string `json:"source_thread_id,omitempty"`
+	TargetThreadID    string `json:"target_thread_id,omitempty"`
+	CodexThread       string `json:"codex_thread_id,omitempty"`
+	Title             string `json:"title,omitempty"`
+}
+
+type GitWorktreeCreateResult struct {
+	Path        string `json:"path"`
+	Branch      string `json:"branch"`
+	CommitSHA   string `json:"commit_sha"`
+	CodexThread string `json:"codex_thread_id,omitempty"`
+}
+
+type GitWorktreeCleanupCommand struct {
+	SourcePath string `json:"source_path"`
+	TargetPath string `json:"target_path"`
+	Branch     string `json:"branch"`
+}
+
 type CodexSnapshotCommand struct {
 	ScopeType    string `json:"scope_type"`
 	ScopeID      string `json:"scope_id"`

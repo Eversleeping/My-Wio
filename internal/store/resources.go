@@ -224,6 +224,62 @@ func (s *Store) CommitThreadFork(ctx context.Context, command protocol.ForkThrea
 	return tx.Commit()
 }
 
+func (s *Store) CommitGitWorktree(ctx context.Context, command protocol.GitWorktreeCreateCommand, result protocol.GitWorktreeCreateResult) error {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM workspaces WHERE id=? AND project_id=? AND server_id=(SELECT server_id FROM workspaces WHERE id=?)"), command.SourceWorkspaceID, command.ProjectID, command.SourceWorkspaceID); err != nil {
+		return err
+	}
+	if count != 1 {
+		return sql.ErrNoRows
+	}
+	if result.Path == "" || result.Branch != command.Branch || result.CommitSHA == "" {
+		return errors.New("worktree result does not match command")
+	}
+	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,kind,parent_workspace_id,branch,commit_sha,dirty,last_scanned_at)
+		SELECT ?,project_id,server_id,?,'worktree',?,?,?,0,? FROM workspaces WHERE id=?`), command.TargetWorkspaceID, result.Path, command.SourceWorkspaceID, result.Branch, result.CommitSHA, time.Now().UTC(), command.SourceWorkspaceID)
+	if err != nil {
+		return err
+	}
+	if command.TargetThreadID == "" {
+		return tx.Commit()
+	}
+	if command.SourceThreadID == "" || result.CodexThread == "" {
+		return errors.New("continued worktree has incomplete thread result")
+	}
+	var sourceCount int
+	if err := tx.GetContext(ctx, &sourceCount, s.Q("SELECT COUNT(*) FROM codex_threads WHERE id=? AND workspace_id=?"), command.SourceThreadID, command.SourceWorkspaceID); err != nil {
+		return err
+	}
+	if sourceCount != 1 {
+		return sql.ErrNoRows
+	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO codex_threads(id,workspace_id,codex_thread_id,title,status,last_sequence,created_at,updated_at)
+		SELECT ?,?,?,?,'idle',last_sequence,?,? FROM codex_threads WHERE id=?`), command.TargetThreadID, command.TargetWorkspaceID, result.CodexThread, command.Title, now, now, command.SourceThreadID); err != nil {
+		return err
+	}
+	var events []struct {
+		Sequence   int64     `db:"sequence"`
+		Kind       string    `db:"kind"`
+		OccurredAt time.Time `db:"occurred_at"`
+		Payload    string    `db:"payload"`
+	}
+	if err := tx.SelectContext(ctx, &events, s.Q("SELECT sequence,kind,occurred_at,payload FROM events WHERE stream_id=? ORDER BY sequence"), command.SourceThreadID); err != nil {
+		return err
+	}
+	for _, event := range events {
+		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), NewID(), command.TargetThreadID, event.Sequence, event.Kind, event.OccurredAt, event.Payload); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) SetThreadTitleIfDefault(ctx context.Context, id, title string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET title=?,updated_at=? WHERE id=? AND title='New session'"), title, time.Now().UTC(), id)
 	return err
