@@ -90,6 +90,8 @@ const (
 	serverAddressLimit       = 255
 	serverConfigurationLimit = 4096
 	serverNotesLimit         = 4096
+	projectNameLimit         = 200
+	threadTitleLimit         = 200
 )
 
 func normalizeServerMetadata(address, configuration, notes string) (store.ServerMetadata, error) {
@@ -226,6 +228,56 @@ func (a *API) projects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, projects)
+}
+
+func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name   *string `json:"name"`
+		Pinned *bool   `json:"pinned"`
+		Hidden *bool   `json:"hidden"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Name == nil && input.Pinned == nil && input.Hidden == nil {
+		writeError(w, http.StatusBadRequest, "at least one project field is required")
+		return
+	}
+	if input.Name != nil {
+		name := strings.TrimSpace(*input.Name)
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "project name is required")
+			return
+		}
+		if utf8.RuneCountInString(name) > projectNameLimit {
+			writeError(w, http.StatusBadRequest, "project name is too long")
+			return
+		}
+		input.Name = &name
+	}
+	projectID := chi.URLParam(r, "projectID")
+	project, err := a.store.UpdateProject(r.Context(), projectID, input.Name, input.Pinned, input.Hidden)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not update project")
+		return
+	}
+	detail := map[string]any{}
+	if input.Name != nil {
+		detail["name"] = *input.Name
+	}
+	if input.Pinned != nil {
+		detail["pinned"] = *input.Pinned
+	}
+	if input.Hidden != nil {
+		detail["hidden"] = *input.Hidden
+	}
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "project.update", "project", project.ID, detail, clientIP(r))
+	writeJSON(w, http.StatusOK, project)
 }
 
 func (a *API) workspaces(w http.ResponseWriter, r *http.Request) {
@@ -565,6 +617,52 @@ func (a *API) threads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, threads)
+}
+
+func (a *API) updateThread(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Title  *string `json:"title"`
+		Pinned *bool   `json:"pinned"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Title == nil && input.Pinned == nil {
+		writeError(w, http.StatusBadRequest, "at least one thread field is required")
+		return
+	}
+	if input.Title != nil {
+		title := strings.TrimSpace(*input.Title)
+		if title == "" {
+			writeError(w, http.StatusBadRequest, "thread title is required")
+			return
+		}
+		if utf8.RuneCountInString(title) > threadTitleLimit {
+			writeError(w, http.StatusBadRequest, "thread title is too long")
+			return
+		}
+		input.Title = &title
+	}
+	threadID := chi.URLParam(r, "threadID")
+	thread, err := a.store.UpdateThread(r.Context(), threadID, input.Title, input.Pinned)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not update Codex session")
+		return
+	}
+	detail := map[string]any{}
+	if input.Title != nil {
+		detail["title"] = *input.Title
+	}
+	if input.Pinned != nil {
+		detail["pinned"] = *input.Pinned
+	}
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.update", "thread", thread.ID, detail, clientIP(r))
+	writeJSON(w, http.StatusOK, thread)
 }
 
 func (a *API) createThread(w http.ResponseWriter, r *http.Request) {

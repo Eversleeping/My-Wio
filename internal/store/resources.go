@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -15,29 +16,32 @@ var ErrInvalidEditTarget = errors.New("invalid Codex message edit target")
 var ErrApprovalResolved = errors.New("approval was already resolved")
 
 type Thread struct {
-	ID            string    `db:"id" json:"id"`
-	WorkspaceID   string    `db:"workspace_id" json:"workspace_id"`
-	ProjectID     string    `db:"project_id" json:"project_id"`
-	CodexThreadID string    `db:"codex_thread_id" json:"codex_thread_id"`
-	Title         string    `db:"title" json:"title"`
-	Status        string    `db:"status" json:"status"`
-	Path          string    `db:"path" json:"path"`
-	ServerID      string    `db:"server_id" json:"server_id"`
-	ServerName    string    `db:"server_name" json:"server_name"`
-	ProjectName   string    `db:"project_name" json:"project_name"`
-	CreatedAt     time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
+	ID              string     `db:"id" json:"id"`
+	WorkspaceID     string     `db:"workspace_id" json:"workspace_id"`
+	ProjectID       string     `db:"project_id" json:"project_id"`
+	CodexThreadID   string     `db:"codex_thread_id" json:"codex_thread_id"`
+	Title           string     `db:"title" json:"title"`
+	Status          string     `db:"status" json:"status"`
+	Path            string     `db:"path" json:"path"`
+	ServerID        string     `db:"server_id" json:"server_id"`
+	ServerName      string     `db:"server_name" json:"server_name"`
+	ProjectName     string     `db:"project_name" json:"project_name"`
+	PinnedAt        *time.Time `db:"pinned_at" json:"pinned_at"`
+	ProjectPinnedAt *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
+	ProjectHiddenAt *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
+	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 func (s *Store) ListThreads(ctx context.Context) ([]Thread, error) {
 	var out []Thread
-	err := s.DB.SelectContext(ctx, &out, `SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY t.updated_at DESC`)
+	err := s.DB.SelectContext(ctx, &out, `SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.pinned_at,p.pinned_at project_pinned_at,p.hidden_at project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC`)
 	return out, err
 }
 
 func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
 	var out Thread
-	err := s.DB.GetContext(ctx, &out, s.Q(`SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE t.id=?`), id)
+	err := s.DB.GetContext(ctx, &out, s.Q(`SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.pinned_at,p.pinned_at project_pinned_at,p.hidden_at project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE t.id=?`), id)
 	return out, err
 }
 
@@ -108,6 +112,41 @@ func (s *Store) SetThreadTitle(ctx context.Context, id, title string) error {
 	return err
 }
 
+func (s *Store) UpdateThread(ctx context.Context, id string, title *string, pinned *bool) (Thread, error) {
+	sets := make([]string, 0, 3)
+	args := make([]any, 0, 4)
+	if title != nil {
+		sets = append(sets, "title=?")
+		args = append(args, *title)
+	}
+	now := time.Now().UTC()
+	if pinned != nil {
+		sets = append(sets, "pinned_at=?")
+		if *pinned {
+			args = append(args, now)
+		} else {
+			args = append(args, nil)
+		}
+	}
+	if len(sets) == 0 {
+		return s.Thread(ctx, id)
+	}
+	sets = append(sets, "updated_at=?")
+	args = append(args, now, id)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET "+strings.Join(sets, ",")+" WHERE id=?"), args...)
+	if err != nil {
+		return Thread{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Thread{}, err
+	}
+	if rows == 0 {
+		return Thread{}, sql.ErrNoRows
+	}
+	return s.Thread(ctx, id)
+}
+
 func (s *Store) SetThreadTitleIfDefault(ctx context.Context, id, title string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET title=?,updated_at=? WHERE id=? AND title='New session'"), title, time.Now().UTC(), id)
 	return err
@@ -157,7 +196,7 @@ func (s *Store) CreateProject(ctx context.Context, name, remoteURL string) (Proj
 		return Project{}, err
 	}
 	var project Project
-	err = s.DB.GetContext(ctx, &project, s.Q("SELECT id,name,remote_url,updated_at,0 workspace_count FROM projects WHERE id=?"), id)
+	err = s.DB.GetContext(ctx, &project, s.Q("SELECT id,name,remote_url,pinned_at,hidden_at,updated_at,0 workspace_count FROM projects WHERE id=?"), id)
 	return project, err
 }
 

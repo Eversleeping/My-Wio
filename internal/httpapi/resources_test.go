@@ -626,6 +626,124 @@ func TestStartTurnRejectsInvalidReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestUpdateProjectReturnsPreferencesAndWritesAudit(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "update-project-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/update-project", Name: "before"}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("unexpected projects: %#v %v", projects, err)
+	}
+	api := resourceTestAPI(database)
+	response := projectResourceRequest(t, http.MethodPatch, "/api/projects/"+projects[0].ID, projects[0].ID, map[string]any{"name": "  after  ", "pinned": true, "hidden": true}, api.updateProject)
+	if response.Code != http.StatusOK {
+		t.Fatalf("update returned %d: %s", response.Code, response.Body.String())
+	}
+	var updated store.Project
+	if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "after" || updated.PinnedAt == nil || updated.HiddenAt == nil {
+		t.Fatalf("unexpected updated project: %#v", updated)
+	}
+	projects, err = database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].HiddenAt == nil {
+		t.Fatalf("hidden project was omitted from project list: %#v %v", projects, err)
+	}
+	var auditCount int
+	if err := database.DB.GetContext(ctx, &auditCount, database.Q("SELECT COUNT(*) FROM audit_log WHERE action='project.update' AND resource_id=?"), updated.ID); err != nil || auditCount != 1 {
+		t.Fatalf("project audit missing: count=%d err=%v", auditCount, err)
+	}
+	response = projectResourceRequest(t, http.MethodPatch, "/api/projects/"+updated.ID, updated.ID, map[string]any{"pinned": false, "hidden": false}, api.updateProject)
+	if response.Code != http.StatusOK {
+		t.Fatalf("clear preferences returned %d: %s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.PinnedAt != nil || updated.HiddenAt != nil {
+		t.Fatalf("project preferences were not cleared: %#v", updated)
+	}
+}
+
+func TestUpdateProjectRejectsInvalidInputAndMissingProject(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	api := resourceTestAPI(database)
+	for name, body := range map[string]any{
+		"empty patch":    map[string]any{},
+		"blank name":     map[string]any{"name": "  "},
+		"oversized name": map[string]any{"name": strings.Repeat("项", projectNameLimit+1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := projectResourceRequest(t, http.MethodPatch, "/api/projects/missing", "missing", body, api.updateProject)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("returned %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	missing := projectResourceRequest(t, http.MethodPatch, "/api/projects/missing", "missing", map[string]any{"pinned": true}, api.updateProject)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing project returned %d: %s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestUpdateThreadReturnsPreferencesAndWritesAudit(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "update-thread-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/update-thread", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPatch, "/api/threads/"+thread.ID, thread.ID, map[string]any{"title": "  after  ", "pinned": true}, api.updateThread)
+	if response.Code != http.StatusOK {
+		t.Fatalf("update returned %d: %s", response.Code, response.Body.String())
+	}
+	var updated store.Thread
+	if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "after" || updated.PinnedAt == nil || updated.ProjectPinnedAt != nil || updated.ProjectHiddenAt != nil {
+		t.Fatalf("unexpected updated thread: %#v", updated)
+	}
+	var auditCount int
+	if err := database.DB.GetContext(ctx, &auditCount, database.Q("SELECT COUNT(*) FROM audit_log WHERE action='codex.thread.update' AND resource_id=?"), updated.ID); err != nil || auditCount != 1 {
+		t.Fatalf("thread audit missing: count=%d err=%v", auditCount, err)
+	}
+}
+
+func TestUpdateThreadRejectsInvalidInputAndMissingThread(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	api := resourceTestAPI(database)
+	for name, body := range map[string]any{
+		"empty patch":     map[string]any{},
+		"blank title":     map[string]any{"title": "  "},
+		"oversized title": map[string]any{"title": strings.Repeat("题", threadTitleLimit+1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := threadResourceRequest(t, http.MethodPatch, "/api/threads/missing", "missing", body, api.updateThread)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("returned %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	missing := threadResourceRequest(t, http.MethodPatch, "/api/threads/missing", "missing", map[string]any{"pinned": true}, api.updateThread)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing thread returned %d: %s", missing.Code, missing.Body.String())
+	}
+}
+
 func projectResourceRequest(t *testing.T, method, target, projectID string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	route := chi.NewRouteContext()

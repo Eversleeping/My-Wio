@@ -58,6 +58,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateProjectThreadPreferences(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
 			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
@@ -66,6 +70,46 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateProjectThreadPreferences(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE projects
+			ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP,
+			ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMP`); err != nil {
+			return fmt.Errorf("migrate project preferences: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_threads
+			ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP`); err != nil {
+			return fmt.Errorf("migrate thread preferences: %w", err)
+		}
+		return nil
+	}
+	for _, table := range []struct {
+		name    string
+		columns []string
+	}{
+		{name: "projects", columns: []string{"pinned_at", "hidden_at"}},
+		{name: "codex_threads", columns: []string{"pinned_at"}},
+	} {
+		var columns []string
+		if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info(?)", table.name); err != nil {
+			return fmt.Errorf("inspect %s preference columns: %w", table.name, err)
+		}
+		existing := make(map[string]bool, len(columns))
+		for _, column := range columns {
+			existing[column] = true
+		}
+		for _, column := range table.columns {
+			if existing[column] {
+				continue
+			}
+			if _, err := db.ExecContext(ctx, "ALTER TABLE "+table.name+" ADD COLUMN "+column+" TIMESTAMP"); err != nil {
+				return fmt.Errorf("migrate %s preference column %s: %w", table.name, column, err)
+			}
+		}
+	}
+	return nil
 }
 
 func migrateCredentialProfileIdentity(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -346,21 +390,23 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 }
 
 type Project struct {
-	ID                string    `db:"id" json:"id"`
-	Name              string    `db:"name" json:"name"`
-	RemoteURL         string    `db:"remote_url" json:"remote_url"`
-	UpdatedAt         time.Time `db:"updated_at" json:"updated_at"`
-	WorkspaceCount    int       `db:"workspace_count" json:"workspace_count"`
-	ImportStatus      string    `db:"-" json:"import_status"`
-	ImportMessage     string    `db:"-" json:"import_message"`
-	ImportServerID    string    `db:"-" json:"import_server_id"`
-	ImportServerName  string    `db:"-" json:"import_server_name"`
-	ImportOperationID string    `db:"-" json:"import_operation_id"`
+	ID                string     `db:"id" json:"id"`
+	Name              string     `db:"name" json:"name"`
+	RemoteURL         string     `db:"remote_url" json:"remote_url"`
+	PinnedAt          *time.Time `db:"pinned_at" json:"pinned_at"`
+	HiddenAt          *time.Time `db:"hidden_at" json:"hidden_at"`
+	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
+	WorkspaceCount    int        `db:"workspace_count" json:"workspace_count"`
+	ImportStatus      string     `db:"-" json:"import_status"`
+	ImportMessage     string     `db:"-" json:"import_message"`
+	ImportServerID    string     `db:"-" json:"import_server_id"`
+	ImportServerName  string     `db:"-" json:"import_server_name"`
+	ImportOperationID string     `db:"-" json:"import_operation_id"`
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project
-	if err := s.DB.SelectContext(ctx, &out, `SELECT p.id,p.name,p.remote_url,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id GROUP BY p.id,p.name,p.remote_url,p.updated_at ORDER BY p.name`); err != nil {
+	if err := s.DB.SelectContext(ctx, &out, `SELECT p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id GROUP BY p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,p.name`); err != nil {
 		return nil, err
 	}
 	imports, err := s.listProjectImports(ctx)
@@ -387,8 +433,51 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 
 func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 	var project Project
-	err := s.DB.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.remote_url,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id WHERE p.id=? GROUP BY p.id,p.name,p.remote_url,p.updated_at`), id)
+	err := s.DB.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id WHERE p.id=? GROUP BY p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at`), id)
 	return project, err
+}
+
+func (s *Store) UpdateProject(ctx context.Context, id string, name *string, pinned, hidden *bool) (Project, error) {
+	sets := make([]string, 0, 4)
+	args := make([]any, 0, 5)
+	if name != nil {
+		sets = append(sets, "name=?")
+		args = append(args, *name)
+	}
+	now := time.Now().UTC()
+	if pinned != nil {
+		sets = append(sets, "pinned_at=?")
+		if *pinned {
+			args = append(args, now)
+		} else {
+			args = append(args, nil)
+		}
+	}
+	if hidden != nil {
+		sets = append(sets, "hidden_at=?")
+		if *hidden {
+			args = append(args, now)
+		} else {
+			args = append(args, nil)
+		}
+	}
+	if len(sets) == 0 {
+		return s.Project(ctx, id)
+	}
+	sets = append(sets, "updated_at=?")
+	args = append(args, now, id)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE projects SET "+strings.Join(sets, ",")+" WHERE id=?"), args...)
+	if err != nil {
+		return Project{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Project{}, err
+	}
+	if rows == 0 {
+		return Project{}, sql.ErrNoRows
+	}
+	return s.Project(ctx, id)
 }
 
 type ProjectImportOperation struct {

@@ -17,6 +17,8 @@ import {
   Copy,
   Cpu,
   Database,
+  ExternalLink,
+  EyeOff,
   File as FileIcon,
   FileCode2,
   Folder,
@@ -29,6 +31,7 @@ import {
   Image as ImageIcon,
   KeyRound,
   LayoutDashboard,
+  Link,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -39,9 +42,12 @@ import {
   MonitorDot,
   Paperclip,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   Rocket,
+  RotateCcw,
   Search,
   Server as ServerIcon,
   Settings,
@@ -60,6 +66,7 @@ import { QRCodeSVG } from "qrcode.react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, APIError, patch, post, postStream, remove, setSession, socketURL } from "./api";
+import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { currentLocale, useI18n } from "./i18n";
 import type {
   Alert,
@@ -120,11 +127,28 @@ const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboa
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];
 
+function readLocationState(): { view: View; threadID: string } {
+  const params = new URLSearchParams(window.location.search);
+  const requestedView = params.get("view");
+  const view = navigation.some(item => item.id === requestedView) ? requestedView as View : "dashboard";
+  return { view, threadID: view === "codex" ? params.get("thread") ?? "" : "" };
+}
+
+function locationFor(view: View, threadID = "") {
+  const params = new URLSearchParams();
+  if (view !== "dashboard") params.set("view", view);
+  if (view === "codex" && threadID) params.set("thread", threadID);
+  const query = params.toString();
+  return `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+}
+
 export default function App() {
   const { t } = useI18n();
+  const initialLocation = useMemo(readLocationState, []);
   const [auth, setAuth] = useState<AuthState>("loading");
   const [session, setCurrentSession] = useState<Session | null>(null);
-  const [view, setView] = useState<View>("dashboard");
+  const [view, setView] = useState<View>(initialLocation.view);
+  const [codexThreadID, setCodexThreadID] = useState(initialLocation.threadID);
   const [mobileNav, setMobileNav] = useState(false);
   const [realtime, setRealtime] = useState(0);
   const [streamRevisions, setStreamRevisions] = useState<StreamRevisions>({});
@@ -213,6 +237,17 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    const onPopState = () => {
+      const location = readLocationState();
+      setView(location.view);
+      setCodexThreadID(location.threadID);
+      setMobileNav(false);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   if (auth === "loading") return <LoadingScreen />;
   if (auth === "setup") return <SetupScreen onReady={() => setAuth("login")} />;
   if (auth === "login") return <LoginScreen onLogin={authenticate} />;
@@ -221,12 +256,19 @@ export default function App() {
     await api("/auth/logout", { method: "POST" });
     authenticate(null);
   };
-  const selectView = (next: View) => { setView(next); setMobileNav(false); };
+  const selectView = (next: View, threadID = "", replace = false) => {
+    const nextThreadID = next === "codex" ? threadID : "";
+    setView(next);
+    setCodexThreadID(nextThreadID);
+    setMobileNav(false);
+    const nextLocation = locationFor(next, nextThreadID);
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextLocation) window.history[replace ? "replaceState" : "pushState"](null, "", nextLocation);
+  };
   const page = {
     dashboard: <Dashboard realtime={realtime} onNavigate={selectView} />,
     servers: <ServersPage realtime={realtime} notify={setToast} />,
     projects: <ProjectsPage realtime={realtime} notify={setToast} />,
-    codex: <CodexPage realtime={realtime} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} />,
+    codex: <CodexPage realtime={realtime} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} />,
     deployments: <DeploymentsPage realtime={realtime} notify={setToast} />,
     monitoring: <MonitoringPage realtime={realtime} />,
     settings: <SettingsPage realtime={realtime} notify={setToast} />
@@ -508,7 +550,7 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   const [dialog, setDialog] = useState(false);
   const [mode, setMode] = useState<"clone" | "discover">("clone");
   const [busy, setBusy] = useState(false);
-  const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "delete" } | null>(null);
+  const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "delete" | "restore" } | null>(null);
   const [form, setForm] = useState({ name: "", remote_url: "", server_id: "", destination: "" });
   const close = () => { if (!busy) setDialog(false); };
   const submit = async (event: FormEvent) => {
@@ -543,42 +585,91 @@ function ProjectsPage({ realtime, notify }: PageProps) {
       notify(t("project.deleted"));
     } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
   };
+  const restoreProject = async (project: Project) => {
+    setProjectAction({ id: project.id, kind: "restore" });
+    try {
+      await patch<Project>(`/projects/${project.id}`, { hidden: false });
+      projects.reload();
+      notify(t("project.restored"));
+    } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
+  };
   const importState = (project: Project) => project.import_status === "queued" || project.import_status === "delivered" ? "importing" : project.import_status === "failed" ? "failed" : project.workspace_count > 0 ? "ready" : project.import_status === "succeeded" ? "syncing" : "pending";
   const importMessage = (project: Project) => /http2 framing|expected flush|timed? out|timeout|could not resolve|temporary failure in name resolution|connection (?:refused|reset)|network is unreachable|dial tcp/i.test(project.import_message) ? t("project.networkFailure") : project.import_message;
   const serverOptions = (servers.data ?? []).map(server => <option key={server.id} value={server.id} disabled={server.status !== "online"}>{server.name}{server.status !== "online" ? ` (${t("status.offline")})` : ""}</option>);
   return <div className="page-stack"><Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={() => setDialog(true)}><Plus size={17} />{t("project.import")}</button>}>
-    <DataTable headers={[t("column.project"), t("column.remote"), t("column.workspaces"), t("project.importStatus"), t("column.updated"), t("common.actions")]} empty={t("project.none")}>{(projects.data ?? []).map(project => { const state = importState(project); const failed = state === "failed" && project.workspace_count === 0; const action = projectAction?.id === project.id ? projectAction.kind : null; const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id); const retryAvailable = targetServer?.status === "online"; return <tr key={project.id}><td><div className="cell-main"><strong>{project.name}</strong>{project.import_server_name && <small>{t("project.targetSummary", { server: project.import_server_name })}</small>}</div></td><td><code className="truncate-code">{project.remote_url || t("project.local")}</code></td><td>{project.workspace_count}</td><td><div className="project-import-state"><Status value={state} />{state === "syncing" && <small className="project-import-message syncing">{t("project.awaitingWorkspace")}</small>}{state === "failed" && importMessage(project) && <small className="project-import-message" title={project.import_message}>{importMessage(project)}</small>}</div></td><td>{relative(project.updated_at)}</td><td><div className="row-actions">{failed ? <><button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t("project.retryImport") : t("project.retryOffline")} onClick={() => void retryImport(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button className="icon-button danger" disabled={projectAction !== null} title={t("project.deleteFailed")} onClick={() => void deleteFailedProject(project)}>{action === "delete" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}</button></> : <span className="muted">-</span>}</div></td></tr>; })}</DataTable>
+    <DataTable headers={[t("column.project"), t("column.remote"), t("column.workspaces"), t("project.importStatus"), t("column.updated"), t("common.actions")]} empty={t("project.none")}>{(projects.data ?? []).map(project => { const state = importState(project); const failed = state === "failed" && project.workspace_count === 0; const action = projectAction?.id === project.id ? projectAction.kind : null; const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id); const retryAvailable = targetServer?.status === "online"; return <tr key={project.id} className={project.hidden_at ? "project-hidden-row" : ""}><td><div className="cell-main"><span className="inline"><strong>{project.name}</strong>{project.hidden_at && <span className="status-tag neutral"><EyeOff size={12} />{t("project.hidden")}</span>}</span>{project.import_server_name && <small>{t("project.targetSummary", { server: project.import_server_name })}</small>}</div></td><td><code className="truncate-code">{project.remote_url || t("project.local")}</code></td><td>{project.workspace_count}</td><td><div className="project-import-state"><Status value={state} />{state === "syncing" && <small className="project-import-message syncing">{t("project.awaitingWorkspace")}</small>}{state === "failed" && importMessage(project) && <small className="project-import-message" title={project.import_message}>{importMessage(project)}</small>}</div></td><td>{relative(project.updated_at)}</td><td><div className="row-actions">{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <><button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t("project.retryImport") : t("project.retryOffline")} onClick={() => void retryImport(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button className="icon-button danger" disabled={projectAction !== null} title={t("project.deleteFailed")} onClick={() => void deleteFailedProject(project)}>{action === "delete" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}</button></>}{!project.hidden_at && !failed && <span className="muted">-</span>}</div></td></tr>; })}</DataTable>
   </Section><Section title={t("project.workspaces")} icon={<Boxes size={18} />}><DataTable headers={[t("column.project"), t("column.server"), t("column.path"), t("column.branch"), t("column.commit"), t("column.state")]} empty={t("project.noWorkspaces")}>{(workspaces.data ?? []).map(workspace => <tr key={workspace.id}><td><strong>{workspace.project_name}</strong></td><td>{workspace.server_name}</td><td><code className="truncate-code">{workspace.path}</code></td><td><span className="inline"><GitBranch size={13} />{workspace.branch || t("project.detached")}</span></td><td><code>{shortSHA(workspace.commit_sha)}</code></td><td><Status value={workspace.dirty ? "dirty" : "clean"} /></td></tr>)}</DataTable></Section>
   <Dialog open={dialog} title={t("project.import")} onClose={close}><form onSubmit={submit}><div className="segmented-control" role="tablist" aria-label={t("project.importMode")}><button type="button" role="tab" aria-selected={mode === "clone"} className={mode === "clone" ? "active" : ""} onClick={() => setMode("clone")}><GitBranch size={15} />{t("project.cloneMode")}</button><button type="button" role="tab" aria-selected={mode === "discover"} className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")}><ServerIcon size={15} />{t("project.discoverMode")}</button></div>{mode === "clone" ? <><Field label={t("project.remoteURL")}><input value={form.remote_url} onChange={e => setForm({ ...form, remote_url: e.target.value })} placeholder="https://git.example.com/team/project.git" required /></Field><div className="form-grid"><Field label={t("project.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field><Field label={t("project.targetServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field></div><Field label={t("project.destination")}><input value={form.destination} onChange={e => setForm({ ...form, destination: e.target.value })} placeholder={t("common.optional")} /></Field></> : <Field label={t("project.existingServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field>}<DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : mode === "clone" ? <GitBranch size={16} /> : <Search size={16} />}{busy ? t("project.working") : mode === "clone" ? t("project.queue") : t("project.scan")}</button></DialogActions></form></Dialog></div>;
 }
 
-function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloadApprovals, notify }: PageProps & { streamRevisions: StreamRevisions; approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void }) {
+function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloadApprovals, notify, selectedThreadID, onSelectThread }: PageProps & { streamRevisions: StreamRevisions; approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void; selectedThreadID: string; onSelectThread: (threadID: string, replace?: boolean) => void }) {
   const { t } = useI18n();
   const threads = useData<Thread[]>("/threads", realtime);
   const workspaces = useData<Workspace[]>("/workspaces", realtime);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(selectedThreadID);
   const [createOpen, setCreateOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(approvals.length > 0);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [deletingThread, setDeletingThread] = useState("");
+  const [renameTarget, setRenameTarget] = useState<{ kind: "project" | "thread"; id: string; name: string } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
   const [preview, setPreview] = useState<FilePreviewSelection | null>(null);
   const [activePane, setActivePane] = useState<"conversation" | "preview">("conversation");
-  const active = selected ? (threads.data ?? []).find(thread => thread.id === selected) : threads.data?.[0];
-  const threadGroups = useMemo(() => groupThreadsByProject(threads.data ?? []), [threads.data]);
+  const visibleThreads = useMemo(() => (threads.data ?? []).filter(thread => !thread.project_hidden_at), [threads.data]);
+  const active = visibleThreads.find(thread => thread.id === selected) ?? visibleThreads[0];
+  const threadGroups = useMemo(() => groupThreadsByProject(visibleThreads), [visibleThreads]);
   const approvalKey = approvals.map(item => item.id).join(",");
-  useEffect(() => { if (!selected && threads.data?.[0]) setSelected(threads.data[0].id); }, [threads.data, selected]);
+  useEffect(() => {
+    if (!threads.data) return;
+    const requested = selectedThreadID && visibleThreads.some(thread => thread.id === selectedThreadID) ? selectedThreadID : "";
+    const next = requested || (visibleThreads.some(thread => thread.id === selected) ? selected : visibleThreads[0]?.id ?? "");
+    if (next !== selected) setSelected(next);
+    if (next !== selectedThreadID) onSelectThread(next, true);
+  }, [onSelectThread, selected, selectedThreadID, threads.data, visibleThreads]);
   useEffect(() => { if (approvalKey) setApprovalOpen(true); }, [approvalKey, approvalSignal]);
   useEffect(() => { setPreview(null); setActivePane("conversation"); }, [active?.workspace_id]);
+  const selectThread = (threadID: string) => { setSelected(threadID); onSelectThread(threadID); };
   const toggleProject = (projectID: string) => setCollapsedProjects(current => { const next = new Set(current); if (next.has(projectID)) next.delete(projectID); else next.add(projectID); return next; });
   const openFile = (selection: FilePreviewSelection) => { setPreview(selection); setActivePane("preview"); };
+  const copyValue = async (value: string, success: string) => { try { await copyText(value); notify(success); } catch (error) { notify(message(error)); } };
+  const deepLink = (threadID: string) => `${window.location.origin}${locationFor("codex", threadID)}`;
+  const beginRename = (kind: "project" | "thread", id: string, name: string) => { setRenameTarget({ kind, id, name }); setRenameValue(name); };
+  const submitRename = async (event: FormEvent) => {
+    event.preventDefault();
+    const value = renameValue.trim();
+    if (!renameTarget || !value || renameBusy) return;
+    setRenameBusy(true);
+    try {
+      if (renameTarget.kind === "project") await patch<Project>(`/projects/${renameTarget.id}`, { name: value });
+      else await patch<Thread>(`/threads/${renameTarget.id}`, { title: value });
+      threads.reload();
+      notify(t(renameTarget.kind === "project" ? "codex.projectRenamed" : "codex.threadRenamed"));
+      setRenameTarget(null);
+    } catch (error) { notify(message(error)); } finally { setRenameBusy(false); }
+  };
+  const projectMenuActions = (group: ThreadGroup): ContextMenuAction[] => [
+    { id: "pin", label: t(group.pinnedAt ? "codex.unpinProject" : "codex.pinProject"), icon: group.pinnedAt ? PinOff : Pin, onSelect: async () => { try { await patch<Project>(`/projects/${group.projectID}`, { pinned: !group.pinnedAt }); threads.reload(); notify(t(group.pinnedAt ? "codex.projectUnpinned" : "codex.projectPinned")); } catch (error) { notify(message(error)); } } },
+    { id: "rename", label: t("codex.renameProject"), icon: Pencil, onSelect: () => beginRename("project", group.projectID, group.projectName) },
+    { id: "hide", label: t("codex.hideProject"), icon: EyeOff, danger: true, separatorBefore: true, onSelect: async () => { if (!confirm(t("codex.confirmHideProject", { name: group.projectName }))) return; try { await patch<Project>(`/projects/${group.projectID}`, { hidden: true }); if (active?.project_id === group.projectID) selectThread(visibleThreads.find(thread => thread.project_id !== group.projectID)?.id ?? ""); threads.reload(); notify(t("codex.projectHidden")); } catch (error) { notify(message(error)); } } }
+  ];
+  const threadMenuActions = (thread: Thread): ContextMenuAction[] => [
+    { id: "pin", label: t(thread.pinned_at ? "codex.unpinThread" : "codex.pinThread"), icon: thread.pinned_at ? PinOff : Pin, onSelect: async () => { try { await patch<Thread>(`/threads/${thread.id}`, { pinned: !thread.pinned_at }); threads.reload(); notify(t(thread.pinned_at ? "codex.threadUnpinned" : "codex.threadPinned")); } catch (error) { notify(message(error)); } } },
+    { id: "rename", label: t("codex.renameThread"), icon: Pencil, onSelect: () => beginRename("thread", thread.id, thread.title) },
+    { id: "copy-path", label: t("codex.copyWorkingDirectory"), icon: FolderOpen, separatorBefore: true, disabled: !thread.path, onSelect: () => copyValue(thread.path, t("codex.workingDirectoryCopied")) },
+    { id: "copy-wio-id", label: t("codex.copyWioSessionID"), icon: Copy, onSelect: () => copyValue(thread.id, t("codex.wioSessionIDCopied")) },
+    { id: "copy-codex-id", label: t("codex.copyCodexSessionID"), icon: Copy, disabled: !thread.codex_thread_id, onSelect: () => copyValue(thread.codex_thread_id, t("codex.codexSessionIDCopied")) },
+    { id: "copy-link", label: t("codex.copyDeepLink"), icon: Link, onSelect: () => copyValue(deepLink(thread.id), t("codex.deepLinkCopied")) },
+    { id: "new-window", label: t("codex.openNewWindow"), icon: ExternalLink, separatorBefore: true, onSelect: () => { window.open(deepLink(thread.id), "_blank", "noopener,noreferrer"); } }
+  ];
   const deleteSession = async (thread: Thread) => {
     if (thread.status === "queued" || thread.status === "running") return;
     if (!confirm(t("codex.confirmDeleteSession", { title: thread.title }))) return;
     setDeletingThread(thread.id);
     try {
       await remove(`/threads/${thread.id}`);
-      const next = (threads.data ?? []).find(item => item.id !== thread.id);
-      if (active?.id === thread.id) setSelected(next?.id ?? "");
+      const next = visibleThreads.find(item => item.id !== thread.id);
+      if (active?.id === thread.id) selectThread(next?.id ?? "");
       threads.reload();
       notify(t("codex.sessionDeleted"));
     } catch (error) {
@@ -588,23 +679,28 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
     }
   };
   return <div className="codex-layout">
-    <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{threadGroups.length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong><span>{group.threads.length}</span></button>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; return <div key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"}><button type="button" className="thread-select" onClick={() => setSelected(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span></button><div className="thread-actions"><Status value={thread.status} /><button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div></div>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} onOpenFile={path => openFile({ path })} /></aside>
+    <aside className="codex-sidebar"><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t("codex.sessions")}</h2></div><button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button></div><div className="thread-items">{threadGroups.length === 0 ? <Empty icon={<Code2 size={23} />} text={t("codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><ContextMenu className="thread-project-heading" label={t("codex.projectMenu", { name: group.projectName })} actions={projectMenuActions(group)}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span></button></ContextMenu>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions"><Status value={thread.status} /><button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div></ContextMenu>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} onOpenFile={path => openFile({ path })} /></aside>
     <section className="session-area">{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}><FileCode2 size={15} />{t("codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{threads.error && !threads.data ? <ErrorState error={threads.error} reload={threads.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />}</div></section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
-    <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { setSelected(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
+    <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
+    <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
   </div>;
 }
 
 function groupThreadsByProject(threads: Thread[]) {
-  const groups = new Map<string, { projectID: string; projectName: string; threads: Thread[] }>();
+  const groups = new Map<string, ThreadGroup>();
   for (const thread of threads) {
-    const group = groups.get(thread.project_id) ?? { projectID: thread.project_id, projectName: thread.project_name, threads: [] };
+    const group = groups.get(thread.project_id) ?? { projectID: thread.project_id, projectName: thread.project_name, pinnedAt: thread.project_pinned_at, threads: [] };
     group.threads.push(thread);
     groups.set(thread.project_id, group);
   }
-  return Array.from(groups.values());
+  const pinnedFirst = (left: string | null, right: string | null) => left && !right ? -1 : !left && right ? 1 : left && right ? right.localeCompare(left) : 0;
+  for (const group of groups.values()) group.threads.sort((left, right) => pinnedFirst(left.pinned_at, right.pinned_at) || right.updated_at.localeCompare(left.updated_at));
+  return Array.from(groups.values()).sort((left, right) => pinnedFirst(left.pinnedAt, right.pinnedAt) || left.projectName.localeCompare(right.projectName));
 }
+
+type ThreadGroup = { projectID: string; projectName: string; pinnedAt: string | null; threads: Thread[] };
 
 type FileTreeNode = { name: string; path: string; kind: WorkspaceFile["kind"]; size?: number; children: FileTreeNode[] };
 

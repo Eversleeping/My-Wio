@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,6 +34,152 @@ func TestOpenMigratesLegacyCredentialProfilesWithCommitIdentity(t *testing.T) {
 		t.Fatalf("legacy profile migration failed: %#v %v", profile, err)
 	}
 }
+
+func TestOpenMigratesLegacyProjectAndThreadPreferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-preferences.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`
+		CREATE TABLE projects (id TEXT PRIMARY KEY,name TEXT NOT NULL,remote_url TEXT NOT NULL DEFAULT '',normalized_remote TEXT NOT NULL DEFAULT '',created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+		CREATE TABLE codex_threads (id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,codex_thread_id TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT 'New session',status TEXT NOT NULL DEFAULT 'idle',last_sequence INTEGER NOT NULL DEFAULT 0,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+		INSERT INTO projects(id,name) VALUES('legacy-project','Legacy');`)
+	if closeErr := legacy.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(path + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, table := range []string{"projects", "codex_threads"} {
+		var columns []string
+		if err := database.DB.SelectContext(context.Background(), &columns, "SELECT name FROM pragma_table_info(?)", table); err != nil {
+			t.Fatal(err)
+		}
+		if table == "projects" && (!containsString(columns, "pinned_at") || !containsString(columns, "hidden_at")) {
+			t.Fatalf("project preference columns missing: %v", columns)
+		}
+		if table == "codex_threads" && !containsString(columns, "pinned_at") {
+			t.Fatalf("thread preference column missing: %v", columns)
+		}
+	}
+	project, err := database.Project(context.Background(), "legacy-project")
+	if err != nil || project.PinnedAt != nil || project.HiddenAt != nil {
+		t.Fatalf("legacy project did not retain null preferences: %#v %v", project, err)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestProjectAndThreadPreferencesAreReturnedAndSorted(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "preference-node", []string{"/srv"}, "preference-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "preference-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "preference-node.local", "preference-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{
+		{Path: "/srv/a", Name: "alpha", RemoteURL: "https://example.com/alpha.git"},
+		{Path: "/srv/b", Name: "beta", RemoteURL: "https://example.com/beta.git"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 2 {
+		t.Fatalf("unexpected projects: %#v %v", projects, err)
+	}
+	alpha, beta := projects[0], projects[1]
+	if alpha.Name != "alpha" || beta.Name != "beta" {
+		t.Fatalf("unexpected initial project order: %#v", projects)
+	}
+	trueValue := true
+	if _, err := database.UpdateProject(ctx, alpha.ID, nil, &trueValue, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.UpdateProject(ctx, beta.ID, nil, nil, &trueValue); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 2 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	var alphaWorkspace, betaWorkspace string
+	for _, workspace := range workspaces {
+		if workspace.ProjectID == alpha.ID {
+			alphaWorkspace = workspace.ID
+		} else if workspace.ProjectID == beta.ID {
+			betaWorkspace = workspace.ID
+		}
+	}
+	alphaThread, err := database.CreateThread(ctx, alphaWorkspace, "alpha thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateThread(ctx, alphaWorkspace, "alpha unpinned"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateThread(ctx, betaWorkspace, "beta thread"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.UpdateThread(ctx, alphaThread.ID, nil, &trueValue); err != nil {
+		t.Fatal(err)
+	}
+	threads, err := database.ListThreads(ctx)
+	if err != nil || len(threads) != 3 {
+		t.Fatalf("unexpected threads: %#v %v", threads, err)
+	}
+	if threads[0].ID != alphaThread.ID || threads[1].ProjectID != alpha.ID || threads[1].PinnedAt != nil || threads[2].ProjectID != beta.ID {
+		t.Fatalf("project and thread pins did not sort first: %#v", threads)
+	}
+	if threads[0].ProjectPinnedAt == nil || threads[0].PinnedAt == nil || threads[0].ProjectHiddenAt != nil {
+		t.Fatalf("thread preference fields missing: %#v", threads[0])
+	}
+	var encoded map[string]any
+	raw, err := json.Marshal(threads[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"pinned_at", "project_pinned_at", "project_hidden_at"} {
+		if _, ok := encoded[field]; !ok {
+			t.Fatalf("thread JSON missing %q: %s", field, raw)
+		}
+	}
+	updated, err := database.UpdateProject(ctx, alpha.ID, strPtr(" Renamed "), nil, nil)
+	if err != nil || updated.Name != " Renamed " {
+		t.Fatalf("project update did not preserve store input: %#v %v", updated, err)
+	}
+	if _, err := database.UpdateThread(ctx, alphaThread.ID, strPtr(" Retitled "), nil); err != nil {
+		t.Fatal(err)
+	}
+	projects, err = database.ListProjects(ctx)
+	if err != nil || len(projects) != 2 || projects[1].ID != beta.ID || projects[1].HiddenAt == nil {
+		t.Fatalf("hidden projects should remain in the project list: %#v %v", projects, err)
+	}
+}
+
+func strPtr(value string) *string { return &value }
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
