@@ -80,6 +80,42 @@ func TestAgentServiceUnitAllowsExplicitSudo(t *testing.T) {
 	}
 }
 
+func TestNPMRegistryForCountries(t *testing.T) {
+	tests := []struct {
+		name      string
+		countries string
+		want      string
+	}{
+		{name: "mainland consensus", countries: "CN\nCN\n", want: mainlandNPMRegistry},
+		{name: "single mainland result", countries: "CN\n", want: mainlandNPMRegistry},
+		{name: "international consensus", countries: "US\nUS\n", want: officialNPMRegistry},
+		{name: "conflicting result", countries: "CN\nUS\n", want: officialNPMRegistry},
+		{name: "unknown location", countries: "request failed", want: officialNPMRegistry},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := npmRegistryForCountries(test.countries); got != test.want {
+				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestNPMRegistryConfigurationScript(t *testing.T) {
+	script := npmRegistryConfigurationScript(mainlandNPMRegistry)
+	for _, expected := range []string{
+		"registry 'https://registry.npmmirror.com'",
+		"replace-registry-host always",
+		"--userconfig=/root/.npmrc",
+		"--userconfig=/var/lib/wio-agent/.npmrc",
+		"chown wio-agent:wio-agent /var/lib/wio-agent/.npmrc",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("npm configuration script missing %q:\n%s", expected, script)
+		}
+	}
+}
+
 func TestEnrollmentServerID(t *testing.T) {
 	id := "6d22a53c-6a88-46ec-a201-1fd24dd83bea"
 	if actual := enrollmentServerID("Enrolled server " + id + "; configuration written"); actual != id {

@@ -34,6 +34,11 @@ var (
 	ErrInstallation        = errors.New("agent installation failed")
 )
 
+const (
+	officialNPMRegistry = "https://registry.npmjs.org"
+	mainlandNPMRegistry = "https://registry.npmmirror.com"
+)
+
 type Target struct {
 	Host                 string `json:"host"`
 	Port                 int    `json:"port"`
@@ -190,6 +195,15 @@ rm -f /etc/sudoers.d/wio-agent`
 	if _, err := run(client, elevated(root, setup)); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
+	resultWarnings := make([]string, 0, 5)
+	if probe.NPMReady {
+		request.report("configuring_npm", 0, 0)
+		countries, _ := run(client, npmCountryDetectionScript())
+		registry := npmRegistryForCountries(countries)
+		if _, err := run(client, elevated(root, npmRegistryConfigurationScript(registry))); err != nil {
+			resultWarnings = append(resultWarnings, "npm_registry_configuration_failed")
+		}
+	}
 	request.report("configuring_codex", 0, 0)
 	if err := upload(client, root, "/etc/wio-agent/codex.key", "0600", []byte(request.CodexAPIKey+"\n"), nil); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install Codex credentials: %v", ErrInstallation, err)
@@ -223,7 +237,6 @@ rm -f /etc/sudoers.d/wio-agent`
 
 	codexReady := probe.CodexReady
 	codexPath := "codex"
-	resultWarnings := make([]string, 0, 4)
 	if probe.NPMReady {
 		request.report("installing_codex", 0, 0)
 		prefix := "/var/lib/wio-agent/codex/versions/" + codexcli.DefaultTargetVersion
@@ -274,6 +287,58 @@ rm -f /etc/sudoers.d/wio-agent`
 		result.Warnings = append(result.Warnings, "codex_unavailable")
 	}
 	return result, nil
+}
+
+func npmCountryDetectionScript() string {
+	return `fetch_country() {
+  endpoint=$1
+  if command -v curl >/dev/null 2>&1; then
+    curl -4fsS --connect-timeout 3 --max-time 6 "$endpoint" 2>/dev/null || true
+  elif command -v wget >/dev/null 2>&1; then
+    wget -4qO- -T 6 "$endpoint" 2>/dev/null || true
+  fi
+}
+for endpoint in \
+  https://ipapi.co/country/ \
+  https://ifconfig.co/country-iso \
+  https://ipinfo.io/country
+do
+  country=$(fetch_country "$endpoint" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+  case "$country" in
+    [A-Z][A-Z]) printf '%s\n' "$country" ;;
+  esac
+done`
+}
+
+func npmRegistryForCountries(output string) string {
+	cnVotes := 0
+	totalVotes := 0
+	for _, country := range strings.Fields(output) {
+		country = strings.ToUpper(strings.TrimSpace(country))
+		if len(country) != 2 || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z' {
+			continue
+		}
+		totalVotes++
+		if country == "CN" {
+			cnVotes++
+		}
+	}
+	if cnVotes >= 2 || (cnVotes == 1 && totalVotes == 1) {
+		return mainlandNPMRegistry
+	}
+	return officialNPMRegistry
+}
+
+func npmRegistryConfigurationScript(registry string) string {
+	return `set -eu
+npm config set registry ` + shellQuote(registry) + ` --location=user --userconfig=/root/.npmrc
+npm config set replace-registry-host always --location=user --userconfig=/root/.npmrc
+npm config set registry ` + shellQuote(registry) + ` --location=user --userconfig=/var/lib/wio-agent/.npmrc
+npm config set replace-registry-host always --location=user --userconfig=/var/lib/wio-agent/.npmrc
+chown root:root /root/.npmrc
+chmod 0600 /root/.npmrc
+chown wio-agent:wio-agent /var/lib/wio-agent/.npmrc
+chmod 0600 /var/lib/wio-agent/.npmrc`
 }
 
 func agentServiceUnit(unit []byte, allowSudo bool) []byte {
