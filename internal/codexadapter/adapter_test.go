@@ -193,6 +193,26 @@ func TestRewriteTurnForksBeforeRollingBackAndStartingReplacement(t *testing.T) {
 	}
 }
 
+func TestForkThreadUsesFixedAppServerMethod(t *testing.T) {
+	adapter := &Adapter{threads: map[string]string{}, turns: map[string]turnState{}}
+	var method string
+	var params map[string]any
+	result, err := adapter.forkThread(context.Background(), protocol.ForkThreadCommand{TargetThreadID: "wio-new", CodexThread: "codex-old", Workspace: "/srv/repo"}, func(_ context.Context, gotMethod string, raw any) (json.RawMessage, error) {
+		method = gotMethod
+		params = raw.(map[string]any)
+		return json.RawMessage(`{"thread":{"id":"codex-new"}}`), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != "thread/fork" || params["threadId"] != "codex-old" || params["cwd"] != "/srv/repo" {
+		t.Fatalf("unexpected fork request: %s %#v", method, params)
+	}
+	if result.CodexThread != "codex-new" || adapter.threads["codex-new"] != "wio-new" {
+		t.Fatalf("unexpected fork result: %#v %#v", result, adapter.threads)
+	}
+}
+
 func TestInterruptUsesCapturedTurnInsteadOfLatestAdapterState(t *testing.T) {
 	adapter := &Adapter{turns: map[string]turnState{"wio-thread": {CodexThread: "codex-thread", TurnID: "new-turn"}}}
 	var params map[string]string

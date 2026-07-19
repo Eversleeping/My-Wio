@@ -122,6 +122,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/threads", api.threads)
 			private.Post("/threads", api.createThread)
 			private.Patch("/threads/{threadID}", api.updateThread)
+			private.Post("/threads/{threadID}/fork", api.forkThread)
+			private.Post("/projects/{projectID}/threads/archive", api.archiveProjectThreads)
 			private.Delete("/threads/{threadID}", api.deleteThread)
 			private.Get("/threads/{threadID}/events", api.threadEvents)
 			private.Post("/threads/{threadID}/turns", api.startTurn)

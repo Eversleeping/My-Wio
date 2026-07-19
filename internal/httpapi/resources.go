@@ -611,7 +611,12 @@ func normalizeWorkspaceFilePath(value string) (string, bool) {
 }
 
 func (a *API) threads(w http.ResponseWriter, r *http.Request) {
-	threads, err := a.store.ListThreads(r.Context())
+	archived := r.URL.Query().Get("archived")
+	if archived != "" && archived != "true" && archived != "all" {
+		writeError(w, http.StatusBadRequest, "archived must be true or all")
+		return
+	}
+	threads, err := a.store.ListThreads(r.Context(), archived)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list Codex sessions")
 		return
@@ -621,13 +626,14 @@ func (a *API) threads(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) updateThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Title  *string `json:"title"`
-		Pinned *bool   `json:"pinned"`
+		Title    *string `json:"title"`
+		Pinned   *bool   `json:"pinned"`
+		Archived *bool   `json:"archived"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Title == nil && input.Pinned == nil {
+	if input.Title == nil && input.Pinned == nil && input.Archived == nil {
 		writeError(w, http.StatusBadRequest, "at least one thread field is required")
 		return
 	}
@@ -644,7 +650,22 @@ func (a *API) updateThread(w http.ResponseWriter, r *http.Request) {
 		input.Title = &title
 	}
 	threadID := chi.URLParam(r, "threadID")
-	thread, err := a.store.UpdateThread(r.Context(), threadID, input.Title, input.Pinned)
+	if input.Archived != nil && *input.Archived {
+		current, err := a.store.Thread(r.Context(), threadID)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "Codex session not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not load Codex session")
+			return
+		}
+		if current.Status == "queued" || current.Status == "running" {
+			writeError(w, http.StatusConflict, "active Codex session cannot be archived")
+			return
+		}
+	}
+	thread, err := a.store.UpdateThread(r.Context(), threadID, input.Title, input.Pinned, input.Archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
 		return
@@ -660,9 +681,75 @@ func (a *API) updateThread(w http.ResponseWriter, r *http.Request) {
 	if input.Pinned != nil {
 		detail["pinned"] = *input.Pinned
 	}
+	if input.Archived != nil {
+		detail["archived"] = *input.Archived
+	}
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.update", "thread", thread.ID, detail, clientIP(r))
 	writeJSON(w, http.StatusOK, thread)
+}
+
+func (a *API) archiveProjectThreads(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	if _, err := a.store.Project(r.Context(), projectID); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	count, err := a.store.ArchiveProjectThreads(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not archive project sessions")
+		return
+	}
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.archive_project", "project", projectID, map[string]int64{"archived": count}, clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]int64{"archived": count})
+}
+
+func (a *API) forkThread(w http.ResponseWriter, r *http.Request) {
+	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Codex session")
+		return
+	}
+	if thread.ArchivedAt != nil {
+		writeError(w, http.StatusConflict, "archived Codex session is read-only")
+		return
+	}
+	if thread.CodexThreadID == "" {
+		writeError(w, http.StatusConflict, "Codex session must be initialized before it can be continued")
+		return
+	}
+	if thread.Status == "queued" || thread.Status == "running" {
+		writeError(w, http.StatusConflict, "active Codex session cannot be continued yet")
+		return
+	}
+	server, err := a.store.Server(r.Context(), thread.ServerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	targetID := store.NewID()
+	command := protocol.ForkThreadCommand{SourceThreadID: thread.ID, TargetThreadID: targetID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Title: thread.Title + " (continued)"}
+	opID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.thread.fork", command, "codex-fork:"+targetID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue Codex session continuation")
+		return
+	}
+	a.gateway.Wake(thread.ServerID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.fork", "thread", thread.ID, map[string]string{"operation_id": opID, "target_thread_id": targetID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": opID, "target_thread_id": targetID})
 }
 
 func (a *API) createThread(w http.ResponseWriter, r *http.Request) {
@@ -794,6 +881,10 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 		writeError(w, http.StatusNotFound, "Codex session not found")
 		return
 	}
+	if thread.ArchivedAt != nil {
+		writeError(w, http.StatusConflict, "archived Codex session is read-only")
+		return
+	}
 	command := protocol.StartTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: input.Prompt, Images: input.Images, Model: input.Model, ReasoningEffort: input.ReasoningEffort, ApprovalMode: input.ApprovalMode}
 	if input.EditEventID != "" {
 		operationID, _, err := a.store.RewriteThread(r.Context(), thread, input.EditEventID, command, eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images)}))
@@ -871,6 +962,10 @@ func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if thread.ArchivedAt != nil {
+		writeError(w, http.StatusConflict, "archived Codex session is read-only")
 		return
 	}
 	turnID, err := a.store.LatestActiveTurnID(r.Context(), thread.ID)

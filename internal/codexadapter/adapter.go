@@ -111,6 +111,32 @@ func (a *Adapter) RewriteTurn(ctx context.Context, command protocol.RewriteTurnC
 	return a.rewriteTurn(ctx, command, a.request)
 }
 
+func (a *Adapter) ForkThread(ctx context.Context, command protocol.ForkThreadCommand) (protocol.ForkThreadResult, error) {
+	if err := a.ensureStarted(ctx); err != nil {
+		return protocol.ForkThreadResult{}, err
+	}
+	return a.forkThread(ctx, command, a.request)
+}
+
+func (a *Adapter) forkThread(ctx context.Context, command protocol.ForkThreadCommand, request requestFunc) (protocol.ForkThreadResult, error) {
+	if command.CodexThread == "" {
+		return protocol.ForkThreadResult{}, errors.New("Codex thread is not initialized")
+	}
+	params := threadResumeParams(protocol.StartTurnCommand{Workspace: command.Workspace, ApprovalMode: "on-request"}, command.CodexThread)
+	result, err := request(ctx, "thread/fork", params)
+	if err != nil {
+		return protocol.ForkThreadResult{}, err
+	}
+	id, err := responseThreadID(result, "thread/fork")
+	if err != nil {
+		return protocol.ForkThreadResult{}, err
+	}
+	a.mu.Lock()
+	a.threads[id] = command.TargetThreadID
+	a.mu.Unlock()
+	return protocol.ForkThreadResult{CodexThread: id}, nil
+}
+
 func (a *Adapter) CodexOperation(ctx context.Context, kind string, payload json.RawMessage) (protocol.CodexCapabilityResult, error) {
 	if err := a.ensureStarted(ctx); err != nil {
 		return protocol.CodexCapabilityResult{}, err

@@ -847,6 +847,47 @@ func TestCodexGoalRefreshQueuesFixedOperation(t *testing.T) {
 	}
 }
 
+func TestForkRequiresOnlineServerAndArchivedThreadsAreReadOnly(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "fork-guard-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "Guarded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE codex_threads SET codex_thread_id=? WHERE id=?"), "codex-guarded", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/fork", thread.ID, map[string]any{}, api.forkThread)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "offline") {
+		t.Fatalf("offline fork returned %d: %s", response.Code, response.Body.String())
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 0 {
+		t.Fatalf("offline fork queued work: %#v %v", operations, err)
+	}
+	archived := true
+	if _, err := database.UpdateThread(ctx, thread.ID, nil, nil, &archived); err != nil {
+		t.Fatal(err)
+	}
+	response = threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "hello"}, api.startTurn)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "read-only") {
+		t.Fatalf("archived turn returned %d: %s", response.Code, response.Body.String())
+	}
+	response = threadResourceRequest(t, http.MethodDelete, "/api/threads/"+thread.ID+"/goal", thread.ID, map[string]any{}, api.clearThreadGoal)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "read-only") {
+		t.Fatalf("archived goal clear returned %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func resourceTestAPI(database *store.Store) *API {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	vault := security.DevVault()

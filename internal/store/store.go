@@ -80,7 +80,8 @@ func migrateProjectThreadPreferences(ctx context.Context, db *sqlx.DB, driver st
 			return fmt.Errorf("migrate project preferences: %w", err)
 		}
 		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_threads
-			ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP`); err != nil {
+			ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP,
+			ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`); err != nil {
 			return fmt.Errorf("migrate thread preferences: %w", err)
 		}
 		return nil
@@ -90,7 +91,7 @@ func migrateProjectThreadPreferences(ctx context.Context, db *sqlx.DB, driver st
 		columns []string
 	}{
 		{name: "projects", columns: []string{"pinned_at", "hidden_at"}},
-		{name: "codex_threads", columns: []string{"pinned_at"}},
+		{name: "codex_threads", columns: []string{"pinned_at", "archived_at"}},
 	} {
 		var columns []string
 		if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info(?)", table.name); err != nil {
@@ -680,10 +681,17 @@ func (s *Store) BeginCodexSnapshot(ctx context.Context, scopeType, scopeID, kind
 
 func (s *Store) SaveCodexSnapshot(ctx context.Context, scopeType, scopeID, kind string, result protocol.CodexCapabilityResult) error {
 	data := result.Data
-	if len(data) == 0 { data = json.RawMessage(`{}`) }
+	if len(data) == 0 {
+		data = json.RawMessage(`{}`)
+	}
 	var valid any
-	if err := json.Unmarshal(data, &valid); err != nil { return err }
-	supported := 0; if result.Supported { supported = 1 }
+	if err := json.Unmarshal(data, &valid); err != nil {
+		return err
+	}
+	supported := 0
+	if result.Supported {
+		supported = 1
+	}
 	now := time.Now().UTC()
 	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO codex_snapshots(scope_type,scope_id,kind,data,supported,reason,codex_version,status,error,requested_at,updated_at) VALUES(?,?,?,?,?,?,?,'succeeded','',?,?) ON CONFLICT(scope_type,scope_id,kind) DO UPDATE SET data=excluded.data,supported=excluded.supported,reason=excluded.reason,codex_version=excluded.codex_version,status='succeeded',error='',updated_at=excluded.updated_at`), scopeType, scopeID, kind, string(data), supported, result.Reason, result.CodexVersion, now, now)
 	return err

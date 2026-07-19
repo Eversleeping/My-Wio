@@ -186,6 +186,19 @@ type RewriteTurnCommand struct {
 	CutoffSequence     int64            `json:"cutoff_sequence,omitempty"`
 }
 
+type ForkThreadCommand struct {
+	SourceThreadID string `json:"source_thread_id"`
+	TargetThreadID string `json:"target_thread_id"`
+	CodexThread    string `json:"codex_thread_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	Workspace      string `json:"workspace"`
+	Title          string `json:"title"`
+}
+
+type ForkThreadResult struct {
+	CodexThread string `json:"codex_thread_id"`
+}
+
 type TurnImage struct {
 	DataURL string `json:"data_url"`
 }

@@ -84,13 +84,75 @@ func TestOpenMigratesLegacyProjectAndThreadPreferences(t *testing.T) {
 		if table == "projects" && (!containsString(columns, "pinned_at") || !containsString(columns, "hidden_at")) {
 			t.Fatalf("project preference columns missing: %v", columns)
 		}
-		if table == "codex_threads" && !containsString(columns, "pinned_at") {
+		if table == "codex_threads" && (!containsString(columns, "pinned_at") || !containsString(columns, "archived_at")) {
 			t.Fatalf("thread preference column missing: %v", columns)
 		}
 	}
 	project, err := database.Project(context.Background(), "legacy-project")
 	if err != nil || project.PinnedAt != nil || project.HiddenAt != nil {
 		t.Fatalf("legacy project did not retain null preferences: %#v %v", project, err)
+	}
+}
+
+func TestArchiveAndForkThreadCopiesVisibleHistoryTransactionally(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "fork-node", []string{"/srv"}, "fork-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "fork-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "fork-node.local", "fork-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/fork", Name: "fork-repo"}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("unexpected projects: %#v %v", projects, err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	project, workspace := projects[0], workspaces[0]
+	thread, err := database.CreateThread(ctx, workspace.ID, "Original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE codex_threads SET codex_thread_id=? WHERE id=?"), "codex-original", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: json.RawMessage(`{"text":"hello"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.ForkThreadCommand{SourceThreadID: thread.ID, TargetThreadID: "fork-target", WorkspaceID: workspace.ID, Title: "Continued"}
+	if err := database.CommitThreadFork(ctx, command, "codex-fork"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CommitThreadFork(ctx, command, "codex-fork"); err != nil {
+		t.Fatalf("fork commit must be idempotent: %v", err)
+	}
+	forked, err := database.Thread(ctx, command.TargetThreadID)
+	if err != nil || forked.CodexThreadID != "codex-fork" {
+		t.Fatalf("unexpected forked thread: %#v %v", forked, err)
+	}
+	events, err := database.ConversationEvents(ctx, forked.ID, 0, 10)
+	if err != nil || len(events) != 1 || !strings.Contains(string(events[0].Payload), "hello") {
+		t.Fatalf("history was not copied: %#v %v", events, err)
+	}
+	count, err := database.ArchiveProjectThreads(ctx, project.ID)
+	if err != nil || count != 2 {
+		t.Fatalf("unexpected archive result: %d %v", count, err)
+	}
+	active, _ := database.ListThreads(ctx)
+	archived, _ := database.ListThreads(ctx, "true")
+	if len(active) != 0 || len(archived) != 2 {
+		t.Fatalf("unexpected archive lists: active=%d archived=%d", len(active), len(archived))
 	}
 }
 

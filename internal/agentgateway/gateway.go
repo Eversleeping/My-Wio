@@ -265,6 +265,22 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		if operation.Kind == "codex.thread.fork" && result.Status == "succeeded" {
+			var command protocol.ForkThreadCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			var fork protocol.ForkThreadResult
+			if err := json.Unmarshal(result.Data, &fork); err != nil {
+				return err
+			}
+			if fork.CodexThread == "" {
+				return errors.New("forked Codex thread id is empty")
+			}
+			if err := g.store.CommitThreadFork(ctx, command, fork.CodexThread); err != nil {
+				return err
+			}
+		}
 		if operation.Kind == "credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
 		} else {

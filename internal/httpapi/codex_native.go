@@ -124,6 +124,10 @@ func (a *API) queueThreadCodex(w http.ResponseWriter, r *http.Request, kind stri
 		writeError(w, 500, "could not load thread")
 		return
 	}
+	if thread.ArchivedAt != nil && (kind == "codex.goal.set" || kind == "codex.goal.clear") {
+		writeError(w, http.StatusConflict, "archived Codex session is read-only")
+		return
+	}
 	server, err := a.store.Server(r.Context(), thread.ServerID)
 	if err != nil {
 		writeError(w, 500, "could not load server")

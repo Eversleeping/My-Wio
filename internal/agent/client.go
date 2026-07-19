@@ -276,6 +276,15 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if err == nil {
 			resultData, err = json.Marshal(result)
 		}
+	} else if envelope.Kind == "codex.thread.fork" {
+		var command protocol.ForkThreadCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var result protocol.ForkThreadResult
+			result, err = c.codex.ForkThread(ctx, command)
+			if err == nil {
+				resultData, err = json.Marshal(result)
+			}
+		}
 	} else {
 		err = c.execute(ctx, envelope)
 	}
