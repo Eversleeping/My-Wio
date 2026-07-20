@@ -321,6 +321,12 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			}
 			return publishOperationResult(ctx, g, serverID, result)
 		}
+		if operation.Kind == store.ProjectDeleteOperationKind {
+			if err := g.store.CompleteProjectDeletion(ctx, operation, result); err != nil {
+				return err
+			}
+			return publishOperationResult(ctx, g, serverID, result)
+		}
 		if operation.Kind == "workspace.files" {
 			var command protocol.WorkspaceFilesCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {

@@ -145,6 +145,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/projects/discover", api.discoverProjects)
 			private.Post("/projects/{projectID}/retry-import", api.retryProjectImport)
 			private.Post("/projects/{projectID}/retry-create", api.retryProjectCreation)
+			private.Post("/projects/{projectID}/deletion-plan", api.projectDeletionPlan)
 			private.Delete("/projects/{projectID}", api.deleteProject)
 			private.Get("/threads", api.threads)
 			private.Post("/threads", api.createThread)

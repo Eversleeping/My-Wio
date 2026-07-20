@@ -298,6 +298,16 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				refreshInventory = err == nil
 			}
 		}
+	} else if envelope.Kind == "git.project.delete" {
+		var command protocol.GitProjectDeleteCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var result protocol.GitProjectDeleteResult
+			result, err = c.deleteProject(ctx, command)
+			if err == nil {
+				resultData, err = json.Marshal(result)
+				refreshInventory = err == nil
+			}
+		}
 	} else if envelope.Kind == "git.workspace.inspect" {
 		var command protocol.GitWorkspaceInspectCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
@@ -527,6 +537,21 @@ func (c *Client) createProject(ctx context.Context, command protocol.GitProjectC
 		Unborn:    result.Unborn,
 		RemoteURL: result.RemoteURL,
 	}, nil
+}
+
+func (c *Client) deleteProject(ctx context.Context, command protocol.GitProjectDeleteCommand) (protocol.GitProjectDeleteResult, error) {
+	projectID := strings.TrimSpace(command.ProjectID)
+	if projectID == "" {
+		return protocol.GitProjectDeleteResult{}, errors.New("project ID is required")
+	}
+	if strings.TrimSpace(command.Path) == "" {
+		return protocol.GitProjectDeleteResult{}, errors.New("project path is required")
+	}
+	result, err := gitrepository.DeleteManagedProject(ctx, projectID, command.Path, c.config.CloneRoot)
+	if err != nil {
+		return protocol.GitProjectDeleteResult{}, err
+	}
+	return protocol.GitProjectDeleteResult{ProjectID: projectID, WorkspaceID: strings.TrimSpace(command.WorkspaceID), Path: filepath.Clean(command.Path), Removed: result.Deleted}, nil
 }
 
 func projectCreateDestination(cloneRoot, projectName, destination string) (string, error) {

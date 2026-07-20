@@ -111,6 +111,19 @@ type GitProjectCreateResult struct {
 	RemoteURL string `json:"remote_url,omitempty"`
 }
 
+type GitProjectDeleteCommand struct {
+	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Path        string `json:"path"`
+}
+
+type GitProjectDeleteResult struct {
+	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Path        string `json:"path"`
+	Removed     bool   `json:"removed"`
+}
+
 // ProjectRemoteResult is returned by the control-plane provider adapter. It
 // is deliberately free of credentials and is safe to persist in operation
 // metadata and audit records.

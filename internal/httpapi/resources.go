@@ -1057,7 +1057,7 @@ func (a *API) retryProjectImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
 }
 
-func (a *API) deleteProject(w http.ResponseWriter, r *http.Request) {
+func (a *API) deleteProjectLegacy(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	project, err := a.store.Project(r.Context(), projectID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1066,6 +1066,15 @@ func (a *API) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	plan, err := a.store.ProjectDeletionPlan(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check project dependencies")
+		return
+	}
+	if !plan.CanDeleteMetadata {
+		writeDeletionBlocked(w, plan)
 		return
 	}
 	active, err := a.store.HasActiveProjectImport(r.Context(), projectID)

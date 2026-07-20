@@ -171,6 +171,50 @@ func TestProjectCreateDestinationRejectsCloneRootEscape(t *testing.T) {
 	}
 }
 
+func TestGitProjectDeleteReturnsStructuredResult(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	cloneRoot := t.TempDir()
+	repository := filepath.Join(cloneRoot, "service")
+	if output, err := exec.Command("git", "init", "-b", "main", repository).CombinedOutput(); err != nil {
+		t.Fatalf("init repository: %v: %s", err, output)
+	}
+	if output, err := exec.Command("git", "-C", repository, "config", "--local", "wio.projectId", "project-1").CombinedOutput(); err != nil {
+		t.Fatalf("mark repository: %v: %s", err, output)
+	}
+	client := &Client{
+		config:   Config{CloneRoot: cloneRoot},
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		outbound: make(chan *protocol.AgentEnvelope, 4),
+		seen:     make(map[string]*operationExecution),
+	}
+	payload, err := json.Marshal(protocol.GitProjectDeleteCommand{ProjectID: "project-1", WorkspaceID: "workspace-1", Path: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "delete-1", Kind: "git.project.delete", PayloadJSON: payload})
+
+	envelope := receiveAgentEnvelope(t, client.outbound)
+	var operation protocol.OperationResult
+	if err := json.Unmarshal(envelope.PayloadJSON, &operation); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Kind != "operation_result" || operation.Status != "succeeded" || operation.OperationID != "delete-1" {
+		t.Fatalf("unexpected operation result: kind=%q result=%#v", envelope.Kind, operation)
+	}
+	var result protocol.GitProjectDeleteResult
+	if err := json.Unmarshal(operation.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ProjectID != "project-1" || result.WorkspaceID != "workspace-1" || result.Path != filepath.Clean(repository) || !result.Removed {
+		t.Fatalf("unexpected project delete result: %#v", result)
+	}
+	if _, err := os.Stat(repository); !os.IsNotExist(err) {
+		t.Fatalf("project repository still exists: %v", err)
+	}
+}
+
 func TestWorkspaceGitInspectReturnsStatusBranchesRemotesAndCommits(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
