@@ -102,6 +102,7 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 				ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
 				ADD COLUMN IF NOT EXISTS workspace_write INTEGER NOT NULL DEFAULT 0,
 				ADD COLUMN IF NOT EXISTS result_data TEXT NOT NULL DEFAULT '{}'`,
+			`ALTER TABLE servers ADD COLUMN IF NOT EXISTS managed_roots TEXT NOT NULL DEFAULT '[]'`,
 		}
 		for _, statement := range statements {
 			if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -140,6 +141,9 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 				"workspace_id":    "TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
 				"workspace_write": "INTEGER NOT NULL DEFAULT 0",
 				"result_data":     "TEXT NOT NULL DEFAULT '{}'",
+			}},
+			{name: "servers", columns: map[string]string{
+				"managed_roots": "TEXT NOT NULL DEFAULT '[]'",
 			}},
 		}
 		for _, table := range tables {
@@ -342,6 +346,7 @@ type Server struct {
 	CodexVersion         string     `db:"codex_version" json:"codex_version"`
 	CodexReady           int        `db:"codex_ready" json:"codex_ready"`
 	ScanRoots            string     `db:"scan_roots" json:"-"`
+	ManagedRoots         string     `db:"managed_roots" json:"-"`
 	Address              string     `db:"address" json:"address"`
 	Configuration        string     `db:"configuration" json:"configuration"`
 	Notes                string     `db:"notes" json:"notes"`
@@ -367,13 +372,13 @@ type ServerMetadata struct {
 
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
-	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	return out, err
 }
 
 func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	var server Server
-	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	return server, err
 }
 
@@ -476,7 +481,8 @@ func (s *Store) Heartbeat(ctx context.Context, serverID string, h protocol.Heart
 		ready = 1
 	}
 	roots, _ := json.Marshal(h.ScanRoots)
-	_, err := s.DB.ExecContext(ctx, s.Q(`UPDATE servers SET hostname=?,status='online',agent_version=?,codex_version=?,codex_ready=?,scan_roots=?,last_seen_at=? WHERE id=? AND revoked_at IS NULL`), h.Hostname, h.AgentVersion, h.CodexVersion, ready, string(roots), time.Now().UTC(), serverID)
+	managedRoots, _ := json.Marshal(h.ManagedRoots)
+	_, err := s.DB.ExecContext(ctx, s.Q(`UPDATE servers SET hostname=?,status='online',agent_version=?,codex_version=?,codex_ready=?,scan_roots=?,managed_roots=?,last_seen_at=? WHERE id=? AND revoked_at IS NULL`), h.Hostname, h.AgentVersion, h.CodexVersion, ready, string(roots), string(managedRoots), time.Now().UTC(), serverID)
 	return err
 }
 

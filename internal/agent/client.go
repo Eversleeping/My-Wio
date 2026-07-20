@@ -316,6 +316,42 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
+	} else if envelope.Kind == "git.workspace.lifecycle" {
+		var command protocol.GitWorkspaceLifecycleCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var result protocol.GitWorkspaceLifecycleResult
+			result.WorkspaceID, result.TargetWorkspaceID, result.Action, result.SourcePath = command.WorkspaceID, command.TargetWorkspaceID, command.Action, command.SourcePath
+			switch command.Action {
+			case "move":
+				_, err = gitrepository.MoveWorkspace(ctx, command.SourcePath, command.TargetPath, c.managedRoots())
+			case "copy":
+				_, err = gitrepository.CopyWorkspace(ctx, command.SourcePath, command.TargetPath, c.managedRoots())
+			case "delete":
+				err = gitrepository.DeleteWorkspace(ctx, command.SourcePath, command.Force, c.managedRoots())
+			default:
+				err = fmt.Errorf("unsupported workspace lifecycle action %q", command.Action)
+			}
+			if err == nil {
+				if command.Action != "delete" {
+					result.TargetPath = filepath.Clean(command.TargetPath)
+				}
+				resultData, err = json.Marshal(result)
+			}
+		}
+	} else if envelope.Kind == "git.workspace.clone" {
+		var command protocol.GitWorkspaceCloneCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			destination, destinationErr := projectCreateDestination(c.config.CloneRoot, command.Name, command.Destination)
+			if destinationErr != nil {
+				err = destinationErr
+			} else {
+				var cloned gitrepository.CloneWorkspaceResult
+				cloned, err = gitrepository.CloneWorkspace(ctx, gitrepository.CloneWorkspaceOptions{WorkspaceID: command.WorkspaceID, ProjectID: command.ProjectID, Path: destination, RemoteURL: command.RemoteURL, Branch: command.Branch, ExpectedHead: command.ExpectedHead}, c.managedRoots())
+				if err == nil {
+					resultData, err = json.Marshal(protocol.GitWorkspaceCloneResult{WorkspaceID: command.WorkspaceID, ProjectID: command.ProjectID, Path: filepath.Clean(command.Destination), Branch: cloned.Branch, CommitSHA: cloned.CommitSHA})
+				}
+			}
+		}
 	} else if envelope.Kind == "git.worktree.create" {
 		var command protocol.GitWorktreeCreateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
@@ -424,6 +460,15 @@ func (c *Client) writeWorkspaceGit(ctx context.Context, command protocol.GitWork
 		return protocol.GitWorkspaceWriteResult{}, errors.New("workspace Git write command is incomplete")
 	}
 	roots := c.inventoryRoots()
+	if command.Action == "checkout" || command.Action == "pull" {
+		status, statusErr := gitrepository.GetStatus(ctx, command.Path, roots)
+		if statusErr != nil {
+			return protocol.GitWorkspaceWriteResult{}, statusErr
+		}
+		if status.Dirty {
+			return protocol.GitWorkspaceWriteResult{}, errors.New("workspace has uncommitted changes")
+		}
+	}
 	var err error
 	switch command.Action {
 	case "branch.create":
@@ -630,7 +675,7 @@ func (c *Client) runRollback(ctx context.Context, command protocol.RollbackComma
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	hostname, _ := os.Hostname()
 	codexPath := c.currentCodexPath()
-	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots()}
+	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
 	return c.queue("heartbeat", heartbeat, false)
 }
 
@@ -702,6 +747,14 @@ func (c *Client) inventoryRoots() []string {
 		}
 	}
 	return append(roots, cloneRoot)
+}
+
+func (c *Client) managedRoots() []string {
+	root := filepath.Clean(strings.TrimSpace(c.config.CloneRoot))
+	if root == "." || root == "" {
+		return nil
+	}
+	return []string{root}
 }
 
 func (c *Client) queue(kind string, payload any, important bool) error {

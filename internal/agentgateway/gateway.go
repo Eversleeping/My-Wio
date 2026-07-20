@@ -208,6 +208,72 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if operation.ServerID != serverID {
 			return errors.New("operation result server mismatch")
 		}
+		if operation.Kind == "git.workspace.clone" {
+			var command protocol.GitWorkspaceCloneCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status != "succeeded" {
+				if result.Message == "" {
+					result.Message = "agent failed to clone workspace"
+				}
+				if err := g.store.FailCrossServerWorkspaceClone(ctx, operation, result, "ready"); err != nil {
+					return err
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			var cloned protocol.GitWorkspaceCloneResult
+			if err := json.Unmarshal(result.Data, &cloned); err != nil {
+				result.Status = "failed"
+				result.Message = "invalid workspace clone result: " + err.Error()
+				if err := g.store.FailCrossServerWorkspaceClone(ctx, operation, result, "partial"); err != nil {
+					return err
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			if err := g.store.CompleteCrossServerWorkspaceClone(ctx, operation, command, cloned, result); err != nil {
+				result.Status = "failed"
+				result.Message = "workspace cloned but control-plane commit failed: " + err.Error()
+				if partialErr := g.store.FailCrossServerWorkspaceClone(ctx, operation, result, "partial"); partialErr != nil {
+					return fmt.Errorf("commit workspace clone: %v; mark partial: %w", err, partialErr)
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			return publishOperationResult(ctx, g, serverID, result)
+		}
+		if operation.Kind == "git.workspace.lifecycle" {
+			var command protocol.GitWorkspaceLifecycleCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status != "succeeded" {
+				if result.Message == "" {
+					result.Message = "agent failed to update workspace"
+				}
+				if err := g.store.FailWorkspaceLifecycle(ctx, operation, command, result, "ready"); err != nil {
+					return err
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			var lifecycleResult protocol.GitWorkspaceLifecycleResult
+			if err := json.Unmarshal(result.Data, &lifecycleResult); err != nil {
+				result.Status = "failed"
+				result.Message = "invalid workspace lifecycle result: " + err.Error()
+				if err := g.store.FailWorkspaceLifecycle(ctx, operation, command, result, "partial"); err != nil {
+					return err
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			if err := g.store.CompleteWorkspaceLifecycle(ctx, operation, command, lifecycleResult, result); err != nil {
+				result.Status = "failed"
+				result.Message = "workspace files changed but control-plane commit failed: " + err.Error()
+				if partialErr := g.store.FailWorkspaceLifecycle(ctx, operation, command, result, "partial"); partialErr != nil {
+					return fmt.Errorf("commit workspace lifecycle: %v; mark partial: %w", err, partialErr)
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			return publishOperationResult(ctx, g, serverID, result)
+		}
 		// Blank project creation is special: the project and its primary
 		// workspace must be committed together only after the agent result has
 		// been checked. Do not let the generic completion path claim success

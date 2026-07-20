@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS servers (
   codex_version TEXT NOT NULL DEFAULT '',
   codex_ready INTEGER NOT NULL DEFAULT 0,
   scan_roots TEXT NOT NULL DEFAULT '[]',
+  managed_roots TEXT NOT NULL DEFAULT '[]',
   last_seen_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   revoked_at TIMESTAMP

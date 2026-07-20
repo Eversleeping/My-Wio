@@ -36,6 +36,7 @@ type Heartbeat struct {
 	CodexVersion string   `json:"codex_version"`
 	CodexReady   bool     `json:"codex_ready"`
 	ScanRoots    []string `json:"scan_roots"`
+	ManagedRoots []string `json:"managed_roots,omitempty"`
 }
 
 type Metrics struct {
@@ -221,6 +222,43 @@ type GitWorkspaceWriteResult struct {
 	WorkspaceID string                    `json:"workspace_id"`
 	Action      string                    `json:"action"`
 	Snapshot    GitWorkspaceInspectResult `json:"snapshot"`
+}
+
+type GitWorkspaceLifecycleCommand struct {
+	WorkspaceID       string `json:"workspace_id"`
+	TargetWorkspaceID string `json:"target_workspace_id,omitempty"`
+	ProjectID         string `json:"project_id"`
+	Action            string `json:"action"`
+	SourcePath        string `json:"source_path"`
+	TargetPath        string `json:"target_path,omitempty"`
+	WorkspaceKind     string `json:"workspace_kind,omitempty"`
+	Force             bool   `json:"force,omitempty"`
+}
+
+type GitWorkspaceLifecycleResult struct {
+	WorkspaceID       string `json:"workspace_id"`
+	TargetWorkspaceID string `json:"target_workspace_id,omitempty"`
+	Action            string `json:"action"`
+	SourcePath        string `json:"source_path"`
+	TargetPath        string `json:"target_path,omitempty"`
+}
+
+type GitWorkspaceCloneCommand struct {
+	WorkspaceID  string `json:"workspace_id"`
+	ProjectID    string `json:"project_id"`
+	Name         string `json:"name"`
+	Destination  string `json:"destination"`
+	RemoteURL    string `json:"remote_url"`
+	Branch       string `json:"branch"`
+	ExpectedHead string `json:"expected_head"`
+}
+
+type GitWorkspaceCloneResult struct {
+	WorkspaceID string `json:"workspace_id"`
+	ProjectID   string `json:"project_id"`
+	Path        string `json:"path"`
+	Branch      string `json:"branch"`
+	CommitSHA   string `json:"commit_sha"`
 }
 
 type CodexSnapshotCommand struct {
