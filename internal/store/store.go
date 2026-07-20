@@ -1016,7 +1016,7 @@ func (s *Store) PendingOperations(ctx context.Context, serverID string) ([]Opera
 
 func (s *Store) ListProjectOperations(ctx context.Context, projectID string, limit int) ([]Operation, error) {
 	limit = operationListLimit(limit)
-	var out []Operation
+	out := make([]Operation, 0)
 	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+` WHERE project_id=? OR workspace_id IN (SELECT id FROM workspaces WHERE project_id=?) ORDER BY created_at DESC LIMIT ?`), projectID, projectID, limit)
 	return out, err
 }

@@ -41,7 +41,7 @@ type BlankProjectRemoteSpec struct {
 }
 
 func (s *Store) ProjectRemotes(ctx context.Context, projectID string) ([]ProjectRemote, error) {
-	var remotes []ProjectRemote
+	remotes := make([]ProjectRemote, 0)
 	err := s.DB.SelectContext(ctx, &remotes, s.Q(`SELECT id,project_id,name,mode,provider,namespace,repository,visibility,credential_profile_id,fetch_url,push_url,web_url,status,error,created_at,updated_at FROM project_remotes WHERE project_id=? ORDER BY name`), projectID)
 	return remotes, err
 }

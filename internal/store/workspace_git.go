@@ -33,7 +33,9 @@ func (s *Store) WorkspaceGitSnapshot(ctx context.Context, workspaceID string) (W
 		if _, workspaceErr := s.Workspace(ctx, workspaceID); workspaceErr != nil {
 			return WorkspaceGitSnapshot{}, workspaceErr
 		}
-		return WorkspaceGitSnapshot{WorkspaceID: workspaceID, Data: protocol.GitWorkspaceInspectResult{WorkspaceID: workspaceID}, Status: "idle"}, nil
+		data := protocol.GitWorkspaceInspectResult{WorkspaceID: workspaceID}
+		normalizeWorkspaceGitData(&data, workspaceID)
+		return WorkspaceGitSnapshot{WorkspaceID: workspaceID, Data: data, Status: "idle"}, nil
 	}
 	if err != nil {
 		return WorkspaceGitSnapshot{}, err
@@ -42,6 +44,7 @@ func (s *Store) WorkspaceGitSnapshot(ctx context.Context, workspaceID string) (W
 	if err := json.Unmarshal([]byte(row.Data), &data); err != nil {
 		return WorkspaceGitSnapshot{}, err
 	}
+	normalizeWorkspaceGitData(&data, workspaceID)
 	return WorkspaceGitSnapshot{WorkspaceID: row.WorkspaceID, Data: data, Status: row.Status, Error: row.Error, RequestedAt: row.RequestedAt, UpdatedAt: row.UpdatedAt}, nil
 }
 
@@ -55,6 +58,7 @@ func (s *Store) SaveWorkspaceGitSnapshot(ctx context.Context, workspaceID string
 	if result.WorkspaceID != workspaceID {
 		return errors.New("workspace Git result does not match command")
 	}
+	normalizeWorkspaceGitData(&result, workspaceID)
 	data, err := json.Marshal(result)
 	if err != nil {
 		return err
@@ -76,6 +80,34 @@ func (s *Store) SaveWorkspaceGitSnapshot(ctx context.Context, workspaceID string
 		return err
 	}
 	return tx.Commit()
+}
+
+func normalizeWorkspaceGitData(data *protocol.GitWorkspaceInspectResult, workspaceID string) {
+	if data.WorkspaceID == "" {
+		data.WorkspaceID = workspaceID
+	}
+	if data.Branches == nil {
+		data.Branches = make([]protocol.GitBranch, 0)
+	}
+	if data.Remotes == nil {
+		data.Remotes = make([]protocol.GitRemote, 0)
+	}
+	for index := range data.Remotes {
+		if data.Remotes[index].FetchURLs == nil {
+			data.Remotes[index].FetchURLs = make([]string, 0)
+		}
+		if data.Remotes[index].PushURLs == nil {
+			data.Remotes[index].PushURLs = make([]string, 0)
+		}
+	}
+	if data.Commits == nil {
+		data.Commits = make([]protocol.GitCommit, 0)
+	}
+	for index := range data.Commits {
+		if data.Commits[index].Parents == nil {
+			data.Commits[index].Parents = make([]string, 0)
+		}
+	}
 }
 
 func (s *Store) FailWorkspaceGitRefresh(ctx context.Context, workspaceID, message string) error {

@@ -51,3 +51,20 @@ test("adds a remote and queues push with upstream", async () => {
   await user.click(screen.getByRole("button", { name: "Push" }));
   await waitFor(() => expect(onAction).toHaveBeenCalledWith({ type: "push", remote: "origin", ref: "main", setUpstream: true }));
 });
+
+test("renders legacy null collections as empty states", async () => {
+  const user = userEvent.setup();
+  const legacySnapshot: WorkspaceGitSnapshot = {
+    ...snapshot,
+    data: { ...snapshot.data, branches: null, remotes: null, commits: null }
+  };
+  render(<WorkspaceGitDialog open snapshot={legacySnapshot} loading={false} busy={false} error="" labels={labels} Dialog={Dialog} onClose={vi.fn()} onRefresh={vi.fn()} onAction={vi.fn()} />);
+
+  expect(screen.getByRole("button", { name: "Fetch" })).toBeDisabled();
+  await user.click(screen.getByRole("tab", { name: "Branches" }));
+  expect(screen.getByText("No branches")).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "Remotes" }));
+  expect(screen.getByText("No remotes")).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "Commits" }));
+  expect(screen.getByText("No commits")).toBeInTheDocument();
+});

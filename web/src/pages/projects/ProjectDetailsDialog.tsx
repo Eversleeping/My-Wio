@@ -47,6 +47,8 @@ export function ProjectDetailsDialog({ open, detail, loading, busy, error, label
   onSubmit: (value: ProjectEditValue) => void | Promise<void>;
 }) {
   const { Dialog, Field, DialogActions } = slots;
+  const remotes = detail?.remotes ?? [];
+  const operations = detail?.operations ?? [];
   const [tab, setTab] = useState<"overview" | "history">("overview");
   const [value, setValue] = useState<ProjectEditValue>({ name: "", description: "", defaultBranch: "main", pinned: false, hidden: false, archived: false });
   useEffect(() => {
@@ -78,10 +80,10 @@ export function ProjectDetailsDialog({ open, detail, loading, busy, error, label
           <label className="toggle-row"><input type="checkbox" checked={value.hidden} disabled={busy} onChange={event => update("hidden", event.target.checked)} /><EyeOff size={15} /><span>{labels.hidden}</span></label>
           <label className="toggle-row"><input type="checkbox" checked={value.archived} disabled={busy} onChange={event => update("archived", event.target.checked)} /><Archive size={15} /><span>{labels.archived}</span></label>
         </div>
-        <div className="project-remote-list"><strong>{labels.remote}</strong>{detail.remotes.length === 0 ? <span className="muted">{labels.noRemote}</span> : detail.remotes.map(remote => <div className="project-remote-row" key={remote.id}><span>{remote.name}</span><code className="truncate-code">{remote.fetch_url}</code><span className="status-tag neutral">{remote.provider || remote.mode}</span></div>)}</div>
+        <div className="project-remote-list"><strong>{labels.remote}</strong>{remotes.length === 0 ? <span className="muted">{labels.noRemote}</span> : remotes.map(remote => <div className="project-remote-row" key={remote.id}><span>{remote.name}</span><code className="truncate-code">{remote.fetch_url}</code><span className="status-tag neutral">{remote.provider || remote.mode}</span></div>)}</div>
       </> : <div className="project-operation-list">
         <div className="project-operation-header"><span>{labels.operation}</span><span>{labels.state}</span><span>{labels.time}</span><span>{labels.result}</span></div>
-        {detail.operations.length === 0 ? <div className="empty-state">{labels.noOperations}</div> : detail.operations.map(operation => <div className="project-operation-row" key={operation.id}><code>{operation.kind}</code><span className={`status-tag ${operation.status === "failed" ? "failed" : "neutral"}`}>{operation.status}</span><span>{new Date(operation.created_at).toLocaleString()}</span><span className="truncate-text" title={operation.result}>{operation.result || "-"}</span></div>)}
+        {operations.length === 0 ? <div className="empty-state">{labels.noOperations}</div> : operations.map(operation => <div className="project-operation-row" key={operation.id}><code>{operation.kind}</code><span className={`status-tag ${operation.status === "failed" ? "failed" : "neutral"}`}>{operation.status}</span><span>{new Date(operation.created_at).toLocaleString()}</span><span className="truncate-text" title={operation.result}>{operation.result || "-"}</span></div>)}
       </div>}
       <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{labels.cancel}</button>{tab === "overview" && <button className="primary-button" disabled={busy || !value.name.trim() || !value.defaultBranch.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{busy ? labels.saving : labels.save}</button>}</DialogActions>
     </form>}

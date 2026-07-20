@@ -681,13 +681,27 @@ func TestProjectDetailIncludesRemotesAndOperations(t *testing.T) {
 		t.Fatalf("unexpected projects: %#v %v", projects, err)
 	}
 	projectID := projects[0].ID
+	api := resourceTestAPI(database)
+	empty := projectResourceRequest(t, http.MethodGet, "/api/projects/"+projectID, projectID, nil, api.projectDetail)
+	if empty.Code != http.StatusOK {
+		t.Fatalf("empty detail returned %d: %s", empty.Code, empty.Body.String())
+	}
+	var emptyDetail struct {
+		Remotes    []store.ProjectRemote `json:"remotes"`
+		Operations []store.Operation     `json:"operations"`
+	}
+	if err := json.Unmarshal(empty.Body.Bytes(), &emptyDetail); err != nil {
+		t.Fatal(err)
+	}
+	if emptyDetail.Remotes == nil || emptyDetail.Operations == nil {
+		t.Fatalf("empty detail collections must be arrays: %s", empty.Body.String())
+	}
 	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO project_remotes(id,project_id,name,mode,provider,fetch_url,push_url,status) VALUES(?,?,?,?,?,?,?,?)"), store.NewID(), projectID, "origin", "existing", "github", "https://github.com/example/detail.git", "https://github.com/example/detail.git", "ready"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.QueueResourceOperation(ctx, server.ID, "git.status", map[string]string{"project_id": projectID}, "detail-operation", store.OperationResource{ProjectID: projectID}, false); err != nil {
 		t.Fatal(err)
 	}
-	api := resourceTestAPI(database)
 	response := projectResourceRequest(t, http.MethodGet, "/api/projects/"+projectID, projectID, nil, api.projectDetail)
 	if response.Code != http.StatusOK {
 		t.Fatalf("detail returned %d: %s", response.Code, response.Body.String())
@@ -725,6 +739,17 @@ func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
 	}
 	workspaceID := workspaces[0].ID
 	api := resourceTestAPI(database)
+	emptySnapshotResponse := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspaceID+"/git", workspaceID, nil, api.workspaceGit)
+	if emptySnapshotResponse.Code != http.StatusOK {
+		t.Fatalf("empty Git snapshot returned %d: %s", emptySnapshotResponse.Code, emptySnapshotResponse.Body.String())
+	}
+	var emptySnapshot store.WorkspaceGitSnapshot
+	if err := json.Unmarshal(emptySnapshotResponse.Body.Bytes(), &emptySnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if emptySnapshot.Data.Branches == nil || emptySnapshot.Data.Remotes == nil || emptySnapshot.Data.Commits == nil {
+		t.Fatalf("empty Git snapshot collections must be arrays: %s", emptySnapshotResponse.Body.String())
+	}
 	refresh := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspaceID+"/git/refresh", workspaceID, map[string]any{}, api.refreshWorkspaceGit)
 	if refresh.Code != http.StatusAccepted {
 		t.Fatalf("refresh returned %d: %s", refresh.Code, refresh.Body.String())
@@ -736,6 +761,13 @@ func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
 	operation, err := database.Operation(ctx, accepted["operation_id"])
 	if err != nil || operation.Kind != "git.workspace.inspect" || operation.WorkspaceID != workspaceID {
 		t.Fatalf("unexpected refresh operation: %#v %v", operation, err)
+	}
+	refreshingSnapshotResponse := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspaceID+"/git", workspaceID, nil, api.workspaceGit)
+	if err := json.Unmarshal(refreshingSnapshotResponse.Body.Bytes(), &emptySnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if emptySnapshot.Data.Branches == nil || emptySnapshot.Data.Remotes == nil || emptySnapshot.Data.Commits == nil {
+		t.Fatalf("refreshing Git snapshot collections must be arrays: %s", refreshingSnapshotResponse.Body.String())
 	}
 	result := protocol.GitWorkspaceInspectResult{WorkspaceID: workspaceID, Status: protocol.GitStatus{Branch: "main", Head: "abc", Dirty: true}, Commits: []protocol.GitCommit{{SHA: "abc", Title: "latest"}}}
 	if err := database.SaveWorkspaceGitSnapshot(ctx, workspaceID, result); err != nil {
