@@ -292,6 +292,40 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		if operation.Kind == "git.workspace.inspect" {
+			var command protocol.GitWorkspaceInspectCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status == "succeeded" {
+				var snapshot protocol.GitWorkspaceInspectResult
+				if err := json.Unmarshal(result.Data, &snapshot); err != nil {
+					return err
+				}
+				if err := g.store.SaveWorkspaceGitSnapshot(ctx, command.WorkspaceID, snapshot); err != nil {
+					return err
+				}
+			} else if err := g.store.FailWorkspaceGitRefresh(ctx, command.WorkspaceID, result.Message); err != nil {
+				return err
+			}
+		}
+		if operation.Kind == "git.workspace.write" {
+			var command protocol.GitWorkspaceWriteCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status == "succeeded" {
+				var written protocol.GitWorkspaceWriteResult
+				if err := json.Unmarshal(result.Data, &written); err != nil {
+					return err
+				}
+				if err := g.store.SaveWorkspaceGitSnapshot(ctx, command.WorkspaceID, written.Snapshot); err != nil {
+					return err
+				}
+			} else if err := g.store.FailWorkspaceGitRefresh(ctx, command.WorkspaceID, result.Message); err != nil {
+				return err
+			}
+		}
 		if strings.HasPrefix(operation.Kind, "codex.goal.") || operation.Kind == "codex.mcp.list" || operation.Kind == "codex.skills.list" || operation.Kind == "codex.status.snapshot" {
 			var command protocol.CodexSnapshotCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {

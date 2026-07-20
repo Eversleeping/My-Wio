@@ -171,6 +171,53 @@ func TestProjectCreateDestinationRejectsCloneRootEscape(t *testing.T) {
 	}
 }
 
+func TestWorkspaceGitInspectReturnsStatusBranchesRemotesAndCommits(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	if output, err := exec.Command("git", "init", "-b", "main", repository).CombinedOutput(); err != nil {
+		t.Fatalf("init repository: %v: %s", err, output)
+	}
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	testGitConfig := func(key, value string) {
+		if output, err := exec.Command("git", "config", "--file", globalConfig, key, value).CombinedOutput(); err != nil {
+			t.Fatalf("configure git: %v: %s", err, output)
+		}
+	}
+	testGitConfig("user.name", "Inspect User")
+	testGitConfig("user.email", "inspect@example.com")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	if output, err := exec.Command("git", "-C", repository, "remote", "add", "origin", "https://example.com/team/repository.git").CombinedOutput(); err != nil {
+		t.Fatal(string(output))
+	}
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("inspect\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "README.md"}, {"commit", "-m", "inspect"}} {
+		if output, err := exec.Command("git", append([]string{"-C", repository}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	client := &Client{config: Config{ScanRoots: []string{root}, CloneRoot: filepath.Join(root, "clone")}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), outbound: make(chan *protocol.AgentEnvelope, 2), seen: make(map[string]*operationExecution)}
+	payload, _ := json.Marshal(protocol.GitWorkspaceInspectCommand{WorkspaceID: "workspace-1", Path: repository, CommitLimit: 10})
+	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "inspect-1", Kind: "git.workspace.inspect", PayloadJSON: payload})
+	envelope := receiveAgentEnvelope(t, client.outbound)
+	var operation protocol.OperationResult
+	if err := json.Unmarshal(envelope.PayloadJSON, &operation); err != nil || operation.Status != "succeeded" {
+		t.Fatalf("unexpected inspect operation: %#v %v", operation, err)
+	}
+	var result protocol.GitWorkspaceInspectResult
+	if err := json.Unmarshal(operation.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.WorkspaceID != "workspace-1" || result.Status.Branch != "main" || result.Status.Head == "" || len(result.Branches) == 0 || len(result.Remotes) != 1 || len(result.Commits) != 1 || result.Commits[0].Title != "inspect" {
+		t.Fatalf("unexpected inspect result: %#v", result)
+	}
+}
+
 func receiveAgentEnvelope(t *testing.T, outbound <-chan *protocol.AgentEnvelope) *protocol.AgentEnvelope {
 	t.Helper()
 	select {

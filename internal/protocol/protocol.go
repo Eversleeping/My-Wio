@@ -149,6 +149,80 @@ type GitWorktreeCleanupCommand struct {
 	Branch     string `json:"branch"`
 }
 
+type GitWorkspaceInspectCommand struct {
+	WorkspaceID string `json:"workspace_id"`
+	Path        string `json:"path"`
+	CommitLimit int    `json:"commit_limit,omitempty"`
+}
+
+type GitStatus struct {
+	Branch    string `json:"branch,omitempty"`
+	Detached  bool   `json:"detached"`
+	Unborn    bool   `json:"unborn"`
+	Head      string `json:"head,omitempty"`
+	Upstream  string `json:"upstream,omitempty"`
+	Ahead     int    `json:"ahead"`
+	Behind    int    `json:"behind"`
+	Staged    int    `json:"staged"`
+	Unstaged  int    `json:"unstaged"`
+	Untracked int    `json:"untracked"`
+	Dirty     bool   `json:"dirty"`
+}
+
+type GitBranch struct {
+	Name      string `json:"name"`
+	FullName  string `json:"full_name"`
+	Kind      string `json:"kind"`
+	CommitSHA string `json:"commit_sha"`
+	Upstream  string `json:"upstream,omitempty"`
+	Current   bool   `json:"current"`
+}
+
+type GitRemote struct {
+	Name      string   `json:"name"`
+	FetchURLs []string `json:"fetch_urls"`
+	PushURLs  []string `json:"push_urls"`
+}
+
+type GitCommit struct {
+	SHA         string    `json:"sha"`
+	AuthorName  string    `json:"author_name"`
+	AuthorEmail string    `json:"author_email"`
+	AuthoredAt  time.Time `json:"authored_at"`
+	Title       string    `json:"title"`
+	Parents     []string  `json:"parents"`
+}
+
+type GitWorkspaceInspectResult struct {
+	WorkspaceID string      `json:"workspace_id"`
+	Status      GitStatus   `json:"status"`
+	Branches    []GitBranch `json:"branches"`
+	Remotes     []GitRemote `json:"remotes"`
+	Commits     []GitCommit `json:"commits"`
+	HasMore     bool        `json:"has_more"`
+}
+
+type GitWorkspaceWriteCommand struct {
+	WorkspaceID string `json:"workspace_id"`
+	Path        string `json:"path"`
+	Action      string `json:"action"`
+	Branch      string `json:"branch,omitempty"`
+	NewBranch   string `json:"new_branch,omitempty"`
+	StartPoint  string `json:"start_point,omitempty"`
+	Remote      string `json:"remote,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Ref         string `json:"ref,omitempty"`
+	Force       bool   `json:"force,omitempty"`
+	SetUpstream bool   `json:"set_upstream,omitempty"`
+	Detach      bool   `json:"detach,omitempty"`
+}
+
+type GitWorkspaceWriteResult struct {
+	WorkspaceID string                    `json:"workspace_id"`
+	Action      string                    `json:"action"`
+	Snapshot    GitWorkspaceInspectResult `json:"snapshot"`
+}
+
 type CodexSnapshotCommand struct {
 	ScopeType    string `json:"scope_type"`
 	ScopeID      string `json:"scope_id"`

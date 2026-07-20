@@ -647,6 +647,212 @@ func (a *API) workspaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workspaces)
 }
 
+func (a *API) workspaceGit(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := a.store.WorkspaceGitSnapshot(r.Context(), chi.URLParam(r, "workspaceID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace Git information")
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (a *API) refreshWorkspaceGit(w http.ResponseWriter, r *http.Request) {
+	workspace, err := a.store.Workspace(r.Context(), chi.URLParam(r, "workspaceID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	command := protocol.GitWorkspaceInspectCommand{WorkspaceID: workspace.ID, Path: workspace.Path, CommitLimit: 50}
+	if err := a.store.BeginWorkspaceGitRefresh(r.Context(), workspace.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start workspace Git refresh")
+		return
+	}
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.workspace.inspect", command, "git-inspect:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	if err != nil {
+		_ = a.store.FailWorkspaceGitRefresh(r.Context(), workspace.ID, "could not queue workspace Git refresh")
+		writeError(w, http.StatusInternalServerError, "could not queue workspace Git refresh")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "git.workspace.refresh", "workspace", workspace.ID, map[string]string{"operation_id": operationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
+func (a *API) workspaceGitCommits(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := a.store.WorkspaceGitSnapshot(r.Context(), chi.URLParam(r, "workspaceID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load commits")
+		return
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	end := offset + limit
+	if end > len(snapshot.Data.Commits) {
+		end = len(snapshot.Data.Commits)
+	}
+	commits := []protocol.GitCommit{}
+	if offset < len(snapshot.Data.Commits) {
+		commits = snapshot.Data.Commits[offset:end]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commits": commits, "offset": offset, "limit": limit, "has_more": end < len(snapshot.Data.Commits) || snapshot.Data.HasMore})
+}
+
+func (a *API) workspaceGitCommit(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := a.store.WorkspaceGitSnapshot(r.Context(), chi.URLParam(r, "workspaceID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load commit")
+		return
+	}
+	sha := strings.TrimSpace(chi.URLParam(r, "sha"))
+	for _, commit := range snapshot.Data.Commits {
+		if commit.SHA == sha {
+			writeJSON(w, http.StatusOK, commit)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "commit not found in the current snapshot")
+}
+
+func (a *API) queueWorkspaceGitWrite(w http.ResponseWriter, r *http.Request, command protocol.GitWorkspaceWriteCommand) {
+	workspace, err := a.store.Workspace(r.Context(), chi.URLParam(r, "workspaceID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	if workspace.ManagementMode != "managed" {
+		writeError(w, http.StatusConflict, "workspace is observed and cannot be modified")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	command.WorkspaceID, command.Path = workspace.ID, workspace.Path
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.workspace.write", command, "git-write:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
+	if errors.Is(err, store.ErrWorkspaceWriteActive) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue Git operation")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "git."+command.Action, "workspace", workspace.ID, map[string]string{"operation_id": operationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
+func (a *API) createGitBranch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name  string `json:"name"`
+		Start string `json:"start_point"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "branch.create", Branch: strings.TrimSpace(in.Name), StartPoint: strings.TrimSpace(in.Start)})
+}
+func (a *API) renameGitBranch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "branch.rename", Branch: chi.URLParam(r, "branch"), NewBranch: strings.TrimSpace(in.Name)})
+}
+func (a *API) deleteGitBranch(w http.ResponseWriter, r *http.Request) {
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "branch.delete", Branch: chi.URLParam(r, "branch"), Force: r.URL.Query().Get("force") == "true"})
+}
+func (a *API) checkoutGit(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Ref    string `json:"ref"`
+		Detach bool   `json:"detach"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "checkout", Ref: strings.TrimSpace(in.Ref), Detach: in.Detach})
+}
+func (a *API) addGitRemote(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Name, URL string }
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "remote.add", Remote: strings.TrimSpace(in.Name), URL: strings.TrimSpace(in.URL)})
+}
+func (a *API) setGitRemote(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		URL string `json:"url"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "remote.set-url", Remote: chi.URLParam(r, "remote"), URL: strings.TrimSpace(in.URL)})
+}
+func (a *API) deleteGitRemote(w http.ResponseWriter, r *http.Request) {
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "remote.remove", Remote: chi.URLParam(r, "remote")})
+}
+func (a *API) fetchGit(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Remote string `json:"remote"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "fetch", Remote: strings.TrimSpace(in.Remote)})
+}
+func (a *API) pullGit(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Remote, Branch string }
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "pull", Remote: strings.TrimSpace(in.Remote), Branch: strings.TrimSpace(in.Branch)})
+}
+func (a *API) pushGit(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Remote, Ref string
+		SetUpstream bool `json:"set_upstream"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "push", Remote: strings.TrimSpace(in.Remote), Ref: strings.TrimSpace(in.Ref), SetUpstream: in.SetUpstream})
+}
+
 type createWorktreeInput struct {
 	Branch  string `json:"branch"`
 	Path    string `json:"path"`

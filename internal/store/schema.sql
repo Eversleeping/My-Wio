@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS workspaces (
   UNIQUE(server_id, path)
 );
 
+CREATE TABLE IF NOT EXISTS workspace_git_snapshots (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  data TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS codex_threads (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

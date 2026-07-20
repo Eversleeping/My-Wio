@@ -78,6 +78,7 @@ import {
   CreateProjectDialog,
   ProjectDetailsDialog,
   ProjectTable,
+  WorkspaceGitDialog,
   WorkspaceTable,
   newCreateProjectFormValue,
   type CreateProjectDialogLabels,
@@ -113,6 +114,7 @@ import type {
   Summary,
   Thread,
   Workspace,
+  WorkspaceGitSnapshot,
   WorkspaceFile,
   WorkspaceFilePreview,
   WorkspaceFilesSnapshot
@@ -670,6 +672,15 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   };
   const projectLabels = { project: t("column.project"), remote: t("column.remote"), workspaces: t("column.workspaces"), status: t("project.status"), updated: t("column.updated"), actions: t("common.actions"), empty: t("project.none"), local: t("project.local"), hidden: t("project.hidden"), targetServer: (server: string) => t("project.targetSummary", { server }), awaitingWorkspace: t("project.awaitingWorkspace") };
   const workspaceLabels = { project: t("column.project"), server: t("column.server"), path: t("column.path"), branch: t("column.branch"), commit: t("column.commit"), state: t("column.state"), actions: t("common.actions"), empty: t("project.noWorkspaces"), detached: t("project.detached") };
+  const [gitWorkspaceID, setGitWorkspaceID] = useState<string | null>(null);
+  const [gitBusy, setGitBusy] = useState(false);
+  const gitSnapshot = useData<WorkspaceGitSnapshot>(gitWorkspaceID ? `/workspaces/${gitWorkspaceID}/git` : null, realtime);
+  const refreshWorkspaceGit = async () => {
+    if (!gitWorkspaceID) return;
+    setGitBusy(true);
+    try { await post(`/workspaces/${gitWorkspaceID}/git/refresh`, {}); gitSnapshot.reload(); notify(t("project.gitRefreshQueued")); } catch (err) { notify(message(err)); } finally { setGitBusy(false); }
+  };
+  const gitLabels = { title: t("project.gitTitle"), status: t("project.gitStatus"), branches: t("project.gitBranches"), remotes: t("project.gitRemotes"), commits: t("project.gitCommits"), refresh: t("project.gitRefresh"), refreshing: t("project.gitRefreshing"), branch: t("column.branch"), head: t("project.gitHead"), upstream: t("project.gitUpstream"), ahead: t("project.gitAhead"), behind: t("project.gitBehind"), staged: t("project.gitStaged"), unstaged: t("project.gitUnstaged"), untracked: t("project.gitUntracked"), clean: t("project.gitClean"), dirty: t("project.gitDirty"), noBranches: t("project.gitNoBranches"), noRemotes: t("project.gitNoRemotes"), noCommits: t("project.gitNoCommits"), close: t("common.close") };
   return <div className="page-stack project-page">
     <Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={openDialog}><Plus size={17} />{t("project.createEntry")}</button>}>
       <ProjectTable projects={projects.data ?? []} labels={projectLabels} slots={{ DataTable, Status }} formatTime={relative} formatImportMessage={importMessage} onSelect={project => { setDetailError(""); setDetailProjectID(project.id); }} renderActions={(project, state: ProjectLifecycleState) => {
@@ -682,10 +693,11 @@ function ProjectsPage({ realtime, notify }: PageProps) {
       }} />
     </Section>
     <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
-      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} />
+      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <button className="icon-button" title={t("project.viewGit")} onClick={() => setGitWorkspaceID(workspace.id)}><GitBranch size={15} /></button>} />
     </Section>
     <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />
     <ProjectDetailsDialog open={detailProjectID !== null} detail={detail.data} loading={detail.loading} busy={detailBusy} error={detailError || detail.error} labels={detailLabels} slots={{ Dialog, Field, DialogActions }} onClose={() => { if (!detailBusy) setDetailProjectID(null); }} onSubmit={saveProjectDetails} />
+    <WorkspaceGitDialog open={gitWorkspaceID !== null} snapshot={gitSnapshot.data} loading={gitSnapshot.loading} busy={gitBusy} labels={gitLabels} Dialog={Dialog} onClose={() => { if (!gitBusy) setGitWorkspaceID(null); }} onRefresh={() => void refreshWorkspaceGit()} />
   </div>;
 }
 

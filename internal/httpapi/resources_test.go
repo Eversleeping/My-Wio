@@ -709,6 +709,48 @@ func TestProjectDetailIncludesRemotesAndOperations(t *testing.T) {
 	}
 }
 
+func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "workspace-git-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "workspace-git", AgentVersion: "0.2.23"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/workspace-git", Name: "git-view", Branch: "main", CommitSHA: "abc", Dirty: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	workspaceID := workspaces[0].ID
+	api := resourceTestAPI(database)
+	refresh := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspaceID+"/git/refresh", workspaceID, map[string]any{}, api.refreshWorkspaceGit)
+	if refresh.Code != http.StatusAccepted {
+		t.Fatalf("refresh returned %d: %s", refresh.Code, refresh.Body.String())
+	}
+	var accepted map[string]string
+	if err := json.Unmarshal(refresh.Body.Bytes(), &accepted); err != nil || accepted["operation_id"] == "" {
+		t.Fatalf("unexpected refresh response: %s", refresh.Body.String())
+	}
+	operation, err := database.Operation(ctx, accepted["operation_id"])
+	if err != nil || operation.Kind != "git.workspace.inspect" || operation.WorkspaceID != workspaceID {
+		t.Fatalf("unexpected refresh operation: %#v %v", operation, err)
+	}
+	result := protocol.GitWorkspaceInspectResult{WorkspaceID: workspaceID, Status: protocol.GitStatus{Branch: "main", Head: "abc", Dirty: true}, Commits: []protocol.GitCommit{{SHA: "abc", Title: "latest"}}}
+	if err := database.SaveWorkspaceGitSnapshot(ctx, workspaceID, result); err != nil {
+		t.Fatal(err)
+	}
+	snapshotResponse := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspaceID+"/git", workspaceID, nil, api.workspaceGit)
+	if snapshotResponse.Code != http.StatusOK || !strings.Contains(snapshotResponse.Body.String(), "latest") {
+		t.Fatalf("unexpected Git snapshot response: %d %s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+	commitsResponse := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspaceID+"/git/commits?limit=1", workspaceID, nil, api.workspaceGitCommits)
+	if commitsResponse.Code != http.StatusOK || !strings.Contains(commitsResponse.Body.String(), "latest") {
+		t.Fatalf("unexpected Git commits response: %d %s", commitsResponse.Code, commitsResponse.Body.String())
+	}
+}
+
 func TestUpdateProjectRejectsInvalidInputAndMissingProject(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	api := resourceTestAPI(database)
