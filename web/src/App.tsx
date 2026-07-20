@@ -74,6 +74,17 @@ import { api, APIError, patch, post, postStream, put, remove, setSession, socket
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { currentLocale, useI18n } from "./i18n";
+import {
+  CreateProjectDialog,
+  ProjectTable,
+  WorkspaceTable,
+  newCreateProjectFormValue,
+  type CreateProjectDialogLabels,
+  type CreateProjectRequest,
+  type ProjectLifecycleState,
+  type ProjectListRecord,
+  type WorkspaceListRecord
+} from "./pages/projects";
 import type {
   Alert,
   Approval,
@@ -559,32 +570,52 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   const workspaces = useData<Workspace[]>("/workspaces", realtime);
   const servers = useData<Server[]>("/servers", realtime);
   const [dialog, setDialog] = useState(false);
-  const [mode, setMode] = useState<"clone" | "discover">("clone");
   const [busy, setBusy] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const [form, setForm] = useState(newCreateProjectFormValue());
   const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "delete" | "restore" } | null>(null);
-  const [form, setForm] = useState({ name: "", remote_url: "", server_id: "", destination: "" });
+
+  const openDialog = () => {
+    setForm(newCreateProjectFormValue());
+    setCreateError("");
+    setDialog(true);
+  };
   const close = () => { if (!busy) setDialog(false); };
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const submit = async (request: CreateProjectRequest) => {
     setBusy(true);
+    setCreateError("");
     try {
-      if (mode === "clone") {
-        await post("/projects/import", form);
+      if (request.mode === "blank") {
+        await post("/projects", request);
+        notify(t("project.createQueued"));
+      } else if (request.mode === "clone") {
+        await post("/projects/import", {
+          remote_url: request.remote_url,
+          name: request.name ?? "",
+          server_id: request.server_id,
+          destination: request.destination ?? ""
+        });
         notify(t("project.queued"));
-        projects.reload();
       } else {
-        await post("/projects/discover", { server_id: form.server_id });
+        await post("/projects/discover", { server_id: request.server_id });
         notify(t("project.scanQueued"));
       }
+      projects.reload();
+      workspaces.reload();
       setDialog(false);
-    } catch (err) { notify(message(err)); } finally { setBusy(false); }
+    } catch (err) {
+      const error = message(err);
+      setCreateError(error);
+      notify(error);
+    } finally { setBusy(false); }
   };
-  const retryImport = async (project: Project) => {
+  const retryProject = async (project: Project) => {
     setProjectAction({ id: project.id, kind: "retry" });
     try {
-      await post(`/projects/${project.id}/retry-import`, {});
+      const blank = project.status === "failed" || project.status === "partial";
+      await post(`/projects/${project.id}/${blank ? "retry-create" : "retry-import"}`, {});
       projects.reload();
-      notify(t("project.retryQueued"));
+      notify(t(blank ? "project.createRetryQueued" : "project.retryQueued"));
     } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
   };
   const deleteFailedProject = async (project: Project) => {
@@ -604,13 +635,35 @@ function ProjectsPage({ realtime, notify }: PageProps) {
       notify(t("project.restored"));
     } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
   };
-  const importState = (project: Project) => project.import_status === "queued" || project.import_status === "delivered" ? "importing" : project.import_status === "failed" ? "failed" : project.workspace_count > 0 ? "ready" : project.import_status === "succeeded" ? "syncing" : "pending";
-  const importMessage = (project: Project) => /http2 framing|expected flush|timed? out|timeout|could not resolve|temporary failure in name resolution|connection (?:refused|reset)|network is unreachable|dial tcp/i.test(project.import_message) ? t("project.networkFailure") : project.import_message;
-  const serverOptions = (servers.data ?? []).map(server => <option key={server.id} value={server.id} disabled={server.status !== "online"}>{server.name}{server.status !== "online" ? ` (${t("status.offline")})` : ""}</option>);
-  return <div className="page-stack"><Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={() => setDialog(true)}><Plus size={17} />{t("project.import")}</button>}>
-    <DataTable headers={[t("column.project"), t("column.remote"), t("column.workspaces"), t("project.importStatus"), t("column.updated"), t("common.actions")]} empty={t("project.none")}>{(projects.data ?? []).map(project => { const state = importState(project); const failed = state === "failed" && project.workspace_count === 0; const action = projectAction?.id === project.id ? projectAction.kind : null; const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id); const retryAvailable = targetServer?.status === "online"; return <tr key={project.id} className={project.hidden_at ? "project-hidden-row" : ""}><td><div className="cell-main"><span className="inline"><strong>{project.name}</strong>{project.hidden_at && <span className="status-tag neutral"><EyeOff size={12} />{t("project.hidden")}</span>}</span>{project.import_server_name && <small>{t("project.targetSummary", { server: project.import_server_name })}</small>}</div></td><td><code className="truncate-code">{project.remote_url || t("project.local")}</code></td><td>{project.workspace_count}</td><td><div className="project-import-state"><Status value={state} />{state === "syncing" && <small className="project-import-message syncing">{t("project.awaitingWorkspace")}</small>}{state === "failed" && importMessage(project) && <small className="project-import-message" title={project.import_message}>{importMessage(project)}</small>}</div></td><td>{relative(project.updated_at)}</td><td><div className="row-actions">{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <><button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t("project.retryImport") : t("project.retryOffline")} onClick={() => void retryImport(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button className="icon-button danger" disabled={projectAction !== null} title={t("project.deleteFailed")} onClick={() => void deleteFailedProject(project)}>{action === "delete" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}</button></>}{!project.hidden_at && !failed && <span className="muted">-</span>}</div></td></tr>; })}</DataTable>
-  </Section><Section title={t("project.workspaces")} icon={<Boxes size={18} />}><DataTable headers={[t("column.project"), t("column.server"), t("column.path"), t("column.branch"), t("column.commit"), t("column.state")]} empty={t("project.noWorkspaces")}>{(workspaces.data ?? []).map(workspace => <tr key={workspace.id}><td><strong>{workspace.project_name}</strong></td><td>{workspace.server_name}</td><td><code className="truncate-code">{workspace.path}</code></td><td><span className="inline"><GitBranch size={13} />{workspace.branch || t("project.detached")}</span></td><td><code>{shortSHA(workspace.commit_sha)}</code></td><td><Status value={workspace.dirty ? "dirty" : "clean"} /></td></tr>)}</DataTable></Section>
-  <Dialog open={dialog} title={t("project.import")} onClose={close}><form onSubmit={submit}><div className="segmented-control" role="tablist" aria-label={t("project.importMode")}><button type="button" role="tab" aria-selected={mode === "clone"} className={mode === "clone" ? "active" : ""} onClick={() => setMode("clone")}><GitBranch size={15} />{t("project.cloneMode")}</button><button type="button" role="tab" aria-selected={mode === "discover"} className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")}><ServerIcon size={15} />{t("project.discoverMode")}</button></div>{mode === "clone" ? <><Field label={t("project.remoteURL")}><input value={form.remote_url} onChange={e => setForm({ ...form, remote_url: e.target.value })} placeholder="https://git.example.com/team/project.git" required /></Field><div className="form-grid"><Field label={t("project.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field><Field label={t("project.targetServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field></div><Field label={t("project.destination")}><input value={form.destination} onChange={e => setForm({ ...form, destination: e.target.value })} placeholder={t("common.optional")} /></Field></> : <Field label={t("project.existingServer")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value })} required><option value="">{t("project.selectServer")}</option>{serverOptions}</select></Field>}<DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : mode === "clone" ? <GitBranch size={16} /> : <Search size={16} />}{busy ? t("project.working") : mode === "clone" ? t("project.queue") : t("project.scan")}</button></DialogActions></form></Dialog></div>;
+  const importMessage = (project: ProjectListRecord) => {
+    const raw = project.provision_error || project.import_message;
+    return /http2 framing|expected flush|timed? out|timeout|could not resolve|temporary failure in name resolution|connection (?:refused|reset)|network is unreachable|dial tcp/i.test(raw) ? t("project.networkFailure") : raw;
+  };
+  const serverOptions = (servers.data ?? []).map(server => ({ id: server.id, name: server.name, status: server.status }));
+  const labels: CreateProjectDialogLabels = {
+    title: t("project.createTitle"), modeLabel: t("project.createMode"), blankMode: t("project.blankMode"), cloneMode: t("project.cloneMode"), discoverMode: t("project.discoverMode"),
+    projectName: t("project.name"), targetServer: t("project.targetServer"), selectServer: t("project.selectServer"), offline: t("status.offline"), destination: t("project.destination"), optional: t("common.optional"), initialBranch: t("project.initialBranch"),
+    remoteSetup: t("project.remoteSetup"), remoteNone: t("project.remoteNone"), remoteExisting: t("project.remoteExisting"), remoteCreate: t("project.remoteCreate"), remoteURL: t("project.remoteURL"), remoteProvider: t("project.remoteProvider"), remoteNamespace: t("project.remoteNamespace"), remoteRepository: t("project.remoteRepository"), remoteVisibility: t("project.remoteVisibility"), visibilityPrivate: t("project.visibilityPrivate"), visibilityInternal: t("project.visibilityInternal"), visibilityPublic: t("project.visibilityPublic"), initializeReadme: t("project.initializeReadme"), existingServer: t("project.existingServer"), comingSoon: t("project.comingSoon"), cancel: t("common.cancel"), working: t("project.working"), create: t("project.create"), clone: t("project.queue"), discover: t("project.scan"),
+    nameRequired: t("project.nameRequired"), serverRequired: t("project.serverRequired"), remoteURLRequired: t("project.remoteURLRequired"), initialBranchRequired: t("project.initialBranchRequired"), remoteProviderRequired: t("project.remoteProviderRequired"), remoteRepositoryRequired: t("project.remoteRepositoryRequired"), remoteUnavailable: t("project.remoteUnavailable")
+  };
+  const projectLabels = { project: t("column.project"), remote: t("column.remote"), workspaces: t("column.workspaces"), status: t("project.status"), updated: t("column.updated"), actions: t("common.actions"), empty: t("project.none"), local: t("project.local"), hidden: t("project.hidden"), targetServer: (server: string) => t("project.targetSummary", { server }), awaitingWorkspace: t("project.awaitingWorkspace") };
+  const workspaceLabels = { project: t("column.project"), server: t("column.server"), path: t("column.path"), branch: t("column.branch"), commit: t("column.commit"), state: t("column.state"), actions: t("common.actions"), empty: t("project.noWorkspaces"), detached: t("project.detached") };
+  return <div className="page-stack project-page">
+    <Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={openDialog}><Plus size={17} />{t("project.createEntry")}</button>}>
+      <ProjectTable projects={projects.data ?? []} labels={projectLabels} slots={{ DataTable, Status }} formatTime={relative} formatImportMessage={importMessage} renderActions={(project, state: ProjectLifecycleState) => {
+        const failed = (state === "failed" || state === "partial") && project.workspace_count === 0;
+        const action = projectAction?.id === project.id ? projectAction.kind : null;
+        const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id);
+        const blankFailure = project.status === "failed" || project.status === "partial";
+        const retryAvailable = blankFailure || targetServer?.status === "online";
+        return <>{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <><button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button className="icon-button danger" disabled={projectAction !== null} title={t("project.deleteFailed")} onClick={() => void deleteFailedProject(project)}>{action === "delete" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}</button></>}{!project.hidden_at && !failed && <span className="muted">-</span>}</>;
+      }} />
+    </Section>
+    <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
+      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} />
+    </Section>
+    <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />
+  </div>;
 }
 
 function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloadApprovals, notify, selectedThreadID, onSelectThread }: PageProps & { streamRevisions: StreamRevisions; approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void; selectedThreadID: string; onSelectThread: (threadID: string, replace?: boolean) => void }) {

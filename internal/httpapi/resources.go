@@ -91,6 +91,8 @@ const (
 	serverConfigurationLimit = 4096
 	serverNotesLimit         = 4096
 	projectNameLimit         = 200
+	projectDestinationLimit  = 1024
+	gitBranchNameLimit       = 240
 	threadTitleLimit         = 200
 )
 
@@ -228,6 +230,138 @@ func (a *API) projects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, projects)
+}
+
+type createProjectInput struct {
+	Mode             string `json:"mode"`
+	Name             string `json:"name"`
+	ServerID         string `json:"server_id"`
+	Destination      string `json:"destination"`
+	InitialBranch    string `json:"initial_branch"`
+	InitializeREADME bool   `json:"initialize_readme"`
+	Remote           struct {
+		Mode string `json:"mode"`
+	} `json:"remote"`
+}
+
+func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
+	var input createProjectInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.Mode = strings.TrimSpace(input.Mode)
+	input.Name = strings.TrimSpace(input.Name)
+	input.ServerID = strings.TrimSpace(input.ServerID)
+	input.Destination = strings.TrimSpace(input.Destination)
+	input.InitialBranch = strings.TrimSpace(input.InitialBranch)
+	input.Remote.Mode = strings.TrimSpace(input.Remote.Mode)
+	if input.Mode != "blank" {
+		writeError(w, http.StatusBadRequest, "mode must be blank")
+		return
+	}
+	if input.Name == "" || input.ServerID == "" {
+		writeError(w, http.StatusBadRequest, "name and server_id are required")
+		return
+	}
+	if utf8.RuneCountInString(input.Name) > projectNameLimit {
+		writeError(w, http.StatusBadRequest, "project name is too long")
+		return
+	}
+	if input.InitialBranch == "" {
+		input.InitialBranch = "main"
+	}
+	if len(input.InitialBranch) > gitBranchNameLimit || strings.ContainsAny(input.InitialBranch, "\x00\r\n\t ") || strings.HasPrefix(input.InitialBranch, "-") {
+		writeError(w, http.StatusBadRequest, "initial_branch is invalid")
+		return
+	}
+	if len(input.Destination) > projectDestinationLimit || strings.ContainsAny(input.Destination, "\x00\r\n") {
+		writeError(w, http.StatusBadRequest, "destination is invalid")
+		return
+	}
+	if input.Remote.Mode != "" && input.Remote.Mode != "none" {
+		writeError(w, http.StatusBadRequest, "remote repository setup is not available for blank projects yet")
+		return
+	}
+	server, err := a.store.Server(r.Context(), input.ServerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	if input.InitializeREADME && server.GitProfileID == "" {
+		writeError(w, http.StatusConflict, "a Git credential profile with commit identity is required for the initial commit")
+		return
+	}
+	provision, err := a.store.CreateBlankProject(r.Context(), server.ID, input.Name, input.Destination, input.InitialBranch, input.InitializeREADME)
+	if err != nil {
+		if databaseConflict(err) {
+			writeError(w, http.StatusConflict, "project could not be reserved")
+		} else {
+			writeError(w, http.StatusInternalServerError, "could not create blank project")
+		}
+		return
+	}
+	a.gateway.Wake(server.ID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "project.create", "project", provision.Project.ID, map[string]any{
+		"server_id": server.ID, "workspace_id": provision.WorkspaceID, "operation_id": provision.OperationID,
+		"initial_branch": input.InitialBranch, "initialize_readme": input.InitializeREADME,
+	}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]any{"project": provision.Project, "workspace_id": provision.WorkspaceID, "operation_id": provision.OperationID})
+}
+
+func (a *API) retryProjectCreation(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	project, err := a.store.Project(r.Context(), projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	if project.Status != "failed" && project.Status != "partial" {
+		writeError(w, http.StatusConflict, "only a failed or partial blank project can be retried")
+		return
+	}
+	operations, err := a.store.ListProjectOperations(r.Context(), projectID, 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project operations")
+		return
+	}
+	serverID := ""
+	for _, operation := range operations {
+		if operation.Kind == "git.project.create" {
+			serverID = operation.ServerID
+			break
+		}
+	}
+	if serverID == "" {
+		writeError(w, http.StatusConflict, "blank project creation operation was not found")
+		return
+	}
+	server, err := a.store.Server(r.Context(), serverID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	provision, err := a.store.RetryBlankProject(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	a.gateway.Wake(server.ID)
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "project.create.retry", "project", projectID, map[string]string{"server_id": server.ID, "workspace_id": provision.WorkspaceID, "operation_id": provision.OperationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]any{"project": provision.Project, "workspace_id": provision.WorkspaceID, "operation_id": provision.OperationID})
 }
 
 func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {

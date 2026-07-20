@@ -91,6 +91,24 @@ type WorkspaceFilePreviewResult struct {
 	Truncated bool   `json:"truncated"`
 }
 
+type GitProjectCreateCommand struct {
+	ProjectID        string `json:"project_id"`
+	WorkspaceID      string `json:"workspace_id"`
+	Name             string `json:"name"`
+	Destination      string `json:"destination,omitempty"`
+	InitialBranch    string `json:"initial_branch"`
+	InitializeREADME bool   `json:"initialize_readme"`
+	RemoteURL        string `json:"remote_url,omitempty"`
+}
+
+type GitProjectCreateResult struct {
+	Path      string `json:"path"`
+	Branch    string `json:"branch"`
+	CommitSHA string `json:"commit_sha,omitempty"`
+	Unborn    bool   `json:"unborn"`
+	RemoteURL string `json:"remote_url,omitempty"`
+}
+
 type GitWorktreeCreateCommand struct {
 	SourceWorkspaceID string `json:"source_workspace_id"`
 	TargetWorkspaceID string `json:"target_workspace_id"`

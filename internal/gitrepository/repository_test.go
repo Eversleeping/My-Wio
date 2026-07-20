@@ -16,7 +16,7 @@ func TestCreateEmptyRepository(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "empty")
 
-	result, err := Create(context.Background(), CreateOptions{Path: target, InitialBranch: "trunk"}, []string{root})
+	result, err := Create(context.Background(), CreateOptions{ProjectID: "project-empty", Path: target, InitialBranch: "trunk"}, []string{root})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +59,7 @@ func TestCreateWithRemoteAndREADME(t *testing.T) {
 	remote := "https://example.com/team/service.git"
 
 	result, err := Create(context.Background(), CreateOptions{
+		ProjectID:        "project-service",
 		Path:             target,
 		RemoteURL:        remote,
 		InitializeREADME: true,
@@ -101,12 +102,12 @@ func TestCreateRejectsUnsafePathsAndRemoteURLs(t *testing.T) {
 		name    string
 		options CreateOptions
 	}{
-		{name: "relative path", options: CreateOptions{Path: "repo"}},
-		{name: "outside root", options: CreateOptions{Path: filepath.Join(outside, "repo")}},
-		{name: "invalid branch", options: CreateOptions{Path: filepath.Join(root, "bad-branch"), InitialBranch: "bad branch"}},
-		{name: "HTTP credentials", options: CreateOptions{Path: filepath.Join(root, "http-user"), RemoteURL: "https://user:secret@example.com/repo.git"}},
-		{name: "SSH password", options: CreateOptions{Path: filepath.Join(root, "ssh-password"), RemoteURL: "ssh://git:secret@example.com/repo.git"}},
-		{name: "external helper", options: CreateOptions{Path: filepath.Join(root, "external-helper"), RemoteURL: "ext::command"}},
+		{name: "relative path", options: CreateOptions{ProjectID: "relative", Path: "repo"}},
+		{name: "outside root", options: CreateOptions{ProjectID: "outside", Path: filepath.Join(outside, "repo")}},
+		{name: "invalid branch", options: CreateOptions{ProjectID: "branch", Path: filepath.Join(root, "bad-branch"), InitialBranch: "bad branch"}},
+		{name: "HTTP credentials", options: CreateOptions{ProjectID: "http-user", Path: filepath.Join(root, "http-user"), RemoteURL: "https://user:secret@example.com/repo.git"}},
+		{name: "SSH password", options: CreateOptions{ProjectID: "ssh-password", Path: filepath.Join(root, "ssh-password"), RemoteURL: "ssh://git:secret@example.com/repo.git"}},
+		{name: "external helper", options: CreateOptions{ProjectID: "external-helper", Path: filepath.Join(root, "external-helper"), RemoteURL: "ext::command"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -124,7 +125,7 @@ func TestCreateRejectsUnsafePathsAndRemoteURLs(t *testing.T) {
 	if err := os.Mkdir(existing, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(context.Background(), CreateOptions{Path: existing}, []string{root}); err == nil {
+	if _, err := Create(context.Background(), CreateOptions{ProjectID: "existing", Path: existing}, []string{root}); err == nil {
 		t.Fatal("expected existing path rejection")
 	}
 	for name, remote := range map[string]string{
@@ -132,7 +133,7 @@ func TestCreateRejectsUnsafePathsAndRemoteURLs(t *testing.T) {
 		"SCP URL": "git@example.com:team/repo.git",
 	} {
 		t.Run(name, func(t *testing.T) {
-			result, err := Create(context.Background(), CreateOptions{Path: filepath.Join(root, strings.ToLower(strings.ReplaceAll(name, " ", "-"))), RemoteURL: remote}, []string{root})
+			result, err := Create(context.Background(), CreateOptions{ProjectID: "remote-" + name, Path: filepath.Join(root, strings.ToLower(strings.ReplaceAll(name, " ", "-"))), RemoteURL: remote}, []string{root})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -154,7 +155,7 @@ func TestCreateAndQueriesRejectSymlinkEscapeAndNestedRepositoryPath(t *testing.T
 		}
 		t.Fatal(err)
 	}
-	if _, err := Create(context.Background(), CreateOptions{Path: filepath.Join(link, "repo")}, []string{root}); err == nil {
+	if _, err := Create(context.Background(), CreateOptions{ProjectID: "symlink", Path: filepath.Join(link, "repo")}, []string{root}); err == nil {
 		t.Fatal("expected symlink escape to be rejected")
 	}
 
@@ -168,6 +169,108 @@ func TestCreateAndQueriesRejectSymlinkEscapeAndNestedRepositoryPath(t *testing.T
 	}
 	if _, err := GetStatus(context.Background(), repository, []string{outside}); err == nil {
 		t.Fatal("expected repository outside managed roots to be rejected")
+	}
+}
+
+func TestCreateIsIdempotentForMatchingProject(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "service")
+	options := CreateOptions{ProjectID: "project-1", Path: target, InitialBranch: "trunk", InitializeREADME: true, AuthorName: "Retry Test", AuthorEmail: "retry@example.com"}
+
+	first, err := Create(context.Background(), options, []string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Create(context.Background(), options, []string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Path != first.Path || second.Branch != first.Branch || second.Head != first.Head || second.Unborn != first.Unborn {
+		t.Fatalf("retry returned a different repository: first=%#v second=%#v", first, second)
+	}
+	marker, err := exec.Command("git", "-C", target, "config", "--local", "--get", "wio.projectId").Output()
+	if err != nil || strings.TrimSpace(string(marker)) != "project-1" {
+		t.Fatalf("repository marker was not persisted: %q %v", marker, err)
+	}
+	page, err := ListCommits(context.Background(), target, []string{root}, CommitLogOptions{Limit: 10})
+	if err != nil || len(page.Commits) != 1 {
+		t.Fatalf("retry should not create another commit: %#v %v", page, err)
+	}
+	if _, err := Create(context.Background(), CreateOptions{ProjectID: "project-2", Path: target}, []string{root}); err == nil {
+		t.Fatal("expected a different project to be rejected")
+	}
+}
+
+func TestCreateResumesInterruptedREADMEInitialization(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "interrupted")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, target, "init", "-b", "main")
+	testGit(t, target, "config", "--local", "wio.projectId", "interrupted-project")
+	configureIdentity(t, target)
+
+	result, err := Create(context.Background(), CreateOptions{ProjectID: "interrupted-project", Path: target, InitialBranch: "main", InitializeREADME: true}, []string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Unborn || result.Head == "" || result.Branch != "main" {
+		t.Fatalf("interrupted repository was not completed: %#v", result)
+	}
+	page, err := ListCommits(context.Background(), target, []string{root}, CommitLogOptions{Limit: 5})
+	if err != nil || len(page.Commits) != 1 || page.Commits[0].Title != "Initial commit" {
+		t.Fatalf("unexpected resumed commit history: %#v %v", page, err)
+	}
+}
+
+func TestCreateRequiresProjectID(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "missing-id")
+	if _, err := Create(context.Background(), CreateOptions{Path: target}, []string{root}); err == nil {
+		t.Fatal("expected missing project ID to be rejected")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("missing project ID left a directory behind: %v", err)
+	}
+}
+
+func TestCreateREADMEUsesConfiguredGitIdentityWhenOptionsAreEmpty(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if output, err := exec.Command("git", "config", "--file", globalConfig, "user.name", "Configured User").CombinedOutput(); err != nil {
+		t.Fatalf("configure test Git name: %v: %s", err, output)
+	}
+	if output, err := exec.Command("git", "config", "--file", globalConfig, "user.email", "configured@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("configure test Git email: %v: %s", err, output)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	result, err := Create(context.Background(), CreateOptions{ProjectID: "configured", Path: filepath.Join(root, "configured"), InitializeREADME: true}, []string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := ListCommits(context.Background(), result.Path, []string{root}, CommitLogOptions{Limit: 1})
+	if err != nil || len(page.Commits) != 1 || page.Commits[0].AuthorName != "Configured User" || page.Commits[0].AuthorEmail != "configured@example.com" {
+		t.Fatalf("configured identity was not used: %#v %v", page, err)
+	}
+}
+
+func TestCreateREADMERejectsMissingGitIdentity(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "missing-gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	target := filepath.Join(root, "missing-identity")
+	if _, err := Create(context.Background(), CreateOptions{ProjectID: "missing-identity", Path: target, InitializeREADME: true}, []string{root}); err == nil || !strings.Contains(err.Error(), "author name is not configured") {
+		t.Fatalf("expected a clear missing identity error, got %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("failed creation left a directory behind: %v", err)
 	}
 }
 

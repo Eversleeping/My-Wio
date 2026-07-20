@@ -24,6 +24,7 @@ const (
 
 // CreateOptions describes a new repository that will be created below a managed root.
 type CreateOptions struct {
+	ProjectID        string
 	Path             string
 	InitialBranch    string
 	RemoteURL        string
@@ -95,9 +96,12 @@ type CommitPage struct {
 }
 
 func Create(ctx context.Context, options CreateOptions, managedRoots []string) (result CreateResult, err error) {
-	target, err := allowedNewPath(options.Path, managedRoots)
-	if err != nil {
-		return CreateResult{}, fmt.Errorf("invalid repository path: %w", err)
+	projectID := strings.TrimSpace(options.ProjectID)
+	if projectID == "" {
+		return CreateResult{}, errors.New("project ID is required")
+	}
+	if containsControl(projectID) {
+		return CreateResult{}, errors.New("project ID contains control characters")
 	}
 	branch := strings.TrimSpace(options.InitialBranch)
 	if branch == "" {
@@ -116,6 +120,15 @@ func Create(ctx context.Context, options CreateOptions, managedRoots []string) (
 		if err := validateCommitIdentity(options); err != nil {
 			return CreateResult{}, err
 		}
+	}
+	if _, statErr := os.Lstat(strings.TrimSpace(options.Path)); statErr == nil {
+		return recoverCreatedRepository(ctx, options, branch, remoteURL, managedRoots)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return CreateResult{}, fmt.Errorf("inspect repository path: %w", statErr)
+	}
+	target, err := allowedNewPath(options.Path, managedRoots)
+	if err != nil {
+		return CreateResult{}, fmt.Errorf("invalid repository path: %w", err)
 	}
 
 	if err := os.Mkdir(target, 0o750); err != nil {
@@ -139,42 +152,17 @@ func Create(ctx context.Context, options CreateOptions, managedRoots []string) (
 	if output, commandErr := runGit(ctx, target, "init", "-b", branch); commandErr != nil {
 		return CreateResult{}, fmt.Errorf("initialize repository: %s", cleanGitError(output, commandErr))
 	}
+	if output, commandErr := runGit(ctx, target, "config", "--local", "wio.projectId", projectID); commandErr != nil {
+		return CreateResult{}, fmt.Errorf("mark repository project: %s", cleanGitError(output, commandErr))
+	}
 	if remoteURL != "" {
 		if output, commandErr := runGit(ctx, target, "remote", "add", "--", "origin", remoteURL); commandErr != nil {
 			return CreateResult{}, fmt.Errorf("add origin remote: %s", cleanGitError(output, commandErr))
 		}
 	}
 	if options.InitializeREADME {
-		content := options.READMEContent
-		if content == "" {
-			content = "# " + filepath.Base(target) + "\n"
-		}
-		if err := os.WriteFile(filepath.Join(target, "README.md"), []byte(content), 0o644); err != nil {
-			return CreateResult{}, fmt.Errorf("write README: %w", err)
-		}
-		if output, commandErr := runGit(ctx, target, "add", "--", "README.md"); commandErr != nil {
-			return CreateResult{}, fmt.Errorf("stage README: %s", cleanGitError(output, commandErr))
-		}
-		name := strings.TrimSpace(options.AuthorName)
-		if name == "" {
-			name = "Wio"
-		}
-		email := strings.TrimSpace(options.AuthorEmail)
-		if email == "" {
-			email = "wio@localhost"
-		}
-		message := strings.TrimSpace(options.CommitMessage)
-		if message == "" {
-			message = "Initial commit"
-		}
-		args := []string{
-			"-c", "user.name=" + name,
-			"-c", "user.email=" + email,
-			"-c", "commit.gpgsign=false",
-			"commit", "--no-gpg-sign", "--no-verify", "-m", message,
-		}
-		if output, commandErr := runGit(ctx, target, args...); commandErr != nil {
-			return CreateResult{}, fmt.Errorf("commit README: %s", cleanGitError(output, commandErr))
+		if err := commitREADME(ctx, target, options); err != nil {
+			return CreateResult{}, err
 		}
 	}
 
@@ -190,6 +178,90 @@ func Create(ctx context.Context, options CreateOptions, managedRoots []string) (
 		Unborn:    status.Unborn,
 		RemoteURL: remoteURL,
 	}, nil
+}
+
+func recoverCreatedRepository(ctx context.Context, options CreateOptions, branch, remoteURL string, managedRoots []string) (CreateResult, error) {
+	repositoryPath, err := resolveRepository(ctx, options.Path, managedRoots)
+	if err != nil {
+		return CreateResult{}, fmt.Errorf("repository path already exists: %w", err)
+	}
+	markerOutput, markerErr := runGit(ctx, repositoryPath, "config", "--local", "--get", "wio.projectId")
+	if markerErr != nil || strings.TrimSpace(string(markerOutput)) != strings.TrimSpace(options.ProjectID) {
+		return CreateResult{}, errors.New("repository path already exists for a different project")
+	}
+	status, err := getStatus(ctx, repositoryPath)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	if status.Branch != branch {
+		return CreateResult{}, errors.New("existing repository branch does not match the requested initial branch")
+	}
+	existingRemote := ""
+	if output, remoteErr := runGit(ctx, repositoryPath, "remote", "get-url", "origin"); remoteErr == nil {
+		existingRemote = strings.TrimSpace(string(output))
+	}
+	if remoteURL == "" && existingRemote != "" {
+		return CreateResult{}, errors.New("existing repository has an unexpected origin remote")
+	}
+	if remoteURL != "" {
+		if existingRemote == "" {
+			if output, commandErr := runGit(ctx, repositoryPath, "remote", "add", "--", "origin", remoteURL); commandErr != nil {
+				return CreateResult{}, fmt.Errorf("resume origin remote: %s", cleanGitError(output, commandErr))
+			}
+		} else if existingRemote != remoteURL {
+			return CreateResult{}, errors.New("existing repository origin does not match the requested remote")
+		}
+	}
+	if options.InitializeREADME && status.Unborn {
+		if err := commitREADME(ctx, repositoryPath, options); err != nil {
+			return CreateResult{}, err
+		}
+		status, err = getStatus(ctx, repositoryPath)
+		if err != nil {
+			return CreateResult{}, err
+		}
+	}
+	if options.InitializeREADME && status.Unborn {
+		return CreateResult{}, errors.New("existing repository is missing the requested initial commit")
+	}
+	return CreateResult{
+		Path:      repositoryPath,
+		Branch:    status.Branch,
+		Head:      status.Head,
+		Unborn:    status.Unborn,
+		RemoteURL: remoteURL,
+	}, nil
+}
+
+func commitREADME(ctx context.Context, repositoryPath string, options CreateOptions) error {
+	if err := validateConfiguredCommitIdentity(ctx, repositoryPath, options); err != nil {
+		return err
+	}
+	content := options.READMEContent
+	if content == "" {
+		content = "# " + filepath.Base(repositoryPath) + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(repositoryPath, "README.md"), []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write README: %w", err)
+	}
+	if output, commandErr := runGit(ctx, repositoryPath, "add", "--", "README.md"); commandErr != nil {
+		return fmt.Errorf("stage README: %s", cleanGitError(output, commandErr))
+	}
+	message := strings.TrimSpace(options.CommitMessage)
+	if message == "" {
+		message = "Initial commit"
+	}
+	args := []string{"-c", "commit.gpgsign=false", "commit", "--no-gpg-sign", "--no-verify", "-m", message}
+	if name := strings.TrimSpace(options.AuthorName); name != "" {
+		args = append([]string{"-c", "user.name=" + name}, args...)
+	}
+	if email := strings.TrimSpace(options.AuthorEmail); email != "" {
+		args = append([]string{"-c", "user.email=" + email}, args...)
+	}
+	if output, commandErr := runGit(ctx, repositoryPath, args...); commandErr != nil {
+		return fmt.Errorf("commit README: %s", cleanGitError(output, commandErr))
+	}
+	return nil
 }
 
 func GetStatus(ctx context.Context, repositoryPath string, managedRoots []string) (Status, error) {
@@ -670,6 +742,27 @@ func validateCommitIdentity(options CreateOptions) error {
 	for _, item := range values {
 		if containsControl(item.value) {
 			return fmt.Errorf("%s contains control characters", item.name)
+		}
+	}
+	return nil
+}
+
+func validateConfiguredCommitIdentity(ctx context.Context, repositoryPath string, options CreateOptions) error {
+	checks := []struct {
+		name  string
+		value string
+		key   string
+	}{
+		{name: "author name", value: options.AuthorName, key: "user.name"},
+		{name: "author email", value: options.AuthorEmail, key: "user.email"},
+	}
+	for _, check := range checks {
+		if strings.TrimSpace(check.value) != "" {
+			continue
+		}
+		output, err := runGit(ctx, repositoryPath, "config", "--get", check.key)
+		if err != nil || strings.TrimSpace(string(output)) == "" {
+			return fmt.Errorf("%s is not configured; set Git %s or provide it explicitly", check.name, check.key)
 		}
 	}
 	return nil

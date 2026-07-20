@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -74,5 +75,109 @@ func TestInventoryRootsDoNotDuplicateCoveredCloneRoot(t *testing.T) {
 	roots := client.inventoryRoots()
 	if len(roots) != 1 || roots[0] != base {
 		t.Fatalf("unexpected inventory roots: %#v", roots)
+	}
+}
+
+func TestGitProjectCreateReturnsStructuredResultAndRefreshesInventory(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	cloneRoot := t.TempDir()
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if output, err := exec.Command("git", "config", "--file", globalConfig, "user.name", "Agent Test").CombinedOutput(); err != nil {
+		t.Fatalf("configure test Git name: %v: %s", err, output)
+	}
+	if output, err := exec.Command("git", "config", "--file", globalConfig, "user.email", "agent@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("configure test Git email: %v: %s", err, output)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	client := &Client{
+		config:   Config{CloneRoot: cloneRoot},
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		outbound: make(chan *protocol.AgentEnvelope, 4),
+		seen:     make(map[string]*operationExecution),
+	}
+	payload, err := json.Marshal(protocol.GitProjectCreateCommand{
+		ProjectID:        "project-1",
+		WorkspaceID:      "workspace-1",
+		Name:             "Sample Service",
+		InitialBranch:    "trunk",
+		InitializeREADME: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "create-1", Kind: "git.project.create", PayloadJSON: payload})
+
+	operationEnvelope := receiveAgentEnvelope(t, client.outbound)
+	if operationEnvelope.Kind != "operation_result" {
+		t.Fatalf("expected operation result first, got %q", operationEnvelope.Kind)
+	}
+	var operation protocol.OperationResult
+	if err := json.Unmarshal(operationEnvelope.PayloadJSON, &operation); err != nil {
+		t.Fatal(err)
+	}
+	if operation.Status != "succeeded" || operation.OperationID != "create-1" {
+		t.Fatalf("unexpected operation result: %#v", operation)
+	}
+	var result protocol.GitProjectCreateResult
+	if err := json.Unmarshal(operation.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	expectedPath := filepath.Join(cloneRoot, "Sample-Service")
+	resultInfo, resultStatErr := os.Stat(result.Path)
+	expectedInfo, expectedStatErr := os.Stat(expectedPath)
+	if resultStatErr != nil || expectedStatErr != nil || !os.SameFile(resultInfo, expectedInfo) || result.Branch != "trunk" || result.CommitSHA == "" || result.Unborn || result.RemoteURL != "" {
+		t.Fatalf("unexpected project result: %#v", result)
+	}
+	if content, err := os.ReadFile(filepath.Join(result.Path, "README.md")); err != nil || string(content) != "# Sample-Service\n" {
+		t.Fatalf("unexpected README: %q %v", content, err)
+	}
+
+	inventoryEnvelope := receiveAgentEnvelope(t, client.outbound)
+	if inventoryEnvelope.Kind != "inventory" {
+		t.Fatalf("expected inventory refresh, got %q", inventoryEnvelope.Kind)
+	}
+	var inventory protocol.Inventory
+	if err := json.Unmarshal(inventoryEnvelope.PayloadJSON, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Repositories) != 1 || inventory.Repositories[0].Path != result.Path || inventory.Repositories[0].CommitSHA != result.CommitSHA {
+		t.Fatalf("created repository missing from inventory: %#v", inventory.Repositories)
+	}
+}
+
+func TestProjectCreateDestinationRejectsCloneRootEscape(t *testing.T) {
+	cloneRoot := t.TempDir()
+	outside := filepath.Join(filepath.Dir(cloneRoot), "outside")
+	for _, destination := range []string{cloneRoot, outside, ".." + string(filepath.Separator) + "outside"} {
+		if _, err := projectCreateDestination(cloneRoot, "service", destination); err == nil {
+			t.Fatalf("expected destination %q to be rejected", destination)
+		}
+	}
+	resolved, err := projectCreateDestination(cloneRoot, "Sample Service", "")
+	if err != nil || resolved != filepath.Join(cloneRoot, "Sample-Service") {
+		t.Fatalf("unexpected default destination: %q %v", resolved, err)
+	}
+	resolved, err = projectCreateDestination(cloneRoot, "ignored", filepath.Join("team", "service"))
+	if err != nil || resolved != filepath.Join(cloneRoot, "team", "service") {
+		t.Fatalf("unexpected relative destination: %q %v", resolved, err)
+	}
+	inside := filepath.Join(cloneRoot, "absolute-service")
+	resolved, err = projectCreateDestination(cloneRoot, "ignored", inside)
+	if err != nil || resolved != inside {
+		t.Fatalf("unexpected absolute destination: %q %v", resolved, err)
+	}
+}
+
+func receiveAgentEnvelope(t *testing.T, outbound <-chan *protocol.AgentEnvelope) *protocol.AgentEnvelope {
+	t.Helper()
+	select {
+	case envelope := <-outbound:
+		return envelope
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Agent envelope")
+		return nil
 	}
 }

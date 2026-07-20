@@ -31,6 +31,7 @@ import (
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexadapter"
 	"github.com/wio-platform/wio/internal/deployer"
+	"github.com/wio-platform/wio/internal/gitrepository"
 	"github.com/wio-platform/wio/internal/gitworktree"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/scanner"
@@ -247,6 +248,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	defer cancel()
 	var restartPath string
 	var resultData json.RawMessage
+	refreshInventory := false
 	var err error
 	if envelope.Kind == "agent.update" {
 		var command protocol.AgentUpdateCommand
@@ -284,6 +286,16 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			result, err = c.codex.ForkThread(ctx, command)
 			if err == nil {
 				resultData, err = json.Marshal(result)
+			}
+		}
+	} else if envelope.Kind == "git.project.create" {
+		var command protocol.GitProjectCreateCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var result protocol.GitProjectCreateResult
+			result, err = c.createProject(ctx, command)
+			if err == nil {
+				resultData, err = json.Marshal(result)
+				refreshInventory = err == nil
 			}
 		}
 	} else if envelope.Kind == "git.worktree.create" {
@@ -333,6 +345,9 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	if queueErr := c.queue("operation_result", result, true); queueErr != nil {
 		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
 	}
+	if refreshInventory {
+		go c.refreshInventory()
+	}
 	if err == nil && restartPath != "" {
 		time.Sleep(750 * time.Millisecond)
 		if restartErr := activateStagedUpdate(c.config.StateDir, restartPath); restartErr != nil {
@@ -343,6 +358,82 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			c.seenMu.Unlock()
 			_ = c.queue("operation_result", failure, true)
 		}
+	}
+}
+
+func (c *Client) createProject(ctx context.Context, command protocol.GitProjectCreateCommand) (protocol.GitProjectCreateResult, error) {
+	destination, err := projectCreateDestination(c.config.CloneRoot, command.Name, command.Destination)
+	if err != nil {
+		return protocol.GitProjectCreateResult{}, err
+	}
+	result, err := gitrepository.Create(ctx, gitrepository.CreateOptions{
+		ProjectID:        command.ProjectID,
+		Path:             destination,
+		InitialBranch:    command.InitialBranch,
+		RemoteURL:        command.RemoteURL,
+		InitializeREADME: command.InitializeREADME,
+	}, []string{filepath.Clean(c.config.CloneRoot)})
+	if err != nil {
+		return protocol.GitProjectCreateResult{}, err
+	}
+	return protocol.GitProjectCreateResult{
+		Path:      result.Path,
+		Branch:    result.Branch,
+		CommitSHA: result.Head,
+		Unborn:    result.Unborn,
+		RemoteURL: result.RemoteURL,
+	}, nil
+}
+
+func projectCreateDestination(cloneRoot, projectName, destination string) (string, error) {
+	cloneRoot = strings.TrimSpace(cloneRoot)
+	if cloneRoot == "" || !filepath.IsAbs(cloneRoot) {
+		return "", errors.New("clone root must be absolute")
+	}
+	cloneRoot, err := filepath.Abs(filepath.Clean(cloneRoot))
+	if err != nil {
+		return "", fmt.Errorf("resolve clone root: %w", err)
+	}
+	destination = strings.TrimSpace(destination)
+	if destination == "" {
+		destination = safeProjectName(projectName)
+	}
+	if !filepath.IsAbs(destination) {
+		destination = filepath.Join(cloneRoot, destination)
+	}
+	destination, err = filepath.Abs(filepath.Clean(destination))
+	if err != nil {
+		return "", fmt.Errorf("resolve project destination: %w", err)
+	}
+	relative, err := filepath.Rel(cloneRoot, destination)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("destination must stay below the configured clone root")
+	}
+	return destination, nil
+}
+
+func safeProjectName(value string) string {
+	value = strings.TrimSpace(value)
+	var builder strings.Builder
+	for _, char := range value {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' {
+			builder.WriteRune(char)
+		} else {
+			builder.WriteByte('-')
+		}
+	}
+	name := strings.Trim(builder.String(), "-")
+	if name == "" {
+		return "repository"
+	}
+	return name
+}
+
+func (c *Client) refreshInventory() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.enqueueInventory(ctx); err != nil {
+		c.log.Warn("could not refresh inventory after project creation", "error", err)
 	}
 }
 

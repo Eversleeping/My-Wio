@@ -5,7 +5,8 @@ import App from "./App";
 import { I18nProvider } from "./i18n";
 import "./styles.css";
 
-const frontendVersion = document.querySelector<HTMLMetaElement>('meta[name="wio-frontend-version"]')?.content ?? "";
+const frontendVersionValue = document.querySelector<HTMLMetaElement>('meta[name="wio-frontend-version"]')?.content ?? "";
+const frontendVersion = frontendVersionValue && !frontendVersionValue.startsWith("__") ? frontendVersionValue : "";
 let reloadingForUpdate = false;
 
 async function reloadForFrontendUpdate() {

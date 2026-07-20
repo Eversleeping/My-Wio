@@ -208,6 +208,53 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if operation.ServerID != serverID {
 			return errors.New("operation result server mismatch")
 		}
+		// Blank project creation is special: the project and its primary
+		// workspace must be committed together only after the agent result has
+		// been checked. Do not let the generic completion path claim success
+		// before that transaction finishes.
+		if operation.Kind == "git.project.create" {
+			var command protocol.GitProjectCreateCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status != "succeeded" {
+				if result.Message == "" {
+					result.Message = "agent failed to create blank project"
+				}
+				if err := g.store.FailBlankProject(ctx, operation, command, result, "failed"); err != nil {
+					return err
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			var created protocol.GitProjectCreateResult
+			if err := json.Unmarshal(result.Data, &created); err != nil {
+				result.Status = "failed"
+				result.Message = "invalid blank project result: " + err.Error()
+				if err := g.store.FailBlankProject(ctx, operation, command, result, "failed"); err != nil {
+					return err
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			if err := store.ValidateBlankProjectResult(command, created); err != nil {
+				result.Status = "failed"
+				result.Message = err.Error()
+				if err := g.store.FailBlankProject(ctx, operation, command, result, "failed"); err != nil {
+					return err
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			if err := g.store.CommitBlankProject(ctx, operation, command, created, result); err != nil {
+				// The agent has already created the directory. Preserve it and
+				// leave a retryable partial project when the DB transaction fails.
+				result.Status = "failed"
+				result.Message = "project created on server but could not persist workspace: " + err.Error()
+				if partialErr := g.store.FailBlankProject(ctx, operation, command, result, "partial"); partialErr != nil {
+					return fmt.Errorf("persist blank project: %v; mark partial: %w", err, partialErr)
+				}
+				return publishOperationResult(ctx, g, serverID, result)
+			}
+			return publishOperationResult(ctx, g, serverID, result)
+		}
 		if operation.Kind == "workspace.files" {
 			var command protocol.WorkspaceFilesCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
@@ -340,6 +387,14 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 	default:
 		return errors.New("unsupported agent message kind")
 	}
+}
+
+func publishOperationResult(ctx context.Context, g *Gateway, serverID string, result protocol.OperationResult) error {
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "operation." + result.Status, Payload: security.RedactJSON(payload)})
 }
 
 func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store.Operation, result protocol.OperationResult) error {
