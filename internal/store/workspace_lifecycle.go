@@ -23,6 +23,8 @@ type WorkspaceDeletionPlan struct {
 	ChildWorkspaces  int      `json:"child_workspaces"`
 	CanRemoveRecord  bool     `json:"can_remove_record"`
 	CanDeleteFiles   bool     `json:"can_delete_files"`
+	RecordBlockers   []string `json:"record_blockers"`
+	FileBlockers     []string `json:"file_blockers"`
 	Blockers         []string `json:"blockers"`
 }
 
@@ -46,7 +48,7 @@ func (s *Store) WorkspaceDeletionPlan(ctx context.Context, workspaceID string, f
 	if err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
-	plan := WorkspaceDeletionPlan{WorkspaceID: workspace.ID, Path: workspace.Path, Managed: workspace.ManagementMode == "managed", Dirty: workspace.Dirty != 0, Blockers: []string{}}
+	plan := WorkspaceDeletionPlan{WorkspaceID: workspace.ID, Path: workspace.Path, Managed: workspace.ManagementMode == "managed", Dirty: workspace.Dirty != 0, RecordBlockers: []string{}, FileBlockers: []string{}, Blockers: []string{}}
 	if err = s.DB.GetContext(ctx, &plan.ActiveOperations, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND status IN ('queued','delivered','running')"), workspaceID); err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
@@ -57,25 +59,27 @@ func (s *Store) WorkspaceDeletionPlan(ctx context.Context, workspaceID string, f
 		return WorkspaceDeletionPlan{}, err
 	}
 	if plan.ActiveOperations != 0 {
-		plan.Blockers = append(plan.Blockers, "workspace has active operations")
+		plan.RecordBlockers = append(plan.RecordBlockers, "workspace has active operations")
 	}
 	if plan.ThreadCount != 0 {
-		plan.Blockers = append(plan.Blockers, "workspace has Codex sessions")
+		plan.RecordBlockers = append(plan.RecordBlockers, "workspace has Codex sessions")
 	}
 	if plan.ChildWorkspaces != 0 {
-		plan.Blockers = append(plan.Blockers, "workspace has linked worktrees")
+		plan.RecordBlockers = append(plan.RecordBlockers, "workspace has linked worktrees")
 	}
-	plan.CanRemoveRecord = len(plan.Blockers) == 0
-	fileBlockers := append([]string(nil), plan.Blockers...)
+	plan.CanRemoveRecord = len(plan.RecordBlockers) == 0
+	plan.FileBlockers = append([]string(nil), plan.RecordBlockers...)
 	if !plan.Managed {
-		fileBlockers = append(fileBlockers, "workspace is not managed")
+		plan.FileBlockers = append(plan.FileBlockers, "workspace is not managed")
 	}
 	if plan.Dirty && !force {
-		fileBlockers = append(fileBlockers, "workspace has uncommitted changes")
+		plan.FileBlockers = append(plan.FileBlockers, "workspace has uncommitted changes")
 	}
-	plan.CanDeleteFiles = len(fileBlockers) == 0
+	plan.CanDeleteFiles = len(plan.FileBlockers) == 0
 	if !plan.CanDeleteFiles {
-		plan.Blockers = fileBlockers
+		plan.Blockers = append([]string(nil), plan.FileBlockers...)
+	} else {
+		plan.Blockers = append([]string(nil), plan.RecordBlockers...)
 	}
 	return plan, nil
 }
@@ -146,7 +150,8 @@ func (s *Store) QueueWorkspaceLifecycle(ctx context.Context, workspace Workspace
 		}
 		return "", err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=?,git_error='' WHERE id=?"), command.Action+"ing", workspace.ID); err != nil {
+	lifecycleStatus := map[string]string{"move": "moving", "copy": "copying", "delete": "deleting"}[command.Action]
+	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=?,git_error='' WHERE id=?"), lifecycleStatus, workspace.ID); err != nil {
 		return "", err
 	}
 	if err = tx.Commit(); err != nil {

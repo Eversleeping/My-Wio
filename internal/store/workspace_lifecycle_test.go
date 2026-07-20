@@ -45,6 +45,10 @@ func TestWorkspaceLifecycleStoreMoveCopyAndSerialization(t *testing.T) {
 	if err != nil || operation.WorkspaceWrite != 1 || operation.ProjectID != workspace.ProjectID {
 		t.Fatalf("unexpected lifecycle operation: %#v %v", operation, err)
 	}
+	queued, err := database.Workspace(ctx, workspace.ID)
+	if err != nil || queued.Status != "moving" {
+		t.Fatalf("move status was not persisted: %#v %v", queued, err)
+	}
 	moveResult := protocol.GitWorkspaceLifecycleResult{WorkspaceID: workspace.ID, Action: "move", SourcePath: workspace.Path, TargetPath: move.TargetPath}
 	moveData, _ := json.Marshal(moveResult)
 	if err := database.CompleteWorkspaceLifecycle(ctx, operation, move, moveResult, protocol.OperationResult{OperationID: operationID, Status: "succeeded", Data: moveData}); err != nil {
@@ -61,6 +65,10 @@ func TestWorkspaceLifecycleStoreMoveCopyAndSerialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	copyOperation, _ := database.Operation(ctx, copyID)
+	queued, err = database.Workspace(ctx, workspace.ID)
+	if err != nil || queued.Status != "copying" {
+		t.Fatalf("copy status was not persisted: %#v %v", queued, err)
+	}
 	copyResult := protocol.GitWorkspaceLifecycleResult{WorkspaceID: workspace.ID, TargetWorkspaceID: copyCommand.TargetWorkspaceID, Action: "copy", SourcePath: workspace.Path, TargetPath: copyCommand.TargetPath}
 	copyData, _ := json.Marshal(copyResult)
 	if err := database.CompleteWorkspaceLifecycle(ctx, copyOperation, copyCommand, copyResult, protocol.OperationResult{OperationID: copyID, Status: "succeeded", Data: copyData}); err != nil {
@@ -76,6 +84,10 @@ func TestWorkspaceLifecycleStoreMoveCopyAndSerialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleteOperation, _ := database.Operation(ctx, deleteID)
+	queued, err = database.Workspace(ctx, copied.ID)
+	if err != nil || queued.Status != "deleting" {
+		t.Fatalf("delete status was not persisted: %#v %v", queued, err)
+	}
 	deleteResult := protocol.GitWorkspaceLifecycleResult{WorkspaceID: copied.ID, Action: "delete", SourcePath: copied.Path}
 	deleteData, _ := json.Marshal(deleteResult)
 	if err := database.CompleteWorkspaceLifecycle(ctx, deleteOperation, deleteCommand, deleteResult, protocol.OperationResult{OperationID: deleteID, Status: "succeeded", Data: deleteData}); err != nil {
@@ -100,7 +112,7 @@ func TestWorkspaceDeletionPlanAndMetadataRemoval(t *testing.T) {
 	workspaces, _ := database.ListWorkspaces(ctx)
 	workspace := workspaces[0]
 	plan, err := database.WorkspaceDeletionPlan(ctx, workspace.ID, false)
-	if err != nil || !plan.CanRemoveRecord || plan.CanDeleteFiles || plan.Managed {
+	if err != nil || !plan.CanRemoveRecord || plan.CanDeleteFiles || plan.Managed || len(plan.RecordBlockers) != 0 || len(plan.FileBlockers) != 2 || plan.FileBlockers[0] != "workspace is not managed" || plan.FileBlockers[1] != "workspace has uncommitted changes" {
 		t.Fatalf("unexpected observed deletion plan: %#v %v", plan, err)
 	}
 	if err := database.RemoveWorkspaceRecord(ctx, workspace.ID); err != nil {

@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+/// <reference types="vitest/config" />
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
@@ -27,6 +28,11 @@ export default defineConfig({
     proxy: {
       "/api": { target: "http://127.0.0.1:8080", ws: true }
     }
+  },
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./src/test/setup.ts"],
+    css: false
   },
   build: { target: "es2022", sourcemap: true }
 });

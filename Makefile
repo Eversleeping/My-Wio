@@ -18,4 +18,5 @@ agent-linux:
 
 test:
 	go test ./...
+	npm --prefix web test
 	npm --prefix web run typecheck

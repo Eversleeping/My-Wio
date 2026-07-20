@@ -125,6 +125,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/workspaces/{workspaceID}/git/branches", api.createGitBranch)
 			private.Patch("/workspaces/{workspaceID}/git/branches/{branch}", api.renameGitBranch)
 			private.Delete("/workspaces/{workspaceID}/git/branches/{branch}", api.deleteGitBranch)
+			private.Patch("/workspaces/{workspaceID}/git/branches/*", api.renameGitBranch)
+			private.Delete("/workspaces/{workspaceID}/git/branches/*", api.deleteGitBranch)
 			private.Post("/workspaces/{workspaceID}/git/checkout", api.checkoutGit)
 			private.Post("/workspaces/{workspaceID}/git/remotes", api.addGitRemote)
 			private.Patch("/workspaces/{workspaceID}/git/remotes/{remote}", api.setGitRemote)

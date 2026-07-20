@@ -122,8 +122,8 @@ td code { font-size: 12px; }
 
 .status-tag { width: fit-content; min-height: 23px; display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; color: #596068; background: #eef0ed; border: 1px solid #dfe2df; border-radius: 12px; font-size: 11px; font-weight: 670; line-height: 1.2; text-transform: capitalize; white-space: nowrap; }
 .status-tag.online, .status-tag.succeeded, .status-tag.clean, .status-tag.success, .status-tag.production, .status-tag.resolved, .status-tag.ready { color: #126848; background: var(--green-soft); border-color: #bde0cf; }
-.status-tag.running, .status-tag.queued, .status-tag.preparing, .status-tag.pending, .status-tag.warning, .status-tag.staging, .status-tag.importing, .status-tag.syncing { color: #86520b; background: var(--amber-soft); border-color: #efd2a6; }
-.status-tag.failed, .status-tag.critical, .status-tag.open, .status-tag.dirty, .status-tag.denied, .status-tag.offline { color: #9a3037; background: var(--red-soft); border-color: #efc3c6; }
+.status-tag.running, .status-tag.queued, .status-tag.preparing, .status-tag.pending, .status-tag.warning, .status-tag.staging, .status-tag.importing, .status-tag.syncing, .status-tag.provisioning, .status-tag.moving, .status-tag.copying, .status-tag.deleting { color: #86520b; background: var(--amber-soft); border-color: #efd2a6; }
+.status-tag.failed, .status-tag.critical, .status-tag.open, .status-tag.dirty, .status-tag.denied, .status-tag.offline, .status-tag.deletion-failed { color: #9a3037; background: var(--red-soft); border-color: #efc3c6; }
 .status-tag.idle, .status-tag.rolled-back, .status-tag.development { color: #17687d; background: var(--cyan-soft); border-color: #bcdde5; }
 .status-tag.neutral { color: #565d64; background: #eff1ef; }
 
@@ -169,6 +169,8 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .truncate-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty-state { min-height: 80px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .workspace-git-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.workspace-manager-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.git-tab-stack { display: grid; gap: 12px; }
 .git-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .git-stat { min-width: 0; display: grid; gap: 4px; padding: 11px; background: #f7f8f6; border: 1px solid var(--line); border-radius: 5px; }
 .git-stat small { color: var(--muted); font-size: 10px; font-weight: 680; text-transform: uppercase; }
@@ -178,11 +180,47 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .git-list-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 2fr) auto; align-items: center; gap: 9px; min-height: 43px; padding: 8px 11px; border-bottom: 1px solid #eceeeb; font-size: 12px; }
 .git-list-row:last-child { border-bottom: 0; }
 .git-list-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-list-row input { min-height: 32px; padding: 5px 8px; font-size: 12px; }
+.git-branch-row { grid-template-columns: auto minmax(100px, 1fr) minmax(80px, .7fr) auto auto; }
+.git-remote-row { grid-template-columns: auto minmax(75px, .45fr) minmax(160px, 2fr) auto; }
+.git-command-bar { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; background: #f7f8f6; border: 1px solid var(--line); border-radius: 6px; }
+.git-command-bar > strong { margin-right: 2px; font-size: 11px; text-transform: uppercase; }
+.git-command-bar input, .git-command-bar select { width: auto; min-width: 120px; min-height: 32px; padding: 5px 8px; font-size: 11px; }
+.git-command-bar .git-url-input { min-width: min(290px, 100%); flex: 1 1 240px; }
+.compact-check { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.compact-check input { width: 14px; min-width: 14px; min-height: 14px; }
+.compact-check.danger { color: #96363d; }
 .git-commit-row { display: grid; gap: 5px; min-height: 54px; padding: 9px 11px; border-bottom: 1px solid #eceeeb; }
 .git-commit-row:last-child { border-bottom: 0; }
 .git-commit-row > div { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 9px; }
 .git-commit-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-commit-row small { color: var(--muted); font-size: 11px; }
+.deletion-dialog, .workspace-manager { min-width: 0; }
+.deletion-mode { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.deletion-description { min-height: 42px; margin: -5px 0 13px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.deletion-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 13px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.deletion-summary-grid.workspace { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.deletion-summary-grid > div { min-width: 0; min-height: 62px; display: grid; align-content: center; gap: 3px; padding: 9px 11px; border-right: 1px solid var(--line); background: #f8f9f7; }
+.deletion-summary-grid > div:nth-child(4n), .deletion-summary-grid > div:last-child { border-right: 0; }
+.deletion-summary-grid small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.deletion-summary-grid strong { font-size: 18px; }
+.deletion-summary-grid .danger strong { color: var(--red); }
+.deletion-workspace-list { display: grid; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.deletion-workspace-list > strong { padding: 8px 10px; color: var(--muted); background: #f7f8f6; border-bottom: 1px solid var(--line); font-size: 10px; text-transform: uppercase; }
+.deletion-workspace-list > div { min-width: 0; display: grid; grid-template-columns: minmax(100px, .7fr) minmax(160px, 2fr) auto; align-items: center; gap: 9px; min-height: 44px; padding: 7px 10px; border-bottom: 1px solid #eceeeb; font-size: 11px; }
+.deletion-workspace-list > div:last-child { border-bottom: 0; }
+.deletion-workspace-list span:first-child { min-width: 0; display: grid; gap: 2px; }
+.deletion-workspace-list small { color: var(--muted); }
+.deletion-workspace-list code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preserved-notice { min-height: 38px; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 8px 10px; color: #176047; background: var(--green-soft); border: 1px solid #c3dfd1; border-radius: 6px; font-size: 12px; }
+.deletion-blockers { display: grid; gap: 7px; margin-bottom: 13px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
+.deletion-blockers strong { font-size: 11px; text-transform: uppercase; }
+.deletion-blockers span { display: flex; align-items: flex-start; gap: 6px; line-height: 1.45; }
+.deletion-blockers.blocked { color: #8d343a; background: var(--red-soft); border-color: #efc4c7; }
+.deletion-blockers.ready { color: #176047; background: var(--green-soft); border-color: #c3dfd1; }
+.readonly-path { min-height: 38px; display: flex; align-items: center; padding: 8px 10px; overflow-wrap: anywhere; color: #495159; background: #f7f8f6; border: 1px solid var(--line); border-radius: 5px; font-size: 11px; }
+.workspace-delete-panel { min-width: 0; }
+.force-toggle { margin: 0 0 12px; color: #8b4f10; background: var(--amber-soft); border-color: #ead0a3; }
 .codex-version-control { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; }
 .codex-version-summary { min-width: 0; display: grid; grid-template-columns: auto auto; align-items: center; gap: 5px 12px; }
 .codex-version-summary small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; font-weight: 680; text-transform: uppercase; }
@@ -559,9 +597,20 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .project-operation-row { grid-template-columns: minmax(0, 1fr) auto; }
   .project-operation-row > span:nth-child(3), .project-operation-row > span:nth-child(4) { grid-column: 1 / -1; }
   .workspace-git-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workspace-manager-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .git-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .git-list-row { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .git-list-row code { grid-column: 2 / -1; }
+  .git-list-row, .git-branch-row, .git-remote-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .git-list-row code, .git-list-row > input { grid-column: 2 / -1; }
+  .git-list-row > .status-tag { grid-column: 2; }
+  .git-list-row > .row-actions { grid-column: 3; grid-row: 1; }
+  .git-command-bar { align-items: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .git-command-bar > strong { grid-column: 1 / -1; }
+  .git-command-bar input, .git-command-bar select, .git-command-bar .git-url-input { width: 100%; min-width: 0; }
+  .deletion-summary-grid, .deletion-summary-grid.workspace { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .deletion-summary-grid > div:nth-child(2n) { border-right: 0; }
+  .deletion-summary-grid > div:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
+  .deletion-workspace-list > div { grid-template-columns: minmax(0, 1fr) auto; }
+  .deletion-workspace-list code { grid-column: 1 / -1; grid-row: 2; }
   .codex-version-control { align-items: stretch; flex-direction: column; }
   .codex-version-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
   .codex-version-actions select { width: 100%; }
@@ -615,4 +664,10 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .topbar-actions .approval-pill svg { color: #7e330f; }
   .composer-bar .primary-button { width: 38px; padding: 0; color: transparent; gap: 0; }
   .composer-bar .primary-button svg { color: #fff; }
+  .git-command-bar { grid-template-columns: minmax(0, 1fr); }
+  .git-command-bar > strong { grid-column: auto; }
+  .git-command-bar .secondary-button, .git-command-bar .primary-button { width: 100%; }
+  .deletion-summary-grid, .deletion-summary-grid.workspace { grid-template-columns: minmax(0, 1fr); }
+  .deletion-summary-grid > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .deletion-summary-grid > div:last-child { border-bottom: 0; }
 }

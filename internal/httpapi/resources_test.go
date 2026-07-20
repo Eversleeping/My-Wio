@@ -751,6 +751,27 @@ func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
 	}
 }
 
+func TestGitBranchRouteSupportsSlashNames(t *testing.T) {
+	router := chi.NewRouter()
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, gitBranchURLParam(r))
+	}
+	router.Patch("/workspaces/{workspaceID}/git/branches/{branch}", handler)
+	router.Patch("/workspaces/{workspaceID}/git/branches/*", handler)
+
+	for _, requestPath := range []string{
+		"/workspaces/workspace-1/git/branches/feature%2Fproject-management",
+		"/workspaces/workspace-1/git/branches/feature/project-management",
+	} {
+		request := httptest.NewRequest(http.MethodPatch, requestPath, nil)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Body.String() != "feature/project-management" {
+			t.Fatalf("branch route %q returned %d %q", requestPath, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestUpdateProjectRejectsInvalidInputAndMissingProject(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	api := resourceTestAPI(database)

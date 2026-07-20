@@ -76,9 +76,11 @@ import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { currentLocale, useI18n } from "./i18n";
 import {
   CreateProjectDialog,
+  ProjectDeletionDialog,
   ProjectDetailsDialog,
   ProjectTable,
   WorkspaceGitDialog,
+  WorkspaceManagerDialog,
   WorkspaceTable,
   newCreateProjectFormValue,
   type CreateProjectDialogLabels,
@@ -86,6 +88,9 @@ import {
   type ProjectLifecycleState,
   type ProjectListRecord,
   type ProjectEditValue,
+  type ProjectDeletionMode,
+  type WorkspaceDeletionMode,
+  type WorkspaceGitAction,
   type WorkspaceListRecord
 } from "./pages/projects";
 import type {
@@ -103,6 +108,7 @@ import type {
   DeploymentTarget,
   Metric,
   Project,
+  ProjectDeletionPlan,
   ProjectDetail,
   SecretSet,
   Server,
@@ -114,6 +120,7 @@ import type {
   Summary,
   Thread,
   Workspace,
+  WorkspaceDeletionPlan,
   WorkspaceGitSnapshot,
   WorkspaceFile,
   WorkspaceFilePreview,
@@ -578,11 +585,20 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   const [busy, setBusy] = useState(false);
   const [createError, setCreateError] = useState("");
   const [form, setForm] = useState(newCreateProjectFormValue());
-  const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "delete" | "restore" } | null>(null);
+  const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "restore" } | null>(null);
   const [detailProjectID, setDetailProjectID] = useState<string | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailError, setDetailError] = useState("");
   const detail = useData<ProjectDetail>(detailProjectID ? `/projects/${detailProjectID}` : null, realtime);
+  const [deleteProjectID, setDeleteProjectID] = useState<string | null>(null);
+  const [projectDeletionPlan, setProjectDeletionPlan] = useState<ProjectDeletionPlan | null>(null);
+  const [projectDeletionBusy, setProjectDeletionBusy] = useState(false);
+  const [projectDeletionError, setProjectDeletionError] = useState("");
+  const [manageWorkspaceID, setManageWorkspaceID] = useState<string | null>(null);
+  const [workspaceDeletionPlan, setWorkspaceDeletionPlan] = useState<WorkspaceDeletionPlan | null>(null);
+  const [workspaceManagerBusy, setWorkspaceManagerBusy] = useState(false);
+  const [workspacePlanLoading, setWorkspacePlanLoading] = useState(false);
+  const [workspaceManagerError, setWorkspaceManagerError] = useState("");
 
   const openDialog = () => {
     setForm(newCreateProjectFormValue());
@@ -627,14 +643,28 @@ function ProjectsPage({ realtime, notify }: PageProps) {
       notify(t(blank ? "project.createRetryQueued" : "project.retryQueued"));
     } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
   };
-  const deleteFailedProject = async (project: Project) => {
-    if (!confirm(t("project.confirmDelete", { name: project.name }))) return;
-    setProjectAction({ id: project.id, kind: "delete" });
+  const openProjectDeletion = async (project: Project) => {
+    setDeleteProjectID(project.id);
+    setProjectDeletionPlan(null);
+    setProjectDeletionError("");
+    setProjectDeletionBusy(true);
+    try { setProjectDeletionPlan(await post<ProjectDeletionPlan>(`/projects/${project.id}/deletion-plan`, {})); }
+    catch (err) { setProjectDeletionError(message(err)); }
+    finally { setProjectDeletionBusy(false); }
+  };
+  const deleteProject = async (mode: ProjectDeletionMode) => {
+    if (!deleteProjectID) return;
+    setProjectDeletionBusy(true);
+    setProjectDeletionError("");
     try {
-      await remove(`/projects/${project.id}`);
+      await api(`/projects/${deleteProjectID}`, { method: "DELETE", body: JSON.stringify({ mode }) });
+      setDeleteProjectID(null);
+      setProjectDeletionPlan(null);
       projects.reload();
-      notify(t("project.deleted"));
-    } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
+      workspaces.reload();
+      notify(t(mode === "managed-files" ? "project.deleteFilesQueued" : "project.deleted"));
+    } catch (err) { setProjectDeletionError(message(err)); }
+    finally { setProjectDeletionBusy(false); }
   };
   const restoreProject = async (project: Project) => {
     setProjectAction({ id: project.id, kind: "restore" });
@@ -674,13 +704,81 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   const workspaceLabels = { project: t("column.project"), server: t("column.server"), path: t("column.path"), branch: t("column.branch"), commit: t("column.commit"), state: t("column.state"), actions: t("common.actions"), empty: t("project.noWorkspaces"), detached: t("project.detached") };
   const [gitWorkspaceID, setGitWorkspaceID] = useState<string | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
+  const [gitError, setGitError] = useState("");
   const gitSnapshot = useData<WorkspaceGitSnapshot>(gitWorkspaceID ? `/workspaces/${gitWorkspaceID}/git` : null, realtime);
   const refreshWorkspaceGit = async () => {
     if (!gitWorkspaceID) return;
     setGitBusy(true);
-    try { await post(`/workspaces/${gitWorkspaceID}/git/refresh`, {}); gitSnapshot.reload(); notify(t("project.gitRefreshQueued")); } catch (err) { notify(message(err)); } finally { setGitBusy(false); }
+    setGitError("");
+    try { await post(`/workspaces/${gitWorkspaceID}/git/refresh`, {}); gitSnapshot.reload(); notify(t("project.gitRefreshQueued")); } catch (err) { setGitError(message(err)); } finally { setGitBusy(false); }
   };
-  const gitLabels = { title: t("project.gitTitle"), status: t("project.gitStatus"), branches: t("project.gitBranches"), remotes: t("project.gitRemotes"), commits: t("project.gitCommits"), refresh: t("project.gitRefresh"), refreshing: t("project.gitRefreshing"), branch: t("column.branch"), head: t("project.gitHead"), upstream: t("project.gitUpstream"), ahead: t("project.gitAhead"), behind: t("project.gitBehind"), staged: t("project.gitStaged"), unstaged: t("project.gitUnstaged"), untracked: t("project.gitUntracked"), clean: t("project.gitClean"), dirty: t("project.gitDirty"), noBranches: t("project.gitNoBranches"), noRemotes: t("project.gitNoRemotes"), noCommits: t("project.gitNoCommits"), close: t("common.close") };
+  const runGitAction = async (action: WorkspaceGitAction) => {
+    if (!gitWorkspaceID) return;
+    const base = `/workspaces/${gitWorkspaceID}/git`;
+    const segment = (value: string) => encodeURIComponent(value);
+    setGitBusy(true);
+    setGitError("");
+    try {
+      switch (action.type) {
+        case "branch.create": await post(`${base}/branches`, { name: action.name, start_point: action.startPoint }); break;
+        case "branch.rename": await patch(`${base}/branches/${segment(action.branch)}`, { name: action.name }); break;
+        case "branch.delete": await remove(`${base}/branches/${segment(action.branch)}?force=${action.force}`); break;
+        case "checkout": await post(`${base}/checkout`, { ref: action.ref, detach: action.detach }); break;
+        case "remote.add": await post(`${base}/remotes`, { name: action.name, url: action.url }); break;
+        case "remote.update": await patch(`${base}/remotes/${segment(action.remote)}`, { url: action.url }); break;
+        case "remote.delete": await remove(`${base}/remotes/${segment(action.remote)}`); break;
+        case "fetch": await post(`${base}/fetch`, { remote: action.remote }); break;
+        case "pull": await post(`${base}/pull`, { remote: action.remote, branch: action.branch }); break;
+        case "push": await post(`${base}/push`, { remote: action.remote, ref: action.ref, set_upstream: action.setUpstream }); break;
+      }
+      notify(t("project.gitActionQueued"));
+      gitSnapshot.reload();
+    } catch (err) {
+      const detail = message(err);
+      setGitError(detail);
+      throw err;
+    } finally { setGitBusy(false); }
+  };
+  const openWorkspaceManager = (workspace: Workspace) => {
+    setManageWorkspaceID(workspace.id);
+    setWorkspaceDeletionPlan(null);
+    setWorkspaceManagerError("");
+  };
+  const renameWorkspace = async (name: string) => {
+    if (!manageWorkspaceID) return;
+    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
+    try { await patch(`/workspaces/${manageWorkspaceID}`, { display_name: name }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceSaved")); }
+    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
+  };
+  const moveWorkspace = async (path: string) => {
+    if (!manageWorkspaceID) return;
+    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
+    try { await post(`/workspaces/${manageWorkspaceID}/move`, { path }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceMoveQueued")); }
+    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
+  };
+  const copyWorkspace = async (serverID: string, path: string) => {
+    if (!manageWorkspaceID) return;
+    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
+    try { await post(`/workspaces/${manageWorkspaceID}/copy`, { server_id: serverID, path }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceCopyQueued")); }
+    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
+  };
+  const loadWorkspaceDeletionPlan = async (force: boolean) => {
+    if (!manageWorkspaceID) return;
+    setWorkspacePlanLoading(true); setWorkspaceManagerError("");
+    try { setWorkspaceDeletionPlan(await post<WorkspaceDeletionPlan>(`/workspaces/${manageWorkspaceID}/deletion-plan?force=${force}`, {})); }
+    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspacePlanLoading(false); }
+  };
+  const deleteWorkspace = async (mode: WorkspaceDeletionMode, force: boolean) => {
+    if (!manageWorkspaceID) return;
+    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
+    try { await remove(`/workspaces/${manageWorkspaceID}?mode=${mode}&force=${force}`); workspaces.reload(); projects.reload(); setManageWorkspaceID(null); notify(t(mode === "files" ? "project.workspaceDeleteQueued" : "project.workspaceRemoved")); }
+    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
+  };
+  const gitLabels = { title: t("project.gitTitle"), status: t("project.gitStatus"), branches: t("project.gitBranches"), remotes: t("project.gitRemotes"), commits: t("project.gitCommits"), refresh: t("project.gitRefresh"), refreshing: t("project.gitRefreshing"), branch: t("column.branch"), head: t("project.gitHead"), upstream: t("project.gitUpstream"), ahead: t("project.gitAhead"), behind: t("project.gitBehind"), staged: t("project.gitStaged"), unstaged: t("project.gitUnstaged"), untracked: t("project.gitUntracked"), clean: t("project.gitClean"), dirty: t("project.gitDirty"), noBranches: t("project.gitNoBranches"), noRemotes: t("project.gitNoRemotes"), noCommits: t("project.gitNoCommits"), close: t("common.close"), sync: t("project.gitSync"), remote: t("project.gitRemote"), ref: t("project.gitRef"), fetch: t("project.gitFetch"), pull: t("project.gitPull"), push: t("project.gitPush"), setUpstream: t("project.gitSetUpstream"), createBranch: t("project.gitCreateBranch"), branchName: t("project.gitBranchName"), startPoint: t("project.gitStartPoint"), checkout: t("project.gitCheckout"), detach: t("project.gitDetach"), rename: t("common.rename"), edit: t("common.edit"), delete: t("common.delete"), forceDelete: t("project.gitForceDelete"), addRemote: t("project.gitAddRemote"), remoteName: t("project.gitRemoteName"), remoteURL: t("project.remoteURL"), save: t("common.save"), cancel: t("common.cancel"), current: t("project.gitCurrent"), local: t("project.gitLocal"), remoteBranch: t("project.gitRemoteBranch"), actionQueued: t("project.gitActionQueued") };
+  const workspaceManagerLabels = { title: t("project.workspaceManage"), rename: t("common.rename"), move: t("project.workspaceMove"), copy: t("project.workspaceCopy"), delete: t("common.delete"), displayName: t("project.workspaceName"), currentPath: t("project.workspaceCurrentPath"), targetPath: t("project.workspaceTargetPath"), targetServer: t("project.workspaceTargetServer"), sameServer: t("project.workspaceSameServer"), managedOnly: t("project.workspaceManagedOnly"), save: t("common.save"), moving: t("project.workspaceMoving"), copying: t("project.workspaceCopying"), loadingPlan: t("project.deletionLoading"), metadataOnly: t("project.deleteMetadataOnly"), deleteFiles: t("project.workspaceDeleteFiles"), metadataDescription: t("project.workspaceMetadataDescription"), filesDescription: t("project.workspaceFilesDescription"), dirty: t("project.gitDirty"), activeOperations: t("project.deleteActiveOperations"), threads: t("project.workspaceThreads"), childWorkspaces: t("project.workspaceChildren"), force: t("project.workspaceForceDelete"), blockers: t("project.deleteBlockers"), noBlockers: t("project.deleteNoBlockers"), confirmLabel: t("project.deleteConfirmLabel"), confirmPlaceholder: t("project.deleteConfirmPlaceholder"), deleting: t("project.deleting"), cancel: t("common.cancel") };
+  const projectDeletionLabels = { title: t("project.deleteTitle"), loading: t("project.deletionLoading"), metadataOnly: t("project.deleteMetadataOnly"), metadataDescription: t("project.deleteMetadataDescription"), managedFiles: t("project.deleteManagedFiles"), managedDescription: t("project.deleteManagedDescription"), workspaces: t("column.workspaces"), managed: t("project.deleteManagedCount"), observed: t("project.deleteObservedCount"), dirty: t("project.gitDirty"), activeOperations: t("project.deleteActiveOperations"), activeTasks: t("project.deleteActiveTasks"), activeDeployments: t("project.deleteActiveDeployments"), remotePreserved: t("project.deleteRemotePreserved"), blockers: t("project.deleteBlockers"), noBlockers: t("project.deleteNoBlockers"), confirmLabel: t("project.deleteConfirmLabel"), confirmPlaceholder: t("project.deleteConfirmPlaceholder"), cancel: t("common.cancel"), deleting: t("project.deleting"), deleteMetadata: t("project.deleteMetadataAction"), deleteFiles: t("project.deleteFilesAction") };
+  const managedWorkspace = (workspaces.data ?? []).find(workspace => workspace.id === manageWorkspaceID) ?? null;
+  const deletingProject = (projects.data ?? []).find(project => project.id === deleteProjectID) ?? null;
   return <div className="page-stack project-page">
     <Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={openDialog}><Plus size={17} />{t("project.createEntry")}</button>}>
       <ProjectTable projects={projects.data ?? []} labels={projectLabels} slots={{ DataTable, Status }} formatTime={relative} formatImportMessage={importMessage} onSelect={project => { setDetailError(""); setDetailProjectID(project.id); }} renderActions={(project, state: ProjectLifecycleState) => {
@@ -689,15 +787,17 @@ function ProjectsPage({ realtime, notify }: PageProps) {
         const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id);
         const blankFailure = project.status === "failed" || project.status === "partial";
         const retryAvailable = blankFailure || targetServer?.status === "online";
-        return <><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <><button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button className="icon-button danger" disabled={projectAction !== null} title={t("project.deleteFailed")} onClick={() => void deleteFailedProject(project)}>{action === "delete" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}</button></>}</>;
+        return <><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button>}<button className="icon-button danger" disabled={projectAction !== null || projectDeletionBusy} title={t("project.deleteTitle")} onClick={() => void openProjectDeletion(project)}><Trash2 size={15} /></button></>;
       }} />
     </Section>
     <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
-      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <button className="icon-button" title={t("project.viewGit")} onClick={() => setGitWorkspaceID(workspace.id)}><GitBranch size={15} /></button>} />
+      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <><button className="icon-button" title={t("project.viewGit")} onClick={() => { setGitError(""); setGitWorkspaceID(workspace.id); }}><GitBranch size={15} /></button><button className="icon-button" title={t("project.workspaceManage")} onClick={() => openWorkspaceManager(workspace)}><Settings size={15} /></button></>} />
     </Section>
     <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />
     <ProjectDetailsDialog open={detailProjectID !== null} detail={detail.data} loading={detail.loading} busy={detailBusy} error={detailError || detail.error} labels={detailLabels} slots={{ Dialog, Field, DialogActions }} onClose={() => { if (!detailBusy) setDetailProjectID(null); }} onSubmit={saveProjectDetails} />
-    <WorkspaceGitDialog open={gitWorkspaceID !== null} snapshot={gitSnapshot.data} loading={gitSnapshot.loading} busy={gitBusy} labels={gitLabels} Dialog={Dialog} onClose={() => { if (!gitBusy) setGitWorkspaceID(null); }} onRefresh={() => void refreshWorkspaceGit()} />
+    <WorkspaceGitDialog open={gitWorkspaceID !== null} snapshot={gitSnapshot.data} loading={gitSnapshot.loading} busy={gitBusy} error={gitError} labels={gitLabels} Dialog={Dialog} onClose={() => { if (!gitBusy) setGitWorkspaceID(null); }} onRefresh={() => void refreshWorkspaceGit()} onAction={runGitAction} />
+    <WorkspaceManagerDialog open={manageWorkspaceID !== null} workspace={managedWorkspace} servers={servers.data ?? []} plan={workspaceDeletionPlan} planLoading={workspacePlanLoading} busy={workspaceManagerBusy} error={workspaceManagerError} labels={workspaceManagerLabels} Dialog={Dialog} onClose={() => { if (!workspaceManagerBusy) setManageWorkspaceID(null); }} onRename={renameWorkspace} onMove={moveWorkspace} onCopy={copyWorkspace} onLoadDeletionPlan={loadWorkspaceDeletionPlan} onDelete={deleteWorkspace} />
+    <ProjectDeletionDialog open={deleteProjectID !== null} project={deletingProject} plan={projectDeletionPlan} loading={projectDeletionBusy && !projectDeletionPlan} busy={projectDeletionBusy} error={projectDeletionError} labels={projectDeletionLabels} Dialog={Dialog} onClose={() => { if (!projectDeletionBusy) setDeleteProjectID(null); }} onSubmit={deleteProject} />
   </div>;
 }
 

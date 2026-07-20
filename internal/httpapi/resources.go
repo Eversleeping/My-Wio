@@ -792,10 +792,22 @@ func (a *API) renameGitBranch(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "branch.rename", Branch: chi.URLParam(r, "branch"), NewBranch: strings.TrimSpace(in.Name)})
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "branch.rename", Branch: gitBranchURLParam(r), NewBranch: strings.TrimSpace(in.Name)})
 }
 func (a *API) deleteGitBranch(w http.ResponseWriter, r *http.Request) {
-	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "branch.delete", Branch: chi.URLParam(r, "branch"), Force: r.URL.Query().Get("force") == "true"})
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "branch.delete", Branch: gitBranchURLParam(r), Force: r.URL.Query().Get("force") == "true"})
+}
+
+func gitBranchURLParam(r *http.Request) string {
+	raw := chi.URLParam(r, "branch")
+	if raw == "" {
+		raw = chi.URLParam(r, "*")
+	}
+	branch, err := url.PathUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	return branch
 }
 func (a *API) checkoutGit(w http.ResponseWriter, r *http.Request) {
 	var in struct {

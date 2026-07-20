@@ -35,7 +35,7 @@ export function WorkspaceTable({ workspaces, labels, slots, formatCommit, render
       <td><code className="truncate-code">{workspace.path}</code></td>
       <td><span className="inline"><GitBranch size={13} />{workspace.branch || labels.detached}</span></td>
       <td><code>{formatCommit(workspace.commit_sha)}</code></td>
-      <td><Status value={workspace.dirty ? "dirty" : "clean"} /></td>
+      <td><Status value={workspace.status && workspace.status !== "ready" ? workspace.status : workspace.dirty ? "dirty" : "clean"} /></td>
       {renderActions && <td><div className="row-actions">{renderActions(workspace)}</div></td>}
     </tr>)}
   </DataTable>;

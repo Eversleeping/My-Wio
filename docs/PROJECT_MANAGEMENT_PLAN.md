@@ -24,7 +24,7 @@
 | 06 | Git 写操作 | 创建/重命名/删除/切换分支，fetch、pull、push、设置 upstream | 脏目录保护、分支占用、非 fast-forward、离线和并发测试 | 已完成 | `feat: 完善工作区 Git 管理` |
 | 07 | 工作区生命周期 | 显示名称、刷新、路径移动、跨服务器复制、移除记录、受管目录物理删除 | 路径和符号链接防护；依赖预检；失败恢复测试 | 已完成 | `feat: 完善工作区生命周期` |
 | 08 | 项目删除 | 删除影响预检、仅删除元数据、删除受管文件、关联任务和部署处理 | 活跃任务/部署/脏目录阻止；审计记录；端到端验收 | 已完成 | `feat: 增加项目删除预检与受管文件清理` |
-| 09 | 前端整合与最终验收 | 项目页拆分、响应式交互、中英文文案、Vitest/RTL/Playwright 核心流程 | `make test`、前端 build、Playwright 桌面/移动端、完成审计 | 未开始 | - |
+| 09 | 前端整合与最终验收 | 项目页拆分、响应式交互、中英文文案、Vitest/RTL/Playwright 核心流程；补充分支斜杠路由和工作区删除模式阻断信息 | `go test ./...`、`go vet ./...`、前端 test/typecheck/build、Playwright 桌面/移动端、完成审计 | 已完成 | `feat: 完成项目管理前端与验收` |
 
 ## 目标数据模型
 
@@ -53,6 +53,14 @@
 
 - 增加 `project_id`、`workspace_id` 和结构化 `result_data`。
 - 写操作通过资源关联检查实现工作区级串行化。
+
+## 类别 09 验收记录
+
+- 前端组件测试：Vitest/RTL 3 个测试文件、9 个测试通过。
+- 前端静态检查与构建：`npm run typecheck`、`npm run build` 通过；构建仅报告既有的大分块警告。
+- 后端回归：`go test ./...`、`go vet ./...`、分支名含 `/` 的 HTTP 路由回归测试通过。
+- 浏览器验收：已验证 Git 状态/提交、分支创建、离线错误、工作区移动、项目删除预检，以及桌面和 390×844 移动布局。截图位于 `outputs/playwright/category09-git-branches-desktop.png`、`outputs/playwright/category09-workspace-move-desktop.png`、`outputs/playwright/category09-project-deletion-desktop.png`、`outputs/playwright/category09-project-deletion-mobile.png`。
+- `make test` 未能直接执行，原因是验收环境没有安装 `make`；其包含的 `go test ./...`、`npm test`、`npm run typecheck` 已逐条执行并通过。
 
 ## API 目标
 

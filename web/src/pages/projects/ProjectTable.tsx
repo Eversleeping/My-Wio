@@ -37,7 +37,7 @@ export function ProjectTable({ projects, labels, slots, formatTime, formatImport
         <td><div className="cell-main"><span className="inline"><button type="button" className="table-link" onClick={() => onSelect?.(project)}>{project.name}</button>{project.hidden_at && <span className="status-tag neutral"><EyeOff size={12} />{labels.hidden}</span>}</span>{project.import_server_name && <small>{labels.targetServer(project.import_server_name)}</small>}</div></td>
         <td><code className="truncate-code">{project.remote_url || labels.local}</code></td>
         <td>{project.workspace_count}</td>
-        <td><div className="project-import-state"><Status value={state} />{state === "syncing" && <small className="project-import-message syncing">{labels.awaitingWorkspace}</small>}{(state === "failed" || state === "partial") && importMessage && <small className="project-import-message" title={importMessage}>{importMessage}</small>}</div></td>
+        <td><div className="project-import-state"><Status value={state} />{state === "syncing" && <small className="project-import-message syncing">{labels.awaitingWorkspace}</small>}{(state === "failed" || state === "partial" || state === "deletion-failed") && importMessage && <small className="project-import-message" title={importMessage}>{importMessage}</small>}</div></td>
         <td>{formatTime(project.updated_at)}</td>
         <td><div className="row-actions">{renderActions?.(project, state) ?? <span className="muted">-</span>}</div></td>
       </tr>;
