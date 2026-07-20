@@ -56,6 +56,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+	if err := migrateImportedProjectRemotes(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateCredentialProfileIdentity(ctx, db, driver); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -509,6 +513,19 @@ func normalizeRemote(raw string) string {
 	return strings.ToLower(raw)
 }
 
+func migrateImportedProjectRemotes(ctx context.Context, db *sqlx.DB) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO project_remotes(id,project_id,name,mode,fetch_url,push_url,status,created_at,updated_at)
+		SELECT 'import-origin-' || p.id,p.id,'origin','existing',p.remote_url,p.remote_url,'ready',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP
+		FROM projects p
+		WHERE TRIM(p.remote_url) <> ''
+		ON CONFLICT(project_id,name) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("migrate imported project remotes: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protocol.Inventory) error {
 	for _, repo := range inv.Repositories {
 		normalized := normalizeRemote(repo.RemoteURL)
@@ -524,6 +541,9 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 			if _, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?)"), projectID, repo.Name, repo.RemoteURL, normalized); err != nil {
 				return err
 			}
+		}
+		if err := s.ensureProjectRemote(ctx, s.DB, projectID, repo.RemoteURL); err != nil {
+			return err
 		}
 		workspaceID := NewID()
 		dirty := 0

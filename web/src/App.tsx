@@ -706,11 +706,16 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   const [gitBusy, setGitBusy] = useState(false);
   const [gitError, setGitError] = useState("");
   const gitSnapshot = useData<WorkspaceGitSnapshot>(gitWorkspaceID ? `/workspaces/${gitWorkspaceID}/git` : null, realtime);
-  const refreshWorkspaceGit = async () => {
-    if (!gitWorkspaceID) return;
+  const refreshWorkspaceGit = async (workspaceID = gitWorkspaceID, announce = true) => {
+    if (!workspaceID) return;
     setGitBusy(true);
     setGitError("");
-    try { await post(`/workspaces/${gitWorkspaceID}/git/refresh`, {}); gitSnapshot.reload(); notify(t("project.gitRefreshQueued")); } catch (err) { setGitError(message(err)); } finally { setGitBusy(false); }
+    try { await post(`/workspaces/${workspaceID}/git/refresh`, {}); gitSnapshot.reload(); if (announce) notify(t("project.gitRefreshQueued")); } catch (err) { setGitError(message(err)); } finally { setGitBusy(false); }
+  };
+  const openWorkspaceGit = (workspaceID: string) => {
+    setGitError("");
+    setGitWorkspaceID(workspaceID);
+    void refreshWorkspaceGit(workspaceID, false);
   };
   const runGitAction = async (action: WorkspaceGitAction) => {
     if (!gitWorkspaceID) return;
@@ -791,7 +796,7 @@ function ProjectsPage({ realtime, notify }: PageProps) {
       }} />
     </Section>
     <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
-      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <><button className="icon-button" title={t("project.viewGit")} onClick={() => { setGitError(""); setGitWorkspaceID(workspace.id); }}><GitBranch size={15} /></button><button className="icon-button" title={t("project.workspaceManage")} onClick={() => openWorkspaceManager(workspace)}><Settings size={15} /></button></>} />
+      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <><button className="icon-button" title={t("project.viewGit")} onClick={() => openWorkspaceGit(workspace.id)}><GitBranch size={15} /></button><button className="icon-button" title={t("project.workspaceManage")} onClick={() => openWorkspaceManager(workspace)}><Settings size={15} /></button></>} />
     </Section>
     <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />
     <ProjectDetailsDialog open={detailProjectID !== null} detail={detail.data} loading={detail.loading} busy={detailBusy} error={detailError || detail.error} labels={detailLabels} slots={{ Dialog, Field, DialogActions }} onClose={() => { if (!detailBusy) setDetailProjectID(null); }} onSubmit={saveProjectDetails} />

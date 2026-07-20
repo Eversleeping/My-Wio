@@ -52,6 +52,16 @@ func (s *Store) ProjectRemote(ctx context.Context, projectID, name string) (Proj
 	return remote, err
 }
 
+func (s *Store) ensureProjectRemote(ctx context.Context, database sqlx.ExtContext, projectID, remoteURL string) error {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return nil
+	}
+	now := time.Now().UTC()
+	_, err := database.ExecContext(ctx, s.Q(`INSERT INTO project_remotes(id,project_id,name,mode,fetch_url,push_url,status,created_at,updated_at) VALUES(?,?,'origin','existing',?,?,'ready',?,?) ON CONFLICT(project_id,name) DO NOTHING`), NewID(), projectID, remoteURL, remoteURL, now, now)
+	return err
+}
+
 func (s *Store) prepareProjectRemote(ctx context.Context, tx sqlx.ExtContext, projectID string, spec BlankProjectRemoteSpec, status string) error {
 	if strings.TrimSpace(spec.Mode) == "none" || strings.TrimSpace(spec.Mode) == "" {
 		return nil

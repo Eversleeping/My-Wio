@@ -324,13 +324,26 @@ func (s *Store) ResolveApprovalAndQueue(ctx context.Context, approvalID, serverI
 
 func (s *Store) CreateProject(ctx context.Context, name, remoteURL string) (Project, error) {
 	id := NewID()
-	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?)"), id, name, remoteURL, normalizeRemote(remoteURL))
+	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return Project{}, err
 	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?)"), id, name, remoteURL, normalizeRemote(remoteURL))
+	if err != nil {
+		return Project{}, err
+	}
+	if err := s.ensureProjectRemote(ctx, tx, id, remoteURL); err != nil {
+		return Project{}, err
+	}
 	var project Project
-	err = s.DB.GetContext(ctx, &project, s.Q("SELECT id,name,description,remote_url,default_branch,status,provision_error,pinned_at,hidden_at,archived_at,updated_at,0 workspace_count FROM projects WHERE id=?"), id)
-	return project, err
+	if err = tx.GetContext(ctx, &project, s.Q("SELECT id,name,description,remote_url,default_branch,status,provision_error,pinned_at,hidden_at,archived_at,updated_at,0 workspace_count FROM projects WHERE id=?"), id); err != nil {
+		return Project{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Project{}, err
+	}
+	return project, nil
 }
 
 type SecretSet struct {

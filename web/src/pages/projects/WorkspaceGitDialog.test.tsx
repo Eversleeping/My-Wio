@@ -68,3 +68,12 @@ test("renders legacy null collections as empty states", async () => {
   await user.click(screen.getByRole("tab", { name: "Commits" }));
   expect(screen.getByText("No commits")).toBeInTheDocument();
 });
+
+test("shows the refresh state while Git data is being collected", () => {
+  const refreshingSnapshot: WorkspaceGitSnapshot = { ...snapshot, status: "refreshing" };
+  render(<WorkspaceGitDialog open snapshot={refreshingSnapshot} loading={false} busy={false} error="" labels={labels} Dialog={Dialog} onClose={vi.fn()} onRefresh={vi.fn()} onAction={vi.fn()} />);
+
+  expect(screen.getByRole("status")).toHaveTextContent("Refreshing");
+  expect(screen.getByRole("button", { name: "Refreshing" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Fetch" })).toBeDisabled();
+});

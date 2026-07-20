@@ -64,7 +64,7 @@ func TestOpenMigratesLegacyProjectAndThreadPreferences(t *testing.T) {
 	_, err = legacy.Exec(`
 		CREATE TABLE projects (id TEXT PRIMARY KEY,name TEXT NOT NULL,remote_url TEXT NOT NULL DEFAULT '',normalized_remote TEXT NOT NULL DEFAULT '',created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
 		CREATE TABLE codex_threads (id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,codex_thread_id TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT 'New session',status TEXT NOT NULL DEFAULT 'idle',last_sequence INTEGER NOT NULL DEFAULT 0,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
-		INSERT INTO projects(id,name) VALUES('legacy-project','Legacy');`)
+		INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES('legacy-project','Legacy','https://example.com/legacy.git','https://example.com/legacy');`)
 	if closeErr := legacy.Close(); err == nil {
 		err = closeErr
 	}
@@ -91,6 +91,22 @@ func TestOpenMigratesLegacyProjectAndThreadPreferences(t *testing.T) {
 	project, err := database.Project(context.Background(), "legacy-project")
 	if err != nil || project.PinnedAt != nil || project.HiddenAt != nil {
 		t.Fatalf("legacy project did not retain null preferences: %#v %v", project, err)
+	}
+	remotes, err := database.ProjectRemotes(context.Background(), project.ID)
+	if err != nil || len(remotes) != 1 || remotes[0].Name != "origin" || remotes[0].FetchURL != project.RemoteURL {
+		t.Fatalf("legacy imported remote was not backfilled: %#v %v", remotes, err)
+	}
+}
+
+func TestCreateProjectRegistersImportedRemote(t *testing.T) {
+	database := testStore(t)
+	project, err := database.CreateProject(context.Background(), "imported", "https://example.com/imported.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remotes, err := database.ProjectRemotes(context.Background(), project.ID)
+	if err != nil || len(remotes) != 1 || remotes[0].Name != "origin" || remotes[0].FetchURL != project.RemoteURL || remotes[0].Mode != "existing" {
+		t.Fatalf("imported project remote was not registered atomically: %#v %v", remotes, err)
 	}
 }
 
@@ -298,6 +314,10 @@ func TestEnrollmentInventoryAndOperations(t *testing.T) {
 	projects, err := database.ListProjects(ctx)
 	if err != nil || len(projects) != 1 || projects[0].WorkspaceCount != 1 {
 		t.Fatalf("unexpected projects: %#v %v", projects, err)
+	}
+	remotes, err := database.ProjectRemotes(ctx, projects[0].ID)
+	if err != nil || len(remotes) != 1 || remotes[0].FetchURL != "https://example.com/app.git" {
+		t.Fatalf("inventory remote was not registered: %#v %v", remotes, err)
 	}
 	operationID, err := database.QueueOperation(ctx, server.ID, "inventory.scan", map[string]bool{"now": true}, "scan-1")
 	if err != nil {

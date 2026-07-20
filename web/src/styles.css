@@ -140,6 +140,7 @@ td code { font-size: 12px; }
 .error-state > svg { color: var(--red); }
 .error-state strong { color: var(--ink); }
 .error-banner { min-height: 39px; display: flex; align-items: center; gap: 8px; margin: 10px 0; padding: 8px 10px; color: #98343b; background: var(--red-soft); border: 1px solid #efc3c6; border-radius: 6px; font-size: 12px; }
+.git-refresh-state { min-height: 39px; display: flex; align-items: center; gap: 8px; margin: 10px 0; padding: 8px 10px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
 
 .dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(20, 23, 27, .54); }
 .dialog { width: min(520px, 100%); max-height: calc(100vh - 40px); overflow: auto; background: #fff; border: 1px solid #cfd3d0; border-radius: 8px; box-shadow: var(--shadow); }
