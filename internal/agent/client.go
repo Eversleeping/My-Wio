@@ -367,11 +367,12 @@ func (c *Client) createProject(ctx context.Context, command protocol.GitProjectC
 		return protocol.GitProjectCreateResult{}, err
 	}
 	result, err := gitrepository.Create(ctx, gitrepository.CreateOptions{
-		ProjectID:        command.ProjectID,
-		Path:             destination,
-		InitialBranch:    command.InitialBranch,
-		RemoteURL:        command.RemoteURL,
-		InitializeREADME: command.InitializeREADME,
+		ProjectID:          command.ProjectID,
+		Path:               destination,
+		InitialBranch:      command.InitialBranch,
+		RemoteURL:          command.RemoteURL,
+		RequireEmptyRemote: command.RequireEmptyRemote,
+		InitializeREADME:   command.InitializeREADME,
 	}, []string{filepath.Clean(c.config.CloneRoot)})
 	if err != nil {
 		return protocol.GitProjectCreateResult{}, err

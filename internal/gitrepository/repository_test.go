@@ -52,6 +52,27 @@ func TestCreateEmptyRepository(t *testing.T) {
 	}
 }
 
+func TestVerifyEmptyRemote(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	testGit(t, root, "init", "--bare", remote)
+	if err := verifyEmptyRemote(context.Background(), remote); err != nil {
+		t.Fatalf("empty remote was rejected: %v", err)
+	}
+	local := filepath.Join(root, "local")
+	testGit(t, root, "init", "-b", "main", local)
+	configureIdentity(t, local)
+	writeFile(t, filepath.Join(local, "README.md"), "# remote\n")
+	testGit(t, local, "add", "README.md")
+	testGit(t, local, "commit", "-m", "initial")
+	testGit(t, local, "remote", "add", "origin", remote)
+	testGit(t, local, "push", "origin", "main")
+	if err := verifyEmptyRemote(context.Background(), remote); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("non-empty remote was accepted: %v", err)
+	}
+}
+
 func TestCreateWithRemoteAndREADME(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()

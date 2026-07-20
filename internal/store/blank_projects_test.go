@@ -85,6 +85,35 @@ func TestBlankProjectFailureCanBeRetriedWithSameWorkspaceIdentity(t *testing.T) 
 	}
 }
 
+func TestRemoteCreatedPartialProjectRetriesWithoutRecreatingRemote(t *testing.T) {
+	database := testStore(t)
+	ctx := context.Background()
+	server := createOperationTestServer(t, database, "remote-partial-server", "remote-partial-token")
+	prepared, err := database.PrepareBlankProject(ctx, server.ID, "remote-partial", "remote-partial", "main", false, BlankProjectRemoteSpec{Mode: "create", Provider: "gitee", Namespace: "team", Repository: "remote-partial", Visibility: "private", CredentialProfileID: "profile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := database.Operation(ctx, prepared.OperationID)
+	if err != nil || operation.Status != "preparing" {
+		t.Fatalf("unexpected preparing operation: %#v %v", operation, err)
+	}
+	remoteURL := "https://gitee.com/team/remote-partial.git"
+	if err := database.UpdateProjectRemote(ctx, prepared.Project.ID, protocol.ProjectRemoteResult{Provider: "gitee", Namespace: "team", Repository: "remote-partial", FetchURL: remoteURL, PushURL: remoteURL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.FailBlankProject(ctx, operation, prepared.Command, protocol.OperationResult{OperationID: operation.ID, Status: "failed", Message: "activation failed"}, "partial"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := database.RetryBlankProject(ctx, prepared.Project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryOperation, err := database.Operation(ctx, retry.OperationID)
+	if err != nil || retryOperation.Status != "queued" || retry.Command.RemoteURL != remoteURL {
+		t.Fatalf("partial retry did not reuse remote: provision=%#v operation=%#v err=%v", retry, retryOperation, err)
+	}
+}
+
 func TestValidateBlankProjectResultRejectsMismatches(t *testing.T) {
 	command := protocol.GitProjectCreateCommand{ProjectID: "project", WorkspaceID: "workspace", InitialBranch: "main", InitializeREADME: false}
 	valid := protocol.GitProjectCreateResult{Path: "/srv/project", Branch: "main", Unborn: true}

@@ -122,10 +122,21 @@ function BlankProjectFields({ value, labels, servers, busy, Field, update }: Fie
     <Field label={labels.remoteSetup}>
       <select value={value.remoteMode} disabled={busy} onChange={event => update("remoteMode", event.target.value as BlankProjectRemoteMode)}>
         <option value="none">{labels.remoteNone}</option>
-        <option value="existing" disabled>{labels.remoteExisting} ({labels.comingSoon})</option>
-        <option value="create" disabled>{labels.remoteCreate} ({labels.comingSoon})</option>
+        <option value="existing">{labels.remoteExisting}</option>
+        <option value="create">{labels.remoteCreate}</option>
       </select>
     </Field>
+    {value.remoteMode === "existing" && <Field label={labels.remoteURL}><input value={value.remoteURL} disabled={busy} onChange={event => update("remoteURL", event.target.value)} placeholder="https://git.example.com/team/project.git" required /></Field>}
+    {value.remoteMode === "create" && <>
+      <div className="form-grid">
+        <Field label={labels.remoteProvider}><select value={value.remoteProvider} disabled={busy} onChange={event => update("remoteProvider", event.target.value)}><option value="gitee">Gitee</option><option value="github">GitHub</option><option value="gitlab">GitLab</option></select></Field>
+        <Field label={labels.remoteNamespace}><input value={value.remoteNamespace} disabled={busy} onChange={event => update("remoteNamespace", event.target.value)} placeholder={labels.optional} /></Field>
+      </div>
+      <div className="form-grid">
+        <Field label={labels.remoteRepository}><input value={value.remoteRepository} disabled={busy} onChange={event => update("remoteRepository", event.target.value)} required /></Field>
+        <Field label={labels.remoteVisibility}><select value={value.remoteVisibility} disabled={busy} onChange={event => update("remoteVisibility", event.target.value as CreateProjectFormValue["remoteVisibility"])}><option value="private">{labels.visibilityPrivate}</option><option value="internal">{labels.visibilityInternal}</option><option value="public">{labels.visibilityPublic}</option></select></Field>
+      </div>
+    </>}
     <label className="inline"><input type="checkbox" style={{ width: "auto", minHeight: "auto" }} checked={value.initializeReadme} disabled={busy} onChange={event => update("initializeReadme", event.target.checked)} /><strong>{labels.initializeReadme}</strong></label>
   </>;
 }

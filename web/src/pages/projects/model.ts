@@ -56,7 +56,7 @@ export type CreateProjectRequest =
     destination?: string;
     initial_branch: string;
     initialize_readme: boolean;
-    remote: { mode: "none" };
+    remote: BlankProjectRemoteRequest;
   }
   | {
     mode: "clone";
@@ -135,7 +135,6 @@ export function validateCreateProjectForm(
       if (!value.remoteProvider.trim()) errors.remoteProvider = labels.remoteProviderRequired;
       if (!value.remoteRepository.trim()) errors.remoteRepository = labels.remoteRepositoryRequired;
     }
-    if (value.remoteMode !== "none") errors.remoteMode = labels.remoteUnavailable;
   }
 
   return errors;
@@ -158,6 +157,20 @@ export function toCreateProjectRequest(value: CreateProjectFormValue): CreatePro
     };
   }
 
+
+  let remote: BlankProjectRemoteRequest = { mode: "none" };
+  if (value.remoteMode === "existing") {
+    remote = { mode: "existing", url: value.remoteURL.trim() };
+  } else if (value.remoteMode === "create") {
+    remote = {
+      mode: "create",
+      provider: value.remoteProvider.trim(),
+      namespace: optional(value.remoteNamespace),
+      repository: value.remoteRepository.trim(),
+      visibility: value.remoteVisibility
+    };
+  }
+
   return {
     mode: "blank",
     name: value.name.trim(),
@@ -165,7 +178,7 @@ export function toCreateProjectRequest(value: CreateProjectFormValue): CreatePro
     destination,
     initial_branch: value.initialBranch.trim(),
     initialize_readme: value.initializeReadme,
-    remote: { mode: "none" }
+    remote
   };
 }
 

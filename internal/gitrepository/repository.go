@@ -24,15 +24,16 @@ const (
 
 // CreateOptions describes a new repository that will be created below a managed root.
 type CreateOptions struct {
-	ProjectID        string
-	Path             string
-	InitialBranch    string
-	RemoteURL        string
-	InitializeREADME bool
-	READMEContent    string
-	CommitMessage    string
-	AuthorName       string
-	AuthorEmail      string
+	ProjectID          string
+	Path               string
+	InitialBranch      string
+	RemoteURL          string
+	RequireEmptyRemote bool
+	InitializeREADME   bool
+	READMEContent      string
+	CommitMessage      string
+	AuthorName         string
+	AuthorEmail        string
 }
 
 type CreateResult struct {
@@ -114,6 +115,11 @@ func Create(ctx context.Context, options CreateOptions, managedRoots []string) (
 	if remoteURL != "" {
 		if err := validateRemoteURL(remoteURL); err != nil {
 			return CreateResult{}, err
+		}
+		if options.RequireEmptyRemote {
+			if err := verifyEmptyRemote(ctx, remoteURL); err != nil {
+				return CreateResult{}, err
+			}
 		}
 	}
 	if options.InitializeREADME {
@@ -820,7 +826,20 @@ func runGit(ctx context.Context, directory string, args ...string) ([]byte, erro
 	if directory != "" {
 		commandArgs = append([]string{"-C", directory}, args...)
 	}
-	return exec.CommandContext(ctx, "git", commandArgs...).CombinedOutput()
+	command := exec.CommandContext(ctx, "git", commandArgs...)
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
+	return command.CombinedOutput()
+}
+
+func verifyEmptyRemote(ctx context.Context, remoteURL string) error {
+	output, err := runGit(ctx, "", "ls-remote", "--heads", "--tags", "--", remoteURL)
+	if err != nil {
+		return fmt.Errorf("inspect remote repository: %s", cleanGitError(output, err))
+	}
+	if strings.TrimSpace(string(output)) != "" {
+		return errors.New("remote repository is not empty")
+	}
+	return nil
 }
 
 func cleanGitError(output []byte, err error) string {

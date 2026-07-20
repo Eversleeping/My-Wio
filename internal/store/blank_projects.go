@@ -30,12 +30,35 @@ type BlankProjectProvision struct {
 // CreateBlankProject atomically creates a provisioning project and its agent
 // operation. No workspace row is inserted until the operation succeeds.
 func (s *Store) CreateBlankProject(ctx context.Context, serverID, name, destination, initialBranch string, initializeREADME bool) (BlankProjectProvision, error) {
+	return s.createBlankProject(ctx, serverID, name, destination, initialBranch, initializeREADME, BlankProjectRemoteSpec{}, "queued")
+}
+
+// CreateBlankProjectWithRemote reserves a project and queues the Agent command
+// with an already-known remote URL (for example an existing empty repository).
+func (s *Store) CreateBlankProjectWithRemote(ctx context.Context, serverID, name, destination, initialBranch string, initializeREADME bool, remote BlankProjectRemoteSpec) (BlankProjectProvision, error) {
+	if remote.Mode == "" {
+		remote.Mode = "existing"
+	}
+	return s.createBlankProject(ctx, serverID, name, destination, initialBranch, initializeREADME, remote, "queued")
+}
+
+// PrepareBlankProject reserves a project and an operation in preparing state.
+// The operation is activated only after a provider-created remote is durable.
+func (s *Store) PrepareBlankProject(ctx context.Context, serverID, name, destination, initialBranch string, initializeREADME bool, remote BlankProjectRemoteSpec) (BlankProjectProvision, error) {
+	return s.createBlankProject(ctx, serverID, name, destination, initialBranch, initializeREADME, remote, "preparing")
+}
+
+func (s *Store) createBlankProject(ctx context.Context, serverID, name, destination, initialBranch string, initializeREADME bool, remote BlankProjectRemoteSpec, operationStatus string) (BlankProjectProvision, error) {
 	projectID, workspaceID, operationID := NewID(), NewID(), NewID()
 	command := protocol.GitProjectCreateCommand{
 		ProjectID: projectID, WorkspaceID: workspaceID, Name: name,
 		Destination: destination, InitialBranch: initialBranch,
 		InitializeREADME: initializeREADME,
 	}
+	if remote.Mode == "existing" {
+		command.RemoteURL = strings.TrimSpace(remote.URL)
+	}
+	command.RequireEmptyRemote = remote.Mode == "existing" || remote.Mode == "create"
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return BlankProjectProvision{}, err
@@ -46,10 +69,13 @@ func (s *Store) CreateBlankProject(ctx context.Context, serverID, name, destinat
 		return BlankProjectProvision{}, err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO projects(id,name,remote_url,normalized_remote,default_branch,status,provision_error,created_at,updated_at) VALUES(?,?, '', '', ?, 'provisioning', '', ?, ?)`), projectID, name, initialBranch, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO projects(id,name,remote_url,normalized_remote,default_branch,status,provision_error,created_at,updated_at) VALUES(?,?,?,?,?, 'provisioning', '', ?, ?)`), projectID, name, strings.TrimSpace(remote.URL), normalizeRemote(remote.URL), initialBranch, now, now); err != nil {
 		return BlankProjectProvision{}, err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?, ?,?,?,?)`), operationID, serverID, projectID, gitProjectCreateKind, string(payload), "git-project-create:"+projectID, now); err != nil {
+	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,status,created_at) VALUES(?,?,?, ?,?,?,?,?)`), operationID, serverID, projectID, gitProjectCreateKind, string(payload), "git-project-create:"+projectID, operationStatus, now); err != nil {
+		return BlankProjectProvision{}, err
+	}
+	if err = s.prepareProjectRemote(ctx, tx, projectID, remote, map[bool]string{true: "provisioning", false: "ready"}[operationStatus == "preparing"]); err != nil {
 		return BlankProjectProvision{}, err
 	}
 	var project Project
@@ -60,6 +86,54 @@ func (s *Store) CreateBlankProject(ctx context.Context, serverID, name, destinat
 		return BlankProjectProvision{}, err
 	}
 	return BlankProjectProvision{Project: project, ServerID: serverID, WorkspaceID: workspaceID, OperationID: operationID, Command: command}, nil
+}
+
+// ActivateBlankProjectRemote records the provider result and releases the
+// queued Agent operation atomically. No token or provider response is stored
+// in the operation payload.
+func (s *Store) ActivateBlankProjectRemote(ctx context.Context, projectID, operationID string, remote protocol.ProjectRemoteResult) (BlankProjectProvision, error) {
+	if strings.TrimSpace(remote.FetchURL) == "" || strings.TrimSpace(remote.PushURL) == "" {
+		return BlankProjectProvision{}, errors.New("project remote URLs are required")
+	}
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return BlankProjectProvision{}, err
+	}
+	defer tx.Rollback()
+	var operation Operation
+	if err = tx.GetContext(ctx, &operation, s.Q(operationSelect+` WHERE id=?`), operationID); err != nil {
+		return BlankProjectProvision{}, err
+	}
+	if operation.ProjectID != projectID || operation.Kind != gitProjectCreateKind || operation.Status != "preparing" {
+		return BlankProjectProvision{}, errRemoteOperationState
+	}
+	command, err := operationCommand(operation)
+	if err != nil {
+		return BlankProjectProvision{}, err
+	}
+	command.RemoteURL = strings.TrimSpace(remote.FetchURL)
+	payload, err := json.Marshal(command)
+	if err != nil {
+		return BlankProjectProvision{}, err
+	}
+	now := time.Now().UTC()
+	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE projects SET remote_url=?,normalized_remote=?,updated_at=? WHERE id=?`), command.RemoteURL, normalizeRemote(command.RemoteURL), now, projectID); err != nil {
+		return BlankProjectProvision{}, err
+	}
+	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE project_remotes SET provider=?,namespace=?,repository=?,fetch_url=?,push_url=?,web_url=?,status='ready',error='',updated_at=? WHERE project_id=? AND name='origin'`), remote.Provider, remote.Namespace, remote.Repository, remote.FetchURL, remote.PushURL, remote.WebURL, now, projectID); err != nil {
+		return BlankProjectProvision{}, err
+	}
+	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE agent_operations SET payload=?,status='queued' WHERE id=?`), string(payload), operationID); err != nil {
+		return BlankProjectProvision{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return BlankProjectProvision{}, err
+	}
+	project, err := s.Project(ctx, projectID)
+	if err != nil {
+		return BlankProjectProvision{}, err
+	}
+	return BlankProjectProvision{Project: project, ServerID: operation.ServerID, WorkspaceID: command.WorkspaceID, OperationID: operationID, Command: command}, nil
 }
 
 // RetryBlankProject requeues the exact command from the latest failed/partial
@@ -104,10 +178,26 @@ func (s *Store) RetryBlankProject(ctx context.Context, projectID string) (BlankP
 	now := time.Now().UTC()
 	operationID := NewID()
 	payload, _ := json.Marshal(command)
+	operationStatus := "queued"
+	var remoteMode, remoteStatus, remoteURL string
+	remoteErr := tx.QueryRowxContext(ctx, s.Q(`SELECT mode,status,fetch_url FROM project_remotes WHERE project_id=? AND name='origin'`), projectID).Scan(&remoteMode, &remoteStatus, &remoteURL)
+	if remoteErr == nil && remoteMode == "create" && remoteStatus != "ready" {
+		operationStatus = "preparing"
+		command.RemoteURL = ""
+		payload, _ = json.Marshal(command)
+		if _, err = tx.ExecContext(ctx, s.Q(`UPDATE project_remotes SET status='provisioning',error='',updated_at=? WHERE project_id=? AND name='origin'`), now, projectID); err != nil {
+			return BlankProjectProvision{}, err
+		}
+	} else if remoteErr == nil && remoteMode == "create" && remoteStatus == "ready" {
+		command.RemoteURL = remoteURL
+		payload, _ = json.Marshal(command)
+	} else if remoteErr != nil && !errors.Is(remoteErr, sql.ErrNoRows) {
+		return BlankProjectProvision{}, remoteErr
+	}
 	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE projects SET status='provisioning',provision_error='',updated_at=? WHERE id=?`), now, projectID); err != nil {
 		return BlankProjectProvision{}, err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?, ?,?,?,?)`), operationID, row.ServerID, projectID, gitProjectCreateKind, string(payload), "git-project-retry:"+projectID+":"+operationID, now); err != nil {
+	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,status,created_at) VALUES(?,?,?, ?,?,?,?,?)`), operationID, row.ServerID, projectID, gitProjectCreateKind, string(payload), "git-project-retry:"+projectID+":"+operationID, operationStatus, now); err != nil {
 		return BlankProjectProvision{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -167,8 +257,8 @@ func ValidateBlankProjectResult(command protocol.GitProjectCreateCommand, result
 	if strings.HasPrefix(normalizeRemotePath(command.Destination), "/") && normalizeRemotePath(result.Path) != normalizeRemotePath(command.Destination) {
 		return errors.New("blank project result path does not match command")
 	}
-	if result.RemoteURL != "" {
-		return errors.New("blank project result unexpectedly contains a remote")
+	if strings.TrimSpace(result.RemoteURL) != strings.TrimSpace(command.RemoteURL) {
+		return errors.New("blank project result remote does not match command")
 	}
 	if command.InitializeREADME && (result.Unborn || result.CommitSHA == "") {
 		return errors.New("blank project README result is missing an initial commit")
@@ -196,6 +286,13 @@ func (s *Store) FailBlankProject(ctx context.Context, operation Operation, comma
 	defer tx.Rollback()
 	now := time.Now().UTC()
 	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE projects SET status=?,provision_error=?,updated_at=? WHERE id=?`), status, operationResult.Message, now, command.ProjectID); err != nil {
+		return err
+	}
+	remoteStatus := "failed"
+	if status == "partial" {
+		remoteStatus = "ready"
+	}
+	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE project_remotes SET status=CASE WHEN fetch_url<>'' THEN ? ELSE 'failed' END,error=?,updated_at=? WHERE project_id=? AND name='origin'`), remoteStatus, operationResult.Message, now, command.ProjectID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE agent_operations SET status='failed',result=?,result_data=?,completed_at=? WHERE id=? AND project_id=?`), operationResult.Message, data, now, operationResult.OperationID, command.ProjectID); err != nil {

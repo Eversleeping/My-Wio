@@ -79,6 +79,28 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE UNIQUE INDEX IF NOT EXISTS projects_remote_unique ON projects(normalized_remote) WHERE normalized_remote <> '';
 
+CREATE TABLE IF NOT EXISTS project_remotes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT 'origin',
+  mode TEXT NOT NULL DEFAULT 'existing',
+  provider TEXT NOT NULL DEFAULT '',
+  namespace TEXT NOT NULL DEFAULT '',
+  repository TEXT NOT NULL DEFAULT '',
+  visibility TEXT NOT NULL DEFAULT 'private',
+  credential_profile_id TEXT NOT NULL DEFAULT '',
+  fetch_url TEXT NOT NULL DEFAULT '',
+  push_url TEXT NOT NULL DEFAULT '',
+  web_url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ready',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS project_remotes_project_idx ON project_remotes(project_id, name);
+
 CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

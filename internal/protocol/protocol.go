@@ -92,13 +92,14 @@ type WorkspaceFilePreviewResult struct {
 }
 
 type GitProjectCreateCommand struct {
-	ProjectID        string `json:"project_id"`
-	WorkspaceID      string `json:"workspace_id"`
-	Name             string `json:"name"`
-	Destination      string `json:"destination,omitempty"`
-	InitialBranch    string `json:"initial_branch"`
-	InitializeREADME bool   `json:"initialize_readme"`
-	RemoteURL        string `json:"remote_url,omitempty"`
+	ProjectID          string `json:"project_id"`
+	WorkspaceID        string `json:"workspace_id"`
+	Name               string `json:"name"`
+	Destination        string `json:"destination,omitempty"`
+	InitialBranch      string `json:"initial_branch"`
+	InitializeREADME   bool   `json:"initialize_readme"`
+	RemoteURL          string `json:"remote_url,omitempty"`
+	RequireEmptyRemote bool   `json:"require_empty_remote,omitempty"`
 }
 
 type GitProjectCreateResult struct {
@@ -107,6 +108,18 @@ type GitProjectCreateResult struct {
 	CommitSHA string `json:"commit_sha,omitempty"`
 	Unborn    bool   `json:"unborn"`
 	RemoteURL string `json:"remote_url,omitempty"`
+}
+
+// ProjectRemoteResult is returned by the control-plane provider adapter. It
+// is deliberately free of credentials and is safe to persist in operation
+// metadata and audit records.
+type ProjectRemoteResult struct {
+	Provider   string `json:"provider,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	FetchURL   string `json:"fetch_url"`
+	PushURL    string `json:"push_url"`
+	WebURL     string `json:"web_url,omitempty"`
 }
 
 type GitWorktreeCreateCommand struct {

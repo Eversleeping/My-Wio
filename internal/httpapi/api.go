@@ -27,6 +27,7 @@ import (
 	"github.com/wio-platform/wio/internal/agentupdate"
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/gitprovider"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
@@ -47,6 +48,7 @@ type API struct {
 	bootstrapper  serverBootstrapper
 	agentUpdates  *agentupdate.Store
 	codexReleases *codexcli.ReleaseChecker
+	gitProviders  gitprovider.Creator
 	publicURL     string
 	secureCookie  bool
 	setupMu       sync.Mutex
@@ -75,6 +77,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 		bootstrapper:  sshbootstrap.New(assetDir),
 		agentUpdates:  agentupdate.New(assetDir),
 		codexReleases: codexcli.NewReleaseChecker(nil, ""),
+		gitProviders:  gitprovider.Client{},
 		publicURL:     strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		secureCookie:  strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
 		login:         make(map[string]*loginAttempt),

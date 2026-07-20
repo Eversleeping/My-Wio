@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/gitprovider"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/store"
@@ -240,7 +242,12 @@ type createProjectInput struct {
 	InitialBranch    string `json:"initial_branch"`
 	InitializeREADME bool   `json:"initialize_readme"`
 	Remote           struct {
-		Mode string `json:"mode"`
+		Mode       string `json:"mode"`
+		URL        string `json:"url"`
+		Provider   string `json:"provider"`
+		Namespace  string `json:"namespace"`
+		Repository string `json:"repository"`
+		Visibility string `json:"visibility"`
 	} `json:"remote"`
 }
 
@@ -255,6 +262,11 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	input.Destination = strings.TrimSpace(input.Destination)
 	input.InitialBranch = strings.TrimSpace(input.InitialBranch)
 	input.Remote.Mode = strings.TrimSpace(input.Remote.Mode)
+	input.Remote.URL = strings.TrimSpace(input.Remote.URL)
+	input.Remote.Provider = strings.ToLower(strings.TrimSpace(input.Remote.Provider))
+	input.Remote.Namespace = strings.Trim(strings.TrimSpace(input.Remote.Namespace), "/")
+	input.Remote.Repository = strings.TrimSpace(input.Remote.Repository)
+	input.Remote.Visibility = strings.ToLower(strings.TrimSpace(input.Remote.Visibility))
 	if input.Mode != "blank" {
 		writeError(w, http.StatusBadRequest, "mode must be blank")
 		return
@@ -278,8 +290,11 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "destination is invalid")
 		return
 	}
-	if input.Remote.Mode != "" && input.Remote.Mode != "none" {
-		writeError(w, http.StatusBadRequest, "remote repository setup is not available for blank projects yet")
+	if input.Remote.Mode == "" {
+		input.Remote.Mode = "none"
+	}
+	if err := validateBlankProjectRemote(input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	server, err := a.store.Server(r.Context(), input.ServerID)
@@ -295,11 +310,26 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	if input.InitializeREADME && server.GitProfileID == "" {
-		writeError(w, http.StatusConflict, "a Git credential profile with commit identity is required for the initial commit")
+	if (input.InitializeREADME || input.Remote.Mode == "create") && server.GitProfileID == "" {
+		writeError(w, http.StatusConflict, "a Git credential profile is required for this operation")
 		return
 	}
-	provision, err := a.store.CreateBlankProject(r.Context(), server.ID, input.Name, input.Destination, input.InitialBranch, input.InitializeREADME)
+	if input.InitializeREADME {
+		profile, profileErr := a.store.CredentialProfile(r.Context(), server.GitProfileID)
+		if profileErr != nil || profile.CommitName == "" || profile.CommitEmail == "" {
+			writeError(w, http.StatusConflict, "a Git credential profile with commit identity is required for the initial commit")
+			return
+		}
+	}
+	var provision store.BlankProjectProvision
+	switch input.Remote.Mode {
+	case "existing":
+		provision, err = a.store.CreateBlankProjectWithRemote(r.Context(), server.ID, input.Name, input.Destination, input.InitialBranch, input.InitializeREADME, store.BlankProjectRemoteSpec{Mode: "existing", URL: input.Remote.URL})
+	case "create":
+		provision, err = a.store.PrepareBlankProject(r.Context(), server.ID, input.Name, input.Destination, input.InitialBranch, input.InitializeREADME, store.BlankProjectRemoteSpec{Mode: "create", Provider: input.Remote.Provider, Namespace: input.Remote.Namespace, Repository: input.Remote.Repository, Visibility: input.Remote.Visibility, CredentialProfileID: server.GitProfileID})
+	default:
+		provision, err = a.store.CreateBlankProject(r.Context(), server.ID, input.Name, input.Destination, input.InitialBranch, input.InitializeREADME)
+	}
 	if err != nil {
 		if databaseConflict(err) {
 			writeError(w, http.StatusConflict, "project could not be reserved")
@@ -308,13 +338,125 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if input.Remote.Mode == "create" {
+		provision, err = a.provisionProjectRemote(r.Context(), provision)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
 	a.gateway.Wake(server.ID)
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "project.create", "project", provision.Project.ID, map[string]any{
 		"server_id": server.ID, "workspace_id": provision.WorkspaceID, "operation_id": provision.OperationID,
-		"initial_branch": input.InitialBranch, "initialize_readme": input.InitializeREADME,
+		"initial_branch": input.InitialBranch, "initialize_readme": input.InitializeREADME, "remote_mode": input.Remote.Mode,
 	}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]any{"project": provision.Project, "workspace_id": provision.WorkspaceID, "operation_id": provision.OperationID})
+}
+
+func validateBlankProjectRemote(input createProjectInput) error {
+	switch input.Remote.Mode {
+	case "none":
+		return nil
+	case "existing":
+		if input.Remote.URL == "" {
+			return errors.New("remote URL is required")
+		}
+		if strings.ContainsAny(input.Remote.URL, "\x00\r\n\t ") {
+			return errors.New("remote URL contains invalid characters")
+		}
+		if strings.Contains(input.Remote.URL, "@") && strings.HasPrefix(strings.ToLower(input.Remote.URL), "https://") {
+			return errors.New("HTTPS remote URL must not contain credentials")
+		}
+		if validSCPRemote(input.Remote.URL) {
+			return nil
+		}
+		parsed, err := url.Parse(input.Remote.URL)
+		hasPassword := false
+		if parsed != nil && parsed.User != nil {
+			_, hasPassword = parsed.User.Password()
+		}
+		if err != nil || parsed.Host == "" || hasPassword || (parsed.Scheme != "https" && parsed.Scheme != "ssh") {
+			return errors.New("remote URL must be an HTTPS or SSH URL")
+		}
+		return nil
+	case "create":
+		if input.Remote.Provider != "gitee" && input.Remote.Provider != "github" && input.Remote.Provider != "gitlab" {
+			return errors.New("Git provider must be Gitee, GitHub, or GitLab")
+		}
+		if input.Remote.Repository == "" || len(input.Remote.Repository) > 200 || strings.ContainsAny(input.Remote.Repository, "/\\\x00\r\n") {
+			return errors.New("remote repository name is invalid")
+		}
+		if input.Remote.Visibility == "" {
+			return errors.New("remote visibility is required")
+		}
+		if input.Remote.Visibility != "private" && input.Remote.Visibility != "internal" && input.Remote.Visibility != "public" {
+			return errors.New("remote visibility is invalid")
+		}
+		if len(input.Remote.Namespace) > 200 || strings.ContainsAny(input.Remote.Namespace, "\\\x00\r\n") {
+			return errors.New("remote namespace is invalid")
+		}
+		return nil
+	default:
+		return errors.New("remote mode must be none, existing, or create")
+	}
+}
+
+func validSCPRemote(raw string) bool {
+	at := strings.LastIndex(raw, "@")
+	colon := strings.Index(raw, ":")
+	return at > 0 && colon > at+1 && colon < len(raw)-1 && !strings.ContainsAny(raw[:at], "/\\:@") && !strings.ContainsAny(raw[at+1:colon], "/\\:@") && !strings.HasPrefix(raw[colon+1:], "-")
+}
+
+func (a *API) provisionProjectRemote(ctx context.Context, provision store.BlankProjectProvision) (store.BlankProjectProvision, error) {
+	operation, err := a.store.Operation(ctx, provision.OperationID)
+	if err != nil {
+		return store.BlankProjectProvision{}, errors.New("could not load remote provisioning operation")
+	}
+	remote, err := a.store.ProjectRemote(ctx, provision.Project.ID, "origin")
+	if err != nil {
+		return store.BlankProjectProvision{}, errors.New("could not load remote provisioning request")
+	}
+	profile, err := a.store.CredentialProfile(ctx, remote.CredentialProfileID)
+	if err != nil || profile.Kind != "git" {
+		message := "Git credential profile is unavailable"
+		_ = a.store.FailBlankProject(ctx, operation, provision.Command, protocol.OperationResult{OperationID: operation.ID, Status: "failed", Message: message}, "failed")
+		return store.BlankProjectProvision{}, errors.New(message)
+	}
+	if a.vault == nil {
+		message := "credential vault is unavailable"
+		_ = a.store.FailBlankProject(ctx, operation, provision.Command, protocol.OperationResult{OperationID: operation.ID, Status: "failed", Message: message}, "failed")
+		return store.BlankProjectProvision{}, errors.New(message)
+	}
+	var token string
+	if err := a.vault.Decrypt(profile.Ciphertext, &token); err != nil || strings.TrimSpace(token) == "" {
+		message := "Git credential could not be decrypted"
+		_ = a.store.FailBlankProject(ctx, operation, provision.Command, protocol.OperationResult{OperationID: operation.ID, Status: "failed", Message: message}, "failed")
+		return store.BlankProjectProvision{}, errors.New(message)
+	}
+	creator := a.gitProviders
+	if creator == nil {
+		creator = gitprovider.Client{}
+	}
+	created, err := creator.Create(ctx, gitprovider.Request{ProjectID: provision.Project.ID, Provider: remote.Provider, Endpoint: profile.Endpoint, Token: token, Username: profile.Username, Namespace: remote.Namespace, Repository: remote.Repository, Visibility: remote.Visibility})
+	if err != nil {
+		message := "remote repository creation failed"
+		_ = a.store.FailBlankProject(ctx, operation, provision.Command, protocol.OperationResult{OperationID: operation.ID, Status: "failed", Message: message}, "failed")
+		return store.BlankProjectProvision{}, errors.New(message)
+	}
+	remoteResult := protocol.ProjectRemoteResult{Provider: created.Provider, Namespace: created.Namespace, Repository: created.Repository, FetchURL: created.FetchURL, PushURL: created.PushURL, WebURL: created.WebURL}
+	if err := a.store.UpdateProjectRemote(ctx, provision.Project.ID, remoteResult); err != nil {
+		message := "remote repository was created but its metadata could not be persisted"
+		_ = a.store.FailBlankProject(ctx, operation, provision.Command, protocol.OperationResult{OperationID: operation.ID, Status: "failed", Message: message}, "partial")
+		return store.BlankProjectProvision{}, errors.New(message)
+	}
+	activated, err := a.store.ActivateBlankProjectRemote(ctx, provision.Project.ID, provision.OperationID, remoteResult)
+	if err != nil {
+		message := "remote repository was created but local project activation failed"
+		_ = a.store.FailBlankProject(ctx, operation, provision.Command, protocol.OperationResult{OperationID: operation.ID, Status: "failed", Message: message}, "partial")
+		return store.BlankProjectProvision{}, errors.New(message)
+	}
+	return activated, nil
 }
 
 func (a *API) retryProjectCreation(w http.ResponseWriter, r *http.Request) {
@@ -357,6 +499,18 @@ func (a *API) retryProjectCreation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
+	}
+	operation, operationErr := a.store.Operation(r.Context(), provision.OperationID)
+	if operationErr != nil {
+		writeError(w, http.StatusInternalServerError, "could not load retry operation")
+		return
+	}
+	if operation.Status == "preparing" {
+		provision, err = a.provisionProjectRemote(r.Context(), provision)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
 	}
 	a.gateway.Wake(server.ID)
 	session := currentSession(r)
