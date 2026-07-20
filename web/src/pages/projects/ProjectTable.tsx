@@ -24,16 +24,17 @@ export interface ProjectTableProps {
   formatTime: (value: string) => string;
   formatImportMessage?: (project: ProjectListRecord) => string;
   renderActions?: (project: ProjectListRecord, state: ProjectLifecycleState) => ReactNode;
+  onSelect?: (project: ProjectListRecord) => void;
 }
 
-export function ProjectTable({ projects, labels, slots, formatTime, formatImportMessage, renderActions }: ProjectTableProps) {
+export function ProjectTable({ projects, labels, slots, formatTime, formatImportMessage, renderActions, onSelect }: ProjectTableProps) {
   const { DataTable, Status } = slots;
   return <DataTable headers={[labels.project, labels.remote, labels.workspaces, labels.status, labels.updated, labels.actions]} empty={labels.empty}>
     {projects.map(project => {
       const state = deriveProjectLifecycleState(project);
       const importMessage = formatImportMessage?.(project) ?? (project.provision_error || project.import_message);
       return <tr key={project.id} className={project.hidden_at ? "project-hidden-row" : ""}>
-        <td><div className="cell-main"><span className="inline"><strong>{project.name}</strong>{project.hidden_at && <span className="status-tag neutral"><EyeOff size={12} />{labels.hidden}</span>}</span>{project.import_server_name && <small>{labels.targetServer(project.import_server_name)}</small>}</div></td>
+        <td><div className="cell-main"><span className="inline"><button type="button" className="table-link" onClick={() => onSelect?.(project)}>{project.name}</button>{project.hidden_at && <span className="status-tag neutral"><EyeOff size={12} />{labels.hidden}</span>}</span>{project.import_server_name && <small>{labels.targetServer(project.import_server_name)}</small>}</div></td>
         <td><code className="truncate-code">{project.remote_url || labels.local}</code></td>
         <td>{project.workspace_count}</td>
         <td><div className="project-import-state"><Status value={state} />{state === "syncing" && <small className="project-import-message syncing">{labels.awaitingWorkspace}</small>}{(state === "failed" || state === "partial") && importMessage && <small className="project-import-message" title={importMessage}>{importMessage}</small>}</div></td>

@@ -638,7 +638,7 @@ func TestUpdateProjectReturnsPreferencesAndWritesAudit(t *testing.T) {
 		t.Fatalf("unexpected projects: %#v %v", projects, err)
 	}
 	api := resourceTestAPI(database)
-	response := projectResourceRequest(t, http.MethodPatch, "/api/projects/"+projects[0].ID, projects[0].ID, map[string]any{"name": "  after  ", "pinned": true, "hidden": true}, api.updateProject)
+	response := projectResourceRequest(t, http.MethodPatch, "/api/projects/"+projects[0].ID, projects[0].ID, map[string]any{"name": "  after  ", "description": "  project details  ", "default_branch": "trunk", "pinned": true, "hidden": true, "archived": true}, api.updateProject)
 	if response.Code != http.StatusOK {
 		t.Fatalf("update returned %d: %s", response.Code, response.Body.String())
 	}
@@ -646,7 +646,7 @@ func TestUpdateProjectReturnsPreferencesAndWritesAudit(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.Name != "after" || updated.PinnedAt == nil || updated.HiddenAt == nil {
+	if updated.Name != "after" || updated.Description != "project details" || updated.DefaultBranch != "trunk" || updated.PinnedAt == nil || updated.HiddenAt == nil || updated.ArchivedAt == nil || updated.Status != "archived" {
 		t.Fatalf("unexpected updated project: %#v", updated)
 	}
 	projects, err = database.ListProjects(ctx)
@@ -657,15 +657,55 @@ func TestUpdateProjectReturnsPreferencesAndWritesAudit(t *testing.T) {
 	if err := database.DB.GetContext(ctx, &auditCount, database.Q("SELECT COUNT(*) FROM audit_log WHERE action='project.update' AND resource_id=?"), updated.ID); err != nil || auditCount != 1 {
 		t.Fatalf("project audit missing: count=%d err=%v", auditCount, err)
 	}
-	response = projectResourceRequest(t, http.MethodPatch, "/api/projects/"+updated.ID, updated.ID, map[string]any{"pinned": false, "hidden": false}, api.updateProject)
+	response = projectResourceRequest(t, http.MethodPatch, "/api/projects/"+updated.ID, updated.ID, map[string]any{"pinned": false, "hidden": false, "archived": false}, api.updateProject)
 	if response.Code != http.StatusOK {
 		t.Fatalf("clear preferences returned %d: %s", response.Code, response.Body.String())
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.PinnedAt != nil || updated.HiddenAt != nil {
+	if updated.PinnedAt != nil || updated.HiddenAt != nil || updated.ArchivedAt != nil || updated.Status == "archived" {
 		t.Fatalf("project preferences were not cleared: %#v", updated)
+	}
+}
+
+func TestProjectDetailIncludesRemotesAndOperations(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "project-detail-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project-detail", Name: "detail"}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("unexpected projects: %#v %v", projects, err)
+	}
+	projectID := projects[0].ID
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO project_remotes(id,project_id,name,mode,provider,fetch_url,push_url,status) VALUES(?,?,?,?,?,?,?,?)"), store.NewID(), projectID, "origin", "existing", "github", "https://github.com/example/detail.git", "https://github.com/example/detail.git", "ready"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.QueueResourceOperation(ctx, server.ID, "git.status", map[string]string{"project_id": projectID}, "detail-operation", store.OperationResource{ProjectID: projectID}, false); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := projectResourceRequest(t, http.MethodGet, "/api/projects/"+projectID, projectID, nil, api.projectDetail)
+	if response.Code != http.StatusOK {
+		t.Fatalf("detail returned %d: %s", response.Code, response.Body.String())
+	}
+	var detail struct {
+		Project    store.Project         `json:"project"`
+		Remotes    []store.ProjectRemote `json:"remotes"`
+		Operations []store.Operation     `json:"operations"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Project.ID != projectID || len(detail.Remotes) != 1 || detail.Remotes[0].FetchURL == "" || len(detail.Operations) != 1 || detail.Operations[0].Kind != "git.status" {
+		t.Fatalf("unexpected detail response: %#v", detail)
+	}
+	history := projectResourceRequest(t, http.MethodGet, "/api/projects/"+projectID+"/operations?limit=1", projectID, nil, api.projectOperations)
+	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), "git.status") {
+		t.Fatalf("unexpected history response: %d %s", history.Code, history.Body.String())
 	}
 }
 

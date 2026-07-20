@@ -3,7 +3,7 @@ import type { Project, Server, Workspace } from "../../types";
 export type CreateProjectMode = "blank" | "clone" | "discover";
 export type BlankProjectRemoteMode = "none" | "existing" | "create";
 export type RemoteRepositoryVisibility = "private" | "internal" | "public";
-export type ProjectLifecycleState = "provisioning" | "importing" | "failed" | "partial" | "ready" | "syncing" | "pending";
+export type ProjectLifecycleState = "provisioning" | "importing" | "failed" | "partial" | "ready" | "syncing" | "pending" | "archived";
 
 export type ProjectListRecord = Project;
 
@@ -102,6 +102,7 @@ export function newCreateProjectFormValue(
 }
 
 export function deriveProjectLifecycleState(project: ProjectListRecord): ProjectLifecycleState {
+  if (project.status === "archived") return "archived";
   if (project.status === "provisioning") return "provisioning";
   if (project.status === "partial") return "partial";
   if (project.status === "failed") return "failed";

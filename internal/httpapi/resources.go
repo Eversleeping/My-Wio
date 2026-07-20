@@ -234,6 +234,48 @@ func (a *API) projects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, projects)
 }
 
+func (a *API) projectDetail(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	project, err := a.store.Project(r.Context(), projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	remotes, err := a.store.ProjectRemotes(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project remotes")
+		return
+	}
+	operations, err := a.store.ListProjectOperations(r.Context(), projectID, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project operations")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project": project, "remotes": remotes, "operations": operations})
+}
+
+func (a *API) projectOperations(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	if _, err := a.store.Project(r.Context(), projectID); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	operations, err := a.store.ListProjectOperations(r.Context(), projectID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project operations")
+		return
+	}
+	writeJSON(w, http.StatusOK, operations)
+}
+
 type createProjectInput struct {
 	Mode             string `json:"mode"`
 	Name             string `json:"name"`
@@ -520,14 +562,17 @@ func (a *API) retryProjectCreation(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Name   *string `json:"name"`
-		Pinned *bool   `json:"pinned"`
-		Hidden *bool   `json:"hidden"`
+		Name          *string `json:"name"`
+		Description   *string `json:"description"`
+		DefaultBranch *string `json:"default_branch"`
+		Pinned        *bool   `json:"pinned"`
+		Hidden        *bool   `json:"hidden"`
+		Archived      *bool   `json:"archived"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Name == nil && input.Pinned == nil && input.Hidden == nil {
+	if input.Name == nil && input.Description == nil && input.DefaultBranch == nil && input.Pinned == nil && input.Hidden == nil && input.Archived == nil {
 		writeError(w, http.StatusBadRequest, "at least one project field is required")
 		return
 	}
@@ -543,8 +588,24 @@ func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		input.Name = &name
 	}
+	if input.Description != nil {
+		description := strings.TrimSpace(*input.Description)
+		if utf8.RuneCountInString(description) > 4096 {
+			writeError(w, http.StatusBadRequest, "project description is too long")
+			return
+		}
+		input.Description = &description
+	}
+	if input.DefaultBranch != nil {
+		branch := strings.TrimSpace(*input.DefaultBranch)
+		if branch == "" || len(branch) > gitBranchNameLimit || strings.ContainsAny(branch, "\x00\r\n\t ") || strings.HasPrefix(branch, "-") {
+			writeError(w, http.StatusBadRequest, "default_branch is invalid")
+			return
+		}
+		input.DefaultBranch = &branch
+	}
 	projectID := chi.URLParam(r, "projectID")
-	project, err := a.store.UpdateProject(r.Context(), projectID, input.Name, input.Pinned, input.Hidden)
+	project, err := a.store.UpdateProjectDetails(r.Context(), projectID, input.Name, input.Description, input.DefaultBranch, input.Pinned, input.Hidden, input.Archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
@@ -557,11 +618,20 @@ func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
 	if input.Name != nil {
 		detail["name"] = *input.Name
 	}
+	if input.Description != nil {
+		detail["description"] = *input.Description
+	}
+	if input.DefaultBranch != nil {
+		detail["default_branch"] = *input.DefaultBranch
+	}
 	if input.Pinned != nil {
 		detail["pinned"] = *input.Pinned
 	}
 	if input.Hidden != nil {
 		detail["hidden"] = *input.Hidden
+	}
+	if input.Archived != nil {
+		detail["archived"] = *input.Archived
 	}
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "project.update", "project", project.ID, detail, clientIP(r))

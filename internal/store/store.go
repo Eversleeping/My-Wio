@@ -580,11 +580,23 @@ func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 }
 
 func (s *Store) UpdateProject(ctx context.Context, id string, name *string, pinned, hidden *bool) (Project, error) {
+	return s.UpdateProjectDetails(ctx, id, name, nil, nil, pinned, hidden, nil)
+}
+
+func (s *Store) UpdateProjectDetails(ctx context.Context, id string, name, description, defaultBranch *string, pinned, hidden, archived *bool) (Project, error) {
 	sets := make([]string, 0, 4)
-	args := make([]any, 0, 5)
+	args := make([]any, 0, 8)
 	if name != nil {
 		sets = append(sets, "name=?")
 		args = append(args, *name)
+	}
+	if description != nil {
+		sets = append(sets, "description=?")
+		args = append(args, *description)
+	}
+	if defaultBranch != nil {
+		sets = append(sets, "default_branch=?")
+		args = append(args, *defaultBranch)
 	}
 	now := time.Now().UTC()
 	if pinned != nil {
@@ -601,6 +613,16 @@ func (s *Store) UpdateProject(ctx context.Context, id string, name *string, pinn
 			args = append(args, now)
 		} else {
 			args = append(args, nil)
+		}
+	}
+	if archived != nil {
+		sets = append(sets, "archived_at=?")
+		if *archived {
+			args = append(args, now)
+			sets = append(sets, "status='archived'")
+		} else {
+			args = append(args, nil)
+			sets = append(sets, "status=CASE WHEN status='archived' THEN 'ready' ELSE status END")
 		}
 	}
 	if len(sets) == 0 {

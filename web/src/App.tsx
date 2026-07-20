@@ -76,6 +76,7 @@ import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { currentLocale, useI18n } from "./i18n";
 import {
   CreateProjectDialog,
+  ProjectDetailsDialog,
   ProjectTable,
   WorkspaceTable,
   newCreateProjectFormValue,
@@ -83,6 +84,7 @@ import {
   type CreateProjectRequest,
   type ProjectLifecycleState,
   type ProjectListRecord,
+  type ProjectEditValue,
   type WorkspaceListRecord
 } from "./pages/projects";
 import type {
@@ -100,6 +102,7 @@ import type {
   DeploymentTarget,
   Metric,
   Project,
+  ProjectDetail,
   SecretSet,
   Server,
   Session,
@@ -574,6 +577,10 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   const [createError, setCreateError] = useState("");
   const [form, setForm] = useState(newCreateProjectFormValue());
   const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "delete" | "restore" } | null>(null);
+  const [detailProjectID, setDetailProjectID] = useState<string | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const detail = useData<ProjectDetail>(detailProjectID ? `/projects/${detailProjectID}` : null, realtime);
 
   const openDialog = () => {
     setForm(newCreateProjectFormValue());
@@ -635,6 +642,18 @@ function ProjectsPage({ realtime, notify }: PageProps) {
       notify(t("project.restored"));
     } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
   };
+  const saveProjectDetails = async (value: ProjectEditValue) => {
+    if (!detailProjectID) return;
+    setDetailBusy(true);
+    setDetailError("");
+    try {
+      await patch(`/projects/${detailProjectID}`, { name: value.name.trim(), description: value.description.trim(), default_branch: value.defaultBranch.trim(), pinned: value.pinned, hidden: value.hidden, archived: value.archived });
+      projects.reload();
+      detail.reload();
+      setDetailProjectID(null);
+      notify(t("project.saved"));
+    } catch (err) { setDetailError(message(err)); } finally { setDetailBusy(false); }
+  };
   const importMessage = (project: ProjectListRecord) => {
     const raw = project.provision_error || project.import_message;
     return /http2 framing|expected flush|timed? out|timeout|could not resolve|temporary failure in name resolution|connection (?:refused|reset)|network is unreachable|dial tcp/i.test(raw) ? t("project.networkFailure") : raw;
@@ -646,23 +665,27 @@ function ProjectsPage({ realtime, notify }: PageProps) {
     remoteSetup: t("project.remoteSetup"), remoteNone: t("project.remoteNone"), remoteExisting: t("project.remoteExisting"), remoteCreate: t("project.remoteCreate"), remoteURL: t("project.remoteURL"), remoteProvider: t("project.remoteProvider"), remoteNamespace: t("project.remoteNamespace"), remoteRepository: t("project.remoteRepository"), remoteVisibility: t("project.remoteVisibility"), visibilityPrivate: t("project.visibilityPrivate"), visibilityInternal: t("project.visibilityInternal"), visibilityPublic: t("project.visibilityPublic"), initializeReadme: t("project.initializeReadme"), existingServer: t("project.existingServer"), comingSoon: t("project.comingSoon"), cancel: t("common.cancel"), working: t("project.working"), create: t("project.create"), clone: t("project.queue"), discover: t("project.scan"),
     nameRequired: t("project.nameRequired"), serverRequired: t("project.serverRequired"), remoteURLRequired: t("project.remoteURLRequired"), initialBranchRequired: t("project.initialBranchRequired"), remoteProviderRequired: t("project.remoteProviderRequired"), remoteRepositoryRequired: t("project.remoteRepositoryRequired"), remoteUnavailable: t("project.remoteUnavailable")
   };
+  const detailLabels = {
+    title: t("project.detailTitle"), overview: t("project.detailOverview"), history: t("project.detailHistory"), name: t("project.name"), description: t("project.description"), defaultBranch: t("project.defaultBranch"), pinned: t("project.pin"), hidden: t("project.hide"), archived: t("project.archive"), remote: t("column.remote"), noRemote: t("project.noRemote"), operation: t("project.operation"), state: t("project.status"), time: t("column.updated"), result: t("project.result"), noOperations: t("project.noOperations"), cancel: t("common.cancel"), save: t("common.save"), saving: t("common.saving"), loading: t("common.loading")
+  };
   const projectLabels = { project: t("column.project"), remote: t("column.remote"), workspaces: t("column.workspaces"), status: t("project.status"), updated: t("column.updated"), actions: t("common.actions"), empty: t("project.none"), local: t("project.local"), hidden: t("project.hidden"), targetServer: (server: string) => t("project.targetSummary", { server }), awaitingWorkspace: t("project.awaitingWorkspace") };
   const workspaceLabels = { project: t("column.project"), server: t("column.server"), path: t("column.path"), branch: t("column.branch"), commit: t("column.commit"), state: t("column.state"), actions: t("common.actions"), empty: t("project.noWorkspaces"), detached: t("project.detached") };
   return <div className="page-stack project-page">
     <Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={openDialog}><Plus size={17} />{t("project.createEntry")}</button>}>
-      <ProjectTable projects={projects.data ?? []} labels={projectLabels} slots={{ DataTable, Status }} formatTime={relative} formatImportMessage={importMessage} renderActions={(project, state: ProjectLifecycleState) => {
+      <ProjectTable projects={projects.data ?? []} labels={projectLabels} slots={{ DataTable, Status }} formatTime={relative} formatImportMessage={importMessage} onSelect={project => { setDetailError(""); setDetailProjectID(project.id); }} renderActions={(project, state: ProjectLifecycleState) => {
         const failed = (state === "failed" || state === "partial") && project.workspace_count === 0;
         const action = projectAction?.id === project.id ? projectAction.kind : null;
         const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id);
         const blankFailure = project.status === "failed" || project.status === "partial";
         const retryAvailable = blankFailure || targetServer?.status === "online";
-        return <>{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <><button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button className="icon-button danger" disabled={projectAction !== null} title={t("project.deleteFailed")} onClick={() => void deleteFailedProject(project)}>{action === "delete" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}</button></>}{!project.hidden_at && !failed && <span className="muted">-</span>}</>;
+        return <><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <><button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button className="icon-button danger" disabled={projectAction !== null} title={t("project.deleteFailed")} onClick={() => void deleteFailedProject(project)}>{action === "delete" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}</button></>}</>;
       }} />
     </Section>
     <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
       <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} />
     </Section>
     <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />
+    <ProjectDetailsDialog open={detailProjectID !== null} detail={detail.data} loading={detail.loading} busy={detailBusy} error={detailError || detail.error} labels={detailLabels} slots={{ Dialog, Field, DialogActions }} onClose={() => { if (!detailBusy) setDetailProjectID(null); }} onSubmit={saveProjectDetails} />
   </div>;
 }
 
