@@ -168,6 +168,13 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 			return fmt.Errorf("normalize operation result data: %w", err)
 		}
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE workspaces SET status=CASE status
+		WHEN 'moveing' THEN 'moving'
+		WHEN 'deleteing' THEN 'deleting'
+		ELSE status END
+		WHERE status IN ('moveing','deleteing')`); err != nil {
+		return fmt.Errorf("normalize workspace lifecycle status: %w", err)
+	}
 	for _, statement := range []string{
 		"CREATE INDEX IF NOT EXISTS operations_project_idx ON agent_operations(project_id, created_at)",
 		"CREATE INDEX IF NOT EXISTS operations_workspace_idx ON agent_operations(workspace_id, created_at)",

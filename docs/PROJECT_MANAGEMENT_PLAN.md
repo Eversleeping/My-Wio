@@ -1,6 +1,6 @@
 # 项目与 Git 工作区管理实施计划
 
-更新时间：2026-07-20
+更新时间：2026-07-21
 
 ## 执行规则
 
@@ -25,6 +25,7 @@
 | 07 | 工作区生命周期 | 显示名称、刷新、路径移动、跨服务器复制、移除记录、受管目录物理删除 | 路径和符号链接防护；依赖预检；失败恢复测试 | 已完成 | `feat: 完善工作区生命周期` |
 | 08 | 项目删除 | 删除影响预检、仅删除元数据、删除受管文件、关联任务和部署处理 | 活跃任务/部署/脏目录阻止；审计记录；端到端验收 | 已完成 | `feat: 增加项目删除预检与受管文件清理` |
 | 09 | 前端整合与最终验收 | 项目页拆分、响应式交互、中英文文案、Vitest/RTL/Playwright 核心流程；补充分支斜杠路由和工作区删除模式阻断信息 | `go test ./...`、`go vet ./...`、前端 test/typecheck/build、Playwright 桌面/移动端、完成审计 | 已完成 | `feat: 完成项目管理前端与验收` |
+| 10 | 完成性审计补强 | 真实 PostgreSQL 迁移/存储测试、历史生命周期状态修复、统一 `make test` 验收、提交和证据复核 | PostgreSQL 16 旧结构幂等迁移、结构化操作和 BIGINT 存储；全新检出全量回归 | 已完成 | `test: 补齐 PostgreSQL 完成性验收` |
 
 ## 目标数据模型
 
@@ -60,7 +61,15 @@
 - 前端静态检查与构建：`npm run typecheck`、`npm run build` 通过；构建仅报告既有的大分块警告。
 - 后端回归：`go test ./...`、`go vet ./...`、分支名含 `/` 的 HTTP 路由回归测试通过。
 - 浏览器验收：已验证 Git 状态/提交、分支创建、离线错误、工作区移动、项目删除预检，以及桌面和 390×844 移动布局。截图位于 `outputs/playwright/category09-git-branches-desktop.png`、`outputs/playwright/category09-workspace-move-desktop.png`、`outputs/playwright/category09-project-deletion-desktop.png`、`outputs/playwright/category09-project-deletion-mobile.png`。
-- `make test` 未能直接执行，原因是验收环境没有安装 `make`；其包含的 `go test ./...`、`npm test`、`npm run typecheck` 已逐条执行并通过。
+- `make test` 已通过，其包含 PostgreSQL 16 集成测试、全量 Go 测试、前端组件测试和 typecheck。
+
+## 类别 10 验收记录
+
+- 使用真实临时 PostgreSQL 16 验证旧版 `projects`、`workspaces`、`agent_operations` 结构连续两次打开后的幂等迁移。
+- 验证 PostgreSQL 下项目/工作区生命周期字段、结构化操作结果、工作区写操作串行化，以及超过 32 位范围的网络计数存储。
+- SQLite 与 PostgreSQL 打开数据库时会将历史 `moveing`、`deleteing` 状态规范化为 `moving`、`deleting`。
+- `make test` 会先生成嵌入式前端产物，再执行 PostgreSQL 16、全量 Go、前端组件和 typecheck；已在无 `web/dist` 的隔离 worktree 复核。
+- `go vet ./...`、带 `postgresintegration` 标签的 Vet 和 `git diff --check` 作为额外最终门槛。
 
 ## API 目标
 
