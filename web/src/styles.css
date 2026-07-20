@@ -646,10 +646,10 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .slash-command-entry > button { grid-template-columns: 22px minmax(0, 1fr) 18px; }
   .slash-command-items em { display: none; }
   .task-status-list > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .composer-bar > div { min-width: 0; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
-  .composer-bar select, .composer-bar input { width: 124px; min-width: 124px; flex: 0 0 124px; }
-  .composer-bar .codex-model-picker { min-width: 150px; flex: 0 0 150px; align-items: center; flex-direction: row; }
-  .composer-bar .codex-model-picker select, .composer-bar .codex-model-picker input { width: 150px; min-width: 150px; }
+  .composer-bar > div { min-width: 0; display: grid; grid-template-columns: 34px repeat(3, minmax(0, 1fr)); gap: 6px; overflow: visible; padding: 0; }
+  .composer-bar > div > .icon-button { width: 34px; min-width: 34px; }
+  .composer-bar > div > select, .composer-bar .codex-model-picker select, .composer-bar .codex-model-picker input { width: 100%; min-width: 0; max-width: none; }
+  .composer-bar .codex-model-picker { min-width: 0; width: 100%; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .composer-bar > .primary-button { width: 38px; min-width: 38px; height: 38px; padding: 0; overflow: hidden; color: transparent; gap: 0; }
   .composer-bar > .primary-button svg { color: #fff; }
   .approval-drawer-button { display: none !important; }
