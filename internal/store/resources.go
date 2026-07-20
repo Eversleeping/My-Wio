@@ -240,8 +240,8 @@ func (s *Store) CommitGitWorktree(ctx context.Context, command protocol.GitWorkt
 	if result.Path == "" || result.Branch != command.Branch || result.CommitSHA == "" {
 		return errors.New("worktree result does not match command")
 	}
-	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,kind,parent_workspace_id,branch,commit_sha,dirty,last_scanned_at)
-		SELECT ?,project_id,server_id,?,'worktree',?,?,?,0,? FROM workspaces WHERE id=?`), command.TargetWorkspaceID, result.Path, command.SourceWorkspaceID, result.Branch, result.CommitSHA, time.Now().UTC(), command.SourceWorkspaceID)
+	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,status,kind,parent_workspace_id,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at)
+		SELECT ?,project_id,server_id,?,?,'managed','ready','worktree',?,?,?,0,?,? FROM workspaces WHERE id=?`), command.TargetWorkspaceID, result.Path, command.Branch, command.SourceWorkspaceID, result.Branch, result.CommitSHA, time.Now().UTC(), time.Now().UTC(), command.SourceWorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -329,7 +329,7 @@ func (s *Store) CreateProject(ctx context.Context, name, remoteURL string) (Proj
 		return Project{}, err
 	}
 	var project Project
-	err = s.DB.GetContext(ctx, &project, s.Q("SELECT id,name,remote_url,pinned_at,hidden_at,updated_at,0 workspace_count FROM projects WHERE id=?"), id)
+	err = s.DB.GetContext(ctx, &project, s.Q("SELECT id,name,description,remote_url,default_branch,status,provision_error,pinned_at,hidden_at,archived_at,updated_at,0 workspace_count FROM projects WHERE id=?"), id)
 	return project, err
 }
 

@@ -49,12 +49,16 @@ func (s *Store) QueueCredentialUpdate(ctx context.Context, serverID, ciphertext,
 }
 
 func (s *Store) CompleteCredentialUpdate(ctx context.Context, result protocol.OperationResult) error {
+	resultData, err := operationResultData(result.Data)
+	if err != nil {
+		return err
+	}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,completed_at=? WHERE id=?"), result.Status, result.Message, time.Now().UTC(), result.OperationID); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=?"), result.Status, result.Message, resultData, time.Now().UTC(), result.OperationID); err != nil {
 		return err
 	}
 	if result.Status == "succeeded" {

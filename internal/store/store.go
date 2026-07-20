@@ -24,6 +24,8 @@ import (
 //go:embed schema.sql
 var schema string
 
+var ErrWorkspaceWriteActive = errors.New("workspace already has an active write operation")
+
 type Store struct {
 	DB     *sqlx.DB
 	driver string
@@ -66,6 +68,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateProjectWorkspaceOperations(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
 			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
@@ -74,6 +80,100 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		statements := []string{
+			`ALTER TABLE projects
+				ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
+				ADD COLUMN IF NOT EXISTS default_branch TEXT NOT NULL DEFAULT 'main',
+				ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready',
+				ADD COLUMN IF NOT EXISTS provision_error TEXT NOT NULL DEFAULT '',
+				ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`,
+			`ALTER TABLE workspaces
+				ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '',
+				ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'observed',
+				ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready',
+				ADD COLUMN IF NOT EXISTS last_git_refresh_at TIMESTAMP,
+				ADD COLUMN IF NOT EXISTS git_error TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE agent_operations
+				ADD COLUMN IF NOT EXISTS project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+				ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+				ADD COLUMN IF NOT EXISTS workspace_write INTEGER NOT NULL DEFAULT 0,
+				ADD COLUMN IF NOT EXISTS result_data TEXT NOT NULL DEFAULT '{}'`,
+		}
+		for _, statement := range statements {
+			if _, err := db.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("migrate project workspace operations: %w", err)
+			}
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE agent_operations SET result_data='{}' WHERE result_data IS NULL"); err != nil {
+			return fmt.Errorf("normalize operation result data: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE agent_operations
+			ALTER COLUMN result_data SET DEFAULT '{}',
+			ALTER COLUMN result_data SET NOT NULL`); err != nil {
+			return fmt.Errorf("constrain operation result data: %w", err)
+		}
+	} else {
+		tables := []struct {
+			name    string
+			columns map[string]string
+		}{
+			{name: "projects", columns: map[string]string{
+				"description":     "TEXT NOT NULL DEFAULT ''",
+				"default_branch":  "TEXT NOT NULL DEFAULT 'main'",
+				"status":          "TEXT NOT NULL DEFAULT 'ready'",
+				"provision_error": "TEXT NOT NULL DEFAULT ''",
+				"archived_at":     "TIMESTAMP",
+			}},
+			{name: "workspaces", columns: map[string]string{
+				"display_name":        "TEXT NOT NULL DEFAULT ''",
+				"management_mode":     "TEXT NOT NULL DEFAULT 'observed'",
+				"status":              "TEXT NOT NULL DEFAULT 'ready'",
+				"last_git_refresh_at": "TIMESTAMP",
+				"git_error":           "TEXT NOT NULL DEFAULT ''",
+			}},
+			{name: "agent_operations", columns: map[string]string{
+				"project_id":      "TEXT REFERENCES projects(id) ON DELETE SET NULL",
+				"workspace_id":    "TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
+				"workspace_write": "INTEGER NOT NULL DEFAULT 0",
+				"result_data":     "TEXT NOT NULL DEFAULT '{}'",
+			}},
+		}
+		for _, table := range tables {
+			var columns []string
+			if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info(?)", table.name); err != nil {
+				return fmt.Errorf("inspect %s resource columns: %w", table.name, err)
+			}
+			existing := make(map[string]bool, len(columns))
+			for _, column := range columns {
+				existing[column] = true
+			}
+			for column, definition := range table.columns {
+				if existing[column] {
+					continue
+				}
+				if _, err := db.ExecContext(ctx, "ALTER TABLE "+table.name+" ADD COLUMN "+column+" "+definition); err != nil {
+					return fmt.Errorf("migrate %s resource column %s: %w", table.name, column, err)
+				}
+			}
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE agent_operations SET result_data='{}' WHERE result_data IS NULL"); err != nil {
+			return fmt.Errorf("normalize operation result data: %w", err)
+		}
+	}
+	for _, statement := range []string{
+		"CREATE INDEX IF NOT EXISTS operations_project_idx ON agent_operations(project_id, created_at)",
+		"CREATE INDEX IF NOT EXISTS operations_workspace_idx ON agent_operations(workspace_id, created_at)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS operations_workspace_active_write_unique ON agent_operations(workspace_id) WHERE workspace_id IS NOT NULL AND workspace_write=1 AND status IN ('queued','delivered','running')",
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("create resource operation index: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateWorkspaceMetadata(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -417,7 +517,8 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 		if repo.Dirty {
 			dirty = 1
 		}
-		_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,branch,commit_sha,dirty,last_scanned_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(server_id,path) DO UPDATE SET project_id=excluded.project_id,branch=excluded.branch,commit_sha=excluded.commit_sha,dirty=excluded.dirty,last_scanned_at=excluded.last_scanned_at`), workspaceID, projectID, serverID, repo.Path, repo.Branch, repo.CommitSHA, dirty, time.Now().UTC())
+		now := time.Now().UTC()
+		_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,path) DO UPDATE SET project_id=excluded.project_id,branch=excluded.branch,commit_sha=excluded.commit_sha,dirty=excluded.dirty,status='ready',last_git_refresh_at=excluded.last_git_refresh_at,git_error='',last_scanned_at=excluded.last_scanned_at`), workspaceID, projectID, serverID, repo.Path, repo.Name, repo.Branch, repo.CommitSHA, dirty, now, now)
 		if err != nil {
 			return err
 		}
@@ -428,9 +529,14 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 type Project struct {
 	ID                string     `db:"id" json:"id"`
 	Name              string     `db:"name" json:"name"`
+	Description       string     `db:"description" json:"description"`
 	RemoteURL         string     `db:"remote_url" json:"remote_url"`
+	DefaultBranch     string     `db:"default_branch" json:"default_branch"`
+	Status            string     `db:"status" json:"status"`
+	ProvisionError    string     `db:"provision_error" json:"provision_error"`
 	PinnedAt          *time.Time `db:"pinned_at" json:"pinned_at"`
 	HiddenAt          *time.Time `db:"hidden_at" json:"hidden_at"`
+	ArchivedAt        *time.Time `db:"archived_at" json:"archived_at"`
 	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
 	WorkspaceCount    int        `db:"workspace_count" json:"workspace_count"`
 	ImportStatus      string     `db:"-" json:"import_status"`
@@ -442,7 +548,7 @@ type Project struct {
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project
-	if err := s.DB.SelectContext(ctx, &out, `SELECT p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id GROUP BY p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,p.name`); err != nil {
+	if err := s.DB.SelectContext(ctx, &out, `SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,p.name`); err != nil {
 		return nil, err
 	}
 	imports, err := s.listProjectImports(ctx)
@@ -469,7 +575,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 
 func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 	var project Project
-	err := s.DB.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at,COUNT(w.id) workspace_count FROM projects p LEFT JOIN workspaces w ON w.project_id=p.id WHERE p.id=? GROUP BY p.id,p.name,p.remote_url,p.pinned_at,p.hidden_at,p.updated_at`), id)
+	err := s.DB.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p WHERE p.id=?`), id)
 	return project, err
 }
 
@@ -586,28 +692,34 @@ func (s *Store) DeleteProject(ctx context.Context, projectID string) (bool, erro
 }
 
 type Workspace struct {
-	ID                string  `db:"id" json:"id"`
-	ProjectID         string  `db:"project_id" json:"project_id"`
-	ServerID          string  `db:"server_id" json:"server_id"`
-	Path              string  `db:"path" json:"path"`
-	Kind              string  `db:"kind" json:"kind"`
-	ParentWorkspaceID *string `db:"parent_workspace_id" json:"parent_workspace_id"`
-	Branch            string  `db:"branch" json:"branch"`
-	CommitSHA         string  `db:"commit_sha" json:"commit_sha"`
-	Dirty             int     `db:"dirty" json:"dirty"`
-	ServerName        string  `db:"server_name" json:"server_name"`
-	ProjectName       string  `db:"project_name" json:"project_name"`
+	ID                string     `db:"id" json:"id"`
+	ProjectID         string     `db:"project_id" json:"project_id"`
+	ServerID          string     `db:"server_id" json:"server_id"`
+	Path              string     `db:"path" json:"path"`
+	DisplayName       string     `db:"display_name" json:"display_name"`
+	ManagementMode    string     `db:"management_mode" json:"management_mode"`
+	Status            string     `db:"status" json:"status"`
+	Kind              string     `db:"kind" json:"kind"`
+	ParentWorkspaceID *string    `db:"parent_workspace_id" json:"parent_workspace_id"`
+	Branch            string     `db:"branch" json:"branch"`
+	CommitSHA         string     `db:"commit_sha" json:"commit_sha"`
+	Dirty             int        `db:"dirty" json:"dirty"`
+	LastGitRefreshAt  *time.Time `db:"last_git_refresh_at" json:"last_git_refresh_at"`
+	GitError          string     `db:"git_error" json:"git_error"`
+	LastScannedAt     time.Time  `db:"last_scanned_at" json:"last_scanned_at"`
+	ServerName        string     `db:"server_name" json:"server_name"`
+	ProjectName       string     `db:"project_name" json:"project_name"`
 }
 
 func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	var out []Workspace
-	err := s.DB.SelectContext(ctx, &out, `SELECT w.id,w.project_id,w.server_id,w.path,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY p.name,s.name`)
+	err := s.DB.SelectContext(ctx, &out, `SELECT w.id,w.project_id,w.server_id,w.path,w.display_name,w.management_mode,w.status,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,w.last_git_refresh_at,w.git_error,w.last_scanned_at,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY p.name,s.name`)
 	return out, err
 }
 
 func (s *Store) Workspace(ctx context.Context, id string) (Workspace, error) {
 	var workspace Workspace
-	err := s.DB.GetContext(ctx, &workspace, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE w.id=?`), id)
+	err := s.DB.GetContext(ctx, &workspace, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.display_name,w.management_mode,w.status,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,w.last_git_refresh_at,w.git_error,w.last_scanned_at,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE w.id=?`), id)
 	return workspace, err
 }
 
@@ -744,47 +856,157 @@ func (s *Store) QueueOperation(ctx context.Context, serverID, kind string, paylo
 	if err != nil {
 		return "", err
 	}
-	return s.queueOperationPayload(ctx, serverID, kind, string(raw), idempotency)
+	return s.queueOperationPayload(ctx, serverID, kind, string(raw), idempotency, OperationResource{}, false)
+}
+
+type OperationResource struct {
+	ProjectID   string
+	WorkspaceID string
+}
+
+func (s *Store) QueueResourceOperation(ctx context.Context, serverID, kind string, payload any, idempotency string, resource OperationResource, write bool) (string, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return s.queueOperationPayload(ctx, serverID, kind, string(raw), idempotency, resource, write)
 }
 
 func (s *Store) QueueEncryptedOperation(ctx context.Context, serverID, kind, ciphertext, idempotency string) (string, error) {
 	if !strings.HasPrefix(ciphertext, "v1:") {
 		return "", errors.New("encrypted operation payload must use a supported Vault format")
 	}
-	return s.queueOperationPayload(ctx, serverID, kind, ciphertext, idempotency)
+	return s.queueOperationPayload(ctx, serverID, kind, ciphertext, idempotency, OperationResource{}, false)
 }
 
-func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, payload, idempotency string) (string, error) {
-	id := NewID()
-	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING"), id, serverID, kind, payload, idempotency, time.Now().UTC())
+func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, payload, idempotency string, resource OperationResource, write bool) (string, error) {
+	var existing string
+	err := s.DB.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	resolved, err := s.resolveOperationResource(ctx, serverID, resource)
 	if err != nil {
 		return "", err
 	}
-	var existing string
+	workspaceWrite := 0
+	if write {
+		if resolved.WorkspaceID == "" {
+			return "", errors.New("workspace write operation requires a workspace")
+		}
+		workspaceWrite = 1
+	}
+	id := NewID()
+	_, err = s.DB.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?, ?, NULLIF(?,''), NULLIF(?,''), ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING"), id, serverID, resolved.ProjectID, resolved.WorkspaceID, kind, payload, workspaceWrite, idempotency, time.Now().UTC())
+	if err != nil {
+		if getErr := s.DB.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); getErr == nil {
+			return existing, nil
+		}
+		if write {
+			active, activeErr := s.HasActiveWorkspaceWriteOperation(ctx, resolved.WorkspaceID)
+			if activeErr == nil && active {
+				return "", ErrWorkspaceWriteActive
+			}
+		}
+		return "", err
+	}
 	if err := s.DB.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); err != nil {
 		return "", err
 	}
 	return existing, nil
 }
 
-type Operation struct {
-	ID        string    `db:"id"`
-	ServerID  string    `db:"server_id"`
-	Kind      string    `db:"kind"`
-	Payload   string    `db:"payload"`
-	CreatedAt time.Time `db:"created_at"`
+func (s *Store) resolveOperationResource(ctx context.Context, serverID string, resource OperationResource) (OperationResource, error) {
+	if resource.WorkspaceID != "" {
+		var workspace struct {
+			ProjectID string `db:"project_id"`
+			ServerID  string `db:"server_id"`
+		}
+		if err := s.DB.GetContext(ctx, &workspace, s.Q("SELECT project_id,server_id FROM workspaces WHERE id=?"), resource.WorkspaceID); err != nil {
+			return OperationResource{}, err
+		}
+		if workspace.ServerID != serverID {
+			return OperationResource{}, errors.New("operation workspace does not belong to server")
+		}
+		if resource.ProjectID != "" && resource.ProjectID != workspace.ProjectID {
+			return OperationResource{}, errors.New("operation workspace does not belong to project")
+		}
+		resource.ProjectID = workspace.ProjectID
+		return resource, nil
+	}
+	if resource.ProjectID != "" {
+		var count int
+		if err := s.DB.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM projects WHERE id=?"), resource.ProjectID); err != nil {
+			return OperationResource{}, err
+		}
+		if count != 1 {
+			return OperationResource{}, sql.ErrNoRows
+		}
+	}
+	return resource, nil
 }
+
+type Operation struct {
+	ID             string     `db:"id" json:"id"`
+	ServerID       string     `db:"server_id" json:"server_id"`
+	ProjectID      string     `db:"project_id" json:"project_id"`
+	WorkspaceID    string     `db:"workspace_id" json:"workspace_id"`
+	Kind           string     `db:"kind" json:"kind"`
+	Payload        string     `db:"payload" json:"-"`
+	Status         string     `db:"status" json:"status"`
+	WorkspaceWrite int        `db:"workspace_write" json:"workspace_write"`
+	Result         string     `db:"result" json:"result"`
+	ResultData     string     `db:"result_data" json:"result_data"`
+	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
+	DeliveredAt    *time.Time `db:"delivered_at" json:"delivered_at"`
+	CompletedAt    *time.Time `db:"completed_at" json:"completed_at"`
+}
+
+const operationSelect = `SELECT id,server_id,COALESCE(project_id,'') project_id,COALESCE(workspace_id,'') workspace_id,kind,payload,status,workspace_write,COALESCE(result,'') result,COALESCE(result_data,'{}') result_data,created_at,delivered_at,completed_at FROM agent_operations`
 
 func (s *Store) Operation(ctx context.Context, id string) (Operation, error) {
 	var operation Operation
-	err := s.DB.GetContext(ctx, &operation, s.Q("SELECT id,server_id,kind,payload,created_at FROM agent_operations WHERE id=?"), id)
+	err := s.DB.GetContext(ctx, &operation, s.Q(operationSelect+" WHERE id=?"), id)
 	return operation, err
 }
 
 func (s *Store) PendingOperations(ctx context.Context, serverID string) ([]Operation, error) {
 	var out []Operation
-	err := s.DB.SelectContext(ctx, &out, s.Q("SELECT id,server_id,kind,payload,created_at FROM agent_operations WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<?)) ORDER BY created_at LIMIT 100"), serverID, time.Now().UTC().Add(-30*time.Second))
+	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+" WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<?)) ORDER BY created_at LIMIT 100"), serverID, time.Now().UTC().Add(-30*time.Second))
 	return out, err
+}
+
+func (s *Store) ListProjectOperations(ctx context.Context, projectID string, limit int) ([]Operation, error) {
+	limit = operationListLimit(limit)
+	var out []Operation
+	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+` WHERE project_id=? OR workspace_id IN (SELECT id FROM workspaces WHERE project_id=?) ORDER BY created_at DESC LIMIT ?`), projectID, projectID, limit)
+	return out, err
+}
+
+func (s *Store) ListWorkspaceOperations(ctx context.Context, workspaceID string, limit int) ([]Operation, error) {
+	limit = operationListLimit(limit)
+	var out []Operation
+	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+" WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?"), workspaceID, limit)
+	return out, err
+}
+
+func operationListLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
+}
+
+func (s *Store) HasActiveWorkspaceWriteOperation(ctx context.Context, workspaceID string) (bool, error) {
+	var count int
+	err := s.DB.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), workspaceID)
+	return count > 0, err
 }
 
 func (s *Store) HasActiveOperation(ctx context.Context, serverID, kind string) (bool, error) {
@@ -812,8 +1034,22 @@ func (s *Store) MarkDelivered(ctx context.Context, id string) error {
 	return err
 }
 func (s *Store) CompleteOperation(ctx context.Context, r protocol.OperationResult) error {
-	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,completed_at=? WHERE id=?"), r.Status, r.Message, time.Now().UTC(), r.OperationID)
+	data, err := operationResultData(r.Data)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=?"), r.Status, r.Message, data, time.Now().UTC(), r.OperationID)
 	return err
+}
+
+func operationResultData(data json.RawMessage) (string, error) {
+	if len(data) == 0 {
+		return "{}", nil
+	}
+	if !json.Valid(data) {
+		return "", errors.New("operation result data must be valid JSON")
+	}
+	return string(data), nil
 }
 
 func (s *Store) AddEvent(ctx context.Context, event protocol.StreamEvent) (protocol.StreamEvent, error) {

@@ -64,10 +64,15 @@ CREATE TABLE IF NOT EXISTS enrollment_metadata (
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
   remote_url TEXT NOT NULL DEFAULT '',
   normalized_remote TEXT NOT NULL DEFAULT '',
+  default_branch TEXT NOT NULL DEFAULT 'main',
+  status TEXT NOT NULL DEFAULT 'ready',
+  provision_error TEXT NOT NULL DEFAULT '',
   pinned_at TIMESTAMP,
   hidden_at TIMESTAMP,
+  archived_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -79,11 +84,16 @@ CREATE TABLE IF NOT EXISTS workspaces (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   path TEXT NOT NULL,
-	 kind TEXT NOT NULL DEFAULT 'primary',
-	 parent_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  management_mode TEXT NOT NULL DEFAULT 'observed',
+  status TEXT NOT NULL DEFAULT 'ready',
+  kind TEXT NOT NULL DEFAULT 'primary',
+  parent_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   branch TEXT NOT NULL DEFAULT '',
   commit_sha TEXT NOT NULL DEFAULT '',
   dirty INTEGER NOT NULL DEFAULT 0,
+  last_git_refresh_at TIMESTAMP,
+  git_error TEXT NOT NULL DEFAULT '',
   last_scanned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(server_id, path)
 );
@@ -167,14 +177,18 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE TABLE IF NOT EXISTS agent_operations (
   id TEXT PRIMARY KEY,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   kind TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'queued',
+  workspace_write INTEGER NOT NULL DEFAULT 0,
   idempotency_key TEXT NOT NULL UNIQUE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   delivered_at TIMESTAMP,
   completed_at TIMESTAMP,
-  result TEXT
+  result TEXT,
+  result_data TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS operations_server_idx ON agent_operations(server_id, status, created_at);
