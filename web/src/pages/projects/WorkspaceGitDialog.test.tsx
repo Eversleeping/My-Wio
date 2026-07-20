@@ -12,7 +12,7 @@ const snapshot: WorkspaceGitSnapshot = {
   workspace_id: "workspace-1", status: "succeeded", error: "", requested_at: null, updated_at: null,
   data: { workspace_id: "workspace-1", status: { branch: "main", detached: false, unborn: false, head: "abcdef123456", upstream: "origin/main", ahead: 0, behind: 0, staged: 0, unstaged: 1, untracked: 0, dirty: true }, branches: [{ name: "main", full_name: "refs/heads/main", kind: "local", commit_sha: "abcdef123456", current: true }], remotes: [{ name: "origin", fetch_urls: ["https://example.com/repo.git"], push_urls: ["https://example.com/repo.git"] }], commits: [], has_more: false }
 };
-function Dialog({ open, title, children }: DialogSlotProps) { return open ? <div role="dialog" aria-label={title}>{children}</div> : null; }
+function Dialog({ open, title, children, className }: DialogSlotProps) { return open ? <div role="dialog" aria-label={title} className={className}>{children}</div> : null; }
 
 test("creates a branch with a structured action", async () => {
   const user = userEvent.setup();
@@ -67,6 +67,9 @@ test("renders legacy null collections as empty states", async () => {
   expect(screen.getByText("No remotes")).toBeInTheDocument();
   await user.click(screen.getByRole("tab", { name: "Commits" }));
   expect(screen.getByText("No commits")).toBeInTheDocument();
+  expect(screen.getByRole("dialog")).toHaveClass("workspace-git-dialog-shell");
+  expect(screen.getByRole("tabpanel")).toHaveClass("workspace-git-tab-panel");
+  expect(screen.getByText("No commits").closest(".workspace-git-tab-panel")).toBeInTheDocument();
 });
 
 test("shows the refresh state while Git data is being collected", () => {

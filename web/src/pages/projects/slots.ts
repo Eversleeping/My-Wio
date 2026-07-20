@@ -6,6 +6,7 @@ export interface DialogSlotProps {
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  className?: string;
 }
 
 export interface FieldSlotProps {
