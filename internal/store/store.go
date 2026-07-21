@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -73,6 +74,10 @@ func Open(databaseURL string) (*Store, error) {
 		return nil, err
 	}
 	if err := migrateProjectWorkspaceOperations(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateManagedWorkspacePaths(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -197,6 +202,62 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 		}
 	}
 	return nil
+}
+
+func migrateManagedWorkspacePaths(ctx context.Context, db *sqlx.DB) error {
+	var servers []struct {
+		ID           string `db:"id"`
+		ManagedRoots string `db:"managed_roots"`
+	}
+	if err := db.SelectContext(ctx, &servers, "SELECT id,managed_roots FROM servers"); err != nil {
+		return fmt.Errorf("load managed workspace roots: %w", err)
+	}
+	for _, server := range servers {
+		roots := decodeManagedRoots(server.ManagedRoots)
+		if len(roots) == 0 {
+			continue
+		}
+		var workspaces []struct {
+			ID   string `db:"id"`
+			Path string `db:"path"`
+		}
+		if err := db.SelectContext(ctx, &workspaces, db.Rebind("SELECT id,path FROM workspaces WHERE server_id=? AND management_mode='observed'"), server.ID); err != nil {
+			return fmt.Errorf("load observed workspaces: %w", err)
+		}
+		for _, workspace := range workspaces {
+			if !insideManagedWorkspaceRoot(workspace.Path, roots) {
+				continue
+			}
+			if _, err := db.ExecContext(ctx, db.Rebind("UPDATE workspaces SET management_mode='managed' WHERE id=? AND management_mode='observed'"), workspace.ID); err != nil {
+				return fmt.Errorf("restore managed workspace path: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func decodeManagedRoots(raw string) []string {
+	var roots []string
+	_ = json.Unmarshal([]byte(raw), &roots)
+	return roots
+}
+
+func insideManagedWorkspaceRoot(workspacePath string, roots []string) bool {
+	workspacePath = path.Clean(strings.TrimSpace(workspacePath))
+	if workspacePath == "." || !strings.HasPrefix(workspacePath, "/") {
+		return false
+	}
+	for _, root := range roots {
+		root = path.Clean(strings.TrimSpace(root))
+		if root == "." || !strings.HasPrefix(root, "/") || workspacePath == root {
+			continue
+		}
+		prefix := strings.TrimSuffix(root, "/") + "/"
+		if strings.HasPrefix(workspacePath, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func migrateWorkspaceMetadata(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -535,6 +596,11 @@ func migrateImportedProjectRemotes(ctx context.Context, db *sqlx.DB) error {
 }
 
 func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protocol.Inventory) error {
+	var managedRootsJSON string
+	if err := s.DB.GetContext(ctx, &managedRootsJSON, s.Q("SELECT managed_roots FROM servers WHERE id=?"), serverID); err != nil {
+		return err
+	}
+	managedRoots := decodeManagedRoots(managedRootsJSON)
 	for _, repo := range inv.Repositories {
 		normalized := normalizeRemote(repo.RemoteURL)
 		var projectID string
@@ -558,8 +624,12 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 		if repo.Dirty {
 			dirty = 1
 		}
+		managementMode := "observed"
+		if insideManagedWorkspaceRoot(repo.Path, managedRoots) {
+			managementMode = "managed"
+		}
 		now := time.Now().UTC()
-		_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,path) DO UPDATE SET project_id=excluded.project_id,branch=excluded.branch,commit_sha=excluded.commit_sha,dirty=excluded.dirty,status='ready',last_git_refresh_at=excluded.last_git_refresh_at,git_error='',last_scanned_at=excluded.last_scanned_at`), workspaceID, projectID, serverID, repo.Path, repo.Name, repo.Branch, repo.CommitSHA, dirty, now, now)
+		_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,path) DO UPDATE SET project_id=excluded.project_id,management_mode=CASE WHEN excluded.management_mode='managed' THEN 'managed' ELSE workspaces.management_mode END,branch=excluded.branch,commit_sha=excluded.commit_sha,dirty=excluded.dirty,status='ready',last_git_refresh_at=excluded.last_git_refresh_at,git_error='',last_scanned_at=excluded.last_scanned_at`), workspaceID, projectID, serverID, repo.Path, repo.Name, managementMode, repo.Branch, repo.CommitSHA, dirty, now, now)
 		if err != nil {
 			return err
 		}

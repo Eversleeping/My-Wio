@@ -53,13 +53,30 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		}
 		assertPostgresMigrationAndStorage(t, database, attempt == 1)
 		if attempt == 1 {
+			if _, err := database.DB.ExecContext(context.Background(), database.Q("UPDATE servers SET managed_roots=? WHERE id=?"), `["/srv/managed"]`, "legacy-server"); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.UpsertInventory(context.Background(), "legacy-server", protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/managed/inventory", Name: "managed-inventory", Branch: "main", CommitSHA: "abc123"}}}); err != nil {
+				t.Fatal(err)
+			}
+			var inventoryMode string
+			if err := database.DB.GetContext(context.Background(), &inventoryMode, database.Q("SELECT management_mode FROM workspaces WHERE server_id=? AND path=?"), "legacy-server", "/srv/managed/inventory"); err != nil || inventoryMode != "managed" {
+				t.Fatalf("PostgreSQL inventory did not classify the managed path: %q %v", inventoryMode, err)
+			}
 			if _, err := database.DB.ExecContext(context.Background(), database.Q(`INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind,parent_workspace_id,branch,commit_sha) VALUES(?,?,?,?,?,'worktree',?,?,?)`), "legacy-worktree", "legacy-project", "legacy-server", "/srv/legacy-feature", "observed", "legacy-workspace", "feature/test", "abc123"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.DB.ExecContext(context.Background(), database.Q(`INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind,branch,commit_sha) VALUES(?,?,?,?,?,'primary',?,?)`), "legacy-managed-path", "legacy-project", "legacy-server", "/srv/managed/project", "observed", "main", "abc123"); err != nil {
 				t.Fatal(err)
 			}
 		} else {
 			worktree, err := database.Workspace(context.Background(), "legacy-worktree")
 			if err != nil || worktree.ManagementMode != "managed" || worktree.Kind != "worktree" || worktree.ParentWorkspaceID == nil || *worktree.ParentWorkspaceID != "legacy-workspace" {
 				t.Fatalf("historical PostgreSQL worktree ownership was not restored: %#v %v", worktree, err)
+			}
+			managedPath, err := database.Workspace(context.Background(), "legacy-managed-path")
+			if err != nil || managedPath.ManagementMode != "managed" {
+				t.Fatalf("historical PostgreSQL managed-root workspace was not restored: %#v %v", managedPath, err)
 			}
 		}
 		if err := database.Close(); err != nil {

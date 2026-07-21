@@ -144,25 +144,31 @@ func TestOpenNormalizesLegacyWorkspaceLifecycleStatuses(t *testing.T) {
 	}
 }
 
-func TestOpenRestoresManagedModeForHistoricalOwnedWorktrees(t *testing.T) {
+func TestOpenRestoresManagedModeForHistoricalWorkspaces(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "historical-worktree.db")
 	database, err := Open(path + "?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := createOperationTestServer(t, database, "worktree-owner", "worktree-owner-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "worktree-owner", ManagedRoots: []string{"/srv/managed"}}); err != nil {
+		t.Fatal(err)
+	}
 	project, err := database.CreateProject(context.Background(), "owned-worktree", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,kind) VALUES(?,?,?,?,'primary')"), "parent", project.ID, server.ID, "/srv/repo"); err != nil {
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,kind) VALUES(?,?,?,?,'primary')"), "parent", project.ID, server.ID, "/srv/external/repo"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind,parent_workspace_id) VALUES(?,?,?,?,?,'worktree',?)"), "owned", project.ID, server.ID, "/srv/repo-feature", "observed", "parent"); err != nil {
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind,parent_workspace_id) VALUES(?,?,?,?,?,'worktree',?)"), "owned", project.ID, server.ID, "/srv/external/repo-feature", "observed", "parent"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind) VALUES(?,?,?,?,?,'worktree')"), "unowned", project.ID, server.ID, "/srv/external-worktree", "observed"); err != nil {
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind) VALUES(?,?,?,?,?,'primary')"), "managed-path", project.ID, server.ID, "/srv/managed/project", "observed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind) VALUES(?,?,?,?,?,'worktree')"), "unowned", project.ID, server.ID, "/srv/external/unowned-worktree", "observed"); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Close(); err != nil {
@@ -175,6 +181,7 @@ func TestOpenRestoresManagedModeForHistoricalOwnedWorktrees(t *testing.T) {
 			t.Fatalf("open attempt %d: %v", attempt+1, err)
 		}
 		owned, ownedErr := database.Workspace(ctx, "owned")
+		managedPath, managedPathErr := database.Workspace(ctx, "managed-path")
 		unowned, unownedErr := database.Workspace(ctx, "unowned")
 		if ownedErr != nil || owned.ManagementMode != "managed" {
 			t.Fatalf("owned historical worktree was not restored: %#v %v", owned, ownedErr)
@@ -183,12 +190,53 @@ func TestOpenRestoresManagedModeForHistoricalOwnedWorktrees(t *testing.T) {
 		if planErr != nil || !plan.Managed || !plan.CanDeleteFiles {
 			t.Fatalf("restored worktree must allow managed-file deletion: %#v %v", plan, planErr)
 		}
+		if managedPathErr != nil || managedPath.ManagementMode != "managed" {
+			t.Fatalf("workspace below a managed root was not restored: %#v %v", managedPath, managedPathErr)
+		}
 		if unownedErr != nil || unowned.ManagementMode != "observed" {
 			t.Fatalf("unowned workspace must remain observed: %#v %v", unowned, unownedErr)
 		}
 		if err := database.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestUpsertInventoryClassifiesManagedWorkspacePaths(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	server := createOperationTestServer(t, database, "managed-inventory", "managed-inventory-token")
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "managed-inventory", ManagedRoots: []string{"/srv/managed"}}); err != nil {
+		t.Fatal(err)
+	}
+	repositories := []protocol.Repository{
+		{Path: "/srv/managed/app", Name: "managed"},
+		{Path: "/srv/managed-other/app", Name: "prefix"},
+		{Path: "/srv/external/app", Name: "external"},
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: repositories}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := make(map[string]string, len(workspaces))
+	for _, workspace := range workspaces {
+		modes[workspace.Path] = workspace.ManagementMode
+	}
+	if modes["/srv/managed/app"] != "managed" || modes["/srv/managed-other/app"] != "observed" || modes["/srv/external/app"] != "observed" {
+		t.Fatalf("unexpected inventory management modes: %#v", modes)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE workspaces SET management_mode='observed' WHERE server_id=? AND path=?"), server.ID, "/srv/managed/app"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: repositories[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	var mode string
+	if err := database.DB.GetContext(ctx, &mode, database.Q("SELECT management_mode FROM workspaces WHERE server_id=? AND path=?"), server.ID, "/srv/managed/app"); err != nil || mode != "managed" {
+		t.Fatalf("inventory did not promote the managed workspace: %q %v", mode, err)
 	}
 }
 

@@ -56,7 +56,7 @@ func TestWorkspaceLifecycleAPIRejectsObservedAndUnrefreshedCrossServerCopy(t *te
 	if err := database.Heartbeat(ctx, target.ID, protocol.Heartbeat{Hostname: "node-2", ManagedRoots: []string{"/srv/managed"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/managed/source", Name: "source"}}}); err != nil {
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/observed/source", Name: "source"}}}); err != nil {
 		t.Fatal(err)
 	}
 	workspaces, _ := database.ListWorkspaces(ctx)
