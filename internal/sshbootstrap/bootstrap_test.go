@@ -68,6 +68,18 @@ func TestAgentServiceUnitAllowsExplicitSudo(t *testing.T) {
 	}
 }
 
+func TestPrerequisiteServiceCreatesSocketRuntimeDirectory(t *testing.T) {
+	unit, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prerequisite.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"RuntimeDirectory=wio-prerequisites", "RuntimeDirectoryMode=0750", "ReadWritePaths=/run/wio-prerequisites"} {
+		if !strings.Contains(string(unit), expected) {
+			t.Fatalf("prerequisite unit missing %q", expected)
+		}
+	}
+}
+
 func TestNPMRegistryForCountries(t *testing.T) {
 	tests := []struct {
 		name      string

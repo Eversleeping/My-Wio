@@ -10,6 +10,8 @@ Group=root
 ExecStart=/usr/local/bin/wio-agent prerequisite-helper --socket /run/wio-prerequisites/helper.sock
 Restart=always
 RestartSec=3
+RuntimeDirectory=wio-prerequisites
+RuntimeDirectoryMode=0750
 NoNewPrivileges=true
 PrivateTmp=true
 # Package managers must write their own fixed system package locations.
