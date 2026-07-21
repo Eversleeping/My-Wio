@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -126,14 +125,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	} else {
 		transport = insecure.NewCredentials()
 	}
-	options := []grpc.DialOption{grpc.WithTransportCredentials(transport), grpc.WithDefaultCallOptions(grpc.ForceCodec(protocol.Codec()), grpc.MaxCallRecvMsgSize(8<<20), grpc.MaxCallSendMsgSize(8<<20))}
-	if c.config.ControlDialAddress != "" {
-		dial := controlDialer(c.config.ControlDialAddress)
-		options = append(options, grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return dial(ctx, "tcp", c.config.ControlDialAddress)
-		}))
-	}
-	connection, err := grpc.NewClient(parsed.Host, options...)
+	connection, err := grpc.NewClient(parsed.Host, grpc.WithTransportCredentials(transport), grpc.WithDefaultCallOptions(grpc.ForceCodec(protocol.Codec()), grpc.MaxCallRecvMsgSize(8<<20), grpc.MaxCallSendMsgSize(8<<20)))
 	if err != nil {
 		return false, err
 	}

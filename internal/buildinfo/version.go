@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.2.33"
+var Version = "0.2.34"
 
 const MinimumSelfUpdateVersion = "0.2.0"
 const MinimumCodexUpdateVersion = "0.2.9"

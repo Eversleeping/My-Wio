@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,7 +15,6 @@ import (
 
 type EnrollmentOptions struct {
 	ControlURL         string
-	ControlDialAddress string
 	EnrollmentToken    string
 	ConfigPath         string
 	CloneRoot          string
@@ -44,11 +42,7 @@ func Enroll(ctx context.Context, options EnrollmentOptions) (Config, error) {
 		return Config{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: options.InsecureSkipVerify}}
-	if options.ControlDialAddress != "" {
-		transport.DialContext = controlDialer(options.ControlDialAddress)
-	}
-	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: options.InsecureSkipVerify}}}
 	response, err := client.Do(request)
 	if err != nil {
 		return Config{}, err
@@ -66,17 +60,10 @@ func Enroll(ctx context.Context, options EnrollmentOptions) (Config, error) {
 	if response.StatusCode != http.StatusCreated {
 		return Config{}, fmt.Errorf("enrollment failed: %s", result.Error)
 	}
-	config := Config{ControlURL: options.ControlURL, ControlDialAddress: options.ControlDialAddress, ServerID: result.ServerID, AgentToken: result.AgentToken, ScanRoots: result.ScanRoots, CloneRoot: options.CloneRoot, StateDir: options.StateDir, CodexPath: options.CodexPath, DockerPath: options.DockerPath, InsecureSkipVerify: options.InsecureSkipVerify}
+	config := Config{ControlURL: options.ControlURL, ServerID: result.ServerID, AgentToken: result.AgentToken, ScanRoots: result.ScanRoots, CloneRoot: options.CloneRoot, StateDir: options.StateDir, CodexPath: options.CodexPath, DockerPath: options.DockerPath, InsecureSkipVerify: options.InsecureSkipVerify}
 	config.defaults()
 	if err := SaveConfig(options.ConfigPath, config); err != nil {
 		return Config{}, err
 	}
 	return config, nil
-}
-
-func controlDialer(address string) func(context.Context, string, string) (net.Conn, error) {
-	dialer := &net.Dialer{}
-	return func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return dialer.DialContext(ctx, "tcp", address)
-	}
 }
