@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
