@@ -179,6 +179,14 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 		WHERE status IN ('moveing','deleteing')`); err != nil {
 		return fmt.Errorf("normalize workspace lifecycle status: %w", err)
 	}
+	// Worktrees created before management_mode was introduced were assigned the
+	// observed default during migration. Their ownership link is durable proof
+	// that Wio created them, so restore the managed mode expected by Git writes
+	// and physical workspace deletion.
+	if _, err := db.ExecContext(ctx, `UPDATE workspaces SET management_mode='managed'
+		WHERE management_mode='observed' AND kind='worktree' AND parent_workspace_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("restore managed worktree ownership: %w", err)
+	}
 	for _, statement := range []string{
 		"CREATE INDEX IF NOT EXISTS operations_project_idx ON agent_operations(project_id, created_at)",
 		"CREATE INDEX IF NOT EXISTS operations_workspace_idx ON agent_operations(workspace_id, created_at)",

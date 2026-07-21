@@ -144,6 +144,54 @@ func TestOpenNormalizesLegacyWorkspaceLifecycleStatuses(t *testing.T) {
 	}
 }
 
+func TestOpenRestoresManagedModeForHistoricalOwnedWorktrees(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "historical-worktree.db")
+	database, err := Open(path + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := createOperationTestServer(t, database, "worktree-owner", "worktree-owner-token")
+	project, err := database.CreateProject(context.Background(), "owned-worktree", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,kind) VALUES(?,?,?,?,'primary')"), "parent", project.ID, server.ID, "/srv/repo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind,parent_workspace_id) VALUES(?,?,?,?,?,'worktree',?)"), "owned", project.ID, server.ID, "/srv/repo-feature", "observed", "parent"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind) VALUES(?,?,?,?,?,'worktree')"), "unowned", project.ID, server.ID, "/srv/external-worktree", "observed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		database, err = Open(path + "?_pragma=foreign_keys(1)")
+		if err != nil {
+			t.Fatalf("open attempt %d: %v", attempt+1, err)
+		}
+		owned, ownedErr := database.Workspace(ctx, "owned")
+		unowned, unownedErr := database.Workspace(ctx, "unowned")
+		if ownedErr != nil || owned.ManagementMode != "managed" {
+			t.Fatalf("owned historical worktree was not restored: %#v %v", owned, ownedErr)
+		}
+		plan, planErr := database.WorkspaceDeletionPlan(ctx, owned.ID, false)
+		if planErr != nil || !plan.Managed || !plan.CanDeleteFiles {
+			t.Fatalf("restored worktree must allow managed-file deletion: %#v %v", plan, planErr)
+		}
+		if unownedErr != nil || unowned.ManagementMode != "observed" {
+			t.Fatalf("unowned workspace must remain observed: %#v %v", unowned, unownedErr)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestResourceOperationsPersistResultsAndSupportQueries(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

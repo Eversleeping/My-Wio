@@ -52,6 +52,16 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 			t.Fatalf("open migrated PostgreSQL attempt %d: %v", attempt, err)
 		}
 		assertPostgresMigrationAndStorage(t, database, attempt == 1)
+		if attempt == 1 {
+			if _, err := database.DB.ExecContext(context.Background(), database.Q(`INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind,parent_workspace_id,branch,commit_sha) VALUES(?,?,?,?,?,'worktree',?,?,?)`), "legacy-worktree", "legacy-project", "legacy-server", "/srv/legacy-feature", "observed", "legacy-workspace", "feature/test", "abc123"); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			worktree, err := database.Workspace(context.Background(), "legacy-worktree")
+			if err != nil || worktree.ManagementMode != "managed" || worktree.Kind != "worktree" || worktree.ParentWorkspaceID == nil || *worktree.ParentWorkspaceID != "legacy-workspace" {
+				t.Fatalf("historical PostgreSQL worktree ownership was not restored: %#v %v", worktree, err)
+			}
+		}
 		if err := database.Close(); err != nil {
 			t.Fatal(err)
 		}

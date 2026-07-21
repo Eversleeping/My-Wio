@@ -40,7 +40,7 @@ func TestCommitGitWorktreeAtomicallyCreatesContinuedThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if workspace.Kind != "worktree" || workspace.ParentWorkspaceID == nil || *workspace.ParentWorkspaceID != sourceWorkspaceID {
+	if workspace.ManagementMode != "managed" || workspace.Kind != "worktree" || workspace.ParentWorkspaceID == nil || *workspace.ParentWorkspaceID != sourceWorkspaceID {
 		t.Fatalf("unexpected workspace: %#v", workspace)
 	}
 	thread, err := database.Thread(ctx, command.TargetThreadID)
