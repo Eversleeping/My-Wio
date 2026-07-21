@@ -344,6 +344,18 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-tree-error { align-items: flex-start; color: #8e2d34; }
 .file-tree-error span { overflow-wrap: anywhere; }
 .file-tree-note { margin: 7px 9px 0; padding: 7px 8px; color: #77561b; background: var(--amber-soft); border: 1px solid #ead5ac; border-radius: 5px; font-size: 10px; }
+.change-file-list { padding: 5px 0 12px; }
+.change-file-row { width: 100%; min-height: 42px; display: grid; align-items: center; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 7px; padding: 5px 9px; overflow: hidden; color: #465057; background: transparent; border: 0; border-radius: 0; text-align: left; }
+.change-file-row:hover { color: var(--ink); background: #edf1ed; }
+.change-file-row.active { color: #174c3a; background: #e3efe8; box-shadow: inset 3px 0 0 var(--green); }
+.change-file-status { width: 21px; height: 21px; display: grid; place-items: center; color: #356957; background: #e5f1eb; border: 1px solid #c8dfd3; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 800; }
+.change-file-status.deleted, .change-file-status.conflicted { color: #9b2f37; background: #fbeaec; border-color: #edc8cb; }
+.change-file-status.untracked, .change-file-status.added { color: #176a42; background: #e4f4e9; border-color: #bfddc9; }
+.change-file-name { min-width: 0; display: grid; gap: 2px; }
+.change-file-name strong, .change-file-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-file-name strong { font-size: 11px; }
+.change-file-name small { color: var(--muted); font-size: 9px; }
+.change-file-label { color: var(--muted); font-size: 9px; white-space: nowrap; }
 .session-area { min-width: 0; min-height: 0; display: grid; overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
 .session-pane-tabs { display: flex; align-items: center; gap: 3px; padding: 7px 9px; background: #f4f6f3; border-bottom: 1px solid var(--line); }
 .session-pane-tabs button { min-height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 10px; color: #5c666d; background: transparent; border: 0; border-radius: 5px; font-size: 11px; }
@@ -372,6 +384,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-preview-loading, .file-preview-error { min-height: 220px; height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 20px; color: var(--muted); font-size: 11px; text-align: center; }
 .file-preview-error { flex-direction: column; color: #8e2d34; }
 .file-preview-error span { max-width: 420px; overflow-wrap: anywhere; }
+.file-preview-empty { min-height: 220px; height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; padding: 20px; color: var(--muted); font-size: 11px; text-align: center; }
 .file-preview-note { min-height: 32px; display: flex; align-items: center; gap: 6px; padding: 6px 11px; color: #77561b; background: var(--amber-soft); border-bottom: 1px solid #ead5ac; font-size: 10px; }
 .file-code { width: 100%; min-height: 100%; margin: 0 !important; padding: 9px 0 18px; background: #fbfcfb !important; border-radius: 0; font-size: 11px; line-height: 1.58; tab-size: 2; }
 .file-code > code { display: block; min-width: 0; }
@@ -379,6 +392,25 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-code-line.target { background: #fff0bf; box-shadow: inset 3px 0 0 #c58a21; }
 .file-code-number { width: 48px; min-width: 48px; flex: 0 0 48px; position: sticky; left: 0; padding: 0 10px 0 8px; color: #98a09f; background: #f2f4f2; border-right: 1px solid #e3e6e3; text-align: right; user-select: none; }
 .file-code-content { min-width: 0; flex: 1 1 auto; padding: 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.diff-stat { min-width: 30px; padding: 3px 6px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 750; text-align: center; }
+.diff-stat.additions { color: #11703e; background: #e5f5ea; border: 1px solid #bfdfca; }
+.diff-stat.deletions { color: #a52f37; background: #fcebed; border: 1px solid #efc9cd; }
+.file-diff { min-width: 100%; padding: 7px 0 18px; color: #293036; background: #fbfcfb; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.58; tab-size: 2; }
+.file-diff-section { min-width: max-content; }
+.file-diff-collapsed { min-height: 34px; display: flex; align-items: center; margin: 0 7px 5px; padding: 0 12px; color: #5d666c; background: #eef1ee; border: 1px solid #e0e4e0; border-radius: 5px; font-family: Inter, "Segoe UI", sans-serif; font-size: 10px; }
+.file-diff-lines { min-width: max-content; }
+.file-diff-line { min-width: max-content; display: grid; align-items: stretch; grid-template-columns: 4px 42px 42px minmax(420px, 1fr); }
+.file-diff-line.add { background: #eaf7ee; }
+.file-diff-line.delete { background: #fceced; }
+.file-diff-marker { position: sticky; left: 0; z-index: 2; display: grid; place-items: center; color: transparent; background: #fbfcfb; font-weight: 850; user-select: none; }
+.file-diff-line.add .file-diff-marker { color: #138b4d; background: #20a45d; }
+.file-diff-line.delete .file-diff-marker { color: #c83b45; background: #dd4350; }
+.file-diff-number { position: sticky; z-index: 1; padding: 0 8px; color: #89928f; background: #f2f4f2; border-right: 1px solid #e2e6e2; text-align: right; user-select: none; }
+.file-diff-number:nth-child(2) { left: 4px; }
+.file-diff-number:nth-child(3) { left: 46px; }
+.file-diff-line.add .file-diff-number { background: #ddf1e3; }
+.file-diff-line.delete .file-diff-number { background: #f8dcdf; }
+.file-diff-content { min-width: 0; padding: 0 12px; white-space: pre; }
 .event-stream { min-height: 0; max-height: calc(100vh - 370px); overflow-y: auto; padding: 20px 18px; scroll-behavior: smooth; background: #f7f8f6; }
 .conversation-stream { display: flex; flex-direction: column; align-items: stretch; }
 .message { width: min(82%, 820px); flex: 0 0 auto; align-self: flex-start; margin: 0 0 14px; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 1px 2px rgba(28, 35, 38, .03); }

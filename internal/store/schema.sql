@@ -165,6 +165,29 @@ CREATE TABLE IF NOT EXISTS workspace_file_previews (
   updated_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS workspace_change_snapshots (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  changes TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS workspace_diff_previews (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  path TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  additions INTEGER NOT NULL DEFAULT 0,
+  deletions INTEGER NOT NULL DEFAULT 0,
+  is_binary INTEGER NOT NULL DEFAULT 0,
+  truncated INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS codex_snapshots (
   scope_type TEXT NOT NULL,
   scope_id TEXT NOT NULL,

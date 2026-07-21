@@ -364,6 +364,43 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		if operation.Kind == "workspace.changes" {
+			var command protocol.WorkspaceChangesCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status == "succeeded" {
+				var changes protocol.WorkspaceChangesResult
+				if err := json.Unmarshal(result.Data, &changes); err != nil {
+					return err
+				}
+				if err := g.store.SaveWorkspaceChanges(ctx, command.WorkspaceID, changes); err != nil {
+					return err
+				}
+			} else if err := g.store.FailWorkspaceChangeScan(ctx, command.WorkspaceID, result.Message); err != nil {
+				return err
+			}
+		}
+		if operation.Kind == "workspace.diff.preview" {
+			var command protocol.WorkspaceDiffCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if result.Status == "succeeded" {
+				var diff protocol.WorkspaceDiffResult
+				if err := json.Unmarshal(result.Data, &diff); err != nil {
+					return err
+				}
+				if diff.Path != command.Path {
+					return errors.New("workspace diff preview path mismatch")
+				}
+				if err := g.store.SaveWorkspaceDiffPreview(ctx, command.WorkspaceID, command.Path, diff); err != nil {
+					return err
+				}
+			} else if err := g.store.FailWorkspaceDiffPreview(ctx, command.WorkspaceID, command.Path, result.Message); err != nil {
+				return err
+			}
+		}
 		if operation.Kind == "git.workspace.inspect" {
 			var command protocol.GitWorkspaceInspectCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {

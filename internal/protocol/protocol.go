@@ -92,6 +92,39 @@ type WorkspaceFilePreviewResult struct {
 	Truncated bool   `json:"truncated"`
 }
 
+type WorkspaceChangesCommand struct {
+	WorkspaceID string `json:"workspace_id"`
+	Path        string `json:"path"`
+}
+
+type WorkspaceChange struct {
+	Path     string `json:"path"`
+	OldPath  string `json:"old_path,omitempty"`
+	Status   string `json:"status"`
+	Staged   bool   `json:"staged"`
+	Unstaged bool   `json:"unstaged"`
+}
+
+type WorkspaceChangesResult struct {
+	Changes []WorkspaceChange `json:"changes"`
+}
+
+type WorkspaceDiffCommand struct {
+	WorkspaceID string `json:"workspace_id"`
+	Root        string `json:"root"`
+	Path        string `json:"path"`
+	OldPath     string `json:"old_path,omitempty"`
+}
+
+type WorkspaceDiffResult struct {
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Binary    bool   `json:"binary"`
+	Truncated bool   `json:"truncated"`
+}
+
 type GitProjectCreateCommand struct {
 	ProjectID          string `json:"project_id"`
 	WorkspaceID        string `json:"workspace_id"`

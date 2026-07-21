@@ -1288,6 +1288,167 @@ func (a *API) requestWorkspaceFilePreview(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "path": path})
 }
 
+func (a *API) workspaceChanges(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	if _, err := a.store.Workspace(r.Context(), workspaceID); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	snapshot, err := a.store.WorkspaceChangeSnapshot(r.Context(), workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusOK, map[string]any{"workspace_id": workspaceID, "changes": []protocol.WorkspaceChange{}, "status": "idle", "error": "", "requested_at": nil, "updated_at": nil})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace changes")
+		return
+	}
+	var changes []protocol.WorkspaceChange
+	if err := json.Unmarshal([]byte(snapshot.Changes), &changes); err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace change snapshot is invalid")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": workspaceID, "changes": changes, "status": snapshot.Status, "error": snapshot.Error, "requested_at": snapshot.RequestedAt, "updated_at": snapshot.UpdatedAt})
+}
+
+func (a *API) refreshWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	workspace, err := a.store.Workspace(r.Context(), workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	if err := a.store.BeginWorkspaceChangeScan(r.Context(), workspace.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start workspace change scan")
+		return
+	}
+	command := protocol.WorkspaceChangesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}
+	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.changes", command, "workspace-changes:"+workspace.ID+":"+store.NewID())
+	if err != nil {
+		_ = a.store.FailWorkspaceChangeScan(r.Context(), workspace.ID, "could not queue workspace change scan")
+		writeError(w, http.StatusInternalServerError, "could not queue workspace change scan")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "workspace.changes.scan", "workspace", workspace.ID, map[string]string{"operation_id": operationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
+func (a *API) workspaceDiffPreview(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	if _, err := a.store.Workspace(r.Context(), workspaceID); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	path, ok := normalizeWorkspaceFilePath(r.URL.Query().Get("path"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid workspace file path")
+		return
+	}
+	preview, err := a.store.WorkspaceDiffPreview(r.Context(), workspaceID, path)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusOK, map[string]any{"workspace_id": workspaceID, "path": path, "content": "", "additions": 0, "deletions": 0, "binary": false, "truncated": false, "status": "idle", "error": "", "requested_at": nil, "updated_at": nil})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace diff preview")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": preview.WorkspaceID, "path": preview.Path, "content": preview.Content, "additions": preview.Additions, "deletions": preview.Deletions, "binary": preview.Binary != 0, "truncated": preview.Truncated != 0, "status": preview.Status, "error": preview.Error, "requested_at": preview.RequestedAt, "updated_at": preview.UpdatedAt})
+}
+
+func (a *API) requestWorkspaceDiffPreview(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	workspace, err := a.store.Workspace(r.Context(), workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace")
+		return
+	}
+	var input struct {
+		Path string `json:"path"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	path, ok := normalizeWorkspaceFilePath(input.Path)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid workspace file path")
+		return
+	}
+	snapshot, err := a.store.WorkspaceChangeSnapshot(r.Context(), workspace.ID)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && snapshot.Status != "succeeded" {
+		writeError(w, http.StatusConflict, "workspace changes must be refreshed before opening a diff")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace changes")
+		return
+	}
+	var changes []protocol.WorkspaceChange
+	if err := json.Unmarshal([]byte(snapshot.Changes), &changes); err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace change snapshot is invalid")
+		return
+	}
+	oldPath := ""
+	found := false
+	for _, change := range changes {
+		if change.Path == path {
+			oldPath, found = change.OldPath, true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusConflict, "file is not modified")
+		return
+	}
+	server, err := a.store.Server(r.Context(), workspace.ServerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	if err := a.store.BeginWorkspaceDiffPreview(r.Context(), workspace.ID, path); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start workspace diff preview")
+		return
+	}
+	command := protocol.WorkspaceDiffCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path, OldPath: oldPath}
+	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.diff.preview", command, "workspace-diff-preview:"+workspace.ID+":"+store.NewID())
+	if err != nil {
+		_ = a.store.FailWorkspaceDiffPreview(r.Context(), workspace.ID, path, "could not queue workspace diff preview")
+		writeError(w, http.StatusInternalServerError, "could not queue workspace diff preview")
+		return
+	}
+	a.gateway.Wake(workspace.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "workspace.diff.preview", "workspace", workspace.ID, map[string]string{"operation_id": operationID, "path": path}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "path": path})
+}
+
 func normalizeWorkspaceFilePath(value string) (string, bool) {
 	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
 	if value == "" || len(value) > 1024 || strings.HasPrefix(value, "/") {

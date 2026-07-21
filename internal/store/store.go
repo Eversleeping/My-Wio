@@ -935,6 +935,85 @@ func (s *Store) FailWorkspaceFilePreview(ctx context.Context, workspaceID, path,
 	return err
 }
 
+type WorkspaceChangeSnapshot struct {
+	WorkspaceID string     `db:"workspace_id" json:"workspace_id"`
+	Changes     string     `db:"changes" json:"-"`
+	Status      string     `db:"status" json:"status"`
+	Error       string     `db:"error" json:"error"`
+	RequestedAt *time.Time `db:"requested_at" json:"requested_at"`
+	UpdatedAt   *time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Store) WorkspaceChangeSnapshot(ctx context.Context, workspaceID string) (WorkspaceChangeSnapshot, error) {
+	var snapshot WorkspaceChangeSnapshot
+	err := s.DB.GetContext(ctx, &snapshot, s.Q("SELECT workspace_id,changes,status,error,requested_at,updated_at FROM workspace_change_snapshots WHERE workspace_id=?"), workspaceID)
+	return snapshot, err
+}
+
+func (s *Store) BeginWorkspaceChangeScan(ctx context.Context, workspaceID string) error {
+	now := time.Now().UTC()
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_change_snapshots(workspace_id,status,error,requested_at) VALUES(?,'scanning','',?) ON CONFLICT(workspace_id) DO UPDATE SET status='scanning',error='',requested_at=excluded.requested_at`), workspaceID, now)
+	return err
+}
+
+func (s *Store) SaveWorkspaceChanges(ctx context.Context, workspaceID string, result protocol.WorkspaceChangesResult) error {
+	changes, err := json.Marshal(result.Changes)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	_, err = s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_change_snapshots(workspace_id,changes,status,error,requested_at,updated_at) VALUES(?,?,'succeeded','',?,?) ON CONFLICT(workspace_id) DO UPDATE SET changes=excluded.changes,status='succeeded',error='',updated_at=excluded.updated_at`), workspaceID, string(changes), now, now)
+	return err
+}
+
+func (s *Store) FailWorkspaceChangeScan(ctx context.Context, workspaceID, message string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_change_snapshots(workspace_id,status,error,requested_at) VALUES(?,'failed',?,?) ON CONFLICT(workspace_id) DO UPDATE SET status='failed',error=excluded.error`), workspaceID, message, time.Now().UTC())
+	return err
+}
+
+type WorkspaceDiffPreview struct {
+	WorkspaceID string     `db:"workspace_id" json:"workspace_id"`
+	Path        string     `db:"path" json:"path"`
+	Content     string     `db:"content" json:"content"`
+	Additions   int        `db:"additions" json:"additions"`
+	Deletions   int        `db:"deletions" json:"deletions"`
+	Binary      int        `db:"is_binary" json:"binary"`
+	Truncated   int        `db:"truncated" json:"truncated"`
+	Status      string     `db:"status" json:"status"`
+	Error       string     `db:"error" json:"error"`
+	RequestedAt *time.Time `db:"requested_at" json:"requested_at"`
+	UpdatedAt   *time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Store) WorkspaceDiffPreview(ctx context.Context, workspaceID, path string) (WorkspaceDiffPreview, error) {
+	var preview WorkspaceDiffPreview
+	err := s.DB.GetContext(ctx, &preview, s.Q("SELECT workspace_id,path,content,additions,deletions,is_binary,truncated,status,error,requested_at,updated_at FROM workspace_diff_previews WHERE workspace_id=? AND path=?"), workspaceID, path)
+	return preview, err
+}
+
+func (s *Store) BeginWorkspaceDiffPreview(ctx context.Context, workspaceID, path string) error {
+	now := time.Now().UTC()
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_diff_previews(workspace_id,path,content,additions,deletions,is_binary,truncated,status,error,requested_at) VALUES(?,?,'',0,0,0,0,'loading','',?) ON CONFLICT(workspace_id) DO UPDATE SET path=excluded.path,content='',additions=0,deletions=0,is_binary=0,truncated=0,status='loading',error='',requested_at=excluded.requested_at,updated_at=NULL`), workspaceID, path, now)
+	return err
+}
+
+func (s *Store) SaveWorkspaceDiffPreview(ctx context.Context, workspaceID, path string, result protocol.WorkspaceDiffResult) error {
+	binary, truncated := 0, 0
+	if result.Binary {
+		binary = 1
+	}
+	if result.Truncated {
+		truncated = 1
+	}
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_diff_previews SET content=?,additions=?,deletions=?,is_binary=?,truncated=?,status='succeeded',error='',updated_at=? WHERE workspace_id=? AND path=?"), result.Content, result.Additions, result.Deletions, binary, truncated, time.Now().UTC(), workspaceID, path)
+	return err
+}
+
+func (s *Store) FailWorkspaceDiffPreview(ctx context.Context, workspaceID, path, message string) error {
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_diff_previews SET content='',additions=0,deletions=0,is_binary=0,truncated=0,status='failed',error=?,updated_at=? WHERE workspace_id=? AND path=?"), message, time.Now().UTC(), workspaceID, path)
+	return err
+}
+
 type CodexSnapshot struct {
 	ScopeType    string     `db:"scope_type" json:"scope_type"`
 	ScopeID      string     `db:"scope_id" json:"scope_id"`

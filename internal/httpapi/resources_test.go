@@ -204,6 +204,71 @@ func TestWorkspaceFilePreviewQueuesAgentReadAndReturnsContent(t *testing.T) {
 	}
 }
 
+func TestWorkspaceChangesAndDiffPreviewQueueAgentReads(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "workspace-changes-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.5"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	workspace := workspaces[0]
+	api := resourceTestAPI(database)
+
+	initial := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspace.ID+"/changes", workspace.ID, nil, api.workspaceChanges)
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"status":"idle"`) {
+		t.Fatalf("unexpected initial changes: %d %s", initial.Code, initial.Body.String())
+	}
+	queued := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/changes/refresh", workspace.ID, map[string]any{}, api.refreshWorkspaceChanges)
+	if queued.Code != http.StatusAccepted {
+		t.Fatalf("change scan returned %d: %s", queued.Code, queued.Body.String())
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 || operations[0].Kind != "workspace.changes" {
+		t.Fatalf("unexpected change operations: %#v %v", operations, err)
+	}
+	var changesCommand protocol.WorkspaceChangesCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &changesCommand); err != nil || changesCommand.Path != workspace.Path {
+		t.Fatalf("unexpected changes command: %#v %v", changesCommand, err)
+	}
+	changes := protocol.WorkspaceChangesResult{Changes: []protocol.WorkspaceChange{{Path: "src/main.ts", OldPath: "src/old.ts", Status: "renamed", Staged: true}}}
+	if err := database.SaveWorkspaceChanges(ctx, workspace.ID, changes); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: operations[0].ID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	diffQueued := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/diff-preview", workspace.ID, map[string]string{"path": "src/../src/main.ts"}, api.requestWorkspaceDiffPreview)
+	if diffQueued.Code != http.StatusAccepted || !strings.Contains(diffQueued.Body.String(), `"path":"src/main.ts"`) {
+		t.Fatalf("diff preview returned %d: %s", diffQueued.Code, diffQueued.Body.String())
+	}
+	operations, err = database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 || operations[0].Kind != "workspace.diff.preview" {
+		t.Fatalf("unexpected diff operations: %#v %v", operations, err)
+	}
+	var diffCommand protocol.WorkspaceDiffCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &diffCommand); err != nil || diffCommand.Path != "src/main.ts" || diffCommand.OldPath != "src/old.ts" {
+		t.Fatalf("unexpected diff command: %#v %v", diffCommand, err)
+	}
+	if err := database.SaveWorkspaceDiffPreview(ctx, workspace.ID, diffCommand.Path, protocol.WorkspaceDiffResult{Path: diffCommand.Path, Content: "@@ -1 +1 @@\n-old\n+new\n", Additions: 1, Deletions: 1}); err != nil {
+		t.Fatal(err)
+	}
+	completed := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspace.ID+"/diff-preview?path=src/main.ts", workspace.ID, nil, api.workspaceDiffPreview)
+	if completed.Code != http.StatusOK || !strings.Contains(completed.Body.String(), `"additions":1`) || !strings.Contains(completed.Body.String(), `"status":"succeeded"`) {
+		t.Fatalf("unexpected completed diff: %d %s", completed.Code, completed.Body.String())
+	}
+	invalid := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/diff-preview", workspace.ID, map[string]string{"path": "../secret"}, api.requestWorkspaceDiffPreview)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid diff path returned %d: %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestListProjectsIncludesLatestFailedImport(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "import-status-token")

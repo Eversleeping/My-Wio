@@ -23,6 +23,7 @@ import {
   EyeOff,
   File as FileIcon,
   FileCode2,
+  FileDiff,
   Folder,
   FolderOpen,
   FolderTree,
@@ -119,7 +120,10 @@ import type {
   Summary,
   Thread,
   Workspace,
+  WorkspaceChange,
+  WorkspaceChangesSnapshot,
   WorkspaceDeletionPlan,
+  WorkspaceDiffPreview,
   WorkspaceGitSnapshot,
   WorkspaceFile,
   WorkspaceFilePreview,
@@ -131,8 +135,9 @@ type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
 type ComposerImage = { id: string; dataURL: string };
-type FilePreviewSelection = { path: string; line?: number };
+type FilePreviewSelection = { path: string; line?: number; mode?: "file" | "diff" };
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
+const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevisions = Record<string, number>;
 
 const defaultCodexModel = "gpt-5.6-sol";
@@ -970,8 +975,8 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   };
   return <div className="codex-layout">
     <div className="codex-mobile-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={mobileView === "sessions"} className={mobileView === "sessions" ? "active" : ""} onClick={() => setMobileView("sessions")}><Code2 size={15} />{t("codex.sessions")}</button><button type="button" role="tab" aria-selected={mobileView === "files"} className={mobileView === "files" ? "active" : ""} onClick={() => setMobileView("files")}><FolderTree size={15} />{t("codex.projectFiles")}</button><button type="button" role="tab" aria-selected={mobileView === "conversation"} className={mobileView === "conversation" ? "active" : ""} onClick={() => setMobileView("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button></div>
-    <aside className={`codex-sidebar mobile-${mobileView}`}><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t(showArchived ? "codex.archivedTasks" : "codex.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${showArchived ? "active" : ""}`} aria-pressed={showArchived} title={t(showArchived ? "codex.showActiveTasks" : "codex.showArchivedTasks")} onClick={() => { setShowArchived(value => !value); setSelected(""); }}><Archive size={18} /></button>{!showArchived && <button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button>}</div></div><div className="thread-items">{(showArchived ? archivedThreads.loading : threads.loading) ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : threadGroups.length === 0 ? <Empty icon={showArchived ? <Archive size={23} /> : <Code2 size={23} />} text={t(showArchived ? "codex.noArchivedTasks" : "codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><ContextMenu className="thread-project-heading" label={t("codex.projectMenu", { name: group.projectName })} actions={projectMenuActions(group)}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span></button></ContextMenu>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; const acting = threadAction.endsWith(`:${thread.id}`); return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions">{acting ? <LoaderCircle className="spin" size={14} /> : <Status value={thread.status} />}{!showArchived && <button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting || !!threadAction} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</div></ContextMenu>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} onOpenFile={path => openFile({ path })} /></aside>
-    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}><FileCode2 size={15} />{t("codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />}</div></section>
+    <aside className={`codex-sidebar mobile-${mobileView}`}><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t(showArchived ? "codex.archivedTasks" : "codex.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${showArchived ? "active" : ""}`} aria-pressed={showArchived} title={t(showArchived ? "codex.showActiveTasks" : "codex.showArchivedTasks")} onClick={() => { setShowArchived(value => !value); setSelected(""); }}><Archive size={18} /></button>{!showArchived && <button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button>}</div></div><div className="thread-items">{(showArchived ? archivedThreads.loading : threads.loading) ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : threadGroups.length === 0 ? <Empty icon={showArchived ? <Archive size={23} /> : <Code2 size={23} />} text={t(showArchived ? "codex.noArchivedTasks" : "codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><ContextMenu className="thread-project-heading" label={t("codex.projectMenu", { name: group.projectName })} actions={projectMenuActions(group)}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span></button></ContextMenu>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; const acting = threadAction.endsWith(`:${thread.id}`); return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions">{acting ? <LoaderCircle className="spin" size={14} /> : <Status value={thread.status} />}{!showArchived && <button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting || !!threadAction} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</div></ContextMenu>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
+    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
@@ -996,14 +1001,19 @@ type ThreadGroup = { projectID: string; projectName: string; pinnedAt: string | 
 
 type FileTreeNode = { name: string; path: string; kind: WorkspaceFile["kind"]; size?: number; children: FileTreeNode[] };
 
-function WorkspaceFilesPanel({ workspaceID, realtime, notify, activePath, onOpenFile }: { workspaceID: string | null; realtime: number; notify: (text: string) => void; activePath: string; onOpenFile: (path: string) => void }) {
+function WorkspaceFilesPanel({ workspaceID, realtime, notify, activePath, activeMode, onOpenFile }: { workspaceID: string | null; realtime: number; notify: (text: string) => void; activePath: string; activeMode: "file" | "diff"; onOpenFile: (selection: FilePreviewSelection) => void }) {
   const { t } = useI18n();
+  const [mode, setMode] = useState<"files" | "changes">("files");
   const snapshot = useData<WorkspaceFilesSnapshot>(workspaceID ? `/workspaces/${workspaceID}/files` : null, `${realtime}:${workspaceID}`);
+  const changes = useData<WorkspaceChangesSnapshot>(workspaceID && mode === "changes" ? `/workspaces/${workspaceID}/changes` : null, `${realtime}:${workspaceID}:${mode}`);
   const [requestedWorkspace, setRequestedWorkspace] = useState("");
+  const [requestedChangeWorkspace, setRequestedChangeWorkspace] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const currentSnapshot = snapshot.data?.workspace_id === workspaceID ? snapshot.data : null;
-  const scanning = currentSnapshot?.status === "scanning";
-  const refresh = useCallback(async (silent = false) => {
+  const currentChanges = changes.data?.workspace_id === workspaceID ? changes.data : null;
+  const fileScanning = currentSnapshot?.status === "scanning";
+  const changeScanning = currentChanges?.status === "scanning";
+  const refreshFiles = useCallback(async (silent = false) => {
     if (!workspaceID) return;
     try {
       await post(`/workspaces/${workspaceID}/files/refresh`, {});
@@ -1013,19 +1023,52 @@ function WorkspaceFilesPanel({ workspaceID, realtime, notify, activePath, onOpen
       notify(message(error));
     }
   }, [notify, snapshot.reload, t, workspaceID]);
+  const refreshChanges = useCallback(async (silent = false) => {
+    if (!workspaceID) return;
+    try {
+      await post(`/workspaces/${workspaceID}/changes/refresh`, {});
+      changes.reload();
+      if (!silent) notify(t("codex.changeScanQueued"));
+    } catch (error) {
+      notify(message(error));
+    }
+  }, [changes.reload, notify, t, workspaceID]);
   useEffect(() => {
+    setMode("files");
     setExpanded(new Set());
     setRequestedWorkspace("");
+    setRequestedChangeWorkspace("");
   }, [workspaceID]);
   useEffect(() => {
     if (workspaceID && currentSnapshot?.status === "idle" && requestedWorkspace !== workspaceID) {
       setRequestedWorkspace(workspaceID);
-      void refresh(true);
+      void refreshFiles(true);
     }
-  }, [currentSnapshot?.status, refresh, requestedWorkspace, workspaceID]);
+  }, [currentSnapshot?.status, refreshFiles, requestedWorkspace, workspaceID]);
+  useEffect(() => {
+    if (mode === "changes" && workspaceID && currentChanges?.status === "idle" && requestedChangeWorkspace !== workspaceID) {
+      setRequestedChangeWorkspace(workspaceID);
+      void refreshChanges(true);
+    }
+  }, [currentChanges?.status, mode, refreshChanges, requestedChangeWorkspace, workspaceID]);
   const tree = useMemo(() => buildFileTree(currentSnapshot?.files ?? []), [currentSnapshot?.files]);
   const toggle = (path: string) => setExpanded(current => { const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next; });
-  return <section className="workspace-files"><div className="panel-heading"><div><FolderTree size={17} /><h2>{t("codex.projectFiles")}</h2></div><button className="icon-button" type="button" disabled={!workspaceID || scanning} title={t("codex.refreshFiles")} onClick={() => void refresh()}>{scanning ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div><div className="workspace-file-body">{!workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : scanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} activePath={activePath} onOpenFile={onOpenFile} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div></section>;
+  const busy = mode === "changes" ? changeScanning : fileScanning;
+  const refresh = mode === "changes" ? refreshChanges : refreshFiles;
+  return <section className="workspace-files"><div className="panel-heading"><div>{mode === "changes" ? <FileDiff size={17} /> : <FolderTree size={17} />}<h2>{t(mode === "changes" ? "codex.changedFiles" : "codex.projectFiles")}</h2></div><div className="row-actions"><button className={`icon-button ${mode === "changes" ? "active" : ""}`} type="button" aria-pressed={mode === "changes"} disabled={!workspaceID} title={t(mode === "changes" ? "codex.showProjectFiles" : "codex.showChangedFiles")} onClick={() => setMode(current => current === "files" ? "changes" : "files")}><FileDiff size={16} /></button><button className="icon-button" type="button" disabled={!workspaceID || busy} title={t(mode === "changes" ? "codex.refreshChanges" : "codex.refreshFiles")} onClick={() => void refresh()}>{busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div></div><div className="workspace-file-body">{mode === "changes" ? <ChangedFilesView workspaceID={workspaceID} snapshot={currentChanges} loading={changes.loading} activePath={activeMode === "diff" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "diff" })} /> : !workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : fileScanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} activePath={activeMode === "file" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "file" })} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div></section>;
+}
+
+const changeStatusKeys: Record<string, string> = { modified: "codex.changeModified", added: "codex.changeAdded", deleted: "codex.changeDeleted", renamed: "codex.changeRenamed", copied: "codex.changeCopied", untracked: "codex.changeUntracked", conflicted: "codex.changeConflicted" };
+const changeStatusCodes: Record<string, string> = { modified: "M", added: "A", deleted: "D", renamed: "R", copied: "C", untracked: "?", conflicted: "!" };
+
+function ChangedFilesView({ workspaceID, snapshot, loading, activePath, onOpenFile }: { workspaceID: string | null; snapshot: WorkspaceChangesSnapshot | null; loading: boolean; activePath: string; onOpenFile: (path: string) => void }) {
+  const { t } = useI18n();
+  if (!workspaceID) return <Empty icon={<FileDiff size={22} />} text={t("codex.selectWorkspace")} />;
+  if (loading || !snapshot) return <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningChanges")}</div>;
+  if (snapshot.status === "failed") return <div className="file-tree-error"><AlertTriangle size={16} /><span>{snapshot.error || t("codex.changeScanFailed")}</span></div>;
+  if (snapshot.status === "scanning" && snapshot.changes.length === 0) return <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningChanges")}</div>;
+  if (snapshot.changes.length === 0) return <Empty icon={<FileDiff size={22} />} text={t("codex.noChanges")} />;
+  return <div className="change-file-list">{snapshot.changes.map(change => { const name = change.path.split("/").pop() || change.path; return <button type="button" className={`change-file-row ${activePath === change.path ? "active" : ""}`} title={change.path} onClick={() => onOpenFile(change.path)} key={change.path}><span className={`change-file-status ${change.status}`}>{changeStatusCodes[change.status] ?? "M"}</span><span className="change-file-name"><strong>{name}</strong><small>{change.path}</small></span><span className="change-file-label">{t(changeStatusKeys[change.status] ?? "codex.changeModified")}</span></button>; })}</div>;
 }
 
 function FileTreeItem({ node, depth, expanded, onToggle, activePath, onOpenFile }: { node: FileTreeNode; depth: number; expanded: Set<string>; onToggle: (path: string) => void; activePath: string; onOpenFile: (path: string) => void }) {
@@ -1382,6 +1425,35 @@ function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { worksp
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
   return <section className="file-preview-panel"><header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}</div></section>;
+}
+
+function FileDiffPane({ workspaceID, selection, realtime, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; onClose: () => void }) {
+  const { t } = useI18n();
+  const [requestVersion, setRequestVersion] = useState(0);
+  const [requesting, setRequesting] = useState(false);
+  const [requestError, setRequestError] = useState("");
+  const endpoint = `/workspaces/${workspaceID}/diff-preview?path=${encodeURIComponent(selection.path)}`;
+  const preview = useData<WorkspaceDiffPreview>(endpoint, `${realtime}:${requestVersion}`);
+  const requestPreview = useCallback(async () => {
+    setRequesting(true);
+    setRequestError("");
+    try {
+      await post(`/workspaces/${workspaceID}/diff-preview`, { path: selection.path });
+      preview.reload();
+    } catch (error) {
+      setRequestError(message(error));
+    } finally {
+      setRequesting(false);
+    }
+  }, [preview.reload, selection.path, workspaceID]);
+  useEffect(() => { void requestPreview(); }, [requestPreview]);
+  const data = preview.data?.path === selection.path ? preview.data : null;
+  const loading = requesting || preview.loading || !data || data.status === "idle" || data.status === "loading";
+  const error = requestError || preview.error || data?.error || "";
+  const language = previewLanguage(selection.path);
+  const fileName = selection.path.split("/").pop() || selection.path;
+  const retry = () => { setRequestVersion(value => value + 1); void requestPreview(); };
+  return <section className="file-preview-panel file-diff-panel"><header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button" disabled={requesting} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} /></Suspense>}</> : null}</div></section>;
 }
 
 function workspaceFileLink(href: string | undefined, workspaceRoot: string): FilePreviewSelection | null {

@@ -273,6 +273,29 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
+	} else if envelope.Kind == "workspace.changes" {
+		var command protocol.WorkspaceChangesCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var changes []gitrepository.WorkspaceChange
+			changes, err = gitrepository.ListWorkspaceChanges(ctx, command.Path, c.inventoryRoots())
+			if err == nil {
+				result := protocol.WorkspaceChangesResult{Changes: make([]protocol.WorkspaceChange, 0, len(changes))}
+				for _, change := range changes {
+					result.Changes = append(result.Changes, protocol.WorkspaceChange{Path: change.Path, OldPath: change.OldPath, Status: change.Status, Staged: change.Staged, Unstaged: change.Unstaged})
+				}
+				resultData, err = json.Marshal(result)
+			}
+		}
+	} else if envelope.Kind == "workspace.diff.preview" {
+		var command protocol.WorkspaceDiffCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var diff gitrepository.WorkspaceDiff
+			diff, err = gitrepository.ReadWorkspaceDiff(ctx, command.Root, command.Path, command.OldPath, c.inventoryRoots(), gitrepository.MaxWorkspaceDiffBytes)
+			if err == nil {
+				result := protocol.WorkspaceDiffResult{Path: diff.Path, Content: diff.Content, Additions: diff.Additions, Deletions: diff.Deletions, Binary: diff.Binary, Truncated: diff.Truncated}
+				resultData, err = json.Marshal(result)
+			}
+		}
 	} else if strings.HasPrefix(envelope.Kind, "codex.goal.") || envelope.Kind == "codex.mcp.list" || envelope.Kind == "codex.skills.list" || envelope.Kind == "codex.status.snapshot" {
 		var result protocol.CodexCapabilityResult
 		result, err = c.codex.CodexOperation(ctx, envelope.Kind, envelope.PayloadJSON)

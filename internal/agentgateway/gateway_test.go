@@ -503,4 +503,48 @@ func TestWorkspaceFilesOperationStoresAgentSnapshot(t *testing.T) {
 	if err != nil || preview.Status != "succeeded" || preview.Content != "# Preview\n" {
 		t.Fatalf("unexpected workspace preview: %#v %v", preview, err)
 	}
+	changesID, err := database.QueueOperation(ctx, server.ID, "workspace.changes", protocol.WorkspaceChangesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}, "changes-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.BeginWorkspaceChangeScan(ctx, workspace.ID); err != nil {
+		t.Fatal(err)
+	}
+	changesData, err := json.Marshal(protocol.WorkspaceChangesResult{Changes: []protocol.WorkspaceChange{{Path: "README.md", Status: "modified", Unstaged: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changesPayload, err := json.Marshal(protocol.OperationResult{OperationID: changesID, Status: "succeeded", Data: changesData})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: changesPayload}); err != nil {
+		t.Fatal(err)
+	}
+	changesSnapshot, err := database.WorkspaceChangeSnapshot(ctx, workspace.ID)
+	if err != nil || changesSnapshot.Status != "succeeded" || !strings.Contains(changesSnapshot.Changes, "README.md") {
+		t.Fatalf("unexpected workspace changes: %#v %v", changesSnapshot, err)
+	}
+	diffID, err := database.QueueOperation(ctx, server.ID, "workspace.diff.preview", protocol.WorkspaceDiffCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: "README.md"}, "diff-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.BeginWorkspaceDiffPreview(ctx, workspace.ID, "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	diffData, err := json.Marshal(protocol.WorkspaceDiffResult{Path: "README.md", Content: "@@ -1 +1 @@\n-old\n+new\n", Additions: 1, Deletions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffPayload, err := json.Marshal(protocol.OperationResult{OperationID: diffID, Status: "succeeded", Data: diffData})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: diffPayload}); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := database.WorkspaceDiffPreview(ctx, workspace.ID, "README.md")
+	if err != nil || diff.Status != "succeeded" || diff.Additions != 1 || diff.Deletions != 1 {
+		t.Fatalf("unexpected workspace diff: %#v %v", diff, err)
+	}
 }
