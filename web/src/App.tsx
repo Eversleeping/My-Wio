@@ -1414,11 +1414,13 @@ function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { worksp
   const [requestVersion, setRequestVersion] = useState(0);
   const [requesting, setRequesting] = useState(false);
   const [requestError, setRequestError] = useState("");
+  const [requestedAt, setRequestedAt] = useState(0);
   const endpoint = `/workspaces/${workspaceID}/file-preview?path=${encodeURIComponent(selection.path)}`;
   const preview = useData<WorkspaceFilePreview>(endpoint, `${realtime}:${requestVersion}`);
   const requestPreview = useCallback(async () => {
     setRequesting(true);
     setRequestError("");
+    setRequestedAt(Date.now());
     try {
       await post(`/workspaces/${workspaceID}/file-preview`, { path: selection.path });
       preview.reload();
@@ -1430,6 +1432,17 @@ function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { worksp
   }, [preview.reload, selection.path, workspaceID]);
   useEffect(() => { void requestPreview(); }, [requestPreview]);
   const data = preview.data?.path === selection.path ? preview.data : null;
+  useEffect(() => {
+    if (!data || data.status !== "loading") return;
+    const timer = window.setInterval(() => {
+      if (requestedAt > 0 && Date.now() - requestedAt >= 20_000) {
+        setRequestError(t("codex.previewTimedOut"));
+        return;
+      }
+      preview.reload();
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [data?.status, preview.reload, requestedAt, t]);
   const loading = requesting || preview.loading || !data || data.status === "idle" || data.status === "loading";
   const error = requestError || preview.error || data?.error || "";
   const language = previewLanguage(selection.path);
@@ -1442,11 +1455,13 @@ function FileDiffPane({ workspaceID, selection, realtime, onClose }: { workspace
   const [requestVersion, setRequestVersion] = useState(0);
   const [requesting, setRequesting] = useState(false);
   const [requestError, setRequestError] = useState("");
+  const [requestedAt, setRequestedAt] = useState(0);
   const endpoint = `/workspaces/${workspaceID}/diff-preview?path=${encodeURIComponent(selection.path)}`;
   const preview = useData<WorkspaceDiffPreview>(endpoint, `${realtime}:${requestVersion}`);
   const requestPreview = useCallback(async () => {
     setRequesting(true);
     setRequestError("");
+    setRequestedAt(Date.now());
     try {
       await post(`/workspaces/${workspaceID}/diff-preview`, { path: selection.path });
       preview.reload();
@@ -1458,6 +1473,17 @@ function FileDiffPane({ workspaceID, selection, realtime, onClose }: { workspace
   }, [preview.reload, selection.path, workspaceID]);
   useEffect(() => { void requestPreview(); }, [requestPreview]);
   const data = preview.data?.path === selection.path ? preview.data : null;
+  useEffect(() => {
+    if (!data || data.status !== "loading") return;
+    const timer = window.setInterval(() => {
+      if (requestedAt > 0 && Date.now() - requestedAt >= 20_000) {
+        setRequestError(t("codex.diffTimedOut"));
+        return;
+      }
+      preview.reload();
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [data?.status, preview.reload, requestedAt, t]);
   const loading = requesting || preview.loading || !data || data.status === "idle" || data.status === "loading";
   const error = requestError || preview.error || data?.error || "";
   const language = previewLanguage(selection.path);
