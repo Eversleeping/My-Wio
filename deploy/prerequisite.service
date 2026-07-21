@@ -12,7 +12,9 @@ Restart=always
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+# Package managers must write their own fixed system package locations.
+# This applies only to the root helper; the Agent service remains read-only.
+ProtectSystem=false
 ProtectHome=true
 ReadWritePaths=/run/wio-prerequisites
 LockPersonality=true
