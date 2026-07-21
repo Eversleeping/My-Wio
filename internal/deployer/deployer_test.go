@@ -107,3 +107,15 @@ func TestPreflightStopsBeforeReleaseWhenDockerIsUnavailable(t *testing.T) {
 		t.Fatalf("missing failed preflight event: %#v", events)
 	}
 }
+
+func TestMissingAutomaticPrerequisite(t *testing.T) {
+	if !missingAutomaticPrerequisite([]PreflightCheck{{Name: "Git", OK: false}}) {
+		t.Fatal("missing Git should trigger automatic setup")
+	}
+	if !missingAutomaticPrerequisite([]PreflightCheck{{Name: "Docker daemon", OK: false}}) {
+		t.Fatal("missing Docker daemon should trigger automatic setup")
+	}
+	if missingAutomaticPrerequisite([]PreflightCheck{{Name: "release directory", OK: false}}) {
+		t.Fatal("release path failures must not trigger package installation")
+	}
+}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/agent"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/prerequisite"
 )
 
 func main() {
@@ -26,7 +27,7 @@ func main() {
 
 func run(log *slog.Logger, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: wio-agent <enroll|run> [options]")
+		return errors.New("usage: wio-agent <enroll|run|prerequisite-helper> [options]")
 	}
 	switch args[0] {
 	case "version", "--version", "-version":
@@ -75,6 +76,18 @@ func run(log *slog.Logger, args []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 		return agent.NewClient(config, log).Run(ctx)
+	case "prerequisite-helper":
+		if runtime.GOOS != "linux" {
+			return errors.New("deployment prerequisite helper is supported only on Linux")
+		}
+		flags := flag.NewFlagSet("prerequisite-helper", flag.ContinueOnError)
+		socket := flags.String("socket", prerequisite.DefaultSocket, "Unix socket path")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		return prerequisite.Serve(ctx, *socket)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}

@@ -15,5 +15,6 @@ COPY --from=go /wio-controlplane /usr/local/bin/wio-controlplane
 COPY --from=go /wio-agent-linux-amd64 /usr/local/share/wio/wio-agent-linux-amd64
 COPY --from=go /wio-agent-linux-arm64 /usr/local/share/wio/wio-agent-linux-arm64
 COPY --from=go /src/deploy/agent.service /usr/local/share/wio/wio-agent.service
+COPY --from=go /src/deploy/prerequisite.service /usr/local/share/wio/wio-prerequisite.service
 EXPOSE 8080
 ENTRYPOINT ["wio-controlplane"]

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wio-platform/wio/internal/prerequisite"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -22,8 +23,9 @@ type StatusFunc func(status, message, resolvedCommit, content string)
 const maximumProcessLogSize = 1 << 20
 
 type Deployer struct {
-	Docker string
-	mu     sync.Mutex
+	Docker             string
+	PrerequisiteSocket string
+	mu                 sync.Mutex
 }
 
 type PreflightCheck struct {
@@ -32,11 +34,15 @@ type PreflightCheck struct {
 	Message string `json:"message"`
 }
 
-func New(dockerPath string) *Deployer {
+func New(dockerPath string, prerequisiteSocket ...string) *Deployer {
 	if dockerPath == "" {
 		dockerPath = "docker"
 	}
-	return &Deployer{Docker: dockerPath}
+	socket := prerequisite.DefaultSocket
+	if len(prerequisiteSocket) > 0 && prerequisiteSocket[0] != "" {
+		socket = prerequisiteSocket[0]
+	}
+	return &Deployer{Docker: dockerPath, PrerequisiteSocket: socket}
 }
 
 func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, status StatusFunc) error {
@@ -46,6 +52,21 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		return errors.New("Compose deployments are supported only on Linux agents")
 	}
 	checks := d.Preflight(ctx, command)
+	if missingAutomaticPrerequisite(checks) {
+		status("preparing", "installing missing deployment prerequisites", "", "Missing Git, Docker, Docker Compose, or the Docker daemon will be configured automatically when supported.")
+		result, err := prerequisite.Ensure(ctx, d.PrerequisiteSocket)
+		for _, log := range result.Logs {
+			status("preparing", "deployment prerequisite setup", "", log)
+		}
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, net.ErrClosed) {
+				err = fmt.Errorf("%w; this Agent predates automatic prerequisite setup, so re-register the server once to install its restricted helper", err)
+			}
+			status("failed", "deployment prerequisite setup failed", "", err.Error())
+			return fmt.Errorf("install deployment prerequisites: %w", err)
+		}
+		checks = d.Preflight(ctx, command)
+	}
 	for _, check := range checks {
 		state := "preparing"
 		if !check.OK {
@@ -156,6 +177,15 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	}
 	status("succeeded", "deployment is healthy", resolved, "Release promoted and marked as current.")
 	return nil
+}
+
+func missingAutomaticPrerequisite(checks []PreflightCheck) bool {
+	for _, check := range checks {
+		if !check.OK && (check.Name == "Git" || check.Name == "Docker daemon" || check.Name == "Docker Compose") {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Deployer) Preflight(ctx context.Context, command protocol.DeployCommand) []PreflightCheck {

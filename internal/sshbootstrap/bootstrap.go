@@ -163,6 +163,10 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		return InstallResult{}, fmt.Errorf("%w: %v", ErrAssetsUnavailable, err)
 	}
 	unit = agentServiceUnit(unit, request.AllowSudo)
+	prerequisiteUnit, err := os.ReadFile(filepath.Join(s.assetDir, "wio-prerequisite.service"))
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("%w: %v", ErrAssetsUnavailable, err)
+	}
 
 	root := isRoot(client)
 	request.report("uploading_agent", 0, int64(len(agentBinary)))
@@ -176,6 +180,12 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		request.report("uploading_service", current, total)
 	}); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install systemd unit: %v", ErrInstallation, err)
+	}
+	request.report("uploading_prerequisite_helper", 0, int64(len(prerequisiteUnit)))
+	if err := upload(client, root, "/etc/systemd/system/wio-prerequisite.service", "0644", prerequisiteUnit, func(current, total int64) {
+		request.report("uploading_prerequisite_helper", current, total)
+	}); err != nil {
+		return InstallResult{}, fmt.Errorf("%w: could not install prerequisite helper: %v", ErrInstallation, err)
 	}
 	request.report("preparing_account", 0, 0)
 	setup := `set -eu
@@ -301,7 +311,7 @@ rm -f /etc/sudoers.d/wio-agent`
 		result.Warnings = append(result.Warnings, "config_permission_failed")
 	}
 	request.report("starting_service", 0, 0)
-	start := "systemctl daemon-reload && systemctl enable --now wio-agent"
+	start := "systemctl daemon-reload && systemctl enable --now wio-prerequisite wio-agent"
 	if _, err := run(client, elevated(root, start)); err != nil {
 		result.Warnings = append(result.Warnings, "service_start_failed")
 	} else if _, err := run(client, "systemctl is-active --quiet wio-agent"); err != nil {
@@ -710,12 +720,13 @@ func commandAvailable(client *ssh.Client, command string) bool {
 
 func upload(client *ssh.Client, root bool, destination, mode string, content []byte, progress func(int64, int64)) error {
 	allowed := map[string]string{
-		"/usr/local/bin/wio-agent":              "0755",
-		"/etc/systemd/system/wio-agent.service": "0644",
-		"/etc/wio-agent/codex.key":              "0600",
-		"/var/lib/wio-agent/.codex/config.toml": "0600",
-		"/var/lib/wio-agent/.git-credentials":   "0600",
-		"/var/lib/wio-agent/.gitconfig":         "0600",
+		"/usr/local/bin/wio-agent":                     "0755",
+		"/etc/systemd/system/wio-agent.service":        "0644",
+		"/etc/systemd/system/wio-prerequisite.service": "0644",
+		"/etc/wio-agent/codex.key":                     "0600",
+		"/var/lib/wio-agent/.codex/config.toml":        "0600",
+		"/var/lib/wio-agent/.git-credentials":          "0600",
+		"/var/lib/wio-agent/.gitconfig":                "0600",
 	}
 	if allowed[destination] != mode {
 		return ErrInstallation

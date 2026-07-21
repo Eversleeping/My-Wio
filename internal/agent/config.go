@@ -18,6 +18,7 @@ type Config struct {
 	CodexPath          string   `json:"codex_path"`
 	CodexAPIKeyFile    string   `json:"codex_api_key_file"`
 	DockerPath         string   `json:"docker_path"`
+	PrerequisiteSocket string   `json:"prerequisite_socket"`
 	InsecureSkipVerify bool     `json:"insecure_skip_verify,omitempty"`
 }
 
@@ -79,6 +80,9 @@ func (c *Config) defaults() {
 	if c.DockerPath == "" {
 		c.DockerPath = "docker"
 	}
+	if c.PrerequisiteSocket == "" {
+		c.PrerequisiteSocket = "/run/wio-prerequisites/helper.sock"
+	}
 }
 
 func (c Config) Validate() error {
@@ -88,8 +92,8 @@ func (c Config) Validate() error {
 	if !strings.HasPrefix(c.ControlURL, "https://") && !strings.HasPrefix(c.ControlURL, "http://") {
 		return errors.New("control_url must use https:// or http://")
 	}
-	if !filepath.IsAbs(c.CloneRoot) || !filepath.IsAbs(c.StateDir) || !filepath.IsAbs(c.CodexAPIKeyFile) {
-		return errors.New("clone_root, state_dir, and codex_api_key_file must be absolute")
+	if !filepath.IsAbs(c.CloneRoot) || !filepath.IsAbs(c.StateDir) || !filepath.IsAbs(c.CodexAPIKeyFile) || !filepath.IsAbs(c.PrerequisiteSocket) {
+		return errors.New("clone_root, state_dir, codex_api_key_file, and prerequisite_socket must be absolute")
 	}
 	for _, root := range c.ScanRoots {
 		if !filepath.IsAbs(root) {
