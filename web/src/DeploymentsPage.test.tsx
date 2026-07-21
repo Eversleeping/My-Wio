@@ -6,6 +6,7 @@ import { I18nProvider } from "./i18n";
 
 const target = {
   id: "target-1", project_id: "project-1", server_id: "server-1", secret_set_id: "", environment: "production",
+  source_type: "remote" as const, workspace_id: "", workspace_path: "", workspace_name: "",
   repository: "https://example.com/project.git", git_ref: "main", compose_file: "compose.yaml", working_dir: "",
   build_mode: "build", health_checks: "[]", release_root: "/var/lib/wio-agent/releases", project_name: "project-management", server_name: "server-1"
 };
@@ -35,8 +36,8 @@ test("edits a target, opens process logs, and deletes deployment history", async
     else if (url === "/api/deployments" && method === "GET") payload = [deployment];
     else if (url === `/api/deployments/${deployment.id}` && method === "GET") payload = { deployment, events: detailEvents };
     else if (url === `/api/deployments/${deployment.id}` && method === "DELETE") payload = { ok: true };
-    else if (url === "/api/projects") payload = [{ id: "project-1", name: "project-management", remote_url: target.repository }];
-    else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1" }];
+    else if (url === "/api/workspaces") payload = [{ id: "workspace-1", project_id: "project-1", server_id: "server-1", path: "/srv/project", display_name: "project", status: "ready", branch: "main", project_name: "project-management" }];
+    else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1", status: "online" }];
     else if (url === "/api/secret-sets") payload = [];
     return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
@@ -46,6 +47,9 @@ test("edits a target, opens process logs, and deletes deployment history", async
   expect((await screen.findAllByText("project-management")).length).toBeGreaterThan(0);
 
   await user.click(screen.getByRole("button", { name: "Edit deployment target" }));
+  expect(screen.queryByRole("textbox", { name: "Working directory" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Release root" })).not.toBeInTheDocument();
+  expect(screen.getByText(/Before deployment, Wio checks Linux/)).toBeInTheDocument();
   const environment = screen.getByRole("textbox", { name: "Environment" });
   await user.clear(environment);
   await user.type(environment, "staging");

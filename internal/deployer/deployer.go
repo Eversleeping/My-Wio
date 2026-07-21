@@ -26,6 +26,12 @@ type Deployer struct {
 	mu     sync.Mutex
 }
 
+type PreflightCheck struct {
+	Name    string `json:"name"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
 func New(dockerPath string) *Deployer {
 	if dockerPath == "" {
 		dockerPath = "docker"
@@ -39,6 +45,17 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if runtime.GOOS != "linux" {
 		return errors.New("Compose deployments are supported only on Linux agents")
 	}
+	checks := d.Preflight(ctx, command)
+	for _, check := range checks {
+		state := "preparing"
+		if !check.OK {
+			state = "failed"
+		}
+		status(state, "environment check: "+check.Name, "", check.Message)
+		if !check.OK {
+			return fmt.Errorf("deployment environment check failed: %s: %s", check.Name, check.Message)
+		}
+	}
 	root, release, err := releasePath(command.ReleaseRoot, command.TargetID, command.DeploymentID)
 	if err != nil {
 		return err
@@ -50,19 +67,38 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if _, err := os.Stat(release); err == nil {
 		return errors.New("release already exists")
 	}
-	if output, err := run(ctx, nil, "git", "clone", "--no-checkout", "--", command.Repository, release); err != nil {
+	source := command.Repository
+	cloneArgs := []string{"clone", "--no-checkout", "--", source, release}
+	checkoutRef := "FETCH_HEAD"
+	if command.SourceType == "workspace" {
+		source = command.SourcePath
+		cloneArgs = []string{"clone", "--local", "--no-hardlinks", "--no-checkout", "--", source, release}
+		checkoutRef = command.CommitRef
+		if checkoutRef == "" {
+			checkoutRef = "HEAD"
+		}
+		resolvedSource, resolveErr := run(ctx, nil, "git", "-C", source, "rev-parse", "--verify", checkoutRef+"^{commit}")
+		if resolveErr != nil {
+			status("preparing", "workspace revision resolution failed", "", resolvedSource)
+			return fmt.Errorf("resolve workspace revision: %w: %s", resolveErr, resolvedSource)
+		}
+		checkoutRef = strings.TrimSpace(resolvedSource)
+	}
+	if output, err := run(ctx, nil, "git", cloneArgs...); err != nil {
 		status("preparing", "repository clone failed", "", output)
 		return fmt.Errorf("clone repository: %w: %s", err, output)
 	} else {
 		status("preparing", "repository cloned", "", output)
 	}
-	if output, err := run(ctx, nil, "git", "-C", release, "fetch", "--depth=1", "origin", command.CommitRef); err != nil {
+	if command.SourceType == "workspace" {
+		status("preparing", "using server workspace", checkoutRef, source)
+	} else if output, err := run(ctx, nil, "git", "-C", release, "fetch", "--depth=1", "origin", command.CommitRef); err != nil {
 		status("preparing", "commit fetch failed", "", output)
 		return fmt.Errorf("fetch commit: %w: %s", err, output)
 	} else {
 		status("preparing", "commit fetched", "", output)
 	}
-	if output, err := run(ctx, nil, "git", "-C", release, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+	if output, err := run(ctx, nil, "git", "-C", release, "checkout", "--detach", checkoutRef); err != nil {
 		status("preparing", "commit checkout failed", "", output)
 		return fmt.Errorf("checkout commit: %w: %s", err, output)
 	} else {
@@ -120,6 +156,90 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	}
 	status("succeeded", "deployment is healthy", resolved, "Release promoted and marked as current.")
 	return nil
+}
+
+func (d *Deployer) Preflight(ctx context.Context, command protocol.DeployCommand) []PreflightCheck {
+	checks := make([]PreflightCheck, 0, 6)
+	addCommand := func(name, executable string, args ...string) {
+		output, err := run(ctx, nil, executable, args...)
+		message := strings.TrimSpace(output)
+		if err != nil {
+			if message == "" {
+				message = err.Error()
+			}
+			checks = append(checks, PreflightCheck{Name: name, OK: false, Message: message})
+			return
+		}
+		if message == "" {
+			message = "available"
+		}
+		checks = append(checks, PreflightCheck{Name: name, OK: true, Message: message})
+	}
+	if runtime.GOOS != "linux" {
+		return []PreflightCheck{{Name: "Linux", OK: false, Message: "Compose deployments require a Linux Agent"}}
+	}
+	addCommand("Git", "git", "--version")
+	addCommand("Docker daemon", d.Docker, "info", "--format", "{{.ServerVersion}}")
+	addCommand("Docker Compose", d.Docker, "compose", "version", "--short")
+	if command.ReleaseRoot == "" || !filepath.IsAbs(command.ReleaseRoot) {
+		checks = append(checks, PreflightCheck{Name: "release directory", OK: false, Message: "release root must be an absolute path"})
+	} else if err := writableDirectory(command.ReleaseRoot); err != nil {
+		checks = append(checks, PreflightCheck{Name: "release directory", OK: false, Message: err.Error()})
+	} else {
+		checks = append(checks, PreflightCheck{Name: "release directory", OK: true, Message: command.ReleaseRoot + " is writable"})
+	}
+	if command.SourceType == "workspace" {
+		if info, err := os.Stat(command.SourcePath); err != nil || !info.IsDir() {
+			message := "workspace directory is unavailable"
+			if err != nil {
+				message = err.Error()
+			}
+			checks = append(checks, PreflightCheck{Name: "project workspace", OK: false, Message: message})
+		} else if output, err := run(ctx, nil, "git", "-C", command.SourcePath, "rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(output) != "true" {
+			checks = append(checks, PreflightCheck{Name: "project workspace", OK: false, Message: "selected directory is not a Git worktree"})
+		} else {
+			checks = append(checks, PreflightCheck{Name: "project workspace", OK: true, Message: command.SourcePath})
+		}
+		_, composePath, err := composePaths(command.SourcePath, command.WorkingDir, command.ComposeFile)
+		if err != nil {
+			checks = append(checks, PreflightCheck{Name: "Compose file", OK: false, Message: err.Error()})
+		} else if info, statErr := os.Stat(composePath); statErr != nil || info.IsDir() {
+			message := "Compose file is unavailable"
+			if statErr != nil {
+				message = statErr.Error()
+			}
+			checks = append(checks, PreflightCheck{Name: "Compose file", OK: false, Message: message})
+		} else {
+			checks = append(checks, PreflightCheck{Name: "Compose file", OK: true, Message: composePath})
+		}
+	}
+	return checks
+}
+
+func writableDirectory(path string) error {
+	clean := filepath.Clean(path)
+	ancestor := clean
+	for {
+		info, err := os.Stat(ancestor)
+		if err == nil {
+			if !info.IsDir() {
+				return errors.New("release path is not a directory")
+			}
+			probe, err := os.CreateTemp(ancestor, ".wio-preflight-*")
+			if err != nil {
+				return fmt.Errorf("release directory is not writable: %w", err)
+			}
+			name := probe.Name()
+			_ = probe.Close()
+			_ = os.Remove(name)
+			return nil
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return fmt.Errorf("release directory is unavailable: %w", err)
+		}
+		ancestor = parent
+	}
 }
 
 func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackCommand, status StatusFunc) error {

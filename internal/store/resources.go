@@ -347,6 +347,12 @@ func (s *Store) CreateProject(ctx context.Context, name, remoteURL string) (Proj
 	return project, nil
 }
 
+func (s *Store) ProjectByRemote(ctx context.Context, remoteURL string) (Project, error) {
+	var project Project
+	err := s.DB.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p WHERE p.normalized_remote=?`), normalizeRemote(remoteURL))
+	return project, err
+}
+
 type SecretSet struct {
 	ID        string    `db:"id" json:"id"`
 	Name      string    `db:"name" json:"name"`
@@ -380,31 +386,37 @@ func (s *Store) SecretCiphertext(ctx context.Context, id string) (string, error)
 }
 
 type DeploymentTarget struct {
-	ID           string `db:"id" json:"id"`
-	ProjectID    string `db:"project_id" json:"project_id"`
-	ServerID     string `db:"server_id" json:"server_id"`
-	SecretSetID  string `db:"secret_set_id" json:"secret_set_id"`
-	Environment  string `db:"environment" json:"environment"`
-	Repository   string `db:"repository" json:"repository"`
-	GitRef       string `db:"git_ref" json:"git_ref"`
-	ComposeFile  string `db:"compose_file" json:"compose_file"`
-	WorkingDir   string `db:"working_dir" json:"working_dir"`
-	BuildMode    string `db:"build_mode" json:"build_mode"`
-	HealthChecks string `db:"health_checks" json:"health_checks"`
-	ReleaseRoot  string `db:"release_root" json:"release_root"`
-	ProjectName  string `db:"project_name" json:"project_name"`
-	ServerName   string `db:"server_name" json:"server_name"`
+	ID            string `db:"id" json:"id"`
+	ProjectID     string `db:"project_id" json:"project_id"`
+	ServerID      string `db:"server_id" json:"server_id"`
+	SourceType    string `db:"source_type" json:"source_type"`
+	WorkspaceID   string `db:"workspace_id" json:"workspace_id"`
+	SecretSetID   string `db:"secret_set_id" json:"secret_set_id"`
+	Environment   string `db:"environment" json:"environment"`
+	Repository    string `db:"repository" json:"repository"`
+	GitRef        string `db:"git_ref" json:"git_ref"`
+	ComposeFile   string `db:"compose_file" json:"compose_file"`
+	WorkingDir    string `db:"working_dir" json:"working_dir"`
+	BuildMode     string `db:"build_mode" json:"build_mode"`
+	HealthChecks  string `db:"health_checks" json:"health_checks"`
+	ReleaseRoot   string `db:"release_root" json:"release_root"`
+	ProjectName   string `db:"project_name" json:"project_name"`
+	ServerName    string `db:"server_name" json:"server_name"`
+	WorkspacePath string `db:"workspace_path" json:"workspace_path"`
+	WorkspaceName string `db:"workspace_name" json:"workspace_name"`
 }
+
+const deploymentTargetSelect = `SELECT t.id,t.project_id,t.server_id,t.source_type,COALESCE(t.workspace_id,'') workspace_id,COALESCE(t.secret_set_id,'') secret_set_id,t.environment,t.repository,t.git_ref,t.compose_file,t.working_dir,t.build_mode,t.health_checks,t.release_root,p.name project_name,s.name server_name,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id LEFT JOIN workspaces w ON w.id=t.workspace_id`
 
 func (s *Store) ListDeploymentTargets(ctx context.Context) ([]DeploymentTarget, error) {
 	var out []DeploymentTarget
-	err := s.DB.SelectContext(ctx, &out, `SELECT t.id,t.project_id,t.server_id,COALESCE(t.secret_set_id,'') secret_set_id,t.environment,t.repository,t.git_ref,t.compose_file,t.working_dir,t.build_mode,t.health_checks,t.release_root,p.name project_name,s.name server_name FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id ORDER BY p.name,t.environment`)
+	err := s.DB.SelectContext(ctx, &out, deploymentTargetSelect+` ORDER BY p.name,t.environment`)
 	return out, err
 }
 
 func (s *Store) DeploymentTarget(ctx context.Context, id string) (DeploymentTarget, error) {
 	var out DeploymentTarget
-	err := s.DB.GetContext(ctx, &out, s.Q(`SELECT t.id,t.project_id,t.server_id,COALESCE(t.secret_set_id,'') secret_set_id,t.environment,t.repository,t.git_ref,t.compose_file,t.working_dir,t.build_mode,t.health_checks,t.release_root,p.name project_name,s.name server_name FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id WHERE t.id=?`), id)
+	err := s.DB.GetContext(ctx, &out, s.Q(deploymentTargetSelect+` WHERE t.id=?`), id)
 	return out, err
 }
 
@@ -412,6 +424,9 @@ func (s *Store) CreateDeploymentTarget(ctx context.Context, target DeploymentTar
 	target.ID = NewID()
 	if target.GitRef == "" {
 		target.GitRef = "main"
+	}
+	if target.SourceType == "" {
+		target.SourceType = "remote"
 	}
 	if target.ComposeFile == "" {
 		target.ComposeFile = "compose.yaml"
@@ -429,7 +444,11 @@ func (s *Store) CreateDeploymentTarget(ctx context.Context, target DeploymentTar
 	if target.SecretSetID == "" {
 		secret = nil
 	}
-	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO deployment_targets(id,project_id,server_id,secret_set_id,environment,repository,git_ref,compose_file,working_dir,build_mode,health_checks,release_root) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`), target.ID, target.ProjectID, target.ServerID, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot)
+	var workspace any = target.WorkspaceID
+	if target.WorkspaceID == "" {
+		workspace = nil
+	}
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO deployment_targets(id,project_id,server_id,source_type,workspace_id,secret_set_id,environment,repository,git_ref,compose_file,working_dir,build_mode,health_checks,release_root) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), target.ID, target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot)
 	if err != nil {
 		return DeploymentTarget{}, err
 	}
@@ -441,7 +460,11 @@ func (s *Store) UpdateDeploymentTarget(ctx context.Context, target DeploymentTar
 	if target.SecretSetID == "" {
 		secret = nil
 	}
-	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE deployment_targets SET project_id=?,server_id=?,secret_set_id=?,environment=?,repository=?,git_ref=?,compose_file=?,working_dir=?,build_mode=?,health_checks=?,release_root=? WHERE id=?`), target.ProjectID, target.ServerID, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.ID)
+	var workspace any = target.WorkspaceID
+	if target.WorkspaceID == "" {
+		workspace = nil
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE deployment_targets SET project_id=?,server_id=?,source_type=?,workspace_id=?,secret_set_id=?,environment=?,repository=?,git_ref=?,compose_file=?,working_dir=?,build_mode=?,health_checks=?,release_root=? WHERE id=?`), target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.ID)
 	if err != nil {
 		return DeploymentTarget{}, err
 	}

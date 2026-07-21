@@ -298,6 +298,8 @@ CREATE TABLE IF NOT EXISTS deployment_targets (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  source_type TEXT NOT NULL DEFAULT 'remote',
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   secret_set_id TEXT REFERENCES secret_sets(id) ON DELETE SET NULL,
   environment TEXT NOT NULL,
   repository TEXT NOT NULL,

@@ -1966,6 +1966,8 @@ func (a *API) deploymentTargets(w http.ResponseWriter, r *http.Request) {
 type deploymentTargetInput struct {
 	ProjectID    string                 `json:"project_id"`
 	ServerID     string                 `json:"server_id"`
+	SourceType   string                 `json:"source_type"`
+	WorkspaceID  string                 `json:"workspace_id"`
 	SecretSetID  string                 `json:"secret_set_id"`
 	Environment  string                 `json:"environment"`
 	Repository   string                 `json:"repository"`
@@ -1977,25 +1979,27 @@ type deploymentTargetInput struct {
 	ReleaseRoot  string                 `json:"release_root"`
 }
 
-func deploymentTargetFromInput(input deploymentTargetInput) (store.DeploymentTarget, error) {
+func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTargetInput) (store.DeploymentTarget, error) {
 	input.ProjectID = strings.TrimSpace(input.ProjectID)
 	input.ServerID = strings.TrimSpace(input.ServerID)
+	input.SourceType = strings.TrimSpace(input.SourceType)
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
 	input.SecretSetID = strings.TrimSpace(input.SecretSetID)
 	input.Environment = strings.TrimSpace(input.Environment)
 	input.Repository = strings.TrimSpace(input.Repository)
 	input.GitRef = strings.TrimSpace(input.GitRef)
 	input.ComposeFile = strings.TrimSpace(input.ComposeFile)
-	input.WorkingDir = strings.TrimSpace(input.WorkingDir)
+	input.WorkingDir = ""
 	input.BuildMode = strings.TrimSpace(input.BuildMode)
-	input.ReleaseRoot = strings.TrimSpace(input.ReleaseRoot)
-	if input.ProjectID == "" || input.ServerID == "" || input.Environment == "" || input.Repository == "" {
-		return store.DeploymentTarget{}, errors.New("project_id, server_id, environment, and repository are required")
+	input.ReleaseRoot = "/var/lib/wio-agent/releases"
+	if input.SourceType == "" {
+		input.SourceType = "remote"
+	}
+	if input.ServerID == "" || input.Environment == "" {
+		return store.DeploymentTarget{}, errors.New("server_id and environment are required")
 	}
 	if input.BuildMode != "" && input.BuildMode != "build" && input.BuildMode != "pull" {
 		return store.DeploymentTarget{}, errors.New("build_mode must be build or pull")
-	}
-	if input.GitRef == "" {
-		input.GitRef = "main"
 	}
 	if input.ComposeFile == "" {
 		input.ComposeFile = "compose.yaml"
@@ -2003,19 +2007,57 @@ func deploymentTargetFromInput(input deploymentTargetInput) (store.DeploymentTar
 	if input.BuildMode == "" {
 		input.BuildMode = "build"
 	}
-	if input.ReleaseRoot == "" {
-		input.ReleaseRoot = "/var/lib/wio-agent/releases"
-	}
 	for _, check := range input.HealthChecks {
 		if (check.Type != "http" && check.Type != "https" && check.Type != "tcp") || strings.TrimSpace(check.Address) == "" {
 			return store.DeploymentTarget{}, errors.New("health checks must use http, https, or tcp and include an address")
 		}
 	}
+	server, err := a.store.Server(ctx, input.ServerID)
+	if err != nil || server.Status != "online" {
+		return store.DeploymentTarget{}, errors.New("target server must be online")
+	}
+	switch input.SourceType {
+	case "workspace":
+		workspace, err := a.store.Workspace(ctx, input.WorkspaceID)
+		if err != nil || workspace.ServerID != input.ServerID || workspace.Status != "ready" {
+			return store.DeploymentTarget{}, errors.New("select an available project workspace on the target server")
+		}
+		input.ProjectID = workspace.ProjectID
+		project, err := a.store.Project(ctx, workspace.ProjectID)
+		if err != nil {
+			return store.DeploymentTarget{}, errors.New("could not load workspace project")
+		}
+		input.Repository = project.RemoteURL
+		if input.GitRef == "" {
+			input.GitRef = workspace.Branch
+			if input.GitRef == "" {
+				input.GitRef = "HEAD"
+			}
+		}
+	case "remote":
+		input.WorkspaceID = ""
+		if input.Repository == "" || !validGitRemote(input.Repository) {
+			return store.DeploymentTarget{}, errors.New("repository must use HTTPS or SSH")
+		}
+		if input.GitRef == "" {
+			input.GitRef = "main"
+		}
+		project, err := a.store.ProjectByRemote(ctx, input.Repository)
+		if errors.Is(err, sql.ErrNoRows) {
+			project, err = a.store.CreateProject(ctx, repositoryName(input.Repository), input.Repository)
+		}
+		if err != nil {
+			return store.DeploymentTarget{}, errors.New("could not register repository project")
+		}
+		input.ProjectID = project.ID
+	default:
+		return store.DeploymentTarget{}, errors.New("source_type must be workspace or remote")
+	}
 	checks, err := json.Marshal(input.HealthChecks)
 	if err != nil {
 		return store.DeploymentTarget{}, err
 	}
-	return store.DeploymentTarget{ProjectID: input.ProjectID, ServerID: input.ServerID, SecretSetID: input.SecretSetID, Environment: input.Environment, Repository: input.Repository, GitRef: input.GitRef, ComposeFile: input.ComposeFile, WorkingDir: input.WorkingDir, BuildMode: input.BuildMode, HealthChecks: string(checks), ReleaseRoot: input.ReleaseRoot}, nil
+	return store.DeploymentTarget{ProjectID: input.ProjectID, ServerID: input.ServerID, SourceType: input.SourceType, WorkspaceID: input.WorkspaceID, SecretSetID: input.SecretSetID, Environment: input.Environment, Repository: input.Repository, GitRef: input.GitRef, ComposeFile: input.ComposeFile, WorkingDir: input.WorkingDir, BuildMode: input.BuildMode, HealthChecks: string(checks), ReleaseRoot: input.ReleaseRoot}, nil
 }
 
 func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {
@@ -2023,7 +2065,7 @@ func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	targetInput, err := deploymentTargetFromInput(input)
+	targetInput, err := a.deploymentTargetFromInput(r.Context(), input)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -2046,7 +2088,7 @@ func (a *API) updateDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	target, err := deploymentTargetFromInput(input)
+	target, err := a.deploymentTargetFromInput(r.Context(), input)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -2144,6 +2186,15 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "deployment target not found")
 		return
 	}
+	server, err := a.store.Server(r.Context(), target.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "target server must be online before deployment")
+		return
+	}
+	if target.SourceType == "workspace" && (target.WorkspaceID == "" || target.WorkspacePath == "") {
+		writeError(w, http.StatusConflict, "selected project workspace is no longer available")
+		return
+	}
 	var input struct {
 		CommitRef string `json:"commit_ref"`
 	}
@@ -2170,7 +2221,7 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	var checks []protocol.HealthCheck
 	_ = json.Unmarshal([]byte(target.HealthChecks), &checks)
-	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, Repository: target.Repository, CommitRef: input.CommitRef, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, BuildMode: target.BuildMode, ReleaseRoot: target.ReleaseRoot, Environment: environment, HealthChecks: checks}
+	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, SourceType: target.SourceType, SourcePath: target.WorkspacePath, Repository: target.Repository, CommitRef: input.CommitRef, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, BuildMode: target.BuildMode, ReleaseRoot: target.ReleaseRoot, Environment: environment, HealthChecks: checks}
 	ciphertext, err := a.vault.Encrypt(command)
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not protect deployment operation"})

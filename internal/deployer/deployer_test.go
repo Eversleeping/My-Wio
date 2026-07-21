@@ -82,3 +82,28 @@ func TestComposePathsRejectTraversal(t *testing.T) {
 		t.Fatal("unsafe compose file was accepted")
 	}
 }
+
+func TestPreflightStopsBeforeReleaseWhenDockerIsUnavailable(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Compose deployment execution is supported only on Linux")
+	}
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "git"), "#!/bin/sh\necho 'git version 2.45.0'")
+	docker := filepath.Join(bin, "docker")
+	writeExecutable(t, docker, "#!/bin/sh\necho 'daemon unavailable' >&2\nexit 1")
+	root := filepath.Join(t.TempDir(), "releases")
+	command := protocol.DeployCommand{DeploymentID: "deployment-preflight", TargetID: "target-preflight", SourceType: "remote", Repository: "https://example.com/repo.git", CommitRef: "main", ComposeFile: "compose.yaml", BuildMode: "build", ReleaseRoot: root}
+	var events []string
+	err := New(docker).Deploy(context.Background(), command, func(status, message, resolved, content string) {
+		events = append(events, status+":"+message+":"+content)
+	})
+	if err == nil || !strings.Contains(err.Error(), "Docker daemon") {
+		t.Fatalf("unexpected preflight result: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "target-preflight")); !os.IsNotExist(statErr) {
+		t.Fatalf("release directory was created before preflight completed: %v", statErr)
+	}
+	if !strings.Contains(strings.Join(events, "\n"), "failed:environment check: Docker daemon") {
+		t.Fatalf("missing failed preflight event: %#v", events)
+	}
+}

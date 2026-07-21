@@ -699,6 +699,9 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 }
 
 func (c *Client) runDeployment(ctx context.Context, command protocol.DeployCommand) error {
+	if command.SourceType == "workspace" && !pathWithinRoots(command.SourcePath, c.inventoryRoots()) {
+		return errors.New("deployment workspace is outside configured inventory roots")
+	}
 	status := func(state, message, resolved, content string) {
 		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, command.Repository), ResolvedCommit: resolved, Content: redactDeploymentText(content, command.Environment, command.Repository)}, true)
 	}
@@ -707,6 +710,17 @@ func (c *Client) runDeployment(ctx context.Context, command protocol.DeployComma
 		status("failed", truncate(err.Error(), 8192), "", "")
 	}
 	return err
+}
+
+func pathWithinRoots(path string, roots []string) bool {
+	clean := filepath.Clean(path)
+	for _, root := range roots {
+		relative, err := filepath.Rel(filepath.Clean(root), clean)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) runRollback(ctx context.Context, command protocol.RollbackCommand) error {

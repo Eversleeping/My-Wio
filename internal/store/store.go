@@ -81,6 +81,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateDeploymentSources(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
 			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
@@ -89,6 +93,37 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateDeploymentSources(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		_, err := db.ExecContext(ctx, `ALTER TABLE deployment_targets
+			ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'remote',
+			ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL`)
+		if err != nil {
+			return fmt.Errorf("migrate deployment sources: %w", err)
+		}
+		return nil
+	}
+	var columns []string
+	if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info('deployment_targets')"); err != nil {
+		return fmt.Errorf("inspect deployment target columns: %w", err)
+	}
+	existing := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		existing[column] = true
+	}
+	for column, definition := range map[string]string{
+		"source_type":  "TEXT NOT NULL DEFAULT 'remote'",
+		"workspace_id": "TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
+	} {
+		if !existing[column] {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE deployment_targets ADD COLUMN "+column+" "+definition); err != nil {
+				return fmt.Errorf("migrate deployment target column %s: %w", column, err)
+			}
+		}
+	}
+	return nil
 }
 
 func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver string) error {

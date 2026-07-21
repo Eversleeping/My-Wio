@@ -468,6 +468,8 @@ type ConfigureCredentialsCommand struct {
 type DeployCommand struct {
 	DeploymentID string            `json:"deployment_id"`
 	TargetID     string            `json:"target_id"`
+	SourceType   string            `json:"source_type"`
+	SourcePath   string            `json:"source_path,omitempty"`
 	Repository   string            `json:"repository"`
 	CommitRef    string            `json:"commit_ref"`
 	ComposeFile  string            `json:"compose_file"`

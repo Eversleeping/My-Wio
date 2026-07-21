@@ -116,6 +116,9 @@ td code { font-size: 12px; }
 .deployment-page .section:first-child .cell-main { max-width: 270px; }
 .deployment-page .section:first-child .cell-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .deployment-duration { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.deployment-source-control { margin-bottom: 14px; }
+.deployment-preflight-note { min-height: 46px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; margin-top: 12px; padding: 9px 11px; color: #315f4e; background: #f1f7f3; border: 1px solid #cfe0d6; border-radius: 6px; font-size: 11px; line-height: 1.5; }
+.deployment-preflight-note svg { color: var(--green); }
 .dialog.deployment-log-dialog { width: min(960px, 100%); height: min(760px, calc(100vh - 40px)); display: flex; flex-direction: column; overflow: hidden; }
 .deployment-log-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: hidden; padding: 0 !important; }
 .deployment-log-loading { min-height: 180px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 12px; }

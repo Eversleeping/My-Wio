@@ -992,6 +992,9 @@ func workspaceResourceRequest(t *testing.T, method, target, workspaceID string, 
 func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-management-token")
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.28", ScanRoots: []string{"/srv"}}); err != nil {
+		t.Fatal(err)
+	}
 	project, err := database.CreateProject(context.Background(), "deploy-management", "https://example.com/deploy-management.git")
 	if err != nil {
 		t.Fatal(err)
@@ -1038,6 +1041,31 @@ func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 	targetDeleted := deploymentResourceRequest(t, http.MethodDelete, "/api/deployment-targets/"+target.ID, "targetID", target.ID, nil, api.deleteDeploymentTarget)
 	if targetDeleted.Code != http.StatusOK {
 		t.Fatalf("target delete returned %d: %s", targetDeleted.Code, targetDeleted.Body.String())
+	}
+}
+
+func TestDeploymentTargetUsesServerWorkspaceAndRemoteRepositorySources(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "deployment-source-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.28", ScanRoots: []string{"/srv"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/existing", Name: "existing", RemoteURL: "https://example.com/existing.git", Branch: "develop"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	api := resourceTestAPI(database)
+	workspaceResponse := directJSONRequest(t, http.MethodPost, "/api/deployment-targets", map[string]any{"source_type": "workspace", "workspace_id": workspaces[0].ID, "server_id": server.ID, "environment": "staging", "compose_file": "compose.yaml"}, &store.Session{UserID: "test-user"}, api.createDeploymentTarget)
+	if workspaceResponse.Code != http.StatusCreated || !strings.Contains(workspaceResponse.Body.String(), `"source_type":"workspace"`) || !strings.Contains(workspaceResponse.Body.String(), `"workspace_path":"/srv/existing"`) || !strings.Contains(workspaceResponse.Body.String(), `"git_ref":"develop"`) {
+		t.Fatalf("workspace target returned %d: %s", workspaceResponse.Code, workspaceResponse.Body.String())
+	}
+	remoteResponse := directJSONRequest(t, http.MethodPost, "/api/deployment-targets", map[string]any{"source_type": "remote", "server_id": server.ID, "environment": "production", "repository": "https://example.com/new-service.git"}, &store.Session{UserID: "test-user"}, api.createDeploymentTarget)
+	if remoteResponse.Code != http.StatusCreated || !strings.Contains(remoteResponse.Body.String(), `"source_type":"remote"`) || !strings.Contains(remoteResponse.Body.String(), `"project_name":"new-service"`) {
+		t.Fatalf("remote target returned %d: %s", remoteResponse.Code, remoteResponse.Body.String())
 	}
 }
 
