@@ -105,6 +105,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/servers/ssh/probe", api.probeServerSSH)
 			private.Post("/servers/ssh/bootstrap", api.bootstrapServerSSH)
 			private.Post("/servers/ssh/bootstrap-stream", api.streamBootstrapServerSSH)
+			private.Post("/servers/{serverID}/ssh/repair", api.repairServerSSH)
+			private.Post("/servers/{serverID}/ssh/repair-stream", api.streamRepairServerSSH)
 			private.Delete("/servers/{serverID}", api.revokeServer)
 			private.Get("/servers/{serverID}/metrics", api.metrics)
 			private.Get("/projects", api.projects)

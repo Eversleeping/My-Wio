@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -326,6 +327,49 @@ func TestEnrollmentInventoryAndOperations(t *testing.T) {
 	duplicateID, err := database.QueueOperation(ctx, server.ID, "inventory.scan", map[string]bool{"now": true}, "scan-1")
 	if err != nil || duplicateID != operationID {
 		t.Fatalf("idempotency failed: %s %s %v", operationID, duplicateID, err)
+	}
+}
+
+func TestRepairEnrollmentPreservesServerAndWorkspace(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "repair-node", []string{"/srv"}, "initial-enrollment", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := database.ConsumeEnrollment(ctx, "initial-enrollment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, initial, "repair-node.local", "old-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/app", Name: "app", RemoteURL: "https://example.com/app.git", Branch: "main", CommitSHA: "abc"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRepairEnrollment(ctx, server.ID, "repair-enrollment", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	repair, err := database.ConsumeEnrollment(ctx, "repair-enrollment")
+	if err != nil || repair.ServerID != server.ID {
+		t.Fatalf("unexpected repair enrollment: %#v %v", repair, err)
+	}
+	repaired, err := database.EnrollServer(ctx, repair, "repair-node-new.local", "new-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired.ID != server.ID {
+		t.Fatalf("repair changed server ID: %s != %s", repaired.ID, server.ID)
+	}
+	if _, err := database.AuthenticateAgent(ctx, "old-agent-token"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("old Agent credential remains valid: %v", err)
+	}
+	if id, err := database.AuthenticateAgent(ctx, "new-agent-token"); err != nil || id != server.ID {
+		t.Fatalf("new Agent credential was not installed: %s %v", id, err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 || workspaces[0].ServerID != server.ID {
+		t.Fatalf("repair changed workspace association: %#v %v", workspaces, err)
 	}
 }
 

@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -102,6 +104,51 @@ func TestBootstrapFailureDeletesUnusedEnrollment(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected enrollment cleanup, found %d", count)
+	}
+}
+
+func TestRepairBootstrapCreatesEnrollmentForExistingServer(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	if _, err := database.CreateEnrollment(context.Background(), "repair-node", []string{"/srv"}, "initial-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := database.ConsumeEnrollment(context.Background(), "initial-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(context.Background(), initial, "repair-node.local", "initial-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeServerBootstrapper{installResult: sshbootstrap.InstallResult{ServerID: server.ID, Hostname: "repair-node.local", Architecture: "amd64"}}
+	api := &API{store: database, bootstrapper: fake, publicURL: "https://wio.example.com", log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	input := bootstrapInput()
+	input["allow_sudo"] = true
+	payload, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/servers/"+server.ID+"/ssh/repair", bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("serverID", server.ID)
+	requestContext := context.WithValue(request.Context(), chi.RouteCtxKey, routeContext)
+	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
+	request = request.WithContext(requestContext)
+	response := httptest.NewRecorder()
+	api.repairServerSSH(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("repair bootstrap returned %d: %s", response.Code, response.Body.String())
+	}
+	repair, err := database.ConsumeEnrollment(context.Background(), fake.installRequest.EnrollmentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repair.ServerID != server.ID {
+		t.Fatalf("repair enrollment targets %q, want %q", repair.ServerID, server.ID)
+	}
+	if !fake.installRequest.AllowSudo {
+		t.Fatal("repair did not preserve the optional sudo setting")
 	}
 }
 

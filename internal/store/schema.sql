@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
 CREATE TABLE IF NOT EXISTS enrollment_tokens (
   id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
+  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
   server_name TEXT NOT NULL,
   scan_roots TEXT NOT NULL DEFAULT '[]',
   expires_at TIMESTAMP NOT NULL,

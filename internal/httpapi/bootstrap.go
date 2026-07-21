@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/wio-platform/wio/internal/gitidentity"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
@@ -111,6 +113,14 @@ func (a *API) probeServerSSH(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) bootstrapServerSSH(w http.ResponseWriter, r *http.Request) {
+	a.bootstrapServerSSHForServer(w, r, "")
+}
+
+func (a *API) repairServerSSH(w http.ResponseWriter, r *http.Request) {
+	a.bootstrapServerSSHForServer(w, r, chi.URLParam(r, "serverID"))
+}
+
+func (a *API) bootstrapServerSSHForServer(w http.ResponseWriter, r *http.Request, serverID string) {
 	if !a.bootstrapMu.TryLock() {
 		writeBootstrapCode(w, http.StatusTooManyRequests, "install_busy", "another server installation is already running")
 		return
@@ -121,7 +131,7 @@ func (a *API) bootstrapServerSSH(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := a.runServerBootstrap(r, input, nil)
+	result, err := a.runServerBootstrap(r, input, serverID, nil)
 	if err != nil {
 		a.writeBootstrapError(w, err)
 		return
@@ -130,6 +140,14 @@ func (a *API) bootstrapServerSSH(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) streamBootstrapServerSSH(w http.ResponseWriter, r *http.Request) {
+	a.streamBootstrapServerSSHForServer(w, r, "")
+}
+
+func (a *API) streamRepairServerSSH(w http.ResponseWriter, r *http.Request) {
+	a.streamBootstrapServerSSHForServer(w, r, chi.URLParam(r, "serverID"))
+}
+
+func (a *API) streamBootstrapServerSSHForServer(w http.ResponseWriter, r *http.Request, serverID string) {
 	if !a.bootstrapMu.TryLock() {
 		writeBootstrapCode(w, http.StatusTooManyRequests, "install_busy", "another server installation is already running")
 		return
@@ -180,7 +198,7 @@ func (a *API) streamBootstrapServerSSH(w http.ResponseWriter, r *http.Request) {
 		close(heartbeatDone)
 		heartbeatWG.Wait()
 	}()
-	result, err := a.runServerBootstrap(r, input, func(progress sshbootstrap.InstallProgress) {
+	result, err := a.runServerBootstrap(r, input, serverID, func(progress sshbootstrap.InstallProgress) {
 		emit(bootstrapStreamEvent{Type: "progress", Step: progress.Step, Current: progress.Current, Total: progress.Total})
 	})
 	if err != nil {
@@ -223,7 +241,7 @@ func decodeSSHBootstrapInput(w http.ResponseWriter, r *http.Request) (sshBootstr
 	return input, true
 }
 
-func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progress func(sshbootstrap.InstallProgress)) (sshbootstrap.InstallResult, error) {
+func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serverID string, progress func(sshbootstrap.InstallProgress)) (sshbootstrap.InstallResult, error) {
 	var err error
 	input, err = a.resolveBootstrapCredentialProfiles(r.Context(), input)
 	if err != nil {
@@ -234,9 +252,14 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentToken, err)
 	}
 	expires := time.Now().UTC().Add(15 * time.Minute)
-	enrollmentID, err := a.store.CreateEnrollmentWithMetadata(r.Context(), input.Name, input.ScanRoots, token, expires, store.ServerMetadata{
-		Address: input.Host, Configuration: input.Configuration, Notes: input.Notes,
-	})
+	var enrollmentID string
+	if serverID == "" {
+		enrollmentID, err = a.store.CreateEnrollmentWithMetadata(r.Context(), input.Name, input.ScanRoots, token, expires, store.ServerMetadata{
+			Address: input.Host, Configuration: input.Configuration, Notes: input.Notes,
+		})
+	} else {
+		enrollmentID, err = a.store.CreateRepairEnrollment(r.Context(), serverID, token, expires)
+	}
 	if err != nil {
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentStore, err)
 	}
@@ -272,7 +295,7 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, progr
 
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "server.ssh.bootstrap", "server", result.ServerID, map[string]any{
-		"name": input.Name, "host": strings.TrimSpace(input.Host), "port": input.Port, "user": strings.TrimSpace(input.User),
+		"name": input.Name, "host": strings.TrimSpace(input.Host), "port": input.Port, "user": strings.TrimSpace(input.User), "repair": serverID != "",
 		"architecture": result.Architecture, "scan_roots": input.ScanRoots, "codex_api_url": strings.TrimSpace(input.CodexAPIURL), "codex_model": strings.TrimSpace(input.CodexModel),
 		"codex_profile_id": input.CodexProfileID, "codex_profile_name": input.CodexProfileName, "git_profile_id": input.GitProfileID, "git_profile_name": input.GitProfileName, "allow_sudo": input.AllowSudo, "warnings": result.Warnings,
 	}, clientIP(r))

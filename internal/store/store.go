@@ -85,6 +85,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateRepairEnrollments(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
 			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
@@ -93,6 +97,25 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateRepairEnrollments(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE enrollment_tokens ADD COLUMN IF NOT EXISTS server_id TEXT REFERENCES servers(id) ON DELETE CASCADE"); err != nil {
+			return fmt.Errorf("migrate repair enrollments: %w", err)
+		}
+		return nil
+	}
+	var count int
+	if err := db.GetContext(ctx, &count, "SELECT COUNT(*) FROM pragma_table_info('enrollment_tokens') WHERE name='server_id'"); err != nil {
+		return fmt.Errorf("inspect repair enrollment column: %w", err)
+	}
+	if count == 0 {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE enrollment_tokens ADD COLUMN server_id TEXT REFERENCES servers(id) ON DELETE CASCADE"); err != nil {
+			return fmt.Errorf("migrate repair enrollment column: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateDeploymentSources(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -502,6 +525,22 @@ func (s *Store) CreateEnrollment(ctx context.Context, name string, roots []strin
 }
 
 func (s *Store) CreateEnrollmentWithMetadata(ctx context.Context, name string, roots []string, token string, expires time.Time, metadata ServerMetadata) (string, error) {
+	return s.createEnrollment(ctx, "", name, roots, token, expires, metadata)
+}
+
+func (s *Store) CreateRepairEnrollment(ctx context.Context, serverID, token string, expires time.Time) (string, error) {
+	server, err := s.Server(ctx, serverID)
+	if err != nil {
+		return "", err
+	}
+	var roots []string
+	if err := json.Unmarshal([]byte(server.ScanRoots), &roots); err != nil {
+		return "", err
+	}
+	return s.createEnrollment(ctx, serverID, server.Name, roots, token, expires, ServerMetadata{Address: server.Address, Configuration: server.Configuration, Notes: server.Notes})
+}
+
+func (s *Store) createEnrollment(ctx context.Context, serverID, name string, roots []string, token string, expires time.Time, metadata ServerMetadata) (string, error) {
 	id := NewID()
 	raw, _ := json.Marshal(roots)
 	tx, err := s.DB.BeginTxx(ctx, nil)
@@ -509,7 +548,7 @@ func (s *Store) CreateEnrollmentWithMetadata(ctx context.Context, name string, r
 		return id, err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO enrollment_tokens(id,token_hash,server_name,scan_roots,expires_at) VALUES(?,?,?,?,?)"), id, HashToken(token), name, string(raw), expires); err != nil {
+	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO enrollment_tokens(id,token_hash,server_id,server_name,scan_roots,expires_at) VALUES(?,?,NULLIF(?,''),?,?,?)"), id, HashToken(token), serverID, name, string(raw), expires); err != nil {
 		return id, err
 	}
 	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO enrollment_metadata(enrollment_id,address,configuration,notes) VALUES(?,?,?,?)"), id, metadata.Address, metadata.Configuration, metadata.Notes); err != nil {
@@ -525,6 +564,7 @@ func (s *Store) DeleteUnusedEnrollment(ctx context.Context, id string) error {
 
 type Enrollment struct {
 	ID            string    `db:"id"`
+	ServerID      string    `db:"server_id"`
 	ServerName    string    `db:"server_name"`
 	ScanRoots     string    `db:"scan_roots"`
 	Address       string    `db:"address"`
@@ -540,7 +580,7 @@ func (s *Store) ConsumeEnrollment(ctx context.Context, token string) (Enrollment
 	}
 	defer tx.Rollback()
 	var e Enrollment
-	err = tx.GetContext(ctx, &e, s.Q(`SELECT e.id,e.server_name,e.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,e.expires_at FROM enrollment_tokens e LEFT JOIN enrollment_metadata m ON m.enrollment_id=e.id WHERE e.token_hash=? AND e.consumed_at IS NULL AND e.expires_at>?`), HashToken(token), time.Now().UTC())
+	err = tx.GetContext(ctx, &e, s.Q(`SELECT e.id,COALESCE(e.server_id,'') server_id,e.server_name,e.scan_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,e.expires_at FROM enrollment_tokens e LEFT JOIN enrollment_metadata m ON m.enrollment_id=e.id WHERE e.token_hash=? AND e.consumed_at IS NULL AND e.expires_at>?`), HashToken(token), time.Now().UTC())
 	if err != nil {
 		return Enrollment{}, err
 	}
@@ -554,6 +594,9 @@ func (s *Store) ConsumeEnrollment(ctx context.Context, token string) (Enrollment
 }
 
 func (s *Store) EnrollServer(ctx context.Context, e Enrollment, hostname, agentToken string) (Server, error) {
+	if e.ServerID != "" {
+		return s.repairServerEnrollment(ctx, e, hostname, agentToken)
+	}
 	server := Server{ID: NewID(), Name: e.ServerName, Hostname: hostname, Status: "offline", ScanRoots: e.ScanRoots, Address: e.Address, Configuration: e.Configuration, Notes: e.Notes, CreatedAt: time.Now().UTC()}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
@@ -570,6 +613,33 @@ func (s *Store) EnrollServer(ctx context.Context, e Enrollment, hostname, agentT
 	}
 	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO agent_credentials(server_id,token_hash) VALUES(?,?)"), server.ID, HashToken(agentToken))
 	if err != nil {
+		return server, err
+	}
+	return server, tx.Commit()
+}
+
+func (s *Store) repairServerEnrollment(ctx context.Context, e Enrollment, hostname, agentToken string) (Server, error) {
+	server := Server{ID: e.ServerID, Name: e.ServerName, Hostname: hostname, Status: "offline", ScanRoots: e.ScanRoots, Address: e.Address, Configuration: e.Configuration, Notes: e.Notes}
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return server, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET hostname=?,scan_roots=?,status='offline',agent_version='',codex_version='',codex_ready=0,last_seen_at=NULL WHERE id=? AND revoked_at IS NULL"), hostname, e.ScanRoots, e.ServerID)
+	if err != nil {
+		return server, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		if err == nil {
+			err = sql.ErrNoRows
+		}
+		return server, err
+	}
+	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_credentials SET token_hash=?,created_at=?,revoked_at=NULL WHERE server_id=?"), HashToken(agentToken), time.Now().UTC(), e.ServerID); err != nil {
+		return server, err
+	}
+	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_metadata(server_id,address,configuration,notes,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(server_id) DO UPDATE SET address=excluded.address,configuration=excluded.configuration,notes=excluded.notes,updated_at=excluded.updated_at`), e.ServerID, e.Address, e.Configuration, e.Notes, time.Now().UTC()); err != nil {
 		return server, err
 	}
 	return server, tx.Commit()
