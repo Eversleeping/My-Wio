@@ -38,7 +38,7 @@ export interface CredentialProfile { id: string; kind: "codex" | "git"; name: st
 export interface DeploymentTarget { id: string; project_id: string; server_id: string; secret_set_id: string; environment: string; repository: string; git_ref: string; compose_file: string; working_dir: string; build_mode: string; health_checks: string; release_root: string; project_name: string; server_name: string }
 export interface Deployment { id: string; target_id: string; operation_id: string; commit_ref: string; resolved_commit: string; status: string; message: string; project_name: string; environment: string; created_at: string; started_at: string | null; finished_at: string | null }
 export interface DeploymentEvent { id: string; deployment_id: string; status: string; message: string; content: string; occurred_at: string }
-export interface DeploymentDetail { deployment: Deployment; events: DeploymentEvent[] }
+export interface DeploymentDetail { deployment: Deployment; events: DeploymentEvent[] | null }
 export interface Alert { id: string; server_id: string; kind: string; severity: string; title: string; detail: string; status: string; server_name: string; opened_at: string; resolved_at: string | null; acknowledged_at: string | null }
 export interface Metric { server_id: string; bucket_at: string; cpu_percent: number; memory_percent: number; disk_percent: number; load_1: number; net_rx_bytes: number; net_tx_bytes: number }
 export interface AuditEntry { id: string; action: string; resource_type: string; resource_id: string; detail: unknown; ip_address: string; occurred_at: string }

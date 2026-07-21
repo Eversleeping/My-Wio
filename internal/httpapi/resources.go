@@ -2116,6 +2116,9 @@ func (a *API) deploymentDetails(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load deployment logs")
 		return
 	}
+	if events == nil {
+		events = []store.DeploymentEvent{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"deployment": deployment, "events": events})
 }
 

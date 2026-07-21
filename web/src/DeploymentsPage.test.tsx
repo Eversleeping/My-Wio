@@ -23,6 +23,7 @@ afterEach(() => {
 test("edits a target, opens process logs, and deletes deployment history", async () => {
   window.localStorage.setItem("wio_language", "en");
   const requests: Array<{ url: string; method: string; body: string }> = [];
+  let detailEvents: unknown = [{ id: "event-1", deployment_id: deployment.id, status: "succeeded", message: "deployment is healthy", content: "clone output\ncompose output", occurred_at: "2026-07-21T10:00:08Z" }];
   vi.stubGlobal("confirm", vi.fn(() => true));
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
@@ -32,7 +33,7 @@ test("edits a target, opens process logs, and deletes deployment history", async
     if (url === "/api/deployment-targets" && method === "GET") payload = [target];
     else if (url === `/api/deployment-targets/${target.id}` && method === "PUT") payload = { ...target, ...JSON.parse(String(init.body)) };
     else if (url === "/api/deployments" && method === "GET") payload = [deployment];
-    else if (url === `/api/deployments/${deployment.id}` && method === "GET") payload = { deployment, events: [{ id: "event-1", deployment_id: deployment.id, status: "succeeded", message: "deployment is healthy", content: "clone output\ncompose output", occurred_at: "2026-07-21T10:00:08Z" }] };
+    else if (url === `/api/deployments/${deployment.id}` && method === "GET") payload = { deployment, events: detailEvents };
     else if (url === `/api/deployments/${deployment.id}` && method === "DELETE") payload = { ok: true };
     else if (url === "/api/projects") payload = [{ id: "project-1", name: "project-management", remote_url: target.repository }];
     else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1" }];
@@ -53,6 +54,11 @@ test("edits a target, opens process logs, and deletes deployment history", async
 
   await user.click(screen.getByRole("button", { name: "View process logs" }));
   expect(await screen.findByText(/clone output/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Close" }));
+
+  detailEvents = null;
+  await user.click(screen.getByRole("button", { name: "View process logs" }));
+  expect(await screen.findByText("No process logs were recorded")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Close" }));
 
   await user.click(screen.getByRole("button", { name: "Delete deployment record" }));

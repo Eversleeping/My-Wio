@@ -1013,6 +1013,10 @@ func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	emptyDetails := deploymentResourceRequest(t, http.MethodGet, "/api/deployments/"+deployment.ID, "deploymentID", deployment.ID, nil, api.deploymentDetails)
+	if emptyDetails.Code != http.StatusOK || !strings.Contains(emptyDetails.Body.String(), `"events":[]`) {
+		t.Fatalf("empty deployment details returned %d: %s", emptyDetails.Code, emptyDetails.Body.String())
+	}
 	if err := database.SaveDeploymentStatus(context.Background(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "preparing", Message: "repository cloned", Content: "clone output"}); err != nil {
 		t.Fatal(err)
 	}
