@@ -517,12 +517,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 	case "agent_update_status":
 		return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "agent.updated", Payload: security.RedactJSON(msg.PayloadJSON)})
 	case "deployment_status":
-		var p struct{ DeploymentID, Status, Message, ResolvedCommit string }
+		var p protocol.DeploymentStatus
 		if err := json.Unmarshal(msg.PayloadJSON, &p); err != nil {
 			return err
 		}
-		_, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE deployments SET status=?,message=?,resolved_commit=CASE WHEN ?='' THEN resolved_commit ELSE ? END,started_at=CASE WHEN ?='preparing' THEN ? ELSE started_at END,finished_at=CASE WHEN ? IN ('succeeded','failed','rolled_back','canceled') THEN ? ELSE finished_at END WHERE id=?"), p.Status, p.Message, p.ResolvedCommit, p.ResolvedCommit, p.Status, time.Now().UTC(), p.Status, time.Now().UTC(), p.DeploymentID)
-		if err != nil {
+		if err := g.store.SaveDeploymentStatus(ctx, p); err != nil {
 			return err
 		}
 		payload := security.RedactJSON(msg.PayloadJSON)

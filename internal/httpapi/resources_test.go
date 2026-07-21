@@ -989,6 +989,65 @@ func workspaceResourceRequest(t *testing.T, method, target, workspaceID string, 
 	})
 }
 
+func TestDeploymentTargetManagementAndLogs(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "deployment-management-token")
+	project, err := database.CreateProject(context.Background(), "deploy-management", "https://example.com/deploy-management.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	created := directJSONRequest(t, http.MethodPost, "/api/deployment-targets", map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "production", "repository": project.RemoteURL, "health_checks": []map[string]any{{"type": "http", "address": "https://example.com/health", "timeout_seconds": 60}}}, &store.Session{UserID: "test-user"}, api.createDeploymentTarget)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("target creation returned %d: %s", created.Code, created.Body.String())
+	}
+	var target store.DeploymentTarget
+	if err := json.Unmarshal(created.Body.Bytes(), &target); err != nil {
+		t.Fatal(err)
+	}
+	updated := deploymentResourceRequest(t, http.MethodPut, "/api/deployment-targets/"+target.ID, "targetID", target.ID, map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "staging", "repository": project.RemoteURL, "git_ref": "release", "compose_file": "deploy/compose.yaml", "build_mode": "pull", "health_checks": []map[string]any{}}, api.updateDeploymentTarget)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"environment":"staging"`) || !strings.Contains(updated.Body.String(), `"git_ref":"release"`) {
+		t.Fatalf("target update returned %d: %s", updated.Code, updated.Body.String())
+	}
+	deployment, err := database.CreateDeployment(context.Background(), target.ID, "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SaveDeploymentStatus(context.Background(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "preparing", Message: "repository cloned", Content: "clone output"}); err != nil {
+		t.Fatal(err)
+	}
+	details := deploymentResourceRequest(t, http.MethodGet, "/api/deployments/"+deployment.ID, "deploymentID", deployment.ID, nil, api.deploymentDetails)
+	if details.Code != http.StatusOK || !strings.Contains(details.Body.String(), `"message":"repository cloned"`) || !strings.Contains(details.Body.String(), `"content":"clone output"`) {
+		t.Fatalf("deployment details returned %d: %s", details.Code, details.Body.String())
+	}
+	activeDelete := deploymentResourceRequest(t, http.MethodDelete, "/api/deployments/"+deployment.ID, "deploymentID", deployment.ID, nil, api.deleteDeployment)
+	if activeDelete.Code != http.StatusConflict {
+		t.Fatalf("active deployment delete returned %d: %s", activeDelete.Code, activeDelete.Body.String())
+	}
+	if err := database.SaveDeploymentStatus(context.Background(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "compose failed"}); err != nil {
+		t.Fatal(err)
+	}
+	deleted := deploymentResourceRequest(t, http.MethodDelete, "/api/deployments/"+deployment.ID, "deploymentID", deployment.ID, nil, api.deleteDeployment)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("deployment delete returned %d: %s", deleted.Code, deleted.Body.String())
+	}
+	targetDeleted := deploymentResourceRequest(t, http.MethodDelete, "/api/deployment-targets/"+target.ID, "targetID", target.ID, nil, api.deleteDeploymentTarget)
+	if targetDeleted.Code != http.StatusOK {
+		t.Fatalf("target delete returned %d: %s", targetDeleted.Code, targetDeleted.Body.String())
+	}
+}
+
+func deploymentResourceRequest(t *testing.T, method, target, param, id string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+	route := chi.NewRouteContext()
+	route.URLParams.Add(param, id)
+	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
+	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
+	return directJSONRequest(t, method, target, body, nil, func(w http.ResponseWriter, r *http.Request) {
+		handler(w, r.WithContext(requestContext))
+	})
+}
+
 func enrollResourceTestServer(t *testing.T, database *store.Store, token string) store.Server {
 	t.Helper()
 	ctx := context.Background()

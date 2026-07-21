@@ -1963,33 +1963,72 @@ func (a *API) deploymentTargets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, targets)
 }
 
-func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		ProjectID    string                 `json:"project_id"`
-		ServerID     string                 `json:"server_id"`
-		SecretSetID  string                 `json:"secret_set_id"`
-		Environment  string                 `json:"environment"`
-		Repository   string                 `json:"repository"`
-		GitRef       string                 `json:"git_ref"`
-		ComposeFile  string                 `json:"compose_file"`
-		WorkingDir   string                 `json:"working_dir"`
-		BuildMode    string                 `json:"build_mode"`
-		HealthChecks []protocol.HealthCheck `json:"health_checks"`
-		ReleaseRoot  string                 `json:"release_root"`
+type deploymentTargetInput struct {
+	ProjectID    string                 `json:"project_id"`
+	ServerID     string                 `json:"server_id"`
+	SecretSetID  string                 `json:"secret_set_id"`
+	Environment  string                 `json:"environment"`
+	Repository   string                 `json:"repository"`
+	GitRef       string                 `json:"git_ref"`
+	ComposeFile  string                 `json:"compose_file"`
+	WorkingDir   string                 `json:"working_dir"`
+	BuildMode    string                 `json:"build_mode"`
+	HealthChecks []protocol.HealthCheck `json:"health_checks"`
+	ReleaseRoot  string                 `json:"release_root"`
+}
+
+func deploymentTargetFromInput(input deploymentTargetInput) (store.DeploymentTarget, error) {
+	input.ProjectID = strings.TrimSpace(input.ProjectID)
+	input.ServerID = strings.TrimSpace(input.ServerID)
+	input.SecretSetID = strings.TrimSpace(input.SecretSetID)
+	input.Environment = strings.TrimSpace(input.Environment)
+	input.Repository = strings.TrimSpace(input.Repository)
+	input.GitRef = strings.TrimSpace(input.GitRef)
+	input.ComposeFile = strings.TrimSpace(input.ComposeFile)
+	input.WorkingDir = strings.TrimSpace(input.WorkingDir)
+	input.BuildMode = strings.TrimSpace(input.BuildMode)
+	input.ReleaseRoot = strings.TrimSpace(input.ReleaseRoot)
+	if input.ProjectID == "" || input.ServerID == "" || input.Environment == "" || input.Repository == "" {
+		return store.DeploymentTarget{}, errors.New("project_id, server_id, environment, and repository are required")
 	}
+	if input.BuildMode != "" && input.BuildMode != "build" && input.BuildMode != "pull" {
+		return store.DeploymentTarget{}, errors.New("build_mode must be build or pull")
+	}
+	if input.GitRef == "" {
+		input.GitRef = "main"
+	}
+	if input.ComposeFile == "" {
+		input.ComposeFile = "compose.yaml"
+	}
+	if input.BuildMode == "" {
+		input.BuildMode = "build"
+	}
+	if input.ReleaseRoot == "" {
+		input.ReleaseRoot = "/var/lib/wio-agent/releases"
+	}
+	for _, check := range input.HealthChecks {
+		if (check.Type != "http" && check.Type != "https" && check.Type != "tcp") || strings.TrimSpace(check.Address) == "" {
+			return store.DeploymentTarget{}, errors.New("health checks must use http, https, or tcp and include an address")
+		}
+	}
+	checks, err := json.Marshal(input.HealthChecks)
+	if err != nil {
+		return store.DeploymentTarget{}, err
+	}
+	return store.DeploymentTarget{ProjectID: input.ProjectID, ServerID: input.ServerID, SecretSetID: input.SecretSetID, Environment: input.Environment, Repository: input.Repository, GitRef: input.GitRef, ComposeFile: input.ComposeFile, WorkingDir: input.WorkingDir, BuildMode: input.BuildMode, HealthChecks: string(checks), ReleaseRoot: input.ReleaseRoot}, nil
+}
+
+func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {
+	var input deploymentTargetInput
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.ProjectID == "" || input.ServerID == "" || strings.TrimSpace(input.Environment) == "" || strings.TrimSpace(input.Repository) == "" {
-		writeError(w, http.StatusBadRequest, "project_id, server_id, environment, and repository are required")
+	targetInput, err := deploymentTargetFromInput(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if input.BuildMode != "" && input.BuildMode != "build" && input.BuildMode != "pull" {
-		writeError(w, http.StatusBadRequest, "build_mode must be build or pull")
-		return
-	}
-	checks, _ := json.Marshal(input.HealthChecks)
-	target, err := a.store.CreateDeploymentTarget(r.Context(), store.DeploymentTarget{ProjectID: input.ProjectID, ServerID: input.ServerID, SecretSetID: input.SecretSetID, Environment: strings.TrimSpace(input.Environment), Repository: strings.TrimSpace(input.Repository), GitRef: input.GitRef, ComposeFile: input.ComposeFile, WorkingDir: input.WorkingDir, BuildMode: input.BuildMode, HealthChecks: string(checks), ReleaseRoot: input.ReleaseRoot})
+	target, err := a.store.CreateDeploymentTarget(r.Context(), targetInput)
 	if err != nil {
 		if databaseConflict(err) {
 			writeError(w, http.StatusConflict, "deployment target already exists")
@@ -1998,7 +2037,58 @@ func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.target.create", "deployment_target", target.ID, map[string]string{"project_id": target.ProjectID, "environment": target.Environment}, clientIP(r))
 	writeJSON(w, http.StatusCreated, target)
+}
+
+func (a *API) updateDeploymentTarget(w http.ResponseWriter, r *http.Request) {
+	var input deploymentTargetInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	target, err := deploymentTargetFromInput(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	target.ID = chi.URLParam(r, "targetID")
+	target, err = a.store.UpdateDeploymentTarget(r.Context(), target)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "deployment target not found")
+		return
+	}
+	if err != nil {
+		if databaseConflict(err) {
+			writeError(w, http.StatusConflict, "deployment target already exists")
+		} else {
+			writeError(w, http.StatusBadRequest, "could not update deployment target")
+		}
+		return
+	}
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.target.update", "deployment_target", target.ID, map[string]string{"project_id": target.ProjectID, "environment": target.Environment}, clientIP(r))
+	writeJSON(w, http.StatusOK, target)
+}
+
+func (a *API) deleteDeploymentTarget(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "targetID")
+	target, err := a.store.DeploymentTarget(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "deployment target not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load deployment target")
+		return
+	}
+	if err := a.store.DeleteDeploymentTarget(r.Context(), id); errors.Is(err, store.ErrDeploymentActive) {
+		writeError(w, http.StatusConflict, "active deployments must finish before deleting the target")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete deployment target")
+		return
+	}
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.target.delete", "deployment_target", id, map[string]string{"project_id": target.ProjectID, "environment": target.Environment}, clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *API) deployments(w http.ResponseWriter, r *http.Request) {
@@ -2008,6 +2098,41 @@ func (a *API) deployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, deployments)
+}
+
+func (a *API) deploymentDetails(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "deploymentID")
+	deployment, err := a.store.Deployment(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load deployment")
+		return
+	}
+	events, err := a.store.DeploymentEvents(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load deployment logs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deployment": deployment, "events": events})
+}
+
+func (a *API) deleteDeployment(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "deploymentID")
+	if err := a.store.DeleteDeployment(r.Context(), id); errors.Is(err, store.ErrDeploymentActive) {
+		writeError(w, http.StatusConflict, "active deployments cannot be deleted")
+		return
+	} else if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete deployment")
+		return
+	}
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.delete", "deployment", id, nil, clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
@@ -2030,10 +2155,12 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create deployment")
 		return
 	}
+	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "deployment queued", Content: "Waiting for the target Agent to start deployment."})
 	environment := map[string]string{}
 	if target.SecretSetID != "" {
 		ciphertext, err := a.store.SecretCiphertext(r.Context(), target.SecretSetID)
 		if err != nil || a.vault.Decrypt(ciphertext, &environment) != nil {
+			_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not decrypt deployment secrets"})
 			writeError(w, http.StatusInternalServerError, "could not decrypt deployment secrets")
 			return
 		}
@@ -2043,11 +2170,13 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, Repository: target.Repository, CommitRef: input.CommitRef, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, BuildMode: target.BuildMode, ReleaseRoot: target.ReleaseRoot, Environment: environment, HealthChecks: checks}
 	ciphertext, err := a.vault.Encrypt(command)
 	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not protect deployment operation"})
 		writeError(w, http.StatusInternalServerError, "could not protect deployment operation")
 		return
 	}
 	operationID, err := a.store.QueueEncryptedOperation(r.Context(), target.ServerID, "deploy.start", ciphertext, "deploy:"+deployment.ID)
 	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not queue deployment"})
 		writeError(w, http.StatusInternalServerError, "could not queue deployment")
 		return
 	}
@@ -2069,9 +2198,11 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create rollback")
 		return
 	}
+	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "rollback queued", Content: "Waiting for the target Agent to restore the previous release."})
 	command := protocol.RollbackCommand{DeploymentID: deployment.ID, TargetID: target.ID, ReleaseRoot: target.ReleaseRoot, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir}
 	operationID, err := a.store.QueueOperation(r.Context(), target.ServerID, "deploy.rollback", command, "rollback:"+deployment.ID)
 	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not queue rollback"})
 		writeError(w, http.StatusInternalServerError, "could not queue rollback")
 		return
 	}

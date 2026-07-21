@@ -486,6 +486,16 @@ type RollbackCommand struct {
 	WorkingDir   string `json:"working_dir,omitempty"`
 }
 
+// DeploymentStatus is emitted by an Agent as a deployment advances. Content
+// holds the command output or a short process note for the current step.
+type DeploymentStatus struct {
+	DeploymentID   string `json:"deployment_id"`
+	Status         string `json:"status"`
+	Message        string `json:"message"`
+	ResolvedCommit string `json:"resolved_commit,omitempty"`
+	Content        string `json:"content,omitempty"`
+}
+
 type HealthCheck struct {
 	Type    string `json:"type"`
 	Address string `json:"address"`

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -435,6 +436,47 @@ func (s *Store) CreateDeploymentTarget(ctx context.Context, target DeploymentTar
 	return s.DeploymentTarget(ctx, target.ID)
 }
 
+func (s *Store) UpdateDeploymentTarget(ctx context.Context, target DeploymentTarget) (DeploymentTarget, error) {
+	var secret any = target.SecretSetID
+	if target.SecretSetID == "" {
+		secret = nil
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE deployment_targets SET project_id=?,server_id=?,secret_set_id=?,environment=?,repository=?,git_ref=?,compose_file=?,working_dir=?,build_mode=?,health_checks=?,release_root=? WHERE id=?`), target.ProjectID, target.ServerID, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.ID)
+	if err != nil {
+		return DeploymentTarget{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return DeploymentTarget{}, err
+	}
+	if rows == 0 {
+		return DeploymentTarget{}, sql.ErrNoRows
+	}
+	return s.DeploymentTarget(ctx, target.ID)
+}
+
+func (s *Store) DeleteDeploymentTarget(ctx context.Context, id string) error {
+	var active int
+	if err := s.DB.GetContext(ctx, &active, s.Q(`SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')`), id); err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrDeploymentActive
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q("DELETE FROM deployment_targets WHERE id=?"), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 type Deployment struct {
 	ID             string     `db:"id" json:"id"`
 	TargetID       string     `db:"target_id" json:"target_id"`
@@ -448,6 +490,17 @@ type Deployment struct {
 	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
 	StartedAt      *time.Time `db:"started_at" json:"started_at"`
 	FinishedAt     *time.Time `db:"finished_at" json:"finished_at"`
+}
+
+var ErrDeploymentActive = errors.New("deployment is active")
+
+type DeploymentEvent struct {
+	ID           string    `db:"id" json:"id"`
+	DeploymentID string    `db:"deployment_id" json:"deployment_id"`
+	Status       string    `db:"status" json:"status"`
+	Message      string    `db:"message" json:"message"`
+	Content      string    `db:"content" json:"content"`
+	OccurredAt   time.Time `db:"occurred_at" json:"occurred_at"`
 }
 
 func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {
@@ -470,6 +523,88 @@ func (s *Store) CreateDeployment(ctx context.Context, targetID, commitRef string
 func (s *Store) AttachDeploymentOperation(ctx context.Context, deploymentID, operationID string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE deployments SET operation_id=? WHERE id=?"), operationID, deploymentID)
 	return err
+}
+
+func (s *Store) Deployment(ctx context.Context, id string) (Deployment, error) {
+	var deployment Deployment
+	err := s.DB.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
+	return deployment, err
+}
+
+func (s *Store) DeploymentEvents(ctx context.Context, deploymentID string) ([]DeploymentEvent, error) {
+	var events []DeploymentEvent
+	err := s.DB.SelectContext(ctx, &events, s.Q("SELECT id,deployment_id,status,message,content,occurred_at FROM deployment_events WHERE deployment_id=? ORDER BY occurred_at,id"), deploymentID)
+	return events, err
+}
+
+func (s *Store) AddDeploymentEvent(ctx context.Context, event DeploymentEvent) error {
+	if event.ID == "" {
+		event.ID = NewID()
+	}
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO deployment_events(id,deployment_id,status,message,content,occurred_at) VALUES(?,?,?,?,?,?)"), event.ID, event.DeploymentID, event.Status, event.Message, event.Content, event.OccurredAt)
+	return err
+}
+
+func (s *Store) SaveDeploymentStatus(ctx context.Context, update protocol.DeploymentStatus) error {
+	switch update.Status {
+	case "queued", "preparing", "running", "succeeded", "failed", "rolled_back", "canceled":
+	default:
+		return fmt.Errorf("invalid deployment status %q", update.Status)
+	}
+	if len(update.Message) > 8192 {
+		update.Message = update.Message[:8192] + "..."
+	}
+	if len(update.Content) > 1<<20 {
+		update.Content = update.Content[:1<<20] + "\n... log truncated ..."
+	}
+	update.Message = strings.ToValidUTF8(update.Message, "?")
+	update.Content = strings.ToValidUTF8(update.Content, "?")
+	now := time.Now().UTC()
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE deployments SET status=?,message=?,resolved_commit=CASE WHEN ?='' THEN resolved_commit ELSE ? END,started_at=CASE WHEN ? IN ('preparing','running') AND started_at IS NULL THEN ? ELSE started_at END,finished_at=CASE WHEN ? IN ('succeeded','failed','rolled_back','canceled') THEN ? ELSE finished_at END WHERE id=?"), update.Status, update.Message, update.ResolvedCommit, update.ResolvedCommit, update.Status, now, update.Status, now, update.DeploymentID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO deployment_events(id,deployment_id,status,message,content,occurred_at) VALUES(?,?,?,?,?,?)"), NewID(), update.DeploymentID, update.Status, update.Message, update.Content, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeleteDeployment(ctx context.Context, id string) error {
+	result, err := s.DB.ExecContext(ctx, s.Q(`DELETE FROM deployments WHERE id=? AND status NOT IN ('queued','preparing','running')`), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows > 0 {
+		return nil
+	}
+	var exists int
+	if err := s.DB.GetContext(ctx, &exists, s.Q("SELECT COUNT(*) FROM deployments WHERE id=?"), id); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return sql.ErrNoRows
+	}
+	return ErrDeploymentActive
 }
 
 type Alert struct {

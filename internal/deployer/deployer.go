@@ -17,7 +17,9 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
-type StatusFunc func(status, message, resolvedCommit string)
+type StatusFunc func(status, message, resolvedCommit, content string)
+
+const maximumProcessLogSize = 1 << 20
 
 type Deployer struct {
 	Docker string
@@ -41,7 +43,7 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if err != nil {
 		return err
 	}
-	status("preparing", "creating release workspace", "")
+	status("preparing", "creating release workspace", "", "Preparing an isolated release directory.")
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return err
 	}
@@ -49,16 +51,26 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		return errors.New("release already exists")
 	}
 	if output, err := run(ctx, nil, "git", "clone", "--no-checkout", "--", command.Repository, release); err != nil {
+		status("preparing", "repository clone failed", "", output)
 		return fmt.Errorf("clone repository: %w: %s", err, output)
+	} else {
+		status("preparing", "repository cloned", "", output)
 	}
 	if output, err := run(ctx, nil, "git", "-C", release, "fetch", "--depth=1", "origin", command.CommitRef); err != nil {
+		status("preparing", "commit fetch failed", "", output)
 		return fmt.Errorf("fetch commit: %w: %s", err, output)
+	} else {
+		status("preparing", "commit fetched", "", output)
 	}
 	if output, err := run(ctx, nil, "git", "-C", release, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+		status("preparing", "commit checkout failed", "", output)
 		return fmt.Errorf("checkout commit: %w: %s", err, output)
+	} else {
+		status("preparing", "commit checked out", "", output)
 	}
 	resolved, err := run(ctx, nil, "git", "-C", release, "rev-parse", "HEAD")
 	if err != nil {
+		status("preparing", "commit resolution failed", "", resolved)
 		return fmt.Errorf("resolve commit: %w", err)
 	}
 	resolved = strings.TrimSpace(resolved)
@@ -77,10 +89,13 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		environment = append(environment, key+"="+value)
 	}
 	project := projectName(command.TargetID)
-	status("running", "starting Docker Compose project", resolved)
+	status("running", "starting Docker Compose project", resolved, "Compose project initialization started.")
 	if command.BuildMode == "pull" {
 		if output, err := d.compose(ctx, workDir, environment, project, composePath, "pull"); err != nil {
+			status("running", "image pull failed", resolved, output)
 			return fmt.Errorf("docker compose pull: %w: %s", err, output)
+		} else {
+			status("running", "images pulled", resolved, output)
 		}
 	}
 	args := []string{"up", "-d", "--remove-orphans"}
@@ -88,17 +103,22 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		args = append(args, "--build")
 	}
 	if output, err := d.compose(ctx, workDir, environment, project, composePath, args...); err != nil {
+		status("running", "Docker Compose start failed", resolved, output)
 		return fmt.Errorf("docker compose up: %w: %s", err, output)
+	} else {
+		status("running", "Docker Compose project started", resolved, output)
 	}
 	for _, check := range command.HealthChecks {
+		status("running", "running health check", resolved, check.Address)
 		if err := healthCheck(ctx, check); err != nil {
 			return err
 		}
 	}
+	status("running", "health checks passed", resolved, "All configured health checks passed.")
 	if err := promote(root, release); err != nil {
 		return err
 	}
-	status("succeeded", "deployment is healthy", resolved)
+	status("succeeded", "deployment is healthy", resolved, "Release promoted and marked as current.")
 	return nil
 }
 
@@ -121,9 +141,12 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 	if err != nil {
 		return err
 	}
-	status("running", "restoring previous Compose release", "")
+	status("running", "restoring previous Compose release", "", "Starting Docker Compose from the previous release.")
 	if output, err := d.compose(ctx, workDir, nil, projectName(command.TargetID), composePath, "up", "-d", "--remove-orphans"); err != nil {
+		status("running", "rollback Compose start failed", "", output)
 		return fmt.Errorf("docker compose rollback: %w: %s", err, output)
+	} else {
+		status("running", "previous Compose release started", "", output)
 	}
 	currentLink := filepath.Join(root, "current")
 	current, _ := filepath.EvalSymlinks(currentLink)
@@ -134,7 +157,7 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 		_ = replaceSymlink(previousLink, current)
 	}
 	resolved, _ := run(ctx, nil, "git", "-C", previous, "rev-parse", "HEAD")
-	status("rolled_back", "previous release restored", strings.TrimSpace(resolved))
+	status("rolled_back", "previous release restored", strings.TrimSpace(resolved), "Previous release promoted and marked as current.")
 	return nil
 }
 
@@ -249,7 +272,7 @@ func runIn(ctx context.Context, directory string, environment []string, command 
 	process.Dir = directory
 	process.Env = append(os.Environ(), environment...)
 	output, err := process.CombinedOutput()
-	return truncate(string(output), 64<<10), err
+	return truncate(string(output), maximumProcessLogSize), err
 }
 
 func within(root, child string) bool {

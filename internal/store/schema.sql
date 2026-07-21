@@ -326,6 +326,17 @@ CREATE TABLE IF NOT EXISTS deployments (
 
 CREATE INDEX IF NOT EXISTS deployments_target_idx ON deployments(target_id, created_at);
 
+CREATE TABLE IF NOT EXISTS deployment_events (
+  id TEXT PRIMARY KEY,
+  deployment_id TEXT NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS deployment_events_deployment_idx ON deployment_events(deployment_id, occurred_at);
+
 CREATE TABLE IF NOT EXISTS metric_rollups (
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   bucket_at TIMESTAMP NOT NULL,

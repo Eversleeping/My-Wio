@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,5 +271,15 @@ func receiveAgentEnvelope(t *testing.T, outbound <-chan *protocol.AgentEnvelope)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for Agent envelope")
 		return nil
+	}
+}
+
+func TestRedactDeploymentTextHidesEnvironmentAndRepositoryCredentials(t *testing.T) {
+	value := "TOKEN=env-secret clone https://user:url-secret@example.com/repo.git?access_token=query-secret"
+	redacted := redactDeploymentText(value, map[string]string{"TOKEN": "env-secret"}, "https://user:url-secret@example.com/repo.git?access_token=query-secret")
+	for _, secret := range []string{"env-secret", "url-secret", "query-secret"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("deployment log leaked %q: %s", secret, redacted)
+		}
 	}
 }

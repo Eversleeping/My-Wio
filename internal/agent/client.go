@@ -699,25 +699,51 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 }
 
 func (c *Client) runDeployment(ctx context.Context, command protocol.DeployCommand) error {
-	status := func(state, message, resolved string) {
-		_ = c.queue("deployment_status", map[string]string{"DeploymentID": command.DeploymentID, "Status": state, "Message": message, "ResolvedCommit": resolved}, true)
+	status := func(state, message, resolved, content string) {
+		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, command.Repository), ResolvedCommit: resolved, Content: redactDeploymentText(content, command.Environment, command.Repository)}, true)
 	}
 	err := c.deployer.Deploy(ctx, command, status)
 	if err != nil {
-		status("failed", truncate(err.Error(), 8192), "")
+		status("failed", truncate(err.Error(), 8192), "", "")
 	}
 	return err
 }
 
 func (c *Client) runRollback(ctx context.Context, command protocol.RollbackCommand) error {
-	status := func(state, message, resolved string) {
-		_ = c.queue("deployment_status", map[string]string{"DeploymentID": command.DeploymentID, "Status": state, "Message": message, "ResolvedCommit": resolved}, true)
+	status := func(state, message, resolved, content string) {
+		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: message, ResolvedCommit: resolved, Content: content}, true)
 	}
 	err := c.deployer.Rollback(ctx, command, status)
 	if err != nil {
-		status("failed", truncate(err.Error(), 8192), "")
+		status("failed", truncate(err.Error(), 8192), "", "")
 	}
 	return err
+}
+
+func redactDeploymentText(value string, environment map[string]string, repository string) string {
+	secrets := make([]string, 0, len(environment)+4)
+	for _, secret := range environment {
+		secrets = append(secrets, secret)
+	}
+	if remote, err := url.Parse(repository); err == nil {
+		if remote.User != nil {
+			if password, ok := remote.User.Password(); ok {
+				secrets = append(secrets, password)
+			}
+		}
+		for key, values := range remote.Query() {
+			lower := strings.ToLower(key)
+			if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") {
+				secrets = append(secrets, values...)
+			}
+		}
+	}
+	for _, secret := range secrets {
+		if len(secret) >= 4 {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
 }
 
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
