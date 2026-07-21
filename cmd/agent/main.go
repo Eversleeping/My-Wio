@@ -42,6 +42,7 @@ func run(log *slog.Logger, args []string) error {
 		stateDir := flags.String("state-dir", "/var/lib/wio-agent", "agent state directory")
 		codexPath := flags.String("codex", "codex", "Codex CLI executable")
 		dockerPath := flags.String("docker", "docker", "Docker CLI executable")
+		controlDialAddress := flags.String("control-dial-address", "", "control-plane TCP address, preserving the URL TLS name")
 		insecure := flags.Bool("insecure-skip-verify", false, "skip TLS certificate verification (development only)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
@@ -51,7 +52,7 @@ func run(log *slog.Logger, args []string) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: *token, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure})
+		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, ControlDialAddress: *controlDialAddress, EnrollmentToken: *token, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure})
 		if err != nil {
 			return err
 		}

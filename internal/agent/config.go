@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 type Config struct {
 	ControlURL         string   `json:"control_url"`
+	ControlDialAddress string   `json:"control_dial_address,omitempty"`
 	ServerID           string   `json:"server_id"`
 	AgentToken         string   `json:"agent_token"`
 	ScanRoots          []string `json:"scan_roots"`
@@ -62,6 +64,7 @@ func SaveConfig(filename string, config Config) error {
 
 func (c *Config) defaults() {
 	c.ControlURL = strings.TrimRight(strings.TrimSpace(c.ControlURL), "/")
+	c.ControlDialAddress = strings.TrimSpace(c.ControlDialAddress)
 	if len(c.ScanRoots) == 0 {
 		c.ScanRoots = []string{"/srv", "/opt", "/home"}
 	}
@@ -91,6 +94,11 @@ func (c Config) Validate() error {
 	}
 	if !strings.HasPrefix(c.ControlURL, "https://") && !strings.HasPrefix(c.ControlURL, "http://") {
 		return errors.New("control_url must use https:// or http://")
+	}
+	if c.ControlDialAddress != "" {
+		if _, _, err := net.SplitHostPort(c.ControlDialAddress); err != nil {
+			return errors.New("control_dial_address must be host:port")
+		}
 	}
 	if !filepath.IsAbs(c.CloneRoot) || !filepath.IsAbs(c.StateDir) || !filepath.IsAbs(c.CodexAPIKeyFile) || !filepath.IsAbs(c.PrerequisiteSocket) {
 		return errors.New("clone_root, state_dir, codex_api_key_file, and prerequisite_socket must be absolute")

@@ -67,6 +67,7 @@ type InstallRequest struct {
 	Target              Target
 	ExpectedFingerprint string
 	ControlURL          string
+	ControlDialAddress  string
 	EnrollmentToken     string
 	CodexAPIURL         string
 	CodexAPIKey         string
@@ -296,6 +297,9 @@ rm -f /etc/sudoers.d/wio-agent`
 
 	request.report("enrolling_agent", 0, 0)
 	enroll := "/usr/local/bin/wio-agent enroll --url " + shellQuote(request.ControlURL) + " --token " + shellQuote(request.EnrollmentToken) + " --codex " + shellQuote(codexPath)
+	if request.ControlDialAddress != "" {
+		enroll += " --control-dial-address " + shellQuote(request.ControlDialAddress)
+	}
 	output, err := run(client, elevated(root, enroll))
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: agent enrollment was rejected", ErrInstallation)

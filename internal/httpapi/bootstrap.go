@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -268,6 +269,7 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 		Target:              input.target(),
 		ExpectedFingerprint: strings.TrimSpace(input.HostKeyFingerprint),
 		ControlURL:          a.agentControlURL(r),
+		ControlDialAddress:  strings.TrimSpace(os.Getenv("WIO_AGENT_DIAL_ADDRESS")),
 		EnrollmentToken:     token,
 		CodexAPIURL:         strings.TrimSpace(input.CodexAPIURL),
 		CodexAPIKey:         input.CodexAPIKey,

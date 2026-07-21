@@ -27,6 +27,7 @@ services:
       WIO_DATABASE_URL: ${WIO_DATABASE_URL:?set WIO_DATABASE_URL}
       WIO_MASTER_KEY: ${WIO_MASTER_KEY:?set WIO_MASTER_KEY}
       WIO_PUBLIC_URL: https://${WIO_DOMAIN:?set WIO_DOMAIN}
+      WIO_AGENT_DIAL_ADDRESS: ${WIO_AGENT_DIAL_ADDRESS:-}
     expose:
       - "8080"
     healthcheck:

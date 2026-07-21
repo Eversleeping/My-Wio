@@ -98,6 +98,9 @@ func (c *Client) downloadAgentUpdate(ctx context.Context, source, target string,
 	request.Header.Set("Authorization", "Bearer "+c.config.AgentToken)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: c.config.InsecureSkipVerify}
+	if c.config.ControlDialAddress != "" {
+		transport.DialContext = controlDialer(c.config.ControlDialAddress)
+	}
 	response, err := (&http.Client{Transport: transport}).Do(request)
 	if err != nil {
 		return err
