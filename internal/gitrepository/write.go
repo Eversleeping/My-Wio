@@ -10,6 +10,11 @@ import (
 
 var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
+const (
+	maxGitChangePaths = 512
+	maxCommitMessage  = 20 * 1024
+)
+
 func CreateBranch(ctx context.Context, repositoryPath, name, startPoint string, managedRoots []string) error {
 	repositoryPath, err := resolveRepository(ctx, repositoryPath, managedRoots)
 	if err != nil {
@@ -205,6 +210,167 @@ func Push(ctx context.Context, repositoryPath, remote, ref string, setUpstream b
 		return fmt.Errorf("push: %s", cleanGitError(output, err))
 	}
 	return nil
+}
+
+// Stage stages the selected workspace changes. When all is true, the complete
+// worktree is staged, including deletions.
+func Stage(ctx context.Context, repositoryPath string, paths []string, all bool, managedRoots []string) error {
+	repositoryPath, err := resolveRepository(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return err
+	}
+	paths, err = selectWorkspaceChangePaths(ctx, repositoryPath, paths, all, managedRoots, func(change WorkspaceChange) bool {
+		return change.Unstaged || change.Status == "untracked"
+	})
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	args := []string{"add", "--all", "--"}
+	args = append(args, paths...)
+	output, err := runGit(ctx, repositoryPath, args...)
+	if err != nil {
+		return fmt.Errorf("stage changes: %s", cleanGitError(output, err))
+	}
+	return nil
+}
+
+// Unstage removes the selected changes from the index while preserving the
+// working tree. It also works before the repository has its first commit.
+func Unstage(ctx context.Context, repositoryPath string, paths []string, all bool, managedRoots []string) error {
+	repositoryPath, err := resolveRepository(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return err
+	}
+	paths, err = selectWorkspaceChangePaths(ctx, repositoryPath, paths, all, managedRoots, func(change WorkspaceChange) bool {
+		return change.Staged
+	})
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	if _, headErr := runGit(ctx, repositoryPath, "rev-parse", "--verify", "HEAD"); headErr != nil {
+		args := []string{"rm", "--cached", "-r", "--ignore-unmatch", "--"}
+		args = append(args, paths...)
+		output, rmErr := runGit(ctx, repositoryPath, args...)
+		if rmErr != nil {
+			return fmt.Errorf("unstage changes: %s", cleanGitError(output, rmErr))
+		}
+		return nil
+	}
+	args := []string{"restore", "--staged", "--"}
+	args = append(args, paths...)
+	output, err := runGit(ctx, repositoryPath, args...)
+	if err != nil {
+		return fmt.Errorf("unstage changes: %s", cleanGitError(output, err))
+	}
+	return nil
+}
+
+// DiscardUnstaged restores tracked files to their index version and removes
+// untracked files. It deliberately only accepts changes that have an unstaged
+// portion, so staged work is not silently destroyed.
+func DiscardUnstaged(ctx context.Context, repositoryPath string, paths []string, all bool, managedRoots []string) error {
+	repositoryPath, err := resolveRepository(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return err
+	}
+	paths, err = selectWorkspaceChangePaths(ctx, repositoryPath, paths, all, managedRoots, func(change WorkspaceChange) bool {
+		return change.Status != "conflicted" && (change.Unstaged || change.Status == "untracked")
+	})
+	if err != nil {
+		return err
+	}
+	changes, err := ListWorkspaceChanges(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return err
+	}
+	byPath := make(map[string]WorkspaceChange, len(changes))
+	for _, change := range changes {
+		byPath[change.Path] = change
+	}
+	for _, path := range paths {
+		var output []byte
+		if byPath[path].Status == "untracked" {
+			output, err = runGit(ctx, repositoryPath, "clean", "-f", "--", path)
+		} else {
+			output, err = runGit(ctx, repositoryPath, "restore", "--worktree", "--", path)
+		}
+		if err != nil {
+			return fmt.Errorf("discard changes: %s", cleanGitError(output, err))
+		}
+	}
+	return nil
+}
+
+func CommitChanges(ctx context.Context, repositoryPath, message string, managedRoots []string) error {
+	repositoryPath, err := resolveRepository(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return err
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return errors.New("commit message is required")
+	}
+	if len(message) > maxCommitMessage {
+		return fmt.Errorf("commit message must be at most %d bytes", maxCommitMessage)
+	}
+	if strings.ContainsRune(message, '\x00') {
+		return errors.New("commit message contains a NUL character")
+	}
+	output, err := runGit(ctx, repositoryPath, "commit", "--no-gpg-sign", "-m", message)
+	if err != nil {
+		return fmt.Errorf("commit changes: %s", cleanGitError(output, err))
+	}
+	return nil
+}
+
+func selectWorkspaceChangePaths(ctx context.Context, repositoryPath string, paths []string, all bool, managedRoots []string, predicate func(WorkspaceChange) bool) ([]string, error) {
+	changes, err := ListWorkspaceChanges(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return nil, err
+	}
+	if all {
+		selected := make([]string, 0, len(changes))
+		for _, change := range changes {
+			if predicate(change) {
+				selected = append(selected, change.Path)
+			}
+		}
+		return selected, nil
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("at least one changed path is required")
+	}
+	if len(paths) > maxGitChangePaths {
+		return nil, fmt.Errorf("too many changed paths; maximum is %d", maxGitChangePaths)
+	}
+	byPath := make(map[string]WorkspaceChange, len(changes))
+	for _, change := range changes {
+		byPath[change.Path] = change
+	}
+	selected := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, rawPath := range paths {
+		path, err := normalizeChangePath(rawPath)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		change, ok := byPath[path]
+		if !ok || !predicate(change) {
+			return nil, fmt.Errorf("path is not an eligible workspace change: %s", path)
+		}
+		seen[path] = struct{}{}
+		selected = append(selected, path)
+	}
+	return selected, nil
 }
 
 func validateBranch(ctx context.Context, name string) error {

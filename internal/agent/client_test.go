@@ -246,6 +246,12 @@ func TestWorkspaceGitInspectReturnsStatusBranchesRemotesAndCommits(t *testing.T)
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "new.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	client := &Client{config: Config{ScanRoots: []string{root}, CloneRoot: filepath.Join(root, "clone")}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), outbound: make(chan *protocol.AgentEnvelope, 2), seen: make(map[string]*operationExecution)}
 	payload, _ := json.Marshal(protocol.GitWorkspaceInspectCommand{WorkspaceID: "workspace-1", Path: repository, CommitLimit: 10})
 	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "inspect-1", Kind: "git.workspace.inspect", PayloadJSON: payload})
@@ -258,7 +264,7 @@ func TestWorkspaceGitInspectReturnsStatusBranchesRemotesAndCommits(t *testing.T)
 	if err := json.Unmarshal(operation.Data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.WorkspaceID != "workspace-1" || result.Status.Branch != "main" || result.Status.Head == "" || len(result.Branches) == 0 || len(result.Remotes) != 1 || len(result.Commits) != 1 || result.Commits[0].Title != "inspect" {
+	if result.WorkspaceID != "workspace-1" || result.Status.Branch != "main" || result.Status.Head == "" || len(result.Changes) != 2 || len(result.Branches) == 0 || len(result.Remotes) != 1 || len(result.Commits) != 1 || result.Commits[0].Title != "inspect" {
 		t.Fatalf("unexpected inspect result: %#v", result)
 	}
 }

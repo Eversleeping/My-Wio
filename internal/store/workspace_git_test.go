@@ -18,12 +18,12 @@ func TestWorkspaceGitSnapshotPersistsStructuredDataAndWorkspaceSummary(t *testin
 	if err != nil || len(workspaces) != 1 {
 		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
 	}
-	result := protocol.GitWorkspaceInspectResult{WorkspaceID: workspaces[0].ID, Status: protocol.GitStatus{Branch: "feature/read-only", Head: "abc123", Dirty: true}, Branches: []protocol.GitBranch{{Name: "feature/read-only", FullName: "refs/heads/feature/read-only", Kind: "local", Current: true}}, Commits: []protocol.GitCommit{{SHA: "abc123", Title: "Inspect"}}}
+	result := protocol.GitWorkspaceInspectResult{WorkspaceID: workspaces[0].ID, Status: protocol.GitStatus{Branch: "feature/read-only", Head: "abc123", Dirty: true}, Changes: []protocol.WorkspaceChange{{Path: "new.txt", Status: "untracked", Unstaged: true}}, Branches: []protocol.GitBranch{{Name: "feature/read-only", FullName: "refs/heads/feature/read-only", Kind: "local", Current: true}}, Commits: []protocol.GitCommit{{SHA: "abc123", Title: "Inspect"}}}
 	if err := database.SaveWorkspaceGitSnapshot(ctx, workspaces[0].ID, result); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := database.WorkspaceGitSnapshot(ctx, workspaces[0].ID)
-	if err != nil || snapshot.Status != "succeeded" || snapshot.Data.Status.Head != "abc123" || len(snapshot.Data.Branches) != 1 {
+	if err != nil || snapshot.Status != "succeeded" || snapshot.Data.Status.Head != "abc123" || len(snapshot.Data.Changes) != 1 || snapshot.Data.Changes[0].Path != "new.txt" || len(snapshot.Data.Branches) != 1 {
 		t.Fatalf("unexpected snapshot: %#v %v", snapshot, err)
 	}
 	updated, err := database.Workspace(ctx, workspaces[0].ID)

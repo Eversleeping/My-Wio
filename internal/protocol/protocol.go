@@ -241,27 +241,31 @@ type GitCommit struct {
 }
 
 type GitWorkspaceInspectResult struct {
-	WorkspaceID string      `json:"workspace_id"`
-	Status      GitStatus   `json:"status"`
-	Branches    []GitBranch `json:"branches"`
-	Remotes     []GitRemote `json:"remotes"`
-	Commits     []GitCommit `json:"commits"`
-	HasMore     bool        `json:"has_more"`
+	WorkspaceID string            `json:"workspace_id"`
+	Status      GitStatus         `json:"status"`
+	Changes     []WorkspaceChange `json:"changes"`
+	Branches    []GitBranch       `json:"branches"`
+	Remotes     []GitRemote       `json:"remotes"`
+	Commits     []GitCommit       `json:"commits"`
+	HasMore     bool              `json:"has_more"`
 }
 
 type GitWorkspaceWriteCommand struct {
-	WorkspaceID string `json:"workspace_id"`
-	Path        string `json:"path"`
-	Action      string `json:"action"`
-	Branch      string `json:"branch,omitempty"`
-	NewBranch   string `json:"new_branch,omitempty"`
-	StartPoint  string `json:"start_point,omitempty"`
-	Remote      string `json:"remote,omitempty"`
-	URL         string `json:"url,omitempty"`
-	Ref         string `json:"ref,omitempty"`
-	Force       bool   `json:"force,omitempty"`
-	SetUpstream bool   `json:"set_upstream,omitempty"`
-	Detach      bool   `json:"detach,omitempty"`
+	WorkspaceID string   `json:"workspace_id"`
+	Path        string   `json:"path"`
+	Action      string   `json:"action"`
+	Branch      string   `json:"branch,omitempty"`
+	NewBranch   string   `json:"new_branch,omitempty"`
+	StartPoint  string   `json:"start_point,omitempty"`
+	Remote      string   `json:"remote,omitempty"`
+	URL         string   `json:"url,omitempty"`
+	Ref         string   `json:"ref,omitempty"`
+	Force       bool     `json:"force,omitempty"`
+	SetUpstream bool     `json:"set_upstream,omitempty"`
+	Detach      bool     `json:"detach,omitempty"`
+	Paths       []string `json:"paths,omitempty"`
+	All         bool     `json:"all,omitempty"`
+	Message     string   `json:"message,omitempty"`
 }
 
 type GitWorkspaceWriteResult struct {

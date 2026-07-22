@@ -89,6 +89,9 @@ func normalizeWorkspaceGitData(data *protocol.GitWorkspaceInspectResult, workspa
 	if data.Branches == nil {
 		data.Branches = make([]protocol.GitBranch, 0)
 	}
+	if data.Changes == nil {
+		data.Changes = make([]protocol.WorkspaceChange, 0)
+	}
 	if data.Remotes == nil {
 		data.Remotes = make([]protocol.GitRemote, 0)
 	}

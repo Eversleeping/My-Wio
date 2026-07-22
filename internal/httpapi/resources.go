@@ -761,12 +761,18 @@ func (a *API) queueWorkspaceGitWrite(w http.ResponseWriter, r *http.Request, com
 		return
 	}
 	command.WorkspaceID, command.Path = workspace.ID, workspace.Path
+	if err := a.store.BeginWorkspaceGitRefresh(r.Context(), workspace.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start workspace Git operation")
+		return
+	}
 	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.workspace.write", command, "git-write:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if errors.Is(err, store.ErrWorkspaceWriteActive) {
+		_ = a.store.FailWorkspaceGitRefresh(r.Context(), workspace.ID, err.Error())
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
+		_ = a.store.FailWorkspaceGitRefresh(r.Context(), workspace.ID, "could not queue Git operation")
 		writeError(w, http.StatusInternalServerError, "could not queue Git operation")
 		return
 	}
@@ -863,6 +869,69 @@ func (a *API) pushGit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "push", Remote: strings.TrimSpace(in.Remote), Ref: strings.TrimSpace(in.Ref), SetUpstream: in.SetUpstream})
+}
+
+type gitChangeSelectionInput struct {
+	Paths []string `json:"paths"`
+	All   bool     `json:"all"`
+}
+
+func decodeGitChangeSelection(w http.ResponseWriter, r *http.Request) (gitChangeSelectionInput, bool) {
+	var in gitChangeSelectionInput
+	if !decodeJSON(w, r, &in) {
+		return in, false
+	}
+	if !in.All && len(in.Paths) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one changed path or all=true is required")
+		return in, false
+	}
+	if len(in.Paths) > 512 {
+		writeError(w, http.StatusBadRequest, "too many changed paths")
+		return in, false
+	}
+	return in, true
+}
+
+func (a *API) stageGitChanges(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeGitChangeSelection(w, r)
+	if !ok {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "stage", Paths: in.Paths, All: in.All})
+}
+
+func (a *API) unstageGitChanges(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeGitChangeSelection(w, r)
+	if !ok {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "unstage", Paths: in.Paths, All: in.All})
+}
+
+func (a *API) discardGitChanges(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeGitChangeSelection(w, r)
+	if !ok {
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "discard", Paths: in.Paths, All: in.All})
+}
+
+func (a *API) commitGitChanges(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Message string `json:"message"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Message) == "" {
+		writeError(w, http.StatusBadRequest, "commit message is required")
+		return
+	}
+	if len(in.Message) > 20*1024 {
+		writeError(w, http.StatusBadRequest, "commit message is too long")
+		return
+	}
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "commit", Message: in.Message})
 }
 
 type createWorktreeInput struct {

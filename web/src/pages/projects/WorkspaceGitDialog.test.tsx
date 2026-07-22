@@ -6,11 +6,11 @@ import { WorkspaceGitDialog, type GitDialogLabels } from "./WorkspaceGitDialog";
 import type { DialogSlotProps } from "./slots";
 
 const labels: GitDialogLabels = {
-  title: "Git", status: "Status", branches: "Branches", remotes: "Remotes", commits: "Commits", refresh: "Refresh", refreshing: "Refreshing", branch: "Branch", head: "Head", upstream: "Upstream", ahead: "Ahead", behind: "Behind", staged: "Staged", unstaged: "Unstaged", untracked: "Untracked", clean: "Clean", dirty: "Dirty", noBranches: "No branches", noRemotes: "No remotes", noCommits: "No commits", close: "Close", sync: "Sync", remote: "Remote", ref: "Ref", fetch: "Fetch", pull: "Pull", push: "Push", setUpstream: "Set upstream", createBranch: "Create branch", branchName: "Branch name", startPoint: "Start point", checkout: "Checkout", detach: "Detach", rename: "Rename", edit: "Edit", delete: "Delete", forceDelete: "Force delete", addRemote: "Add remote", remoteName: "Remote name", remoteURL: "Remote URL", save: "Save", cancel: "Cancel", current: "Current", local: "Local", remoteBranch: "Remote branch", actionQueued: "Queued"
+  title: "Git", status: "Status", branches: "Branches", remotes: "Remotes", commits: "Commits", refresh: "Refresh", refreshing: "Refreshing", branch: "Branch", head: "Head", upstream: "Upstream", ahead: "Ahead", behind: "Behind", staged: "Staged", unstaged: "Unstaged", untracked: "Untracked", clean: "Clean", dirty: "Dirty", noBranches: "No branches", noRemotes: "No remotes", noCommits: "No commits", close: "Close", sync: "Sync", remote: "Remote", ref: "Ref", fetch: "Fetch", pull: "Pull", push: "Push", setUpstream: "Set upstream", createBranch: "Create branch", branchName: "Branch name", startPoint: "Start point", checkout: "Checkout", detach: "Detach", rename: "Rename", edit: "Edit", delete: "Delete", forceDelete: "Force delete", addRemote: "Add remote", remoteName: "Remote name", remoteURL: "Remote URL", save: "Save", cancel: "Cancel", current: "Current", local: "Local", remoteBranch: "Remote branch", actionQueued: "Queued", stagedChanges: "Staged changes", unstagedChanges: "Changes", noStagedChanges: "No staged changes", noChanges: "No changes", stage: "Stage", stageAll: "Stage all", unstage: "Unstage", unstageAll: "Unstage all", discard: "Discard", discardConfirm: "Discard changes?", commitMessage: "Commit message", commitPlaceholder: "Describe changes", commitAction: "Commit", readOnly: "Read-only", modified: "Modified", added: "Added", deleted: "Deleted", renamed: "Renamed", copied: "Copied", untrackedFile: "Untracked", conflicted: "Conflicted"
 };
 const snapshot: WorkspaceGitSnapshot = {
   workspace_id: "workspace-1", status: "succeeded", error: "", requested_at: null, updated_at: null,
-  data: { workspace_id: "workspace-1", status: { branch: "main", detached: false, unborn: false, head: "abcdef123456", upstream: "origin/main", ahead: 0, behind: 0, staged: 0, unstaged: 1, untracked: 0, dirty: true }, branches: [{ name: "main", full_name: "refs/heads/main", kind: "local", commit_sha: "abcdef123456", current: true }], remotes: [{ name: "origin", fetch_urls: ["https://example.com/repo.git"], push_urls: ["https://example.com/repo.git"] }], commits: [], has_more: false }
+  data: { workspace_id: "workspace-1", status: { branch: "main", detached: false, unborn: false, head: "abcdef123456", upstream: "origin/main", ahead: 0, behind: 0, staged: 1, unstaged: 1, untracked: 1, dirty: true }, changes: [{ path: "src/staged.ts", status: "added", staged: true, unstaged: false }, { path: "src/new.ts", status: "untracked", staged: false, unstaged: true }, { path: "src/deleted.ts", status: "deleted", staged: false, unstaged: true }], branches: [{ name: "main", full_name: "refs/heads/main", kind: "local", commit_sha: "abcdef123456", current: true }], remotes: [{ name: "origin", fetch_urls: ["https://example.com/repo.git"], push_urls: ["https://example.com/repo.git"] }], commits: [], has_more: false }
 };
 function Dialog({ open, title, children, className }: DialogSlotProps) { return open ? <div role="dialog" aria-label={title} className={className}>{children}</div> : null; }
 
@@ -34,6 +34,29 @@ test("allows fetch but blocks pull while the workspace is dirty", async () => {
   expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "Fetch" }));
   await waitFor(() => expect(onAction).toHaveBeenCalledWith({ type: "fetch", remote: "origin" }));
+});
+
+test("shows every change and queues stage, unstage, discard, and commit actions", async () => {
+  const user = userEvent.setup();
+  const onAction = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("confirm", vi.fn(() => true));
+  render(<WorkspaceGitDialog open snapshot={snapshot} loading={false} busy={false} error="" labels={labels} Dialog={Dialog} onClose={vi.fn()} onRefresh={vi.fn()} onAction={onAction} />);
+
+  expect(screen.getByText("staged.ts")).toBeInTheDocument();
+  expect(screen.getByText("new.ts")).toBeInTheDocument();
+  expect(screen.getByText("deleted.ts")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Stage: src/new.ts" }));
+  await user.click(screen.getByRole("button", { name: "Unstage: src/staged.ts" }));
+  await user.click(screen.getByRole("button", { name: "Discard: src/deleted.ts" }));
+  await user.type(screen.getByRole("textbox", { name: "Commit message" }), "Update files");
+  await user.click(screen.getByRole("button", { name: "Commit" }));
+
+  await waitFor(() => {
+    expect(onAction).toHaveBeenNthCalledWith(1, { type: "stage", paths: ["src/new.ts"], all: false });
+    expect(onAction).toHaveBeenNthCalledWith(2, { type: "unstage", paths: ["src/staged.ts"], all: false });
+    expect(onAction).toHaveBeenNthCalledWith(3, { type: "discard", paths: ["src/deleted.ts"], all: false });
+    expect(onAction).toHaveBeenNthCalledWith(4, { type: "commit", message: "Update files" });
+  });
 });
 
 test("adds a remote and queues push with upstream", async () => {

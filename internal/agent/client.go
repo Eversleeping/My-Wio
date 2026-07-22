@@ -486,7 +486,15 @@ func (c *Client) inspectWorkspaceGit(ctx context.Context, command protocol.GitWo
 	if err != nil {
 		return protocol.GitWorkspaceInspectResult{}, err
 	}
+	changes, err := gitrepository.ListWorkspaceChanges(ctx, command.Path, c.inventoryRoots())
+	if err != nil {
+		return protocol.GitWorkspaceInspectResult{}, err
+	}
 	result := protocol.GitWorkspaceInspectResult{WorkspaceID: command.WorkspaceID, Status: protocol.GitStatus{Branch: status.Branch, Detached: status.Detached, Unborn: status.Unborn, Head: status.Head, Upstream: status.Upstream, Ahead: status.Ahead, Behind: status.Behind, Staged: status.Staged, Unstaged: status.Unstaged, Untracked: status.Untracked, Dirty: status.Dirty}, HasMore: commits.HasMore}
+	result.Changes = make([]protocol.WorkspaceChange, 0, len(changes))
+	for _, change := range changes {
+		result.Changes = append(result.Changes, protocol.WorkspaceChange{Path: change.Path, OldPath: change.OldPath, Status: change.Status, Staged: change.Staged, Unstaged: change.Unstaged})
+	}
 	result.Branches = make([]protocol.GitBranch, 0, len(branches))
 	for _, branch := range branches {
 		result.Branches = append(result.Branches, protocol.GitBranch{Name: branch.Name, FullName: branch.FullName, Kind: branch.Kind, CommitSHA: branch.CommitSHA, Upstream: branch.Upstream, Current: branch.Current})
@@ -538,6 +546,14 @@ func (c *Client) writeWorkspaceGit(ctx context.Context, command protocol.GitWork
 		err = gitrepository.Pull(ctx, command.Path, command.Remote, command.Branch, roots)
 	case "push":
 		err = gitrepository.Push(ctx, command.Path, command.Remote, command.Ref, command.SetUpstream, roots)
+	case "stage":
+		err = gitrepository.Stage(ctx, command.Path, command.Paths, command.All, roots)
+	case "unstage":
+		err = gitrepository.Unstage(ctx, command.Path, command.Paths, command.All, roots)
+	case "discard":
+		err = gitrepository.DiscardUnstaged(ctx, command.Path, command.Paths, command.All, roots)
+	case "commit":
+		err = gitrepository.CommitChanges(ctx, command.Path, command.Message, roots)
 	default:
 		return protocol.GitWorkspaceWriteResult{}, fmt.Errorf("unsupported workspace Git action %q", command.Action)
 	}

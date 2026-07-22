@@ -812,7 +812,7 @@ func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
 	if err := json.Unmarshal(emptySnapshotResponse.Body.Bytes(), &emptySnapshot); err != nil {
 		t.Fatal(err)
 	}
-	if emptySnapshot.Data.Branches == nil || emptySnapshot.Data.Remotes == nil || emptySnapshot.Data.Commits == nil {
+	if emptySnapshot.Data.Changes == nil || emptySnapshot.Data.Branches == nil || emptySnapshot.Data.Remotes == nil || emptySnapshot.Data.Commits == nil {
 		t.Fatalf("empty Git snapshot collections must be arrays: %s", emptySnapshotResponse.Body.String())
 	}
 	refresh := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspaceID+"/git/refresh", workspaceID, map[string]any{}, api.refreshWorkspaceGit)
@@ -831,7 +831,7 @@ func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
 	if err := json.Unmarshal(refreshingSnapshotResponse.Body.Bytes(), &emptySnapshot); err != nil {
 		t.Fatal(err)
 	}
-	if emptySnapshot.Data.Branches == nil || emptySnapshot.Data.Remotes == nil || emptySnapshot.Data.Commits == nil {
+	if emptySnapshot.Data.Changes == nil || emptySnapshot.Data.Branches == nil || emptySnapshot.Data.Remotes == nil || emptySnapshot.Data.Commits == nil {
 		t.Fatalf("refreshing Git snapshot collections must be arrays: %s", refreshingSnapshotResponse.Body.String())
 	}
 	result := protocol.GitWorkspaceInspectResult{WorkspaceID: workspaceID, Status: protocol.GitStatus{Branch: "main", Head: "abc", Dirty: true}, Commits: []protocol.GitCommit{{SHA: "abc", Title: "latest"}}}
@@ -845,6 +845,71 @@ func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
 	commitsResponse := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspaceID+"/git/commits?limit=1", workspaceID, nil, api.workspaceGitCommits)
 	if commitsResponse.Code != http.StatusOK || !strings.Contains(commitsResponse.Body.String(), "latest") {
 		t.Fatalf("unexpected Git commits response: %d %s", commitsResponse.Code, commitsResponse.Body.String())
+	}
+}
+
+func TestWorkspaceGitChangeActionsQueueStructuredWriteCommands(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "workspace-git-write-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "workspace-git-write", AgentVersion: "0.2.36"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/workspace-git-write", Name: "git-write", Branch: "main", CommitSHA: "abc", Dirty: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	workspaceID := workspaces[0].ID
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE workspaces SET management_mode='managed' WHERE id=?"), workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	tests := []struct {
+		name        string
+		path        string
+		body        map[string]any
+		handler     http.HandlerFunc
+		wantAction  string
+		wantPath    string
+		wantAll     bool
+		wantMessage string
+	}{
+		{name: "stage file", path: "/api/workspaces/" + workspaceID + "/git/stage", body: map[string]any{"paths": []string{"src/new.ts"}}, handler: api.stageGitChanges, wantAction: "stage", wantPath: "src/new.ts"},
+		{name: "unstage all", path: "/api/workspaces/" + workspaceID + "/git/unstage", body: map[string]any{"all": true}, handler: api.unstageGitChanges, wantAction: "unstage", wantAll: true},
+		{name: "discard file", path: "/api/workspaces/" + workspaceID + "/git/discard", body: map[string]any{"paths": []string{"src/old.ts"}}, handler: api.discardGitChanges, wantAction: "discard", wantPath: "src/old.ts"},
+		{name: "commit", path: "/api/workspaces/" + workspaceID + "/git/commit", body: map[string]any{"message": "Update Git workspace"}, handler: api.commitGitChanges, wantAction: "commit", wantMessage: "Update Git workspace"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := workspaceResourceRequest(t, http.MethodPost, test.path, workspaceID, test.body, test.handler)
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("Git action returned %d: %s", response.Code, response.Body.String())
+			}
+			var accepted map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil || accepted["operation_id"] == "" {
+				t.Fatalf("unexpected Git action response: %s", response.Body.String())
+			}
+			operation, err := database.Operation(ctx, accepted["operation_id"])
+			if err != nil || operation.Kind != "git.workspace.write" || operation.WorkspaceID != workspaceID {
+				t.Fatalf("unexpected Git write operation: %#v %v", operation, err)
+			}
+			var command protocol.GitWorkspaceWriteCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				t.Fatal(err)
+			}
+			if command.Action != test.wantAction || command.All != test.wantAll || command.Message != test.wantMessage {
+				t.Fatalf("unexpected Git command: %#v", command)
+			}
+			if test.wantPath != "" && (len(command.Paths) != 1 || command.Paths[0] != test.wantPath) {
+				t.Fatalf("unexpected Git command paths: %#v", command.Paths)
+			}
+			if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: operation.ID, Status: "succeeded"}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
