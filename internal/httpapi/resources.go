@@ -195,18 +195,19 @@ func (a *API) createEnrollment(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) revokeServer(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "serverID")
-	now := time.Now().UTC()
-	result, err := a.store.DB.ExecContext(r.Context(), a.store.Q("UPDATE servers SET revoked_at=?,status='offline' WHERE id=? AND revoked_at IS NULL"), now, id)
+	err := a.store.RevokeServer(r.Context(), id)
+	if errors.Is(err, store.ErrControlPlaneServer) {
+		writeError(w, http.StatusForbidden, "the control-plane server cannot be revoked")
+		return
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not revoke server")
 		return
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	_, _ = a.store.DB.ExecContext(r.Context(), a.store.Q("UPDATE agent_credentials SET revoked_at=? WHERE server_id=?"), now, id)
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "server.revoke", "server", id, nil, clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

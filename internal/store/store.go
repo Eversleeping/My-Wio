@@ -26,6 +26,7 @@ import (
 var schema string
 
 var ErrWorkspaceWriteActive = errors.New("workspace already has an active write operation")
+var ErrControlPlaneServer = errors.New("the control-plane server cannot be revoked")
 
 type Store struct {
 	DB     *sqlx.DB
@@ -33,6 +34,12 @@ type Store struct {
 }
 
 const ServerOnlineGracePeriod = 90 * time.Second
+
+const (
+	ControlPlaneServerID      = "control-plane-agent"
+	ControlPlaneServerName    = "Control Plane"
+	ControlPlaneAgentTokenKey = "control_plane_agent_token"
+)
 
 func Open(databaseURL string) (*Store, error) {
 	driver, dsn := "sqlite", databaseURL
@@ -97,6 +104,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateServerControlPlane(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
 			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
@@ -105,6 +116,25 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateServerControlPlane(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN IF NOT EXISTS is_control_plane INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("migrate control-plane server flag: %w", err)
+		}
+		return nil
+	}
+	var count int
+	if err := db.GetContext(ctx, &count, "SELECT COUNT(*) FROM pragma_table_info('servers') WHERE name='is_control_plane'"); err != nil {
+		return fmt.Errorf("inspect control-plane server flag: %w", err)
+	}
+	if count == 0 {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN is_control_plane INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("migrate control-plane server flag: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateUserAuthMode(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -538,6 +568,7 @@ type Server struct {
 	ID                   string     `db:"id" json:"id"`
 	Name                 string     `db:"name" json:"name"`
 	Hostname             string     `db:"hostname" json:"hostname"`
+	IsControlPlane       bool       `db:"is_control_plane" json:"is_control_plane"`
 	Status               string     `db:"status" json:"status"`
 	AgentVersion         string     `db:"agent_version" json:"agent_version"`
 	CodexVersion         string     `db:"codex_version" json:"codex_version"`
@@ -569,14 +600,76 @@ type ServerMetadata struct {
 
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
-	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.is_control_plane DESC,s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	return out, err
 }
 
 func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	var server Server
-	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	return server, err
+}
+
+// EnsureControlPlaneServer creates the built-in Agent registration once and
+// restores it if an older database was left with the record revoked. The
+// caller owns the clear-text token; only its hash is stored with the Agent
+// credentials.
+func (s *Store) EnsureControlPlaneServer(ctx context.Context, hostname, agentToken string) (Server, error) {
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		hostname = ControlPlaneServerName
+	}
+	if strings.TrimSpace(agentToken) == "" {
+		return Server{}, errors.New("control-plane agent token is required")
+	}
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return Server{}, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO servers(id,name,hostname,status,scan_roots,is_control_plane) VALUES(?,?,?,'offline','[]',1)
+		ON CONFLICT(id) DO UPDATE SET name=excluded.name,hostname=excluded.hostname,is_control_plane=1,revoked_at=NULL`), ControlPlaneServerID, ControlPlaneServerName, hostname); err != nil {
+		return Server{}, err
+	}
+	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_credentials(server_id,token_hash,created_at,revoked_at) VALUES(?,?,?,NULL)
+		ON CONFLICT(server_id) DO UPDATE SET token_hash=excluded.token_hash,revoked_at=NULL`), ControlPlaneServerID, HashToken(agentToken), time.Now().UTC()); err != nil {
+		return Server{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Server{}, err
+	}
+	return s.Server(ctx, ControlPlaneServerID)
+}
+
+func (s *Store) RevokeServer(ctx context.Context, id string) error {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var isControlPlane int
+	if err = tx.GetContext(ctx, &isControlPlane, s.Q("SELECT is_control_plane FROM servers WHERE id=? AND revoked_at IS NULL"), id); err != nil {
+		return err
+	}
+	if isControlPlane != 0 {
+		return ErrControlPlaneServer
+	}
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET revoked_at=?,status='offline' WHERE id=? AND revoked_at IS NULL"), now, id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_credentials SET revoked_at=? WHERE server_id=?"), now, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreateEnrollment(ctx context.Context, name string, roots []string, token string, expires time.Time) (string, error) {

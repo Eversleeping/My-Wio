@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS servers (
   codex_ready INTEGER NOT NULL DEFAULT 0,
   scan_roots TEXT NOT NULL DEFAULT '[]',
   managed_roots TEXT NOT NULL DEFAULT '[]',
+  is_control_plane INTEGER NOT NULL DEFAULT 0,
   last_seen_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   revoked_at TIMESTAMP

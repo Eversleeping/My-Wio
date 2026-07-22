@@ -56,6 +56,25 @@ func TestUpdateServerMetadata(t *testing.T) {
 	}
 }
 
+func TestRevokeControlPlaneServerReturnsForbidden(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server, err := database.EnsureControlPlaneServer(context.Background(), "control-host", "control-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &API{store: database}
+	route := chi.NewRouteContext()
+	route.URLParams.Add("serverID", server.ID)
+	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
+	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
+	response := directJSONRequest(t, http.MethodDelete, "/api/servers/"+server.ID, nil, nil, func(w http.ResponseWriter, r *http.Request) {
+		api.revokeServer(w, r.WithContext(requestContext))
+	})
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "cannot be revoked") {
+		t.Fatalf("unexpected control-plane revoke response: %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestNormalizeServerMetadataRejectsOversizedFields(t *testing.T) {
 	if _, err := normalizeServerMetadata("", "", strings.Repeat("备", serverNotesLimit)); err != nil {
 		t.Fatalf("Unicode notes at the limit should be accepted: %v", err)

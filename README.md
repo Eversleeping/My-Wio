@@ -33,6 +33,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 - 控制面下发 Agent 更新包，Agent 校验大小与 SHA-256 后原子切换版本，首次启动失败时自动回退
 - 实时展示 Codex 消息、命令输出、文件变更、任务状态、中断和审批请求
 - 使用 Docker Compose 发布目录、健康检查、稳定的 Compose 项目名和上一版本回滚
+- 控制面启动时自动注册内置控制机 Agent；该记录由数据库保护，不能被撤销
 - 生产环境使用 PostgreSQL，本地开发使用 SQLite
 - 可安装的 PWA，并提供离线应用外壳
 - 用户界面支持中文和英文，默认使用中文，并在浏览器中保存语言偏好
@@ -105,6 +106,8 @@ go build ./cmd/controlplane ./cmd/agent
 4. 打开 `https://<WIO_DOMAIN>`，创建管理员并选择认证方式。选择动态验证码的模式需要扫描 TOTP 二维码并离线保存恢复码；选择固定密码的模式需要妥善保存密码。组合模式登录时必须同时提供固定密码和动态验证码或恢复码。
 
 生产镜像会将 Vite 构建结果嵌入 Go 二进制文件。PostgreSQL 数据、Caddy 证书和 Caddy 状态均使用命名卷保存。
+
+Linux 控制面进程默认同时运行一个内置 Agent，并以固定的“控制机”记录出现在服务器列表中。该记录使用 Vault 保护的持久化令牌，不能通过界面或 API 撤销；将 `WIO_CONTROL_AGENT_ENABLED` 设置为 `false` 可停止内置 Agent 进程，控制机记录会保留为离线状态。
 
 ## 网页注册服务器
 

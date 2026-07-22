@@ -62,6 +62,30 @@ func TestOpenMigratesLegacyUserToTOTPAuthentication(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesLegacyServersWithControlPlaneFlag(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-servers.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE servers (id TEXT PRIMARY KEY,name TEXT NOT NULL,hostname TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'offline',agent_version TEXT NOT NULL DEFAULT '',codex_version TEXT NOT NULL DEFAULT '',codex_ready INTEGER NOT NULL DEFAULT 0,scan_roots TEXT NOT NULL DEFAULT '[]',last_seen_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,revoked_at TIMESTAMP)`); err != nil {
+		_ = legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(path + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var count int
+	if err := database.DB.GetContext(context.Background(), &count, "SELECT COUNT(*) FROM pragma_table_info('servers') WHERE name='is_control_plane'"); err != nil || count != 1 {
+		t.Fatalf("control-plane flag was not migrated: count=%d err=%v", count, err)
+	}
+}
+
 func TestFailedCodexSnapshotRetainsCachedData(t *testing.T) {
 	database := testStore(t)
 	ctx := context.Background()
@@ -313,6 +337,63 @@ func testStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	return database
+}
+
+func TestControlPlaneServerIsIdempotentAndCannotBeRevoked(t *testing.T) {
+	database := testStore(t)
+	ctx := context.Background()
+	server, err := database.EnsureControlPlaneServer(ctx, "control-host", "control-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.ID != ControlPlaneServerID || !server.IsControlPlane || server.Name != ControlPlaneServerName {
+		t.Fatalf("unexpected control-plane server: %#v", server)
+	}
+	if authenticated, authErr := database.AuthenticateAgent(ctx, "control-agent-token"); authErr != nil || authenticated != ControlPlaneServerID {
+		t.Fatalf("control-plane Agent authentication failed: %q %v", authenticated, authErr)
+	}
+	second, err := database.EnsureControlPlaneServer(ctx, "control-host", "control-agent-token")
+	if err != nil || second.ID != server.ID {
+		t.Fatalf("control-plane registration was not idempotent: %#v %v", second, err)
+	}
+	servers, err := database.ListServers(ctx)
+	if err != nil || len(servers) != 1 || !servers[0].IsControlPlane {
+		t.Fatalf("unexpected server list after idempotent registration: %#v %v", servers, err)
+	}
+	if err := database.RevokeServer(ctx, ControlPlaneServerID); !errors.Is(err, ErrControlPlaneServer) {
+		t.Fatalf("expected control-plane revoke protection, got %v", err)
+	}
+	if _, err := database.Server(ctx, ControlPlaneServerID); err != nil {
+		t.Fatalf("control-plane server disappeared after rejected revoke: %v", err)
+	}
+}
+
+func TestRevokeServerStillRevokesRegularServers(t *testing.T) {
+	database := testStore(t)
+	ctx := context.Background()
+	if _, err := database.EnsureControlPlaneServer(ctx, "control-host", "control-agent-token"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateEnrollment(ctx, "regular", []string{"/srv"}, "regular-enrollment", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "regular-enrollment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "regular-host", "regular-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RevokeServer(ctx, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Server(ctx, server.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("revoked regular server remained visible: %v", err)
+	}
+	if _, err := database.AuthenticateAgent(ctx, "regular-agent-token"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("revoked regular Agent remained authenticated: %v", err)
+	}
 }
 
 func TestEnrollmentInventoryAndOperations(t *testing.T) {
