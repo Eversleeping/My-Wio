@@ -782,7 +782,7 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   const [selected, setSelected] = useState(selectedThreadID);
   const [createOpen, setCreateOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(approvals.length > 0);
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
   const [deletingThread, setDeletingThread] = useState("");
   const [threadAction, setThreadAction] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -802,7 +802,7 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   const activeThreadSource = showArchived ? archivedThreads : threads;
   const visibleThreads = useMemo(() => activeThreads.filter(thread => !thread.project_hidden_at), [activeThreads]);
   const active = visibleThreads.find(thread => thread.id === selected) ?? visibleThreads[0];
-  const threadGroups = useMemo(() => groupThreadsByProject(visibleThreads), [visibleThreads]);
+  const threadGroups = useMemo(() => groupThreadsByWorkspace(visibleThreads, workspaces.data ?? []), [visibleThreads, workspaces.data]);
   const approvalKey = approvals.map(item => item.id).join(",");
   useEffect(() => {
     if (!(showArchived ? archivedThreads.data : threads.data)) return;
@@ -815,7 +815,7 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   useEffect(() => { if (pendingThread && listedActiveThreads.some(thread => thread.id === pendingThread.id)) setPendingThread(null); }, [listedActiveThreads, pendingThread]);
   useEffect(() => { setPreview(null); setActivePane("conversation"); if (active) setMobileView("conversation"); }, [active?.workspace_id]);
   const selectThread = (threadID: string) => { setSelected(threadID); setMobileView(threadID ? "conversation" : "sessions"); onSelectThread(threadID); };
-  const toggleProject = (projectID: string) => setCollapsedProjects(current => { const next = new Set(current); if (next.has(projectID)) next.delete(projectID); else next.add(projectID); return next; });
+  const toggleWorkspace = (workspaceID: string) => setCollapsedWorkspaces(current => { const next = new Set(current); if (next.has(workspaceID)) next.delete(workspaceID); else next.add(workspaceID); return next; });
   const openFile = (selection: FilePreviewSelection) => { setPreview(selection); setActivePane("preview"); setMobileView("conversation"); };
   const copyValue = async (value: string, success: string) => { try { await copyText(value); notify(success); } catch (error) { notify(message(error)); } };
   const deepLink = (threadID: string) => `${window.location.origin}${locationFor("codex", threadID)}`;
@@ -868,6 +868,18 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
       notify(t("codex.threadForked"));
     } catch (error) { notify(message(error)); } finally { setThreadAction(""); }
   };
+  const createSessionInWorkspace = async (group: ThreadGroup) => {
+    if (threadAction) return;
+    setThreadAction(`create:${group.workspaceID}`);
+    try {
+      const created = await post<Thread>("/threads", { workspace_id: group.workspaceID });
+      setPendingThread(created);
+      setShowArchived(false);
+      selectThread(created.id);
+      threads.reload();
+      notify(t("codex.sessionCreated"));
+    } catch (error) { notify(message(error)); } finally { setThreadAction(""); }
+  };
   const openWorktreeDialog = (target: { kind: "project"; projectID: string; projectName: string } | { kind: "thread"; thread: Thread }) => {
     const candidates = target.kind === "project" ? (workspaces.data ?? []).filter(workspace => workspace.project_id === target.projectID) : (workspaces.data ?? []).filter(workspace => workspace.id === target.thread.workspace_id);
     setWorktreeTarget(target);
@@ -901,6 +913,7 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
     } catch (error) { setWorktreeError(message(error)); } finally { setWorktreeBusy(false); }
   };
   const projectMenuActions = (group: ThreadGroup): ContextMenuAction[] => [
+    ...(!showArchived ? [{ id: "new-session", label: t("codex.createSessionHere"), icon: Plus, disabled: threadAction !== "", onSelect: () => createSessionInWorkspace(group) } satisfies ContextMenuAction] : []),
     { id: "pin", label: t(group.pinnedAt ? "codex.unpinProject" : "codex.pinProject"), icon: group.pinnedAt ? PinOff : Pin, onSelect: async () => { try { await patch<Project>(`/projects/${group.projectID}`, { pinned: !group.pinnedAt }); threads.reload(); notify(t(group.pinnedAt ? "codex.projectUnpinned" : "codex.projectPinned")); } catch (error) { notify(message(error)); } } },
     { id: "rename", label: t("codex.renameProject"), icon: Pencil, onSelect: () => beginRename("project", group.projectID, group.projectName) },
     ...(!showArchived ? [{ id: "create-worktree", label: t("codex.createPermanentWorktree"), icon: GitBranch, disabled: threadAction !== "" || !(workspaces.data ?? []).some(workspace => workspace.project_id === group.projectID), onSelect: () => openWorktreeDialog({ kind: "project", projectID: group.projectID, projectName: group.projectName }) } satisfies ContextMenuAction] : []),
@@ -939,7 +952,22 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   };
   return <div className="codex-layout">
     <div className="codex-mobile-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={mobileView === "sessions"} className={mobileView === "sessions" ? "active" : ""} onClick={() => setMobileView("sessions")}><Code2 size={15} />{t("codex.sessions")}</button><button type="button" role="tab" aria-selected={mobileView === "files"} className={mobileView === "files" ? "active" : ""} onClick={() => setMobileView("files")}><FolderTree size={15} />{t("codex.projectFiles")}</button><button type="button" role="tab" aria-selected={mobileView === "conversation"} className={mobileView === "conversation" ? "active" : ""} onClick={() => setMobileView("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button></div>
-    <aside className={`codex-sidebar mobile-${mobileView}`}><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t(showArchived ? "codex.archivedTasks" : "codex.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${showArchived ? "active" : ""}`} aria-pressed={showArchived} title={t(showArchived ? "codex.showActiveTasks" : "codex.showArchivedTasks")} onClick={() => { setShowArchived(value => !value); setSelected(""); }}><Archive size={18} /></button>{!showArchived && <button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button>}</div></div><div className="thread-items">{(showArchived ? archivedThreads.loading : threads.loading) ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : threadGroups.length === 0 ? <Empty icon={showArchived ? <Archive size={23} /> : <Code2 size={23} />} text={t(showArchived ? "codex.noArchivedTasks" : "codex.noSessions")} /> : threadGroups.map(group => { const collapsed = collapsedProjects.has(group.projectID); return <section className="thread-project" key={group.projectID}><ContextMenu className="thread-project-heading" label={t("codex.projectMenu", { name: group.projectName })} actions={projectMenuActions(group)}><button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={t(collapsed ? "codex.expandProject" : "codex.collapseProject")} onClick={() => toggleProject(group.projectID)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.projectName}</strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span></button></ContextMenu>{!collapsed && <div className="project-threads">{group.threads.map(thread => { const activeThread = thread.status === "queued" || thread.status === "running"; const deleting = deletingThread === thread.id; const acting = threadAction.endsWith(`:${thread.id}`); return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions">{acting ? <LoaderCircle className="spin" size={14} /> : <Status value={thread.status} />}{!showArchived && <button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting || !!threadAction} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</div></ContextMenu>; })}</div>}</section>; })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
+    <aside className={`codex-sidebar mobile-${mobileView}`}><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t(showArchived ? "codex.archivedTasks" : "codex.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${showArchived ? "active" : ""}`} aria-pressed={showArchived} title={t(showArchived ? "codex.showActiveTasks" : "codex.showArchivedTasks")} onClick={() => { setShowArchived(value => !value); setSelected(""); }}><Archive size={18} /></button>{!showArchived && <button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button>}</div></div><div className="thread-items">{(showArchived ? archivedThreads.loading : threads.loading) ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : threadGroups.length === 0 ? <Empty icon={showArchived ? <Archive size={23} /> : <Code2 size={23} />} text={t(showArchived ? "codex.noArchivedTasks" : "codex.noSessions")} /> : threadGroups.map(group => {
+      const collapsed = collapsedWorkspaces.has(group.workspaceID);
+      return <section className="thread-project" key={group.workspaceID}>
+        <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.label })} actions={projectMenuActions(group)}>
+          <button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={`${t(collapsed ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${group.path}`} onClick={() => toggleWorkspace(group.workspaceID)}>
+            {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.label}</strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span>
+          </button>
+        </ContextMenu>
+        {!collapsed && <div className="project-threads">{group.threads.map(thread => {
+          const activeThread = thread.status === "queued" || thread.status === "running";
+          const deleting = deletingThread === thread.id;
+          const acting = threadAction.endsWith(`:${thread.id}`);
+          return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions">{acting ? <LoaderCircle className="spin" size={14} /> : <Status value={thread.status} />}{!showArchived && <button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting || !!threadAction} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</div></ContextMenu>;
+        })}</div>}
+      </section>;
+    })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
     <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
@@ -949,19 +977,26 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
   </div>;
 }
 
-function groupThreadsByProject(threads: Thread[]) {
+export function groupThreadsByWorkspace(threads: Thread[], workspaces: Workspace[]) {
+  const workspacesByID = new Map(workspaces.map(workspace => [workspace.id, workspace]));
   const groups = new Map<string, ThreadGroup>();
   for (const thread of threads) {
-    const group = groups.get(thread.project_id) ?? { projectID: thread.project_id, projectName: thread.project_name, pinnedAt: thread.project_pinned_at, threads: [] };
+    const workspace = workspacesByID.get(thread.workspace_id);
+    const path = workspace?.path || thread.path;
+    const pathName = path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+    const workspaceName = workspace?.display_name?.trim();
+    const branch = workspace?.branch?.trim();
+    const identity = [workspaceName, branch, pathName].find(value => value && value !== thread.project_name) || pathName || thread.workspace_id;
+    const group = groups.get(thread.workspace_id) ?? { workspaceID: thread.workspace_id, projectID: thread.project_id, projectName: thread.project_name, label: `${thread.project_name} · ${identity}`, path, pinnedAt: thread.project_pinned_at, threads: [] };
     group.threads.push(thread);
-    groups.set(thread.project_id, group);
+    groups.set(thread.workspace_id, group);
   }
   const pinnedFirst = (left: string | null, right: string | null) => left && !right ? -1 : !left && right ? 1 : left && right ? right.localeCompare(left) : 0;
   for (const group of groups.values()) group.threads.sort((left, right) => pinnedFirst(left.pinned_at, right.pinned_at) || right.updated_at.localeCompare(left.updated_at));
-  return Array.from(groups.values()).sort((left, right) => pinnedFirst(left.pinnedAt, right.pinnedAt) || left.projectName.localeCompare(right.projectName));
+  return Array.from(groups.values()).sort((left, right) => pinnedFirst(left.pinnedAt, right.pinnedAt) || left.projectName.localeCompare(right.projectName) || left.label.localeCompare(right.label));
 }
 
-type ThreadGroup = { projectID: string; projectName: string; pinnedAt: string | null; threads: Thread[] };
+type ThreadGroup = { workspaceID: string; projectID: string; projectName: string; label: string; path: string; pinnedAt: string | null; threads: Thread[] };
 
 type FileTreeNode = { name: string; path: string; kind: WorkspaceFile["kind"]; size?: number; children: FileTreeNode[] };
 
