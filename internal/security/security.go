@@ -59,14 +59,19 @@ func HashRecovery(code string) string {
 }
 
 func GenerateRecoveryCodes(count int) ([]string, []string, error) {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	codes := make([]string, 0, count)
 	hashes := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		raw, err := RandomToken(9)
-		if err != nil {
+		random := make([]byte, 12)
+		if _, err := io.ReadFull(rand.Reader, random); err != nil {
 			return nil, nil, err
 		}
-		code := strings.ToUpper(raw[:6] + "-" + raw[6:12])
+		plain := make([]byte, len(random))
+		for index, value := range random {
+			plain[index] = alphabet[int(value)&31]
+		}
+		code := string(plain[:6]) + "-" + string(plain[6:])
 		codes = append(codes, code)
 		hashes = append(hashes, HashRecovery(code))
 	}

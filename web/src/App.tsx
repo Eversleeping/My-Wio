@@ -67,10 +67,10 @@ import {
   WifiOff,
   X
 } from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, APIError, patch, post, postStream, put, remove, setSession, socketURL } from "./api";
+import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { currentLocale, useI18n } from "./i18n";
@@ -185,6 +185,7 @@ export default function App() {
   const { t } = useI18n();
   const initialLocation = useMemo(readLocationState, []);
   const [auth, setAuth] = useState<AuthState>("loading");
+  const [authMode, setAuthMode] = useState<AuthMode>("totp");
   const [session, setCurrentSession] = useState<Session | null>(null);
   const [view, setView] = useState<View>(initialLocation.view);
   const [codexThreadID, setCodexThreadID] = useState(initialLocation.threadID);
@@ -206,11 +207,12 @@ export default function App() {
     let active = true;
     (async () => {
       try {
-        const status = await api<{ configured: boolean }>("/setup/status");
+        const status = await api<{ configured: boolean; auth_mode?: AuthMode }>("/setup/status");
         if (!status.configured) {
           if (active) setAuth("setup");
           return;
         }
+        if (active && status.auth_mode) setAuthMode(status.auth_mode);
         const current = await api<Session>("/auth/session");
         if (active) authenticate(current);
       } catch (error) {
@@ -288,8 +290,8 @@ export default function App() {
   }, []);
 
   if (auth === "loading") return <LoadingScreen />;
-  if (auth === "setup") return <SetupScreen onReady={() => setAuth("login")} />;
-  if (auth === "login") return <LoginScreen onLogin={authenticate} />;
+  if (auth === "setup") return <SetupScreen onReady={mode => { setAuthMode(mode); setAuth("login"); }} />;
+  if (auth === "login") return <LoginScreen authMode={authMode} onLogin={authenticate} />;
 
   const logout = async () => {
     await api("/auth/logout", { method: "POST" });
@@ -343,54 +345,6 @@ export default function App() {
 function LoadingScreen() {
   const { t } = useI18n();
   return <div className="auth-layout"><div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong></div><LoaderCircle className="spin" size={28} /></div>;
-}
-
-function SetupScreen({ onReady }: { onReady: () => void }) {
-  const { t } = useI18n();
-  const [username, setUsername] = useState("admin");
-  const [result, setResult] = useState<{ totp_uri: string; totp_secret: string; recovery_codes: string[] } | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError("");
-    try { setResult(await post("/setup", { username })); } catch (err) { setError(message(err)); } finally { setBusy(false); }
-  };
-  return <div className="auth-layout">
-    <section className="auth-panel">
-      <div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong><LanguageSwitch /></div>
-      {!result ? <form onSubmit={submit}>
-        <div className="section-heading"><h1>{t("auth.createAdmin")}</h1><span className="status-tag neutral"><LockKeyhole size={14} />{t("auth.singleAdmin")}</span></div>
-        <Field label={t("auth.username")}><input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required /></Field>
-        {error && <ErrorBanner text={error} />}
-        <button className="primary-button full" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ShieldCheck size={17} />}{t("auth.createAdmin")}</button>
-      </form> : <div>
-        <div className="section-heading"><h1>{t("auth.twoFactor")}</h1><span className="status-tag success"><Check size={14} />{t("auth.ready")}</span></div>
-        <div className="totp-grid"><div className="qr"><QRCodeSVG value={result.totp_uri} size={156} /></div><div><Field label={t("auth.totpSecret")}><code className="secret-code">{result.totp_secret}</code></Field><p className="label">{t("auth.recoveryCodes")}</p><div className="recovery-codes">{result.recovery_codes.map(code => <code key={code}>{code}</code>)}</div></div></div>
-        <button className="primary-button full" onClick={onReady}><ChevronRight size={17} />{t("auth.continue")}</button>
-      </div>}
-    </section>
-  </div>;
-}
-
-function LoginScreen({ onLogin }: { onLogin: (session: Session) => void }) {
-  const { t } = useI18n();
-  const [username, setUsername] = useState("admin");
-  const [code, setCode] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError("");
-    try { onLogin(await post<Session>("/auth/login", { username, code })); } catch (err) { setError(message(err)); } finally { setBusy(false); }
-  };
-  return <div className="auth-layout"><section className="auth-panel compact">
-    <div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong><LanguageSwitch /></div>
-    <form onSubmit={submit}><h1>{t("auth.signIn")}</h1>
-      <Field label={t("auth.username")}><input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required /></Field>
-      <Field label={t("auth.code")}><input value={code} onChange={e => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" required /></Field>
-      {error && <ErrorBanner text={error} />}
-      <button className="primary-button full" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <LockKeyhole size={17} />}{t("auth.signIn")}</button>
-    </form>
-  </section></div>;
 }
 
 function Dashboard({ realtime, onNavigate }: { realtime: number; onNavigate: (view: View) => void }) {

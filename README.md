@@ -23,7 +23,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 
 ## 功能特性
 
-- 单管理员用户名加 TOTP 认证，并提供一次性恢复码；登录不再需要密码
+- 初始化时可选择三种管理员认证方式：账号 + 固定密码、账号 + 动态验证码或恢复码、账号 + 固定密码 + 动态验证码或恢复码
 - 会话与 Agent 令牌哈希、CSRF 防护、严格 Cookie 和登录限流
 - 使用 AES-256-GCM Vault 保护 TOTP 密钥和命名部署密钥集
 - 使用短期一次性令牌注册 Linux Agent
@@ -102,7 +102,7 @@ go build ./cmd/controlplane ./cmd/agent
    docker compose --env-file .env -f deploy/docker-compose.yml ps
    ```
 
-4. 打开 `https://<WIO_DOMAIN>`，创建管理员，扫描 TOTP 二维码，并离线保存恢复码。登录时只需要用户名和动态验证码；恢复码可作为一次性备用登录凭据。
+4. 打开 `https://<WIO_DOMAIN>`，创建管理员并选择认证方式。选择动态验证码的模式需要扫描 TOTP 二维码并离线保存恢复码；选择固定密码的模式需要妥善保存密码。组合模式登录时必须同时提供固定密码和动态验证码或恢复码。
 
 生产镜像会将 Vite 构建结果嵌入 Go 二进制文件。PostgreSQL 数据、Caddy 证书和 Caddy 状态均使用命名卷保存。
 
@@ -160,12 +160,12 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec -T postgres \
   pg_dump -U wio -Fc wio > wio.dump
 ```
 
-丢失 `WIO_MASTER_KEY` 后，TOTP 密钥、Vault 密钥集和等待执行的加密部署操作都将无法恢复。请将该密钥保存在 Docker 主机备份之外的安全位置。
+丢失 `WIO_MASTER_KEY` 后，启用动态验证码的管理员 TOTP 密钥、Vault 密钥集和等待执行的加密部署操作都将无法恢复。请将该密钥保存在 Docker 主机备份之外的安全位置。
 
 ## 安全边界
 
 - Wio 面向可信的单管理员环境。
-- 管理员登录仅校验 TOTP 或一次性恢复码；TOTP 密钥或任一未使用恢复码泄露即等同于管理员凭据泄露。
+- 管理员登录按初始化时选择的模式校验固定密码、TOTP 或一次性恢复码；组合模式要求两个因子同时通过。TOTP 密钥、固定密码或任一未使用恢复码泄露均可能导致管理员凭据泄露。
 - Agent 令牌和注册令牌只显示一次，控制面仅保存其哈希值。
 - SSH 主机指纹必须经过确认；SSH 密码和私钥仅在单次注册请求内使用，不写入控制面数据库。
 - Vault 密钥集及服务器凭据预设保存后，浏览器不会再次收到其中的明文；Codex API Key 与 Git Token 只以 Vault 密文写入数据库。

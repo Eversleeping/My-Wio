@@ -57,6 +57,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+	if err := migrateUserAuthMode(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateImportedProjectRemotes(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -97,6 +101,25 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateUserAuthMode(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_mode TEXT NOT NULL DEFAULT 'totp'"); err != nil {
+			return fmt.Errorf("migrate user authentication mode: %w", err)
+		}
+		return nil
+	}
+	var count int
+	if err := db.GetContext(ctx, &count, "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='auth_mode'"); err != nil {
+		return fmt.Errorf("inspect user authentication mode: %w", err)
+	}
+	if count == 0 {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'totp'"); err != nil {
+			return fmt.Errorf("migrate user authentication mode: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateRepairEnrollments(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -429,10 +452,17 @@ func HashToken(token string) string {
 type User struct {
 	ID             string `db:"id" json:"id"`
 	Username       string `db:"username" json:"username"`
+	AuthMode       string `db:"auth_mode" json:"auth_mode"`
 	PasswordHash   string `db:"password_hash" json:"-"`
 	TOTPSecret     string `db:"totp_secret" json:"-"`
 	RecoveryHashes string `db:"recovery_hashes" json:"-"`
 }
+
+const (
+	AuthModePassword     = "password"
+	AuthModeTOTP         = "totp"
+	AuthModePasswordTOTP = "password_totp"
+)
 
 func (s *Store) HasUser(ctx context.Context) (bool, error) {
 	var n int
@@ -441,14 +471,20 @@ func (s *Store) HasUser(ctx context.Context) (bool, error) {
 }
 
 func (s *Store) CreateUser(ctx context.Context, u User) error {
-	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO users(id,username,password_hash,totp_secret,recovery_hashes) VALUES(?,?,?,?,?)"), u.ID, u.Username, u.PasswordHash, u.TOTPSecret, u.RecoveryHashes)
+	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO users(id,username,auth_mode,password_hash,totp_secret,recovery_hashes) VALUES(?,?,?,?,?,?)"), u.ID, u.Username, u.AuthMode, u.PasswordHash, u.TOTPSecret, u.RecoveryHashes)
 	return err
 }
 
 func (s *Store) UserByName(ctx context.Context, name string) (User, error) {
 	var u User
-	err := s.DB.GetContext(ctx, &u, s.Q("SELECT id,username,password_hash,totp_secret,recovery_hashes FROM users WHERE username=?"), name)
+	err := s.DB.GetContext(ctx, &u, s.Q("SELECT id,username,auth_mode,password_hash,totp_secret,recovery_hashes FROM users WHERE username=?"), name)
 	return u, err
+}
+
+func (s *Store) UserAuthMode(ctx context.Context) (string, error) {
+	var mode string
+	err := s.DB.GetContext(ctx, &mode, "SELECT auth_mode FROM users ORDER BY created_at LIMIT 1")
+	return mode, err
 }
 
 type Session struct {

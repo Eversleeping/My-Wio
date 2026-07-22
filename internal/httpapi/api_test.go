@@ -35,7 +35,7 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 	frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
 	handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true)
 
-	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"username": "admin"}, nil)
+	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"username": "admin", "auth_mode": store.AuthModeTOTP}, nil)
 	if setup.Code != http.StatusCreated {
 		t.Fatalf("setup returned %d: %s", setup.Code, setup.Body.String())
 	}
@@ -72,6 +72,122 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 	logoutWithoutCSRF := requestJSON(t, handler, http.MethodPost, "/api/auth/logout", nil, cookies[0])
 	if logoutWithoutCSRF.Code != http.StatusForbidden {
 		t.Fatalf("mutation without CSRF returned %d", logoutWithoutCSRF.Code)
+	}
+}
+
+func TestSetupAndLoginAuthenticationModes(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		password string
+	}{
+		{name: "password", mode: store.AuthModePassword, password: "correct-horse-battery-staple"},
+		{name: "totp", mode: store.AuthModeTOTP},
+		{name: "password and totp", mode: store.AuthModePasswordTOTP, password: "correct-horse-battery-staple"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			vault := security.DevVault()
+			hub := realtime.New()
+			log := slog.New(slog.NewTextHandler(testWriter{t}, nil))
+			gateway := agentgateway.New(database, hub, vault, log)
+			frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
+			handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true)
+
+			setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{
+				"username": "admin", "auth_mode": test.mode, "password": test.password,
+			}, nil)
+			if setup.Code != http.StatusCreated {
+				t.Fatalf("setup returned %d: %s", setup.Code, setup.Body.String())
+			}
+			var setupBody struct {
+				AuthMode      string   `json:"auth_mode"`
+				Secret        string   `json:"totp_secret"`
+				RecoveryCodes []string `json:"recovery_codes"`
+			}
+			if err := json.Unmarshal(setup.Body.Bytes(), &setupBody); err != nil {
+				t.Fatal(err)
+			}
+			if setupBody.AuthMode != test.mode {
+				t.Fatalf("setup auth mode = %q", setupBody.AuthMode)
+			}
+			needsCode := test.mode != store.AuthModePassword
+			if needsCode != (setupBody.Secret != "" && len(setupBody.RecoveryCodes) == 10) {
+				t.Fatalf("unexpected TOTP setup response: %#v", setupBody)
+			}
+			status := requestJSON(t, handler, http.MethodGet, "/api/setup/status", nil, nil)
+			if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"auth_mode":"`+test.mode+`"`) {
+				t.Fatalf("setup status returned %d: %s", status.Code, status.Body.String())
+			}
+
+			code := ""
+			if needsCode {
+				code, err = totp.GenerateCode(setupBody.Secret, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			loginPayload := map[string]string{"username": "admin", "password": test.password, "code": code}
+			login := requestJSON(t, handler, http.MethodPost, "/api/auth/login", loginPayload, nil)
+			if login.Code != http.StatusOK {
+				t.Fatalf("login returned %d: %s", login.Code, login.Body.String())
+			}
+
+			if test.mode != store.AuthModeTOTP {
+				wrongPassword := requestJSON(t, handler, http.MethodPost, "/api/auth/login", map[string]string{"username": "admin", "password": "incorrect-password", "code": code}, nil)
+				if wrongPassword.Code != http.StatusUnauthorized {
+					t.Fatalf("wrong password returned %d", wrongPassword.Code)
+				}
+			}
+			if needsCode {
+				wrongCode := requestJSON(t, handler, http.MethodPost, "/api/auth/login", map[string]string{"username": "admin", "password": test.password, "code": "000000"}, nil)
+				if wrongCode.Code != http.StatusUnauthorized {
+					t.Fatalf("wrong code returned %d", wrongCode.Code)
+				}
+				recoveryPayload := map[string]string{"username": "admin", "password": test.password, "code": setupBody.RecoveryCodes[0]}
+				recovery := requestJSON(t, handler, http.MethodPost, "/api/auth/login", recoveryPayload, nil)
+				if recovery.Code != http.StatusOK {
+					t.Fatalf("recovery login returned %d: %s", recovery.Code, recovery.Body.String())
+				}
+				replay := requestJSON(t, handler, http.MethodPost, "/api/auth/login", recoveryPayload, nil)
+				if replay.Code != http.StatusUnauthorized {
+					t.Fatalf("reused recovery code returned %d", replay.Code)
+				}
+			}
+		})
+	}
+}
+
+func TestSetupRejectsInvalidAuthenticationConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body map[string]string
+	}{
+		{name: "unsupported mode", body: map[string]string{"username": "admin", "auth_mode": "magic"}},
+		{name: "short password", body: map[string]string{"username": "admin", "auth_mode": store.AuthModePassword, "password": "too-short"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			vault := security.DevVault()
+			hub := realtime.New()
+			log := slog.New(slog.NewTextHandler(testWriter{t}, nil))
+			gateway := agentgateway.New(database, hub, vault, log)
+			frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
+			handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true)
+			response := requestJSON(t, handler, http.MethodPost, "/api/setup", test.body, nil)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("setup returned %d: %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 

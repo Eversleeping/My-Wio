@@ -70,4 +70,9 @@ func TestRecoveryCodesAreHashed(t *testing.T) {
 	if hashes[0] != HashRecovery(codes[0]) || strings.Contains(hashes[0], codes[0]) {
 		t.Fatal("recovery code hash mismatch")
 	}
+	for _, code := range codes {
+		if len(code) != 13 || code[6] != '-' || strings.Count(code, "-") != 1 {
+			t.Fatalf("unexpected recovery code format: %q", code)
+		}
+	}
 }

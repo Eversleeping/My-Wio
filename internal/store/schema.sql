@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,
+  auth_mode TEXT NOT NULL DEFAULT 'totp',
   password_hash TEXT NOT NULL,
   totp_secret TEXT NOT NULL,
   recovery_hashes TEXT NOT NULL,

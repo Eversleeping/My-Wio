@@ -37,6 +37,31 @@ func TestOpenMigratesLegacyCredentialProfilesWithCommitIdentity(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesLegacyUserToTOTPAuthentication(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-user.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE users (id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,totp_secret TEXT NOT NULL,recovery_hashes TEXT NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+		INSERT INTO users(id,username,password_hash,totp_secret,recovery_hashes) VALUES('legacy-user','admin','unused','encrypted','[]')`)
+	if closeErr := legacy.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(path + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	user, err := database.UserByName(context.Background(), "admin")
+	if err != nil || user.AuthMode != AuthModeTOTP {
+		t.Fatalf("legacy user authentication mode = %q, %v", user.AuthMode, err)
+	}
+}
+
 func TestFailedCodexSnapshotRetainsCachedData(t *testing.T) {
 	database := testStore(t)
 	ctx := context.Background()

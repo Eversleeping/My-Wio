@@ -253,7 +253,16 @@ func (a *API) setupStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not read setup state")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"configured": configured})
+	status := map[string]any{"configured": configured}
+	if configured {
+		mode, modeErr := a.store.UserAuthMode(r.Context())
+		if modeErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not read authentication mode")
+			return
+		}
+		status["auth_mode"] = mode
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (a *API) setup(w http.ResponseWriter, r *http.Request) {
@@ -270,6 +279,8 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		Username string `json:"username"`
+		AuthMode string `json:"auth_mode"`
+		Password string `json:"password"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -279,41 +290,73 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "username must contain 3 to 64 characters")
 		return
 	}
-	// Keep the legacy non-null database field populated with a random, unusable
-	// value. Authentication is intentionally TOTP-only.
-	passwordToken, err := security.RandomToken(32)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not generate administrator credential")
+	authMode := strings.TrimSpace(input.AuthMode)
+	if authMode == "" {
+		authMode = store.AuthModeTOTP
+	}
+	needsPassword := authMode == store.AuthModePassword || authMode == store.AuthModePasswordTOTP
+	needsCode := authMode == store.AuthModeTOTP || authMode == store.AuthModePasswordTOTP
+	if !needsPassword && !needsCode {
+		writeError(w, http.StatusBadRequest, "unsupported authentication mode")
 		return
 	}
-	passwordHash, err := security.HashPassword(passwordToken)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	passwordHash := ""
+	if needsPassword {
+		passwordHash, err = security.HashPassword(input.Password)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else {
+		// Keep the legacy non-null database field populated with a random,
+		// unusable value when password authentication is disabled.
+		passwordToken, tokenErr := security.RandomToken(32)
+		if tokenErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not generate administrator credential")
+			return
+		}
+		passwordHash, err = security.HashPassword(passwordToken)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not generate administrator credential")
+			return
+		}
+	}
+	totpURI, totpSecret, recoveryCodes, recoveryHashes := "", "", []string(nil), []string(nil)
+	if needsCode {
+		key, keyErr := totp.Generate(totp.GenerateOpts{Issuer: "Wio", AccountName: input.Username})
+		if keyErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not generate TOTP secret")
+			return
+		}
+		encryptedSecret, encryptErr := a.vault.Encrypt(key.Secret())
+		if encryptErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not protect TOTP secret")
+			return
+		}
+		totpURI, totpSecret = key.URL(), key.Secret()
+		var codesErr error
+		recoveryCodes, recoveryHashes, codesErr = security.GenerateRecoveryCodes(10)
+		if codesErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not generate recovery codes")
+			return
+		}
+		recoveryJSON, _ := json.Marshal(recoveryHashes)
+		user := store.User{ID: store.NewID(), Username: input.Username, AuthMode: authMode, PasswordHash: passwordHash, TOTPSecret: encryptedSecret, RecoveryHashes: string(recoveryJSON)}
+		if err := a.store.CreateUser(r.Context(), user); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not create administrator")
+			return
+		}
+		_ = a.store.Audit(r.Context(), user.ID, "setup.complete", "user", user.ID, map[string]string{"username": input.Username, "auth_mode": authMode}, clientIP(r))
+		writeJSON(w, http.StatusCreated, map[string]any{"username": input.Username, "auth_mode": authMode, "totp_uri": totpURI, "totp_secret": totpSecret, "recovery_codes": recoveryCodes})
 		return
 	}
-	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Wio", AccountName: input.Username})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not generate TOTP secret")
-		return
-	}
-	encryptedSecret, err := a.vault.Encrypt(key.Secret())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not protect TOTP secret")
-		return
-	}
-	codes, hashes, err := security.GenerateRecoveryCodes(10)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not generate recovery codes")
-		return
-	}
-	recovery, _ := json.Marshal(hashes)
-	user := store.User{ID: store.NewID(), Username: input.Username, PasswordHash: passwordHash, TOTPSecret: encryptedSecret, RecoveryHashes: string(recovery)}
+	user := store.User{ID: store.NewID(), Username: input.Username, AuthMode: authMode, PasswordHash: passwordHash, RecoveryHashes: "[]"}
 	if err := a.store.CreateUser(r.Context(), user); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create administrator")
 		return
 	}
-	_ = a.store.Audit(r.Context(), user.ID, "setup.complete", "user", user.ID, map[string]string{"username": input.Username}, clientIP(r))
-	writeJSON(w, http.StatusCreated, map[string]any{"username": input.Username, "totp_uri": key.URL(), "totp_secret": key.Secret(), "recovery_codes": codes})
+	_ = a.store.Audit(r.Context(), user.ID, "setup.complete", "user", user.ID, map[string]string{"username": input.Username, "auth_mode": authMode}, clientIP(r))
+	writeJSON(w, http.StatusCreated, map[string]any{"username": input.Username, "auth_mode": authMode})
 }
 
 func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +368,7 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		Username string `json:"username"`
+		Password string `json:"password"`
 		Code     string `json:"code"`
 	}
 	if !decodeJSON(w, r, &input) {
@@ -336,30 +380,45 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	code := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(input.Code), " ", ""))
-	var secret string
-	if err := a.vault.Decrypt(user.TOTPSecret, &secret); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not read TOTP secret")
+	authMode := user.AuthMode
+	if authMode == "" {
+		authMode = store.AuthModeTOTP
+	}
+	needsPassword := authMode == store.AuthModePassword || authMode == store.AuthModePasswordTOTP
+	needsCode := authMode == store.AuthModeTOTP || authMode == store.AuthModePasswordTOTP
+	if !needsPassword && !needsCode {
+		a.loginFailed(ip)
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	valid := totp.Validate(code, secret)
+	passwordValid := !needsPassword || security.VerifyPassword(user.PasswordHash, input.Password)
+	valid := !needsCode
 	usedRecovery := false
-	if !valid {
-		var hashes []string
-		_ = json.Unmarshal([]byte(user.RecoveryHashes), &hashes)
-		needle := security.HashRecovery(code)
-		for index, hash := range hashes {
-			if hash == needle {
-				hashes = append(hashes[:index], hashes[index+1:]...)
-				updated, _ := json.Marshal(hashes)
-				_, err = a.store.DB.ExecContext(r.Context(), a.store.Q("UPDATE users SET recovery_hashes=? WHERE id=?"), string(updated), user.ID)
-				valid = err == nil
-				usedRecovery = true
-				break
+	if needsCode {
+		code := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(input.Code), " ", ""))
+		var secret string
+		if err := a.vault.Decrypt(user.TOTPSecret, &secret); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not read TOTP secret")
+			return
+		}
+		valid = totp.Validate(code, secret)
+		if !valid && passwordValid {
+			var hashes []string
+			_ = json.Unmarshal([]byte(user.RecoveryHashes), &hashes)
+			needle := security.HashRecovery(code)
+			for index, hash := range hashes {
+				if hash == needle {
+					hashes = append(hashes[:index], hashes[index+1:]...)
+					updated, _ := json.Marshal(hashes)
+					_, err = a.store.DB.ExecContext(r.Context(), a.store.Q("UPDATE users SET recovery_hashes=? WHERE id=?"), string(updated), user.ID)
+					valid = err == nil
+					usedRecovery = true
+					break
+				}
 			}
 		}
 	}
-	if !valid {
+	if !passwordValid || !valid {
 		a.loginFailed(ip)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -377,7 +436,7 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: a.secureCookie, SameSite: http.SameSiteStrictMode, Expires: expires, MaxAge: int((7 * 24 * time.Hour).Seconds())})
-	_ = a.store.Audit(r.Context(), user.ID, "auth.login", "session", "", map[string]bool{"recovery_code": usedRecovery}, ip)
+	_ = a.store.Audit(r.Context(), user.ID, "auth.login", "session", "", map[string]any{"auth_mode": authMode, "recovery_code": usedRecovery}, ip)
 	writeJSON(w, http.StatusOK, map[string]any{"username": user.Username, "csrf_token": csrf, "expires_at": expires})
 }
 
