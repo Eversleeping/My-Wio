@@ -41,6 +41,7 @@ test("adds a remote and queues push with upstream", async () => {
   const onAction = vi.fn().mockResolvedValue(undefined);
   render(<WorkspaceGitDialog open snapshot={snapshot} loading={false} busy={false} error="" labels={labels} Dialog={Dialog} onClose={vi.fn()} onRefresh={vi.fn()} onAction={onAction} />);
   await user.click(screen.getByRole("tab", { name: "Remotes" }));
+  expect(screen.getByTitle("https://example.com/repo.git")).toHaveClass("truncate-code");
   await user.type(screen.getByRole("textbox", { name: "Remote name" }), "backup");
   await user.type(screen.getByRole("textbox", { name: "Remote URL" }), "https://example.com/backup.git");
   await user.click(screen.getByRole("button", { name: "Add remote" }));

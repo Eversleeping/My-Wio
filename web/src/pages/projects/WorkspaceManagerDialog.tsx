@@ -118,5 +118,5 @@ export function WorkspaceManagerDialog({ open, workspace, servers, plan, planLoa
   </Dialog>;
 }
 
-function ReadOnlyPath({ label, path }: { label: string; path: string }) { return <label className="field"><span>{label}</span><code className="readonly-path">{path}</code></label>; }
+function ReadOnlyPath({ label, path }: { label: string; path: string }) { return <label className="field"><span>{label}</span><code className="readonly-path" title={path}>{path}</code></label>; }
 function DeletionValue({ label, value, danger }: { label: string; value: number; danger: boolean }) { return <div className={danger ? "danger" : ""}><small>{label}</small><strong>{value}</strong></div>; }

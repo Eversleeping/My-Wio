@@ -75,7 +75,7 @@ export function ProjectDeletionDialog({ open, project, plan, loading, busy, erro
           <DeletionStat label={labels.activeTasks} value={plan.active_codex_tasks} danger={plan.active_codex_tasks > 0} />
           <DeletionStat label={labels.activeDeployments} value={plan.active_deployments} danger={plan.active_deployments > 0} />
         </div>
-        {plan.workspaces.length > 0 && <div className="deletion-workspace-list"><strong>{labels.workspaces}</strong>{plan.workspaces.map(workspace => <div key={workspace.id}><span><b>{workspace.server_name}</b><small>{workspace.management_mode === "managed" ? labels.managed : labels.observed}{workspace.dirty ? ` · ${labels.dirty}` : ""}</small></span><code>{workspace.path}</code><span className={`status-tag ${workspace.server_status}`}>{workspace.server_status}</span></div>)}</div>}
+        {plan.workspaces.length > 0 && <div className="deletion-workspace-list"><strong>{labels.workspaces}</strong>{plan.workspaces.map(workspace => <div key={workspace.id}><span><b>{workspace.server_name}</b><small>{workspace.management_mode === "managed" ? labels.managed : labels.observed}{workspace.dirty ? ` · ${labels.dirty}` : ""}</small></span><code title={workspace.path}>{workspace.path}</code><span className={`status-tag ${workspace.server_status}`}>{workspace.server_status}</span></div>)}</div>}
         <div className="preserved-notice"><ShieldCheck size={16} /><span>{labels.remotePreserved}</span></div>
         <div className={`deletion-blockers ${modeBlockers.length ? "blocked" : "ready"}`}>
           <strong>{labels.blockers}</strong>

@@ -32,7 +32,7 @@ export function WorkspaceTable({ workspaces, labels, slots, formatCommit, render
     {workspaces.map(workspace => <tr key={workspace.id}>
       <td><strong>{workspace.project_name}</strong></td>
       <td>{workspace.server_name}</td>
-      <td><code className="truncate-code">{workspace.path}</code></td>
+      <td className="fluid-text-cell"><code className="truncate-code" title={workspace.path}>{workspace.path}</code></td>
       <td><span className="inline"><GitBranch size={13} />{workspace.branch || labels.detached}</span></td>
       <td><code>{formatCommit(workspace.commit_sha)}</code></td>
       <td><Status value={workspace.status && workspace.status !== "ready" ? workspace.status : workspace.dirty ? "dirty" : "clean"} /></td>

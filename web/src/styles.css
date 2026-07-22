@@ -111,7 +111,8 @@ td code { font-size: 12px; }
 .server-information-line { min-width: 0; display: grid; grid-template-columns: 14px minmax(0, 1fr); align-items: center; gap: 6px; color: #626a71; font-size: 11px; }
 .server-information-line svg { color: #879097; }
 .server-information-line code, .server-information-line span { min-width: 0; overflow: hidden; font-size: inherit; text-overflow: ellipsis; white-space: nowrap; }
-.truncate-code { display: block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fluid-text-cell { width: 100%; max-width: 0; }
+.truncate-code { width: 100%; min-width: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-cell { max-width: 300px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .deployment-page .section:first-child .cell-main { max-width: 270px; }
 .deployment-page .section:first-child .cell-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
