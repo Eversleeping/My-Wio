@@ -341,6 +341,21 @@ CREATE TABLE IF NOT EXISTS deployment_events (
 
 CREATE INDEX IF NOT EXISTS deployment_events_deployment_idx ON deployment_events(deployment_id, occurred_at);
 
+-- The latest Compose runtime state is separate from deployment history. A
+-- target can therefore be stopped or removed without rewriting or deleting
+-- the release records that led to it.
+CREATE TABLE IF NOT EXISTS deployment_container_state (
+  target_id TEXT PRIMARY KEY REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  operation_id TEXT,
+  action TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'unknown',
+  message TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS deployment_container_state_operation_idx ON deployment_container_state(operation_id);
+
 CREATE TABLE IF NOT EXISTS metric_rollups (
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   bucket_at TIMESTAMP NOT NULL,

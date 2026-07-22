@@ -311,6 +311,96 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 	return nil
 }
 
+// ContainerAction applies a narrowly scoped Compose lifecycle command to the
+// target's current release. It deliberately never accepts arbitrary command
+// arguments and never passes --volumes, so removing containers preserves named
+// volumes and deployment history.
+func (d *Deployer) ContainerAction(ctx context.Context, command protocol.ContainerActionCommand) (protocol.ContainerActionResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	result := protocol.ContainerActionResult{TargetID: command.TargetID, Action: command.Action}
+	if runtime.GOOS != "linux" {
+		return result, errors.New("Compose container actions are supported only on Linux agents")
+	}
+	_, current, err := currentRelease(command.ReleaseRoot, command.TargetID)
+	if err != nil {
+		return result, err
+	}
+	workDir, composePath, err := composePaths(current, command.WorkingDir, command.ComposeFile)
+	if err != nil {
+		return result, err
+	}
+	if info, statErr := os.Stat(composePath); statErr != nil || info.IsDir() {
+		if statErr != nil {
+			return result, fmt.Errorf("compose file: %w", statErr)
+		}
+		return result, errors.New("compose file is a directory")
+	}
+	environment := make([]string, 0, len(command.Environment))
+	for key, value := range command.Environment {
+		if strings.ContainsAny(key, "=\x00") {
+			return result, fmt.Errorf("invalid environment key %q", key)
+		}
+		environment = append(environment, key+"="+value)
+	}
+	args, state, message, err := containerActionSpec(command.Action)
+	if err != nil {
+		return result, err
+	}
+	result.State = state
+	output, err := d.compose(ctx, workDir, environment, projectName(command.TargetID), composePath, args...)
+	result.Content = truncate(output, maximumProcessLogSize)
+	if err != nil {
+		result.State = "failed"
+		result.Message = fmt.Sprintf("Docker Compose %s failed", command.Action)
+		return result, fmt.Errorf("docker compose %s: %w: %s", command.Action, err, output)
+	}
+	result.Message = message
+	return result, nil
+}
+
+func containerActionSpec(action string) ([]string, string, string, error) {
+	switch action {
+	case "start":
+		// `up` also recreates a container after a previous remove operation.
+		return []string{"up", "-d", "--no-build", "--remove-orphans"}, "running", "Docker Compose project started", nil
+	case "stop":
+		return []string{"stop"}, "stopped", "Docker Compose project stopped", nil
+	case "restart":
+		return []string{"restart"}, "running", "Docker Compose project restarted", nil
+	case "remove":
+		return []string{"down", "--remove-orphans"}, "removed", "Docker Compose project removed", nil
+	default:
+		return nil, "", "", fmt.Errorf("unsupported container action %q", action)
+	}
+}
+
+func currentRelease(releaseRoot, targetID string) (string, string, error) {
+	if releaseRoot == "" || !filepath.IsAbs(releaseRoot) {
+		return "", "", errors.New("release root must be absolute")
+	}
+	if !safeID(targetID) {
+		return "", "", errors.New("invalid deployment target identifier")
+	}
+	root := filepath.Join(filepath.Clean(releaseRoot), targetID)
+	link := filepath.Join(root, "current")
+	current, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		return "", "", errors.New("no current release is available")
+	}
+	if !within(root, current) {
+		return "", "", errors.New("current release points outside the target release root")
+	}
+	info, err := os.Stat(current)
+	if err != nil {
+		return "", "", fmt.Errorf("current release: %w", err)
+	}
+	if !info.IsDir() {
+		return "", "", errors.New("current release is not a directory")
+	}
+	return root, current, nil
+}
+
 func (d *Deployer) compose(ctx context.Context, directory string, environment []string, project, composeFile string, args ...string) (string, error) {
 	base := []string{"compose", "--project-name", project, "--file", composeFile}
 	return runIn(ctx, directory, environment, d.Docker, append(base, args...)...)

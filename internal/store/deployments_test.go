@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -66,6 +67,108 @@ func TestDeploymentLifecycleManagement(t *testing.T) {
 	}
 	if err := database.DeleteDeploymentTarget(ctx, target.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDeploymentContainerOperationsTrackStateAndSerializeWrites(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	server := deploymentTestServer(t, database)
+	project, err := database.CreateProject(ctx, "container-actions", "https://example.com/container-actions.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := database.CreateDeploymentTarget(ctx, DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := database.CreateDeployment(ctx, target.ID, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "pending" || target.ContainerAction != "deploy" || target.ContainerOperationID != "" {
+		t.Fatalf("queued deployment did not mark containers pending: %#v %v", target, err)
+	}
+	if err := database.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "succeeded", Message: "deployment is healthy", Content: "compose up"}); err != nil {
+		t.Fatal(err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "running" || target.ContainerAction != "deploy" {
+		t.Fatalf("successful deployment did not mark containers running: %#v %v", target, err)
+	}
+
+	operationID, err := database.QueueDeploymentContainerOperation(ctx, target.ID, server.ID, "stop", "v1:encrypted", "container-stop-once")
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateID, err := database.QueueDeploymentContainerOperation(ctx, target.ID, server.ID, "stop", "v1:encrypted", "container-stop-once")
+	if err != nil || duplicateID != operationID {
+		t.Fatalf("container operation was not idempotent: %q %q %v", operationID, duplicateID, err)
+	}
+	if _, err := database.QueueDeploymentContainerOperation(ctx, target.ID, server.ID, "restart", "v1:encrypted", "container-restart-blocked"); !errors.Is(err, ErrDeploymentContainerActive) {
+		t.Fatalf("parallel container operation returned %v", err)
+	}
+	if _, err := database.CreateDeployment(ctx, target.ID, "main"); !errors.Is(err, ErrDeploymentContainerActive) {
+		t.Fatalf("deployment was not blocked by container operation: %v", err)
+	}
+	target.Environment = "staging"
+	if _, err := database.UpdateDeploymentTarget(ctx, target); !errors.Is(err, ErrDeploymentContainerActive) {
+		t.Fatalf("target update was not blocked by container operation: %v", err)
+	}
+	if err := database.DeleteDeploymentTarget(ctx, target.ID); !errors.Is(err, ErrDeploymentContainerActive) {
+		t.Fatalf("target deletion was not blocked by container operation: %v", err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "pending" || target.ContainerAction != "stop" || target.ContainerOperationID != operationID {
+		t.Fatalf("unexpected pending container state: %#v %v", target, err)
+	}
+
+	data, _ := json.Marshal(protocol.ContainerActionResult{TargetID: target.ID, Action: "stop", State: "stopped", Message: "Docker Compose project stopped", Content: "stopped service"})
+	result := protocol.OperationResult{OperationID: operationID, Status: "succeeded", Data: data}
+	if err := database.CompleteDeploymentContainerOperation(ctx, operationID, result); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteOperation(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "stopped" || target.ContainerMessage != "Docker Compose project stopped" {
+		t.Fatalf("unexpected completed container state: %#v %v", target, err)
+	}
+
+	active, err := database.CreateDeployment(ctx, target.ID, "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.QueueDeploymentContainerOperation(ctx, target.ID, server.ID, "remove", "v1:encrypted", "container-remove-blocked"); !errors.Is(err, ErrDeploymentActive) {
+		t.Fatalf("container operation was not blocked by deployment: %v", err)
+	}
+	if err := database.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: active.ID, Status: "failed", Message: "failed"}); err != nil {
+		t.Fatal(err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "unknown" || target.ContainerAction != "deploy" {
+		t.Fatalf("failed deployment did not make container state unknown: %#v %v", target, err)
+	}
+	rollback, err := database.CreateDeployment(ctx, target.ID, "rollback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "pending" || target.ContainerAction != "rollback" {
+		t.Fatalf("queued rollback did not mark containers pending: %#v %v", target, err)
+	}
+	if err := database.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: rollback.ID, Status: "rolled_back", Message: "rollback completed"}); err != nil {
+		t.Fatal(err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "running" || target.ContainerAction != "rollback" {
+		t.Fatalf("successful rollback did not mark containers running: %#v %v", target, err)
 	}
 }
 

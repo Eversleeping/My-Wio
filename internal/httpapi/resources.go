@@ -2095,6 +2095,10 @@ func (a *API) updateDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	target.ID = chi.URLParam(r, "targetID")
 	target, err = a.store.UpdateDeploymentTarget(r.Context(), target)
+	if errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
+		writeError(w, http.StatusConflict, "active deployments and container operations must finish before editing the target")
+		return
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "deployment target not found")
 		return
@@ -2122,8 +2126,8 @@ func (a *API) deleteDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load deployment target")
 		return
 	}
-	if err := a.store.DeleteDeploymentTarget(r.Context(), id); errors.Is(err, store.ErrDeploymentActive) {
-		writeError(w, http.StatusConflict, "active deployments must finish before deleting the target")
+	if err := a.store.DeleteDeploymentTarget(r.Context(), id); errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
+		writeError(w, http.StatusConflict, "active deployments and container operations must finish before deleting the target")
 		return
 	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete deployment target")
@@ -2205,19 +2209,20 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		input.CommitRef = target.GitRef
 	}
 	deployment, err := a.store.CreateDeployment(r.Context(), target.ID, input.CommitRef)
+	if errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
+		writeError(w, http.StatusConflict, "another deployment or container operation is already active")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create deployment")
 		return
 	}
 	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "deployment queued", Content: "Waiting for the target Agent to start deployment."})
-	environment := map[string]string{}
-	if target.SecretSetID != "" {
-		ciphertext, err := a.store.SecretCiphertext(r.Context(), target.SecretSetID)
-		if err != nil || a.vault.Decrypt(ciphertext, &environment) != nil {
-			_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not decrypt deployment secrets"})
-			writeError(w, http.StatusInternalServerError, "could not decrypt deployment secrets")
-			return
-		}
+	environment, err := a.deploymentEnvironment(r.Context(), target)
+	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not decrypt deployment secrets"})
+		writeError(w, http.StatusInternalServerError, "could not decrypt deployment secrets")
+		return
 	}
 	var checks []protocol.HealthCheck
 	_ = json.Unmarshal([]byte(target.HealthChecks), &checks)
@@ -2247,7 +2252,16 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "deployment target not found")
 		return
 	}
+	server, err := a.store.Server(r.Context(), target.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "target server must be online before rollback")
+		return
+	}
 	deployment, err := a.store.CreateDeployment(r.Context(), target.ID, "rollback")
+	if errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
+		writeError(w, http.StatusConflict, "another deployment or container operation is already active")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create rollback")
 		return
@@ -2262,7 +2276,91 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.AttachDeploymentOperation(r.Context(), deployment.ID, operationID)
 	a.gateway.Wake(target.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.rollback", "deployment", deployment.ID, map[string]string{"target_id": target.ID, "operation_id": operationID}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]any{"deployment": deployment, "operation_id": operationID})
+}
+
+func (a *API) deploymentEnvironment(ctx context.Context, target store.DeploymentTarget) (map[string]string, error) {
+	environment := map[string]string{}
+	if target.SecretSetID == "" {
+		return environment, nil
+	}
+	ciphertext, err := a.store.SecretCiphertext(ctx, target.SecretSetID)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.vault.Decrypt(ciphertext, &environment); err != nil {
+		return nil, err
+	}
+	return environment, nil
+}
+
+func (a *API) deploymentContainerAction(w http.ResponseWriter, r *http.Request) {
+	action := strings.TrimSpace(chi.URLParam(r, "action"))
+	if r.Method == http.MethodDelete {
+		action = "remove"
+	}
+	if action == "" {
+		var input struct {
+			Action string `json:"action"`
+		}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		action = strings.TrimSpace(input.Action)
+	}
+	switch action {
+	case "start", "stop", "restart", "remove":
+	default:
+		writeError(w, http.StatusBadRequest, "container action must be start, stop, restart, or remove")
+		return
+	}
+	target, err := a.store.DeploymentTarget(r.Context(), chi.URLParam(r, "targetID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "deployment target not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load deployment target")
+		return
+	}
+	server, err := a.store.Server(r.Context(), target.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "target server must be online before changing containers")
+		return
+	}
+	environment, err := a.deploymentEnvironment(r.Context(), target)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not decrypt deployment secrets")
+		return
+	}
+	command := protocol.ContainerActionCommand{TargetID: target.ID, Action: action, ReleaseRoot: target.ReleaseRoot, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, Environment: environment}
+	ciphertext, err := a.vault.Encrypt(command)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not protect container operation")
+		return
+	}
+	idempotency := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotency == "" {
+		idempotency = "container:" + target.ID + ":" + action + ":" + store.NewID()
+	} else if len(idempotency) > 200 || containsControlRune(idempotency) {
+		writeError(w, http.StatusBadRequest, "invalid Idempotency-Key")
+		return
+	} else {
+		idempotency = "container:" + target.ID + ":" + action + ":" + idempotency
+	}
+	operationID, err := a.store.QueueDeploymentContainerOperation(r.Context(), target.ID, target.ServerID, action, ciphertext, idempotency)
+	if errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
+		writeError(w, http.StatusConflict, "another deployment or container operation is already active")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue container operation")
+		return
+	}
+	a.gateway.Wake(target.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.container."+action, "deployment_target", target.ID, map[string]string{"operation_id": operationID, "project_id": target.ProjectID, "environment": target.Environment}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "target_id": target.ID, "action": action})
 }
 
 func (a *API) alerts(w http.ResponseWriter, r *http.Request) {

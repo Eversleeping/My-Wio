@@ -414,6 +414,20 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			err = gitworktree.Remove(ctx, command.SourcePath, command.TargetPath, command.Branch, c.inventoryRoots())
 		}
+	} else if envelope.Kind == "deploy.container" || strings.HasPrefix(envelope.Kind, "deploy.container.") {
+		var command protocol.ContainerActionCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			if command.Action == "" {
+				command.Action = strings.TrimPrefix(envelope.Kind, "deploy.container.")
+			}
+			var actionResult protocol.ContainerActionResult
+			actionResult, err = c.runContainerAction(ctx, command)
+			if marshaled, marshalErr := json.Marshal(actionResult); marshalErr != nil {
+				err = marshalErr
+			} else {
+				resultData = marshaled
+			}
+		}
 	} else {
 		err = c.execute(ctx, envelope)
 	}
@@ -732,6 +746,19 @@ func (c *Client) runRollback(ctx context.Context, command protocol.RollbackComma
 		status("failed", truncate(err.Error(), 8192), "", "")
 	}
 	return err
+}
+
+func (c *Client) runContainerAction(ctx context.Context, command protocol.ContainerActionCommand) (protocol.ContainerActionResult, error) {
+	if command.TargetID == "" {
+		return protocol.ContainerActionResult{}, errors.New("container action target is required")
+	}
+	result, err := c.deployer.ContainerAction(ctx, command)
+	result.Message = redactDeploymentText(result.Message, command.Environment, "")
+	result.Content = redactDeploymentText(result.Content, command.Environment, "")
+	if err != nil {
+		return result, errors.New(redactDeploymentText(err.Error(), command.Environment, ""))
+	}
+	return result, nil
 }
 
 func redactDeploymentText(value string, environment map[string]string, repository string) string {

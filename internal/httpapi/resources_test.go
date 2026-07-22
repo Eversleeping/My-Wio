@@ -1069,6 +1069,59 @@ func TestDeploymentTargetUsesServerWorkspaceAndRemoteRepositorySources(t *testin
 	}
 }
 
+func TestDeploymentContainerActionsQueueEncryptedOperationsAndExposeState(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "deployment-container-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.28", ScanRoots: []string{"/srv"}}); err != nil {
+		t.Fatal(err)
+	}
+	project, err := database.CreateProject(ctx, "container-actions", "https://example.com/container-actions.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := database.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/"+target.ID+"/container", "targetID", target.ID, map[string]string{"action": "stop"}, api.deploymentContainerAction)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("container stop returned %d: %s", response.Code, response.Body.String())
+	}
+	var queued struct {
+		OperationID string `json:"operation_id"`
+		Action      string `json:"action"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &queued); err != nil || queued.OperationID == "" || queued.Action != "stop" {
+		t.Fatalf("unexpected container response: %#v %v", queued, err)
+	}
+	operation, err := database.Operation(ctx, queued.OperationID)
+	if err != nil || operation.Kind != "deploy.container" || !strings.HasPrefix(operation.Payload, "v1:") {
+		t.Fatalf("container operation was not encrypted: %#v %v", operation, err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.ContainerStatus != "pending" || target.ContainerAction != "stop" {
+		t.Fatalf("container target was not marked pending: %#v %v", target, err)
+	}
+	conflict := deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/"+target.ID+"/container", "targetID", target.ID, map[string]string{"action": "restart"}, api.deploymentContainerAction)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("parallel container action returned %d: %s", conflict.Code, conflict.Body.String())
+	}
+	data, _ := json.Marshal(protocol.ContainerActionResult{TargetID: target.ID, Action: "stop", State: "stopped", Message: "Docker Compose project stopped"})
+	result := protocol.OperationResult{OperationID: queued.OperationID, Status: "succeeded", Data: data}
+	if err := database.CompleteDeploymentContainerOperation(ctx, queued.OperationID, result); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteOperation(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	listed := directJSONRequest(t, http.MethodGet, "/api/deployment-targets", nil, &store.Session{UserID: "test-user"}, api.deploymentTargets)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"container_status":"stopped"`) || !strings.Contains(listed.Body.String(), `"container_message":"Docker Compose project stopped"`) {
+		t.Fatalf("container state was not exposed: %d %s", listed.Code, listed.Body.String())
+	}
+}
+
 func deploymentResourceRequest(t *testing.T, method, target, param, id string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	route := chi.NewRouteContext()

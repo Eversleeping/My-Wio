@@ -83,6 +83,40 @@ func TestComposePathsRejectTraversal(t *testing.T) {
 	}
 }
 
+func TestContainerActionSpecsAreConstrained(t *testing.T) {
+	tests := []struct {
+		action string
+		state  string
+		args   string
+	}{
+		{action: "start", state: "running", args: "up -d --no-build --remove-orphans"},
+		{action: "stop", state: "stopped", args: "stop"},
+		{action: "restart", state: "running", args: "restart"},
+		{action: "remove", state: "removed", args: "down --remove-orphans"},
+	}
+	for _, test := range tests {
+		args, state, message, err := containerActionSpec(test.action)
+		if err != nil || state != test.state || strings.Join(args, " ") != test.args || message == "" {
+			t.Fatalf("unexpected %s action: args=%q state=%q message=%q err=%v", test.action, strings.Join(args, " "), state, message, err)
+		}
+		if strings.Contains(strings.Join(args, " "), "--volumes") || strings.Contains(strings.Join(args, " "), " -v") {
+			t.Fatalf("%s action unexpectedly deletes volumes: %v", test.action, args)
+		}
+	}
+	if _, _, _, err := containerActionSpec("shell"); err == nil {
+		t.Fatal("unsupported container action was accepted")
+	}
+}
+
+func TestCurrentReleaseValidatesRootAndTarget(t *testing.T) {
+	if _, _, err := currentRelease("relative/releases", "target-1"); err == nil {
+		t.Fatal("relative release root was accepted")
+	}
+	if _, _, err := currentRelease(filepath.Join(t.TempDir(), "releases"), "../escape"); err == nil {
+		t.Fatal("unsafe target identifier was accepted")
+	}
+}
+
 func TestPreflightStopsBeforeReleaseWhenDockerIsUnavailable(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Compose deployment execution is supported only on Linux")

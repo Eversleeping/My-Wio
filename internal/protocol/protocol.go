@@ -488,6 +488,26 @@ type RollbackCommand struct {
 	WorkingDir   string `json:"working_dir,omitempty"`
 }
 
+// ContainerActionCommand operates on the Compose project from the target's
+// current release. The command is sent through the encrypted operation path
+// because Compose interpolation may require deployment secrets.
+type ContainerActionCommand struct {
+	TargetID    string            `json:"target_id"`
+	Action      string            `json:"action"`
+	ReleaseRoot string            `json:"release_root"`
+	ComposeFile string            `json:"compose_file"`
+	WorkingDir  string            `json:"working_dir,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
+}
+
+type ContainerActionResult struct {
+	TargetID string `json:"target_id"`
+	Action   string `json:"action"`
+	State    string `json:"state"`
+	Message  string `json:"message,omitempty"`
+	Content  string `json:"content,omitempty"`
+}
+
 // DeploymentStatus is emitted by an Agent as a deployment advances. Content
 // holds the command output or a short process note for the current step.
 type DeploymentStatus struct {

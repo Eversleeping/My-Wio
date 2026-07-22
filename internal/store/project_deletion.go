@@ -95,11 +95,13 @@ func (s *Store) projectDeletionPlan(ctx context.Context, query deletionQueryer, 
 	}{
 		{&plan.ActiveAgentOperations, `SELECT COUNT(*) FROM agent_operations o WHERE (o.project_id=? OR o.workspace_id IN (SELECT id FROM workspaces WHERE project_id=?)) AND o.status IN ('queued','delivered','running')`},
 		{&plan.ActiveCodexTasks, `SELECT COUNT(*) FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=? AND t.status IN ('queued','running')`},
-		{&plan.ActiveDeployments, `SELECT COUNT(*) FROM deployments d JOIN deployment_targets t ON t.id=d.target_id WHERE t.project_id=? AND d.status IN ('queued','preparing','running')`},
+		{&plan.ActiveDeployments, `SELECT
+			(SELECT COUNT(*) FROM deployments d JOIN deployment_targets t ON t.id=d.target_id WHERE t.project_id=? AND d.status IN ('queued','preparing','running')) +
+			(SELECT COUNT(*) FROM deployment_container_state cs JOIN deployment_targets t ON t.id=cs.target_id WHERE t.project_id=? AND cs.status='pending' AND cs.operation_id IS NOT NULL)`},
 	}
 	for _, item := range countQueries {
 		args := []any{projectID}
-		if item.target == &plan.ActiveAgentOperations {
+		if item.target == &plan.ActiveAgentOperations || item.target == &plan.ActiveDeployments {
 			args = append(args, projectID)
 		}
 		if err := query.GetContext(ctx, item.target, s.Q(item.query), args...); err != nil {

@@ -8,7 +8,8 @@ const target = {
   id: "target-1", project_id: "project-1", server_id: "server-1", secret_set_id: "", environment: "production",
   source_type: "remote" as const, workspace_id: "", workspace_path: "", workspace_name: "",
   repository: "https://example.com/project.git", git_ref: "main", compose_file: "compose.yaml", working_dir: "",
-  build_mode: "build", health_checks: "[]", release_root: "/var/lib/wio-agent/releases", project_name: "project-management", server_name: "server-1"
+  build_mode: "build", health_checks: "[]", release_root: "/var/lib/wio-agent/releases", project_name: "project-management", server_name: "server-1",
+  container_operation_id: "", container_action: "deploy", container_status: "running", container_message: "deployment is healthy", container_updated_at: "2026-07-21T10:00:08Z"
 };
 const deployment = {
   id: "deployment-1", target_id: target.id, operation_id: "operation-1", commit_ref: "main", resolved_commit: "abc123456789",
@@ -21,7 +22,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test("edits a target, opens process logs, and deletes deployment history", async () => {
+test("manages containers, edits a target, opens process logs, and deletes deployment history", async () => {
   window.localStorage.setItem("wio_language", "en");
   const requests: Array<{ url: string; method: string; body: string }> = [];
   let detailEvents: unknown = [{ id: "event-1", deployment_id: deployment.id, status: "succeeded", message: "deployment is healthy", content: "clone output\ncompose output", occurred_at: "2026-07-21T10:00:08Z" }];
@@ -33,6 +34,7 @@ test("edits a target, opens process logs, and deletes deployment history", async
     let payload: unknown = {};
     if (url === "/api/deployment-targets" && method === "GET") payload = [target];
     else if (url === `/api/deployment-targets/${target.id}` && method === "PUT") payload = { ...target, ...JSON.parse(String(init.body)) };
+    else if (url === `/api/deployment-targets/${target.id}/container` && method === "POST") payload = { operation_id: "container-operation-1", action: "stop" };
     else if (url === "/api/deployments" && method === "GET") payload = [deployment];
     else if (url === `/api/deployments/${deployment.id}` && method === "GET") payload = { deployment, events: detailEvents };
     else if (url === `/api/deployments/${deployment.id}` && method === "DELETE") payload = { ok: true };
@@ -46,7 +48,12 @@ test("edits a target, opens process logs, and deletes deployment history", async
   render(<I18nProvider><DeploymentsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
   expect((await screen.findAllByText("project-management")).length).toBeGreaterThan(0);
 
-  await user.click(screen.getByRole("button", { name: "Edit deployment target" }));
+  await user.click(screen.getByRole("button", { name: "Deployment actions" }));
+  await user.click(screen.getByRole("menuitem", { name: "Stop containers" }));
+  await waitFor(() => expect(requests.some(request => request.url === `/api/deployment-targets/${target.id}/container` && request.method === "POST" && request.body.includes('"action":"stop"'))).toBe(true));
+
+  await user.click(screen.getByRole("button", { name: "Deployment actions" }));
+  await user.click(screen.getByRole("menuitem", { name: "Edit deployment target" }));
   expect(screen.queryByRole("textbox", { name: "Working directory" })).not.toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Release root" })).not.toBeInTheDocument();
   expect(screen.getByText(/Before deployment, Wio checks Linux/)).toBeInTheDocument();

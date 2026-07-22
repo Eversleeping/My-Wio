@@ -491,6 +491,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				result.Message = "could not persist worktree; cleanup queued: " + commitErr.Error()
 			}
 		}
+		if operation.Kind == "deploy.container" || strings.HasPrefix(operation.Kind, "deploy.container.") {
+			if err := g.store.CompleteDeploymentContainerOperation(ctx, operation.ID, result); err != nil {
+				return err
+			}
+		}
 		if operation.Kind == "credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
 		} else {

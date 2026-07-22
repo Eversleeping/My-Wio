@@ -50,6 +50,9 @@ func TestProjectDeletionPlanReportsDependenciesAndPhysicalBlockers(t *testing.T)
 	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO deployments(id,target_id,commit_ref,status) VALUES(?,?,?,'running')"), NewID(), targetID, "main"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO deployment_container_state(target_id,operation_id,action,status) VALUES(?,?,?,'pending')"), targetID, NewID(), "restart"); err != nil {
+		t.Fatal(err)
+	}
 	operationID, err := database.QueueResourceOperation(ctx, server.ID, "workspace.files", struct{}{}, "delete-plan-active", OperationResource{ProjectID: project.ID, WorkspaceID: managedID}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +61,7 @@ func TestProjectDeletionPlanReportsDependenciesAndPhysicalBlockers(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.CanDeleteMetadata || plan.CanDeleteManagedFiles || plan.ActiveAgentOperations != 1 || plan.ActiveCodexTasks != 1 || plan.ActiveDeployments != 1 {
+	if plan.CanDeleteMetadata || plan.CanDeleteManagedFiles || plan.ActiveAgentOperations != 1 || plan.ActiveCodexTasks != 1 || plan.ActiveDeployments != 2 {
 		t.Fatalf("active dependencies did not block deletion: %#v", plan)
 	}
 	for _, code := range []string{"active-agent-operations", "active-codex-tasks", "active-deployments"} {
@@ -73,6 +76,9 @@ func TestProjectDeletionPlanReportsDependenciesAndPhysicalBlockers(t *testing.T)
 		t.Fatal(err)
 	}
 	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE deployments SET status='succeeded' WHERE target_id=?"), targetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE deployment_container_state SET status='running' WHERE target_id=?"), targetID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE servers SET status='offline',last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-2*ServerOnlineGracePeriod), server.ID); err != nil {
