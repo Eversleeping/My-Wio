@@ -1977,6 +1977,7 @@ type deploymentTargetInput struct {
 	BuildMode    string                 `json:"build_mode"`
 	HealthChecks []protocol.HealthCheck `json:"health_checks"`
 	ReleaseRoot  string                 `json:"release_root"`
+	PublicURL    string                 `json:"public_url"`
 }
 
 func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTargetInput) (store.DeploymentTarget, error) {
@@ -1991,6 +1992,7 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 	input.ComposeFile = strings.TrimSpace(input.ComposeFile)
 	input.WorkingDir = ""
 	input.BuildMode = strings.TrimSpace(input.BuildMode)
+	input.PublicURL = strings.TrimSpace(input.PublicURL)
 	input.ReleaseRoot = "/var/lib/wio-agent/releases"
 	if input.SourceType == "" {
 		input.SourceType = "remote"
@@ -2006,6 +2008,13 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 	}
 	if input.BuildMode == "" {
 		input.BuildMode = "build"
+	}
+	if input.PublicURL != "" {
+		publicURL, err := normalizePublicURL(input.PublicURL)
+		if err != nil {
+			return store.DeploymentTarget{}, errors.New("public_url must use http or https and include a host")
+		}
+		input.PublicURL = publicURL
 	}
 	for _, check := range input.HealthChecks {
 		if (check.Type != "http" && check.Type != "https" && check.Type != "tcp") || strings.TrimSpace(check.Address) == "" {
@@ -2057,7 +2066,18 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 	if err != nil {
 		return store.DeploymentTarget{}, err
 	}
-	return store.DeploymentTarget{ProjectID: input.ProjectID, ServerID: input.ServerID, SourceType: input.SourceType, WorkspaceID: input.WorkspaceID, SecretSetID: input.SecretSetID, Environment: input.Environment, Repository: input.Repository, GitRef: input.GitRef, ComposeFile: input.ComposeFile, WorkingDir: input.WorkingDir, BuildMode: input.BuildMode, HealthChecks: string(checks), ReleaseRoot: input.ReleaseRoot}, nil
+	return store.DeploymentTarget{ProjectID: input.ProjectID, ServerID: input.ServerID, SourceType: input.SourceType, WorkspaceID: input.WorkspaceID, SecretSetID: input.SecretSetID, Environment: input.Environment, Repository: input.Repository, GitRef: input.GitRef, ComposeFile: input.ComposeFile, WorkingDir: input.WorkingDir, BuildMode: input.BuildMode, HealthChecks: string(checks), ReleaseRoot: input.ReleaseRoot, PublicURL: input.PublicURL}, nil
+}
+
+func normalizePublicURL(value string) (string, error) {
+	if !strings.Contains(value, "://") {
+		value = "http://" + value
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil {
+		return "", errors.New("invalid public URL")
+	}
+	return parsed.String(), nil
 }
 
 func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {

@@ -400,6 +400,7 @@ type DeploymentTarget struct {
 	BuildMode            string     `db:"build_mode" json:"build_mode"`
 	HealthChecks         string     `db:"health_checks" json:"health_checks"`
 	ReleaseRoot          string     `db:"release_root" json:"release_root"`
+	PublicURL            string     `db:"public_url" json:"public_url"`
 	ProjectName          string     `db:"project_name" json:"project_name"`
 	ServerName           string     `db:"server_name" json:"server_name"`
 	WorkspacePath        string     `db:"workspace_path" json:"workspace_path"`
@@ -411,7 +412,7 @@ type DeploymentTarget struct {
 	ContainerUpdatedAt   *time.Time `db:"container_updated_at" json:"container_updated_at"`
 }
 
-const deploymentTargetSelect = `SELECT t.id,t.project_id,t.server_id,t.source_type,COALESCE(t.workspace_id,'') workspace_id,COALESCE(t.secret_set_id,'') secret_set_id,t.environment,t.repository,t.git_ref,t.compose_file,t.working_dir,t.build_mode,t.health_checks,t.release_root,p.name project_name,s.name server_name,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,COALESCE(cs.operation_id,'') container_operation_id,COALESCE(cs.action,'') container_action,COALESCE(cs.status,'unknown') container_status,COALESCE(cs.message,'') container_message,cs.updated_at container_updated_at FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id LEFT JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN deployment_container_state cs ON cs.target_id=t.id`
+const deploymentTargetSelect = `SELECT t.id,t.project_id,t.server_id,t.source_type,COALESCE(t.workspace_id,'') workspace_id,COALESCE(t.secret_set_id,'') secret_set_id,t.environment,t.repository,t.git_ref,t.compose_file,t.working_dir,t.build_mode,t.health_checks,t.release_root,t.public_url,p.name project_name,s.name server_name,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,COALESCE(cs.operation_id,'') container_operation_id,COALESCE(cs.action,'') container_action,COALESCE(cs.status,'unknown') container_status,COALESCE(cs.message,'') container_message,cs.updated_at container_updated_at FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id LEFT JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN deployment_container_state cs ON cs.target_id=t.id`
 
 func (s *Store) ListDeploymentTargets(ctx context.Context) ([]DeploymentTarget, error) {
 	var out []DeploymentTarget
@@ -453,7 +454,7 @@ func (s *Store) CreateDeploymentTarget(ctx context.Context, target DeploymentTar
 	if target.WorkspaceID == "" {
 		workspace = nil
 	}
-	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO deployment_targets(id,project_id,server_id,source_type,workspace_id,secret_set_id,environment,repository,git_ref,compose_file,working_dir,build_mode,health_checks,release_root) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), target.ID, target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot)
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO deployment_targets(id,project_id,server_id,source_type,workspace_id,secret_set_id,environment,repository,git_ref,compose_file,working_dir,build_mode,health_checks,release_root,public_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), target.ID, target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.PublicURL)
 	if err != nil {
 		return DeploymentTarget{}, err
 	}
@@ -487,7 +488,7 @@ func (s *Store) UpdateDeploymentTarget(ctx context.Context, target DeploymentTar
 	if target.WorkspaceID == "" {
 		workspace = nil
 	}
-	result, err := tx.ExecContext(ctx, s.Q(`UPDATE deployment_targets SET project_id=?,server_id=?,source_type=?,workspace_id=?,secret_set_id=?,environment=?,repository=?,git_ref=?,compose_file=?,working_dir=?,build_mode=?,health_checks=?,release_root=? WHERE id=?`), target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.ID)
+	result, err := tx.ExecContext(ctx, s.Q(`UPDATE deployment_targets SET project_id=?,server_id=?,source_type=?,workspace_id=?,secret_set_id=?,environment=?,repository=?,git_ref=?,compose_file=?,working_dir=?,build_mode=?,health_checks=?,release_root=?,public_url=? WHERE id=?`), target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.PublicURL, target.ID)
 	if err != nil {
 		return DeploymentTarget{}, err
 	}
@@ -551,6 +552,7 @@ type Deployment struct {
 	Message        string     `db:"message" json:"message"`
 	ProjectName    string     `db:"project_name" json:"project_name"`
 	Environment    string     `db:"environment" json:"environment"`
+	PublicURL      string     `db:"public_url" json:"public_url"`
 	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
 	StartedAt      *time.Time `db:"started_at" json:"started_at"`
 	FinishedAt     *time.Time `db:"finished_at" json:"finished_at"`
@@ -570,7 +572,7 @@ type DeploymentEvent struct {
 
 func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {
 	var out []Deployment
-	err := s.DB.SelectContext(ctx, &out, `SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id ORDER BY d.created_at DESC LIMIT 200`)
+	err := s.DB.SelectContext(ctx, &out, `SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,t.public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id ORDER BY d.created_at DESC LIMIT 200`)
 	return out, err
 }
 
@@ -610,7 +612,7 @@ func (s *Store) CreateDeployment(ctx context.Context, targetID, commitRef string
 		return Deployment{}, err
 	}
 	var deployment Deployment
-	err = tx.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
+	err = tx.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,t.public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -627,7 +629,7 @@ func (s *Store) AttachDeploymentOperation(ctx context.Context, deploymentID, ope
 
 func (s *Store) Deployment(ctx context.Context, id string) (Deployment, error) {
 	var deployment Deployment
-	err := s.DB.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
+	err := s.DB.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,t.public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
 	return deployment, err
 }
 

@@ -1000,7 +1000,7 @@ func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	created := directJSONRequest(t, http.MethodPost, "/api/deployment-targets", map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "production", "repository": project.RemoteURL, "health_checks": []map[string]any{{"type": "http", "address": "https://example.com/health", "timeout_seconds": 60}}}, &store.Session{UserID: "test-user"}, api.createDeploymentTarget)
+	created := directJSONRequest(t, http.MethodPost, "/api/deployment-targets", map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "production", "repository": project.RemoteURL, "public_url": "http://203.0.113.10:5000", "health_checks": []map[string]any{{"type": "http", "address": "https://example.com/health", "timeout_seconds": 60}}}, &store.Session{UserID: "test-user"}, api.createDeploymentTarget)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("target creation returned %d: %s", created.Code, created.Body.String())
 	}
@@ -1008,8 +1008,19 @@ func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &target); err != nil {
 		t.Fatal(err)
 	}
-	updated := deploymentResourceRequest(t, http.MethodPut, "/api/deployment-targets/"+target.ID, "targetID", target.ID, map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "staging", "repository": project.RemoteURL, "git_ref": "release", "compose_file": "deploy/compose.yaml", "build_mode": "pull", "health_checks": []map[string]any{}}, api.updateDeploymentTarget)
-	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"environment":"staging"`) || !strings.Contains(updated.Body.String(), `"git_ref":"release"`) {
+	if target.PublicURL != "http://203.0.113.10:5000" {
+		t.Fatalf("target public URL was not persisted: %#v", target)
+	}
+	bareURL := directJSONRequest(t, http.MethodPost, "/api/deployment-targets", map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "bare-url", "repository": project.RemoteURL, "public_url": "app.example.com"}, &store.Session{UserID: "test-user"}, api.createDeploymentTarget)
+	if bareURL.Code != http.StatusCreated || !strings.Contains(bareURL.Body.String(), `"public_url":"http://app.example.com"`) {
+		t.Fatalf("bare public URL was not normalized: %d %s", bareURL.Code, bareURL.Body.String())
+	}
+	invalidURL := directJSONRequest(t, http.MethodPost, "/api/deployment-targets", map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "invalid", "repository": project.RemoteURL, "public_url": "ftp://example.com/service"}, &store.Session{UserID: "test-user"}, api.createDeploymentTarget)
+	if invalidURL.Code != http.StatusBadRequest {
+		t.Fatalf("invalid public URL returned %d: %s", invalidURL.Code, invalidURL.Body.String())
+	}
+	updated := deploymentResourceRequest(t, http.MethodPut, "/api/deployment-targets/"+target.ID, "targetID", target.ID, map[string]any{"project_id": project.ID, "server_id": server.ID, "environment": "staging", "repository": project.RemoteURL, "git_ref": "release", "compose_file": "deploy/compose.yaml", "build_mode": "pull", "public_url": "https://app.example.com", "health_checks": []map[string]any{}}, api.updateDeploymentTarget)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"environment":"staging"`) || !strings.Contains(updated.Body.String(), `"git_ref":"release"`) || !strings.Contains(updated.Body.String(), `"public_url":"https://app.example.com"`) {
 		t.Fatalf("target update returned %d: %s", updated.Code, updated.Body.String())
 	}
 	deployment, err := database.CreateDeployment(context.Background(), target.ID, "release")
@@ -1017,7 +1028,7 @@ func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	emptyDetails := deploymentResourceRequest(t, http.MethodGet, "/api/deployments/"+deployment.ID, "deploymentID", deployment.ID, nil, api.deploymentDetails)
-	if emptyDetails.Code != http.StatusOK || !strings.Contains(emptyDetails.Body.String(), `"events":[]`) {
+	if emptyDetails.Code != http.StatusOK || !strings.Contains(emptyDetails.Body.String(), `"events":[]`) || !strings.Contains(emptyDetails.Body.String(), `"public_url":"https://app.example.com"`) {
 		t.Fatalf("empty deployment details returned %d: %s", emptyDetails.Code, emptyDetails.Body.String())
 	}
 	if err := database.SaveDeploymentStatus(context.Background(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "preparing", Message: "repository cloned", Content: "clone output"}); err != nil {

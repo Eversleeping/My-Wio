@@ -89,6 +89,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateDeploymentPublicURL(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateRepairEnrollments(ctx, db, driver); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -167,6 +171,25 @@ func migrateDeploymentSources(ctx context.Context, db *sqlx.DB, driver string) e
 			if _, err := db.ExecContext(ctx, "ALTER TABLE deployment_targets ADD COLUMN "+column+" "+definition); err != nil {
 				return fmt.Errorf("migrate deployment target column %s: %w", column, err)
 			}
+		}
+	}
+	return nil
+}
+
+func migrateDeploymentPublicURL(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS public_url TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("migrate deployment public URL: %w", err)
+		}
+		return nil
+	}
+	var count int
+	if err := db.GetContext(ctx, &count, "SELECT COUNT(*) FROM pragma_table_info('deployment_targets') WHERE name='public_url'"); err != nil {
+		return fmt.Errorf("inspect deployment public URL column: %w", err)
+	}
+	if count == 0 {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE deployment_targets ADD COLUMN public_url TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("migrate deployment public URL column: %w", err)
 		}
 	}
 	return nil

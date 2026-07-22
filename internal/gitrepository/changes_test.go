@@ -25,6 +25,8 @@ func TestWorkspaceChangesAndDiffs(t *testing.T) {
 
 	writeChangesFile(t, repository, "modified.txt", "after\ncontext\n")
 	writeChangesFile(t, repository, "untracked.txt", "new line\nsecond line\n")
+	writeChangesFile(t, repository, "added.txt", "staged new file\n")
+	runChangesGit(t, repository, "add", "added.txt")
 	if err := os.Remove(filepath.Join(repository, "deleted.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +46,9 @@ func TestWorkspaceChangesAndDiffs(t *testing.T) {
 	if byPath["deleted.txt"].Status != "deleted" || byPath["untracked.txt"].Status != "untracked" {
 		t.Fatalf("missing deleted or untracked changes: %#v", changes)
 	}
+	if byPath["added.txt"].Status != "added" || !byPath["added.txt"].Staged {
+		t.Fatalf("unexpected added entry: %#v", byPath["added.txt"])
+	}
 	if byPath["moved.txt"].Status != "renamed" || byPath["moved.txt"].OldPath != "renamed.txt" || !byPath["moved.txt"].Staged {
 		t.Fatalf("unexpected rename entry: %#v", byPath["moved.txt"])
 	}
@@ -61,6 +66,13 @@ func TestWorkspaceChangesAndDiffs(t *testing.T) {
 	}
 	if untracked.Additions != 2 || untracked.Deletions != 0 || untracked.Content == "" {
 		t.Fatalf("unexpected untracked diff: %#v", untracked)
+	}
+	deleted, err := ReadWorkspaceDiff(context.Background(), repository, "deleted.txt", "", []string{root}, MaxWorkspaceDiffBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Additions != 0 || deleted.Deletions != 1 || deleted.Content == "" {
+		t.Fatalf("unexpected deleted diff: %#v", deleted)
 	}
 	if _, err := ReadWorkspaceDiff(context.Background(), repository, "../secret", "", []string{root}, MaxWorkspaceDiffBytes); err == nil {
 		t.Fatal("expected escaped diff path to be rejected")

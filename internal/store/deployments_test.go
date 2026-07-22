@@ -23,19 +23,23 @@ func TestDeploymentLifecycleManagement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := database.CreateDeploymentTarget(ctx, DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL})
+	target, err := database.CreateDeploymentTarget(ctx, DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL, PublicURL: "http://203.0.113.10:5000"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	target.Environment = "staging"
 	target.ComposeFile = "deploy/compose.yaml"
+	target.PublicURL = "https://app.example.com"
 	updated, err := database.UpdateDeploymentTarget(ctx, target)
-	if err != nil || updated.Environment != "staging" || updated.ComposeFile != "deploy/compose.yaml" {
+	if err != nil || updated.Environment != "staging" || updated.ComposeFile != "deploy/compose.yaml" || updated.PublicURL != "https://app.example.com" {
 		t.Fatalf("unexpected target update: %#v %v", updated, err)
 	}
 	deployment, err := database.CreateDeployment(ctx, target.ID, "main")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if deployment.PublicURL != "https://app.example.com" {
+		t.Fatalf("deployment did not expose the target public URL: %#v", deployment)
 	}
 	if err := database.DeleteDeployment(ctx, deployment.ID); !errors.Is(err, ErrDeploymentActive) {
 		t.Fatalf("active deployment deletion returned %v", err)

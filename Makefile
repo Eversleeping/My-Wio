@@ -8,9 +8,9 @@ web:
 
 build:
 	mkdir -p bin
+	npm --prefix web run build
 	go build -o bin/wio-controlplane ./cmd/controlplane
 	go build -o bin/wio-agent ./cmd/agent
-	npm --prefix web run build
 
 agent-linux:
 	mkdir -p bin
