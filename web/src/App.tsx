@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Archive,
@@ -75,6 +75,7 @@ import { api, APIError, patch, post, postStream, put, remove, setSession, socket
 import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
+import { clearCodexComposerPreferences, defaultCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
 import { currentLocale, useI18n } from "./i18n";
 import {
   CreateProjectDialog,
@@ -142,8 +143,22 @@ type FilePreviewSelection = { path: string; line?: number; mode?: "file" | "diff
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevisions = Record<string, number>;
+type DataCacheEntry = { data: unknown; dependency: unknown };
 
-const defaultCodexModel = "gpt-5.6-sol";
+const dataCache = new Map<string, DataCacheEntry>();
+const codexScrollPositions = new Map<string, number>();
+
+function clearCodexSessionMemory(threadID?: string) {
+  const eventPrefix = threadID ? `/threads/${threadID}/events?` : "/threads/";
+  for (const path of dataCache.keys()) {
+    if (path.startsWith(eventPrefix) && path.includes("/events?")) dataCache.delete(path);
+  }
+  for (const key of codexScrollPositions.keys()) {
+    if (!threadID || key.startsWith(`${threadID}:`)) codexScrollPositions.delete(key);
+  }
+}
+
+const defaultCodexModel = defaultCodexComposerPreferences.model;
 const codexModelOptions = [
   { value: "gpt-5.6-sol", labelKey: "codex.model56Sol" },
   { value: "gpt-5.6-terra", labelKey: "codex.model56Terra" },
@@ -200,6 +215,7 @@ export default function App() {
   const approvals = useData<Approval[]>(auth === "authenticated" ? "/approvals" : null, realtime);
 
   const authenticate = useCallback((value: Session | null) => {
+    if (!value) clearCodexSessionMemory();
     setSession(value);
     setCurrentSession(value);
     setAuth(value ? "authenticated" : "login");
@@ -947,6 +963,8 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
     setDeletingThread(thread.id);
     try {
       await remove(`/threads/${thread.id}`);
+      clearCodexComposerPreferences(thread.id);
+      clearCodexSessionMemory(thread.id);
       const next = visibleThreads.find(item => item.id !== thread.id);
       if (active?.id === thread.id) selectThread(next?.id ?? "");
       threads.reload();
@@ -1125,20 +1143,29 @@ function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCr
   return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/threads", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;
 }
 
-function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onOpenFile, onNewTask }: { thread: Thread; approvals: Approval[]; realtime: unknown; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; onNewTask: () => void }) {
+export function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onOpenFile, onNewTask }: { thread: Thread; approvals: Approval[]; realtime: unknown; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; onNewTask: () => void }) {
   const { t } = useI18n();
   const [rawEvents, setRawEvents] = useState(false);
-  const events = useData<StreamEvent[]>(`/threads/${thread.id}/events?view=${rawEvents ? "raw" : "conversation"}`, realtime);
+  const events = useData<StreamEvent[]>(`/threads/${thread.id}/events?view=${rawEvents ? "raw" : "conversation"}`, realtime, true);
   const [prompt, setPrompt] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [editingEventID, setEditingEventID] = useState("");
-  const [model, setModel] = useState(defaultCodexModel);
+  const [composerPreferences, setComposerPreferences] = useState(() => loadCodexComposerPreferences(thread.id));
+  const { approvalMode, model, reasoningEffort } = composerPreferences;
+  const updateComposerPreferences = (changes: Partial<CodexComposerPreferences>) => {
+    setComposerPreferences(current => {
+      const next = { ...current, ...changes };
+      saveCodexComposerPreferences(thread.id, next);
+      return next;
+    });
+  };
+  const setModel = (value: string) => updateComposerPreferences({ model: value });
+  const setReasoningEffort = (value: string) => updateComposerPreferences({ reasoningEffort: value });
+  const setApprovalMode = (value: string) => updateComposerPreferences({ approvalMode: value });
   const [customModelSignal, setCustomModelSignal] = useState(0);
-  const [reasoningEffort, setReasoningEffort] = useState("");
-  const [approvalMode, setApprovalMode] = useState("on-request");
   const [slashMode, setSlashMode] = useState<"commands" | "model" | "reasoning">("commands");
   const [slashDismissedValue, setSlashDismissedValue] = useState("");
   const [statusOpen, setStatusOpen] = useState(false);
@@ -1154,6 +1181,7 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onO
   const [nativeBusy, setNativeBusy] = useState("");
   const [nativeError, setNativeError] = useState("");
   const streamRef = useRef<HTMLDivElement>(null);
+  const restoredScrollKeyRef = useRef("");
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const slashKeyboardRef = useRef<((event: ReactKeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
   const sourceEvents = events.data ?? [];
@@ -1212,7 +1240,21 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onO
   useEffect(() => { if (slashOpen && slashMode === "commands" && !skillsSnapshot && nativeBusy !== "skills") void loadSnapshot<CodexSkill[]>("skills"); }, [slashOpen, slashMode, thread.workspace_id]);
   useEffect(() => { if (statusOpen && !statusSnapshot) void loadSnapshot<CodexStatusData>("status"); }, [statusOpen, thread.id]);
   useEffect(() => { setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); }, [thread.id]);
-  useEffect(() => { const frame = requestAnimationFrame(() => { if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight; }); return () => cancelAnimationFrame(frame); }, [thread.id, rawEvents, sourceEvents.length]);
+  const scrollStateKey = `${thread.id}:${rawEvents ? "raw" : "conversation"}`;
+  useLayoutEffect(() => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    if (restoredScrollKeyRef.current !== scrollStateKey) {
+      stream.scrollTop = codexScrollPositions.get(scrollStateKey) ?? stream.scrollHeight;
+      restoredScrollKeyRef.current = scrollStateKey;
+      return;
+    }
+    stream.scrollTop = stream.scrollHeight;
+  }, [scrollStateKey, sourceEvents.length]);
+  useLayoutEffect(() => {
+    const stream = streamRef.current;
+    return () => { if (stream) codexScrollPositions.set(scrollStateKey, stream.scrollTop); };
+  }, [scrollStateKey]);
   const addImages = async (files: File[]) => {
     const available = 4 - images.length;
     if (available <= 0) { notify(t("codex.imageLimit")); return; }
@@ -1264,7 +1306,7 @@ function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onO
   };
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite">{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => codexScrollPositions.set(scrollStateKey, event.currentTarget.scrollTop)}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <form className="composer" onSubmit={send}>
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
@@ -1882,11 +1924,31 @@ function PageLoading() { return <div className="page-loading"><LoaderCircle clas
 function ErrorState({ error, reload }: { error: string; reload: () => void }) { const { t } = useI18n(); return <div className="error-state"><AlertTriangle size={25} /><strong>{t("error.load")}</strong><span>{error}</span><button className="secondary-button" onClick={reload}><RefreshCw size={16} />{t("common.retry")}</button></div>; }
 
 interface PageProps { realtime: number; notify: (text: string) => void }
-function useData<T>(path: string | null, dependency: unknown) {
+function useData<T>(path: string | null, dependency: unknown, cache = false) {
   const [result, setResult] = useState<{ path: string | null; data: T | null }>({ path: null, data: null }); const [failure, setFailure] = useState<{ path: string | null; text: string }>({ path: null, text: "" }); const [settledPath, setSettledPath] = useState<string | null>(null); const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion(value => value + 1), []);
-  useEffect(() => { if (!path) { setSettledPath(null); return; } const controller = new AbortController(); api<T>(path, { signal: controller.signal }).then(value => { setResult({ path, data: value }); setFailure({ path, text: "" }); }).catch(err => { if (err instanceof DOMException && err.name === "AbortError") return; setFailure({ path, text: message(err) }); }).finally(() => { if (!controller.signal.aborted) setSettledPath(path); }); return () => controller.abort(); }, [path, dependency, version]);
-  const data = result.path === path ? result.data : null;
+  useEffect(() => {
+    if (!path) { setSettledPath(null); return; }
+    const cached = cache ? dataCache.get(path) : undefined;
+    if (version === 0 && cached && Object.is(cached.dependency, dependency)) {
+      setFailure({ path, text: "" });
+      setSettledPath(path);
+      return;
+    }
+    const controller = new AbortController();
+    api<T>(path, { signal: controller.signal }).then(value => {
+      if (cache) dataCache.set(path, { data: value, dependency });
+      setResult({ path, data: value });
+      setFailure({ path, text: "" });
+    }).catch(err => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setFailure({ path, text: message(err) });
+    }).finally(() => { if (!controller.signal.aborted) setSettledPath(path); });
+    return () => controller.abort();
+  }, [path, dependency, version, cache]);
+  const cached = cache && path ? dataCache.get(path) : undefined;
+  const cachedData = cached && Object.is(cached.dependency, dependency) ? cached.data as T : null;
+  const data = result.path === path ? result.data : cachedData;
   const error = failure.path === path ? failure.text : "";
   return { data, error, loading: Boolean(path) && data === null && settledPath !== path, reload };
 }
