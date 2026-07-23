@@ -797,7 +797,7 @@ function ProjectsPage({ realtime, notify }: PageProps) {
   </div>;
 }
 
-function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloadApprovals, notify, selectedThreadID, onSelectThread }: PageProps & { streamRevisions: StreamRevisions; approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void; selectedThreadID: string; onSelectThread: (threadID: string, replace?: boolean) => void }) {
+export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloadApprovals, notify, selectedThreadID, onSelectThread }: PageProps & { streamRevisions: StreamRevisions; approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void; selectedThreadID: string; onSelectThread: (threadID: string, replace?: boolean) => void }) {
   const { t } = useI18n();
   const threads = useData<Thread[]>("/threads", realtime);
   const archivedThreads = useData<Thread[]>("/threads?archived=true", realtime);
@@ -834,7 +834,7 @@ function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloa
     if (next !== selected) setSelected(next);
     if (next !== selectedThreadID) onSelectThread(next, true);
   }, [archivedThreads.data, onSelectThread, selected, selectedThreadID, showArchived, threads.data, visibleThreads]);
-  useEffect(() => { if (approvalKey) setApprovalOpen(true); }, [approvalKey, approvalSignal]);
+  useEffect(() => { setApprovalOpen(Boolean(approvalKey)); }, [approvalKey, approvalSignal]);
   useEffect(() => { if (pendingThread && listedActiveThreads.some(thread => thread.id === pendingThread.id)) setPendingThread(null); }, [listedActiveThreads, pendingThread]);
   useEffect(() => { setPreview(null); setActivePane("conversation"); if (active) setMobileView("conversation"); }, [active?.workspace_id]);
   const selectThread = (threadID: string) => { setSelected(threadID); setMobileView(threadID ? "conversation" : "sessions"); onSelectThread(threadID); };
