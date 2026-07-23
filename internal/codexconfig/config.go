@@ -9,6 +9,10 @@ import (
 
 const providerName = "wio_api"
 
+// SandboxMode allows Codex to update Git metadata such as .git. The Agent's
+// systemd unit still constrains ordinary installations to its managed roots.
+const SandboxMode = "danger-full-access"
+
 // Merge updates the settings managed by Wio while retaining unrelated Codex
 // configuration, such as trusted projects and user-selected feature flags.
 func Merge(existing []byte, apiURL, model string) ([]byte, error) {
@@ -22,7 +26,7 @@ func Merge(existing []byte, apiURL, model string) ([]byte, error) {
 	configuration["model"] = strings.TrimSpace(model)
 	configuration["model_provider"] = providerName
 	configuration["model_supports_reasoning_summaries"] = true
-	configuration["sandbox_mode"] = "workspace-write"
+	configuration["sandbox_mode"] = SandboxMode
 
 	sandbox := table(configuration, "sandbox_workspace_write")
 	sandbox["network_access"] = true

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -121,6 +122,9 @@ func TestStartTurnParamsIncludeReasoningEffort(t *testing.T) {
 	threadParams := threadStartParams(command)
 	if _, ok := threadParams["effort"]; ok {
 		t.Fatal("thread/start must not include the turn-only effort field")
+	}
+	if threadParams["sandbox"] != codexconfig.SandboxMode {
+		t.Fatalf("unexpected thread/start sandbox: %#v", threadParams["sandbox"])
 	}
 	turnParams := turnStartParams(command, "thread-123")
 	if turnParams["effort"] != "xhigh" {
@@ -249,7 +253,7 @@ func TestPrepareCodexThreadResumesAfterAdapterRestart(t *testing.T) {
 	if threadID != "codex-thread" || method != "thread/resume" {
 		t.Fatalf("unexpected resume result: thread=%q method=%q", threadID, method)
 	}
-	if params["threadId"] != "codex-thread" || params["cwd"] != "/srv/project" || params["model"] != "gpt-5.6-sol" {
+	if params["threadId"] != "codex-thread" || params["cwd"] != "/srv/project" || params["model"] != "gpt-5.6-sol" || params["sandbox"] != codexconfig.SandboxMode {
 		t.Fatalf("unexpected thread/resume params: %#v", params)
 	}
 }

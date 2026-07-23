@@ -53,7 +53,7 @@ func TestConfigureCredentialsWritesProtectedFilesAndRemovesGit(t *testing.T) {
 		t.Fatal(err)
 	}
 	password, _ := parsed.User.Password()
-	if string(key) != "new-codex-secret\n" || !strings.Contains(string(config), "base_url = 'https://api.example.com/v1'") || !strings.Contains(string(config), "sandbox_mode = 'workspace-write'") || !strings.Contains(string(config), "network_access = true") || !strings.Contains(string(config), "web_search = 'live'") || !strings.Contains(string(config), "trust_level = 'trusted'") || parsed.User.Username() != command.GitUsername || password != command.GitToken || !strings.Contains(string(gitConfig), `name = "Example User"`) || !strings.Contains(string(gitConfig), `email = "user@users.noreply.github.com"`) {
+	if string(key) != "new-codex-secret\n" || !strings.Contains(string(config), "base_url = 'https://api.example.com/v1'") || !strings.Contains(string(config), "sandbox_mode = 'danger-full-access'") || !strings.Contains(string(config), "network_access = true") || !strings.Contains(string(config), "web_search = 'live'") || !strings.Contains(string(config), "trust_level = 'trusted'") || parsed.User.Username() != command.GitUsername || password != command.GitToken || !strings.Contains(string(gitConfig), `name = "Example User"`) || !strings.Contains(string(gitConfig), `email = "user@users.noreply.github.com"`) {
 		t.Fatalf("unexpected credential files: key=%q config=%q credential=%q gitconfig=%q", key, config, credential, gitConfig)
 	}
 	if err := client.configureCredentials(protocol.ConfigureCredentialsCommand{CodexAPIURL: command.CodexAPIURL, CodexAPIKey: command.CodexAPIKey, CodexModel: command.CodexModel, RemoveGit: true}); err != nil {

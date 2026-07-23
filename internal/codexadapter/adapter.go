@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -572,7 +573,7 @@ func threadStartParams(command protocol.StartTurnCommand) map[string]any {
 	params := map[string]any{
 		"cwd":            command.Workspace,
 		"approvalPolicy": approvalPolicy(command.ApprovalMode),
-		"sandbox":        "workspace-write",
+		"sandbox":        codexconfig.SandboxMode,
 	}
 	if command.Model != "" {
 		params["model"] = command.Model

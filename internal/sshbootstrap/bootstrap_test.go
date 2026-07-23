@@ -70,6 +70,18 @@ func TestAgentServiceUnitAllowsExplicitSudo(t *testing.T) {
 	}
 }
 
+func TestAgentServiceKeepsManagedProjectsWritable(t *testing.T) {
+	unit, err := os.ReadFile(filepath.Join("..", "..", "deploy", "agent.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"ProtectSystem=strict", "ProtectHome=read-only", "ReadWritePaths=/var/lib/wio-agent"} {
+		if !strings.Contains(string(unit), expected) {
+			t.Fatalf("agent unit missing managed workspace boundary %q: %s", expected, unit)
+		}
+	}
+}
+
 func TestPrerequisiteServiceCreatesSocketRuntimeDirectory(t *testing.T) {
 	unit, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prerequisite.service"))
 	if err != nil {
