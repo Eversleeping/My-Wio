@@ -296,9 +296,12 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if strings.HasPrefix(envelope.Kind, "codex.goal.") || envelope.Kind == "codex.mcp.list" || envelope.Kind == "codex.skills.list" || envelope.Kind == "codex.status.snapshot" {
+	} else if strings.HasPrefix(envelope.Kind, "codex.goal.") || envelope.Kind == "codex.mcp.list" || envelope.Kind == "codex.skills.list" || envelope.Kind == "codex.status.snapshot" || envelope.Kind == "codex.thread.compact" {
 		var result protocol.CodexCapabilityResult
 		result, err = c.codex.CodexOperation(ctx, envelope.Kind, envelope.PayloadJSON)
+		if err == nil && envelope.Kind == "codex.thread.compact" && !result.Supported {
+			err = errors.New(result.Reason)
+		}
 		if err == nil {
 			resultData, err = json.Marshal(result)
 		}

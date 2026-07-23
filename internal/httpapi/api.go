@@ -176,6 +176,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/threads/{threadID}/goal/refresh", api.refreshThreadGoal)
 			private.Put("/threads/{threadID}/goal", api.setThreadGoal)
 			private.Delete("/threads/{threadID}/goal", api.clearThreadGoal)
+			private.Post("/threads/{threadID}/compact", api.compactThread)
 			private.Get("/approvals", api.approvals)
 			private.Post("/approvals/{approvalID}/decision", api.decideApproval)
 			private.Get("/secret-sets", api.secretSets)

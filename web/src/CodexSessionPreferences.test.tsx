@@ -42,6 +42,10 @@ function sessionView(value: Thread, realtime: unknown = 0) {
   return <I18nProvider><SessionView key={value.id} thread={value} approvals={[]} realtime={realtime} reloadApprovals={vi.fn()} notify={vi.fn()} onOpenFile={vi.fn()} onNewTask={vi.fn()} /></I18nProvider>;
 }
 
+function eventFetchCount() {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/events")).length;
+}
+
 function composerSelects() {
   return {
     approval: screen.getByLabelText("Approve on request"),
@@ -91,14 +95,14 @@ test("reuses cached conversation events and restores each session scroll positio
   const { container, rerender } = render(sessionView(first));
 
   expect(await screen.findByText("No messages yet")).toBeInTheDocument();
-  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(eventFetchCount()).toBe(1);
   let stream = container.querySelector<HTMLElement>(".event-stream")!;
   stream.scrollTop = 360;
   fireEvent.scroll(stream);
 
   rerender(sessionView(second));
   expect(await screen.findByText("No messages yet")).toBeInTheDocument();
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(eventFetchCount()).toBe(2);
   stream = container.querySelector<HTMLElement>(".event-stream")!;
   stream.scrollTop = 120;
   fireEvent.scroll(stream);
@@ -106,14 +110,14 @@ test("reuses cached conversation events and restores each session scroll positio
   rerender(sessionView(first));
   expect(screen.getByText("No messages yet")).toBeInTheDocument();
   await waitFor(() => expect(container.querySelector<HTMLElement>(".event-stream")).toHaveProperty("scrollTop", 360));
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(eventFetchCount()).toBe(2);
 
   rerender(sessionView(second));
   await waitFor(() => expect(container.querySelector<HTMLElement>(".event-stream")).toHaveProperty("scrollTop", 120));
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(eventFetchCount()).toBe(2);
 
   rerender(sessionView(first, 1));
-  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(eventFetchCount()).toBe(3));
 });
 
 test("restores the saved position after invalidated events finish loading", async () => {

@@ -150,6 +150,17 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 	if err := json.Unmarshal(payload, &base); err != nil {
 		return protocol.CodexCapabilityResult{}, err
 	}
+	if base.CodexThread != "" && base.ThreadID != "" {
+		a.mu.Lock()
+		if a.threads == nil {
+			a.threads = make(map[string]string)
+		}
+		a.threads[base.CodexThread] = base.ThreadID
+		a.mu.Unlock()
+	}
+	if kind == "codex.status.snapshot" {
+		return codexStatusOperation(ctx, base.CodexVersion, request)
+	}
 	method := ""
 	var params any
 	switch kind {
@@ -173,8 +184,11 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 		method, params = "skills/list", map[string]any{"cwds": []string{base.Workspace}, "forceReload": true}
 	case "codex.mcp.list":
 		method, params = "mcpServerStatus/list", map[string]any{"threadId": nullableString(base.CodexThread), "limit": 100, "detail": "toolsAndAuthOnly"}
-	case "codex.status.snapshot":
-		method, params = "account/rateLimits/read", map[string]any{}
+	case "codex.thread.compact":
+		if base.CodexThread == "" {
+			return unsupported(base.CodexVersion, "Codex thread is not initialized"), nil
+		}
+		method, params = "thread/compact/start", map[string]string{"threadId": base.CodexThread}
 	default:
 		return protocol.CodexCapabilityResult{}, fmt.Errorf("unsupported Codex operation %q", kind)
 	}
@@ -191,6 +205,82 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 		return protocol.CodexCapabilityResult{}, fmt.Errorf("invalid %s response: %w", method, err)
 	}
 	return protocol.CodexCapabilityResult{Supported: true, CodexVersion: base.CodexVersion, Data: clean}, nil
+}
+
+func codexStatusOperation(ctx context.Context, version string, request requestFunc) (protocol.CodexCapabilityResult, error) {
+	accountRaw, err := request(ctx, "account/read", map[string]any{"refreshToken": false})
+	if err != nil {
+		if isUnsupportedRPC(err) || isAccountAuthenticationError(err) {
+			return statusCapability(version, protocol.CodexStatusSnapshot{AccountType: "unknown", RateLimits: []protocol.CodexRateLimit{}})
+		}
+		return protocol.CodexCapabilityResult{}, err
+	}
+	accountType, err := statusAccountType(accountRaw)
+	if err != nil {
+		return protocol.CodexCapabilityResult{}, fmt.Errorf("invalid account/read response: %w", err)
+	}
+	snapshot := protocol.CodexStatusSnapshot{AccountType: accountType, RateLimits: []protocol.CodexRateLimit{}}
+	if accountType != "chatgpt" {
+		return statusCapability(version, snapshot)
+	}
+	rateRaw, err := request(ctx, "account/rateLimits/read", map[string]any{})
+	if err != nil {
+		if isUnsupportedRPC(err) || isAccountAuthenticationError(err) {
+			return statusCapability(version, snapshot)
+		}
+		return protocol.CodexCapabilityResult{}, err
+	}
+	clean, err := sanitizeStatusResultValue(rateRaw)
+	if err != nil {
+		return protocol.CodexCapabilityResult{}, fmt.Errorf("invalid account/rateLimits/read response: %w", err)
+	}
+	if err := json.Unmarshal(clean, &snapshot); err != nil {
+		return protocol.CodexCapabilityResult{}, err
+	}
+	snapshot.AccountType = accountType
+	snapshot.RateLimitsAvailable = true
+	return statusCapability(version, snapshot)
+}
+
+func statusCapability(version string, snapshot protocol.CodexStatusSnapshot) (protocol.CodexCapabilityResult, error) {
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return protocol.CodexCapabilityResult{}, err
+	}
+	return protocol.CodexCapabilityResult{Supported: true, CodexVersion: version, Data: data}, nil
+}
+
+func statusAccountType(raw json.RawMessage) (string, error) {
+	var response struct {
+		Account *struct {
+			Type string `json:"type"`
+		} `json:"account"`
+		RequiresOpenAIAuth bool `json:"requiresOpenaiAuth"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return "", err
+	}
+	if response.Account != nil && response.Account.Type != "" {
+		return response.Account.Type, nil
+	}
+	if response.RequiresOpenAIAuth {
+		return "signedOut", nil
+	}
+	return "custom", nil
+}
+
+func isUnsupportedRPC(err error) bool {
+	var rpcErr *rpcRequestError
+	return errors.As(err, &rpcErr) && (rpcErr.Code == -32601 || strings.Contains(strings.ToLower(rpcErr.Message), "not found") || strings.Contains(strings.ToLower(rpcErr.Message), "unsupported"))
+}
+
+func isAccountAuthenticationError(err error) bool {
+	var rpcErr *rpcRequestError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	message := strings.ToLower(rpcErr.Message)
+	return strings.Contains(message, "authentication required") || strings.Contains(message, "account authentication") || strings.Contains(message, "not logged in")
 }
 
 func nullableString(value string) any {
@@ -217,6 +307,8 @@ func sanitizeCodexResult(kind string, raw json.RawMessage) (json.RawMessage, err
 		return sanitizeMCPResult(value)
 	case "codex.status.snapshot":
 		return sanitizeStatusResult(value)
+	case "codex.thread.compact":
+		return json.RawMessage(`{}`), nil
 	}
 	allowed := map[string]bool{}
 	switch kind {
@@ -371,6 +463,14 @@ func sanitizeStatusResult(value any) (json.RawMessage, error) {
 		appendSnapshot(root["rateLimits"], "")
 	}
 	return json.Marshal(snapshot)
+}
+
+func sanitizeStatusResultValue(raw json.RawMessage) (json.RawMessage, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return sanitizeStatusResult(value)
 }
 
 func stringField(object map[string]any, key string) string {

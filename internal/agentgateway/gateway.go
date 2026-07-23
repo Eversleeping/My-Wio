@@ -509,7 +509,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if (operation.Kind == "codex.turn.interrupt" || operation.Kind == "codex.approval") && result.Status == "failed" {
+		if (operation.Kind == "codex.turn.interrupt" || operation.Kind == "codex.approval" || operation.Kind == "codex.thread.compact") && result.Status == "failed" {
 			if err := g.failCodexControlOperation(ctx, operation, result); err != nil {
 				return err
 			}
@@ -561,6 +561,13 @@ func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store
 		}
 		threadID = command.ThreadID
 		kind = "codex.approval.failed"
+	case "codex.thread.compact":
+		var command protocol.CodexSnapshotCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+			return err
+		}
+		threadID = command.ThreadID
+		kind = "codex.compact.failed"
 	}
 	if threadID == "" {
 		return errors.New("failed Codex control operation has no thread id")

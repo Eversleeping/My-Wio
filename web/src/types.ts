@@ -28,7 +28,7 @@ export interface Thread { id: string; workspace_id: string; project_id: string; 
 export type CodexSnapshotState = "idle" | "loading" | "refreshing" | "succeeded" | "failed" | "unsupported";
 export interface CodexSnapshot<T> { status: CodexSnapshotState; supported: boolean; reason: string; codex_version: string; data: T | null; error: string; requested_at: string | null; updated_at: string | null }
 export interface CodexGoal { thread_id: string; objective: string; status: string; token_budget: number | null; tokens_used: number; time_used_seconds: number; created_at: number; updated_at: number }
-export interface CodexStatusData { model?: string; reasoning_effort?: string; approval_policy?: string; rate_limits?: Array<{ name: string; used_percent?: number; resets_at?: string; detail?: string }>; [key: string]: unknown }
+export interface CodexStatusData { model?: string; reasoning_effort?: string; approval_policy?: string; account_type?: string; rate_limits_available?: boolean; rate_limits?: Array<{ name: string; used_percent?: number; resets_at?: string; detail?: string }>; [key: string]: unknown }
 export interface CodexMCPServer { name: string; auth_status: string; server_name: string; server_version: string; tools: string[]; resource_count: number; resource_template_count: number }
 export interface CodexSkill { name: string; description: string; path: string; scope: "user" | "repo" | "system" | "admin" | string; enabled: boolean; display_name?: string; short_description?: string }
 export interface StreamEvent { event_id: string; stream_id: string; sequence: number; kind: string; occurred_at: string; payload: unknown }

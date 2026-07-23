@@ -374,7 +374,9 @@ type CodexRateLimit struct {
 }
 
 type CodexStatusSnapshot struct {
-	RateLimits []CodexRateLimit `json:"rate_limits"`
+	AccountType         string           `json:"account_type,omitempty"`
+	RateLimitsAvailable bool             `json:"rate_limits_available"`
+	RateLimits          []CodexRateLimit `json:"rate_limits"`
 }
 
 type StreamEvent struct {

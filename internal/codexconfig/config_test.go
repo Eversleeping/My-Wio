@@ -37,6 +37,7 @@ trust_level = "trusted"
 		`model_provider = 'wio_api'`,
 		`sandbox_mode = 'danger-full-access'`,
 		`network_access = true`,
+		`enabled = true`,
 		`base_url = 'https://api.example.com/v1'`,
 		`web_search = 'live'`,
 		`writable_roots = ['/srv/shared']`,
@@ -46,6 +47,25 @@ trust_level = "trusted"
 		if !strings.Contains(strings.ReplaceAll(string(merged), `"`, "'"), expected) {
 			t.Fatalf("configuration missing %q:\n%s", expected, merged)
 		}
+	}
+}
+
+func TestMergeEnablesSubagents(t *testing.T) {
+	merged, err := Merge([]byte("[features]\ngoals = false\nmulti_agent = false\n\n[agents]\nenabled = false\nmax_concurrent_threads_per_session = 3\n"), "https://api.example.com/v1", "custom-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration map[string]any
+	if err := toml.Unmarshal(merged, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	agents, ok := configuration["agents"].(map[string]any)
+	if !ok || agents["enabled"] != true || agents["max_concurrent_threads_per_session"] != int64(3) {
+		t.Fatalf("unexpected agents configuration: %#v", configuration["agents"])
+	}
+	features, ok := configuration["features"].(map[string]any)
+	if !ok || features["goals"] != true || features["multi_agent"] != true {
+		t.Fatalf("unexpected feature configuration: %#v", configuration["features"])
 	}
 }
 

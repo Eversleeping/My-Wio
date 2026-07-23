@@ -30,6 +30,11 @@ func Merge(existing []byte, apiURL, model string) ([]byte, error) {
 
 	sandbox := table(configuration, "sandbox_workspace_write")
 	sandbox["network_access"] = true
+	features := table(configuration, "features")
+	features["goals"] = true
+	features["multi_agent"] = true
+	agents := table(configuration, "agents")
+	agents["enabled"] = true
 
 	providers := table(configuration, "model_providers")
 	provider := table(providers, providerName)

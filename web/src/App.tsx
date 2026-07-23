@@ -45,8 +45,10 @@ import {
   Menu,
   MemoryStick,
   MessageSquare,
+  Minimize2,
   MonitorDot,
   Network,
+  Pause,
   Pencil,
   Pin,
   PinOff,
@@ -66,6 +68,7 @@ import {
   Trash2,
   Undo2,
   UserRound,
+  Users,
   Wrench,
   Wifi,
   WifiOff,
@@ -142,6 +145,7 @@ type AuthState = "loading" | "setup" | "login" | "authenticated";
 type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
 type ComposerImage = { id: string; dataURL: string };
 type FilePreviewSelection = { path: string; line?: number; mode?: "file" | "diff" };
+type SubagentActivity = { threadID: string; path: string; status: string; message: string; prompt: string; model: string; reasoningEffort: string; updatedAt: string };
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevisions = Record<string, number>;
@@ -1252,6 +1256,8 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   const [mcpOpen, setMcpOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [subagentsOpen, setSubagentsOpen] = useState(false);
+  const [compactBusy, setCompactBusy] = useState(false);
   const [statusSnapshot, setStatusSnapshot] = useState<CodexSnapshot<CodexStatusData> | null>(null);
   const [mcpSnapshot, setMcpSnapshot] = useState<CodexSnapshot<CodexMCPServer[]> | null>(null);
   const [skillsSnapshot, setSkillsSnapshot] = useState<CodexSnapshot<CodexSkill[]> | null>(null);
@@ -1266,7 +1272,10 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   const sourceEvents = events.data ?? [];
   const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
   const displayItems = useMemo(() => groupCommandEvents(chatEvents), [chatEvents]);
+  const subagents = useMemo(() => collectSubagentActivity(sourceEvents), [sourceEvents]);
+  const activeSubagents = subagents.filter(agent => ["pendingInit", "running"].includes(agent.status));
   const activeTurn = thread.status === "queued" || thread.status === "running";
+  const goalRuntimeStatus = goal ? (["paused", "blocked", "usageLimited", "budgetLimited", "complete"].includes(goal.status) ? goal.status : thread.status) : "idle";
   const slashCandidate = /^\/[^\r\n]*$/.test(prompt);
   const slashOpen = !editingEventID && slashCandidate && prompt !== slashDismissedValue;
   const slashQuery = slashMode === "commands" ? prompt.slice(1) : prompt.replace(/^\/(?:model|reasoning)\s*/, "");
@@ -1288,11 +1297,80 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
     catch (error) { setNativeError(message(error)); }
     finally { setNativeBusy(""); }
   };
-  const loadGoal = async () => {
+  const loadGoal = async (refresh = false) => {
     setNativeBusy("goal"); setNativeError("");
-    try { const snapshot = await api<CodexSnapshot<unknown>>(`/threads/${thread.id}/goal`); const next = normalizeGoal(snapshot.data); setGoal(next); setGoalForm({ objective: next?.objective ?? "", status: next?.status ?? "active", token_budget: next?.token_budget == null ? "" : String(next.token_budget) }); if (!snapshot.supported) setNativeError(snapshot.reason || t("codex.unsupported")); }
+    try {
+      let snapshot = await api<CodexSnapshot<unknown>>(`/threads/${thread.id}/goal`);
+      if (refresh) {
+        await post(`/threads/${thread.id}/goal/refresh`, {});
+        snapshot = await waitForGoalSnapshot(thread.id) ?? snapshot;
+      }
+      const next = normalizeGoal(snapshot.data);
+      setGoal(next);
+      setGoalForm({ objective: next?.objective ?? "", status: next?.status ?? "active", token_budget: next?.token_budget == null ? "" : String(next.token_budget) });
+      if (!snapshot.supported) setNativeError(snapshot.reason || t("codex.unsupported"));
+    }
     catch (error) { setNativeError(message(error)); }
     finally { setNativeBusy(""); }
+  };
+  const queueGoalTurn = async (objective: string) => {
+    await post(`/threads/${thread.id}/turns`, { prompt: objective, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode });
+  };
+  const saveGoal = async (objective: string, status: string, tokenBudget: number | null, resume = false) => {
+    const creating = !goal;
+    const needsInitialTurn = creating && status === "active";
+    if (creating && !thread.codex_thread_id && status !== "active") throw new Error(t("codex.goalNeedsActive"));
+    if (needsInitialTurn && !thread.codex_thread_id) {
+      await queueGoalTurn(objective);
+      await waitForThreadCodexBinding(thread.id, t("codex.goalBindingTimeout"));
+    }
+    await put(`/threads/${thread.id}/goal`, { objective, status, token_budget: tokenBudget });
+    const snapshot = await waitForGoalSnapshot(thread.id);
+    if (!snapshot?.supported || snapshot.status === "failed") throw new Error(snapshot?.reason || snapshot?.error || t("codex.unsupported"));
+    if ((needsInitialTurn && Boolean(thread.codex_thread_id)) || (resume && status === "active" && !activeTurn)) await queueGoalTurn(objective);
+    await loadGoal();
+  };
+  const compactContext = async () => {
+    if (compactBusy) return;
+    if (activeTurn) { notify(t("codex.waitForTurn")); return; }
+    setCompactBusy(true);
+    try {
+      await post(`/threads/${thread.id}/compact`, {});
+      notify(t("codex.compactQueued"));
+    } catch (error) {
+      notify(message(error));
+    } finally {
+      setCompactBusy(false);
+    }
+  };
+  const updateGoalStatus = async (status: "active" | "paused") => {
+    if (!goal || nativeBusy === "goal") return;
+    setNativeBusy("goal"); setNativeError("");
+    try {
+      await saveGoal(goal.objective, status, goal.token_budget, status === "active");
+      if (status === "paused" && thread.status === "running") await post(`/threads/${thread.id}/interrupt`, {});
+      notify(t(status === "active" ? "codex.goalResumed" : "codex.goalPaused"));
+    } catch (error) {
+      notify(message(error));
+    } finally {
+      setNativeBusy("");
+    }
+  };
+  const clearCurrentGoal = async () => {
+    if (!goal || nativeBusy === "goal") return;
+    setNativeBusy("goal"); setNativeError("");
+    try {
+      await remove(`/threads/${thread.id}/goal`);
+      const snapshot = await waitForGoalSnapshot(thread.id);
+      if (!snapshot?.supported || snapshot.status === "failed") throw new Error(snapshot?.reason || snapshot?.error || t("codex.unsupported"));
+      await loadGoal();
+      notify(t("codex.goalCleared"));
+    } catch (error) {
+      setNativeError(message(error));
+      notify(message(error));
+    } finally {
+      setNativeBusy("");
+    }
   };
   const modelItems: SlashCommandItem[] = [
     { id: "default", name: t("codex.modelServerDefault"), description: t("codex.slashModelDefaultDescription"), icon: Cpu, selected: model === "", onSelect: () => finishSlash(() => setModel("")) },
@@ -1308,7 +1386,9 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
     { id: "model", name: "/model", description: t("codex.slashModelDescription"), detail: model || t("codex.modelServerDefault"), icon: Cpu, onSelect: () => { setPrompt("/model "); setSlashMode("model"); } },
     { id: "reasoning", name: "/reasoning", description: t("codex.slashReasoningDescription"), detail: reasoningEffort ? t(codexReasoningOptions.find(option => option.value === reasoningEffort)?.labelKey ?? "codex.reasoningDefault") : t("codex.reasoningDefault"), icon: Gauge, onSelect: () => { setPrompt("/reasoning "); setSlashMode("reasoning"); } },
     { id: "status", name: "/status", description: t("codex.slashStatusDescription"), icon: Activity, onSelect: () => finishSlash(() => setStatusOpen(true)) },
-    { id: "goal", name: "/goal", description: t("codex.slashGoalDescription"), icon: Target, onSelect: () => finishSlash(() => { setGoalOpen(true); void loadGoal(); }) },
+    { id: "goal", name: "/goal", description: t("codex.slashGoalDescription"), icon: Target, onSelect: () => finishSlash(() => { setGoalOpen(true); void loadGoal(true); }) },
+    { id: "compact", name: "/compact", description: t("codex.slashCompactDescription"), icon: Minimize2, onSelect: () => finishSlash(() => void compactContext()) },
+    { id: "subagents", name: "/subagents", description: t("codex.slashSubagentsDescription"), detail: subagents.length ? String(subagents.length) : undefined, icon: Users, onSelect: () => finishSlash(() => setSubagentsOpen(true)) },
     { id: "mcp", name: "/mcp", description: t("codex.slashMCPDescription"), icon: Network, onSelect: () => finishSlash(() => { setMcpOpen(true); void loadSnapshot<CodexMCPServer[]>("mcp"); }) },
     { id: "skills", name: "/skills", description: t("codex.slashSkillsDescription"), icon: Boxes, onSelect: () => finishSlash(() => { setSkillsOpen(true); void loadSnapshot<CodexSkill[]>("skills"); }) },
     { id: "plan", name: "/plan", description: t("codex.slashPlanDescription"), detail: t("codex.unsupported"), icon: StickyNote, onSelect: () => finishSlash(() => setPlanOpen(true)) },
@@ -1318,7 +1398,7 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   const slashItems = slashMode === "model" ? modelItems : slashMode === "reasoning" ? reasoningItems : [...commandItems, ...skillItems];
   useEffect(() => { if (slashOpen && slashMode === "commands" && !skillsSnapshot && nativeBusy !== "skills") void loadSnapshot<CodexSkill[]>("skills"); }, [slashOpen, slashMode, thread.workspace_id]);
   useEffect(() => { if (statusOpen && !statusSnapshot) void loadSnapshot<CodexStatusData>("status"); }, [statusOpen, thread.id]);
-  useEffect(() => { setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); }, [thread.id]);
+  useEffect(() => { setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); setGoal(null); setStatusSnapshot(null); setMcpSnapshot(null); setSkillsSnapshot(null); setSubagentsOpen(false); void loadGoal(); }, [thread.id]);
   const scrollStateKey = `${thread.id}:${rawEvents ? "raw" : "conversation"}`;
   const eventsReady = events.data !== null;
   useLayoutEffect(() => {
@@ -1388,16 +1468,19 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
     <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, event.currentTarget.scrollTop); }}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <form className="composer" onSubmit={send}>
+      {subagents.length > 0 && <button type="button" className="subagent-progress-row" onClick={() => setSubagentsOpen(true)}><Users size={16} /><span><strong>{t("codex.subagentActivity")}</strong><small>{activeSubagents.length > 0 ? t("codex.subagentsRunning", { count: activeSubagents.length }) : t("codex.subagentsRecorded", { count: subagents.length })}</small></span><ChevronRight size={15} /></button>}
+      {goal && <div className="goal-progress-row"><Target size={16} /><span title={goal.objective}><strong>{goal.objective}</strong><small>{t("codex.goalUsage", { tokens: goal.tokens_used, seconds: goal.time_used_seconds })}</small></span><Status value={goalRuntimeStatus} /><div>{goal.status === "active" ? <button type="button" className="icon-button" disabled={nativeBusy === "goal"} title={t("codex.pauseGoal")} aria-label={t("codex.pauseGoal")} onClick={() => void updateGoalStatus("paused")}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={14} /> : <Pause size={14} />}</button> : <button type="button" className="icon-button" disabled={nativeBusy === "goal"} title={t("codex.resumeGoal")} aria-label={t("codex.resumeGoal")} onClick={() => void updateGoalStatus("active")}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}</button>}<button type="button" className="icon-button" title={t("codex.editGoal")} aria-label={t("codex.editGoal")} onClick={() => setGoalOpen(true)}><Pencil size={14} /></button><button type="button" className="icon-button danger" disabled={nativeBusy === "goal"} title={t("codex.clearGoal")} aria-label={t("codex.clearGoal")} onClick={() => void clearCurrentGoal()}><Trash2 size={14} /></button></div></div>}
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
       {slashOpen && <SlashCommandMenu items={slashItems} query={slashQuery} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashMode === "commands" ? undefined : () => { setPrompt("/"); setSlashMode("commands"); }} onDismiss={closeSlash} keyboardRef={slashKeyboardRef} />}
       <textarea ref={promptRef} value={prompt} onChange={event => { setPrompt(event.target.value); if (event.target.value !== slashDismissedValue) setSlashDismissedValue(""); if (!event.target.value.startsWith("/model ") && !event.target.value.startsWith("/reasoning ")) setSlashMode("commands"); }} onKeyDown={event => { if (slashOpen && slashKeyboardRef.current?.(event)) return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onPaste={event => { const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} placeholder={t("codex.messagePlaceholder")} rows={3} />
       <div className="composer-bar"><div><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={event => setApprovalMode(event.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select><CodexModelPicker value={model} onChange={setModel} allowServerDefault requestCustom={customModelSignal} /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" title={activeTurn ? t("codex.waitForTurn") : t("codex.send")} disabled={slashOpen || (!prompt.trim() && images.length === 0) || imageBusy || sending || activeTurn}>{sending ? <LoaderCircle className="spin" size={17} /> : <ChevronRight size={17} />}{t("codex.send")}</button></div>
     </form>}
-    <Dialog open={statusOpen} title={t("codex.taskStatus")} onClose={() => setStatusOpen(false)}><SnapshotNotice snapshot={statusSnapshot} loading={nativeBusy === "status"} error={nativeError} /><dl className="task-status-list"><div><dt>{t("codex.statusWioTaskID")}</dt><dd><code>{thread.id}</code></dd></div><div><dt>{t("codex.statusCodexThreadID")}</dt><dd>{thread.codex_thread_id ? <code>{thread.codex_thread_id}</code> : t("codex.notBound")}</dd></div><div><dt>{t("column.project")}</dt><dd>{thread.project_name}</dd></div><div><dt>{t("column.server")}</dt><dd>{thread.server_name}</dd></div><div><dt>{t("codex.statusWorkingDirectory")}</dt><dd><code>{thread.path}</code></dd></div><div><dt>{t("codex.modelOverride")}</dt><dd>{String(statusSnapshot?.data?.model || model || t("codex.modelServerDefault"))}</dd></div><div><dt>{t("codex.reasoningEffort")}</dt><dd>{String(statusSnapshot?.data?.reasoning_effort || (reasoningEffort ? t(codexReasoningOptions.find(option => option.value === reasoningEffort)?.labelKey ?? "codex.reasoningDefault") : t("codex.reasoningDefault")))}</dd></div><div><dt>{t("codex.statusApprovalPolicy")}</dt><dd>{String(statusSnapshot?.data?.approval_policy || t(approvalMode === "on-request" ? "codex.approveOnRequest" : approvalMode === "untrusted" ? "codex.untrusted" : "codex.neverApprove"))}</dd></div><div><dt>{t("column.state")}</dt><dd><Status value={thread.status} /></dd></div>{(statusSnapshot?.data?.rate_limits ?? []).map(limit => <div key={limit.name}><dt>{limit.name}</dt><dd>{limit.used_percent == null ? limit.detail || "-" : `${limit.used_percent}%${limit.resets_at ? ` · ${t("codex.resetsAt", { time: formatDate(limit.resets_at) })}` : ""}`}</dd></div>)}</dl><DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "status"} onClick={() => void loadSnapshot<CodexStatusData>("status", true)}>{nativeBusy === "status" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{t("common.refresh")}</button></DialogActions></Dialog>
-    <Dialog open={goalOpen} title={t("codex.goalTitle")} onClose={() => setGoalOpen(false)}><SnapshotNotice loading={nativeBusy === "goal"} error={nativeError} /><form onSubmit={async event => { event.preventDefault(); setNativeBusy("goal"); setNativeError(""); try { await put(`/threads/${thread.id}/goal`, { objective: goalForm.objective.trim(), status: goalForm.status, token_budget: goalForm.token_budget ? Number(goalForm.token_budget) : null }); await waitForGoalSnapshot(thread.id); await loadGoal(); notify(t("codex.goalSaved")); } catch (error) { setNativeError(message(error)); } finally { setNativeBusy(""); } }}><Field label={t("codex.goalObjective")}><textarea rows={3} value={goalForm.objective} onChange={event => setGoalForm({ ...goalForm, objective: event.target.value })} required /></Field><div className="form-grid"><Field label={t("column.state")}><select value={goalForm.status} onChange={event => setGoalForm({ ...goalForm, status: event.target.value })}><option value="active">active</option><option value="paused">paused</option><option value="blocked">blocked</option><option value="complete">complete</option></select></Field><Field label={t("codex.goalTokenBudget")}><input type="number" min="1" value={goalForm.token_budget} onChange={event => setGoalForm({ ...goalForm, token_budget: event.target.value })} placeholder={t("codex.noLimit")} /></Field></div>{goal && <p className="snapshot-meta">{t("codex.goalUsage", { tokens: goal.tokens_used, seconds: goal.time_used_seconds })}</p>}<DialogActions>{goal && <button type="button" className="secondary-button danger" disabled={nativeBusy === "goal"} onClick={async () => { setNativeBusy("goal"); try { await remove(`/threads/${thread.id}/goal`); await waitForGoalSnapshot(thread.id); await loadGoal(); notify(t("codex.goalCleared")); } catch (error) { setNativeError(message(error)); } finally { setNativeBusy(""); } }}><Trash2 size={16} />{t("codex.clearGoal")}</button>}<button className="primary-button" disabled={nativeBusy === "goal" || !goalForm.objective.trim()}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={16} /> : <Target size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
+    <Dialog open={statusOpen} title={t("codex.taskStatus")} onClose={() => setStatusOpen(false)}><SnapshotNotice snapshot={statusSnapshot} loading={nativeBusy === "status"} error={nativeError} /><dl className="task-status-list"><div><dt>{t("codex.statusWioTaskID")}</dt><dd><code>{thread.id}</code></dd></div><div><dt>{t("codex.statusCodexThreadID")}</dt><dd>{thread.codex_thread_id ? <code>{thread.codex_thread_id}</code> : t("codex.notBound")}</dd></div><div><dt>{t("column.project")}</dt><dd>{thread.project_name}</dd></div><div><dt>{t("column.server")}</dt><dd>{thread.server_name}</dd></div><div><dt>{t("codex.statusWorkingDirectory")}</dt><dd><code>{thread.path}</code></dd></div><div><dt>{t("codex.modelOverride")}</dt><dd>{String(statusSnapshot?.data?.model || model || t("codex.modelServerDefault"))}</dd></div><div><dt>{t("codex.reasoningEffort")}</dt><dd>{String(statusSnapshot?.data?.reasoning_effort || (reasoningEffort ? t(codexReasoningOptions.find(option => option.value === reasoningEffort)?.labelKey ?? "codex.reasoningDefault") : t("codex.reasoningDefault")))}</dd></div><div><dt>{t("codex.statusApprovalPolicy")}</dt><dd>{String(statusSnapshot?.data?.approval_policy || t(approvalMode === "on-request" ? "codex.approveOnRequest" : approvalMode === "untrusted" ? "codex.untrusted" : "codex.neverApprove"))}</dd></div><div><dt>{t("column.state")}</dt><dd><Status value={thread.status} /></dd></div>{statusSnapshot?.data?.account_type && <div><dt>{t("codex.statusAccount")}</dt><dd>{statusSnapshot.data.account_type}</dd></div>}{statusSnapshot?.data?.rate_limits_available === false && <div className="status-note-row"><dt>{t("codex.statusRateLimits")}</dt><dd>{t("codex.statusRateLimitsUnavailable")}</dd></div>}{(statusSnapshot?.data?.rate_limits ?? []).map(limit => <div key={limit.name}><dt>{limit.name}</dt><dd>{limit.used_percent == null ? limit.detail || "-" : `${limit.used_percent}%${limit.resets_at ? ` · ${t("codex.resetsAt", { time: formatDate(limit.resets_at) })}` : ""}`}</dd></div>)}</dl><DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "status"} onClick={() => void loadSnapshot<CodexStatusData>("status", true)}>{nativeBusy === "status" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{t("common.refresh")}</button></DialogActions></Dialog>
+     <Dialog open={goalOpen} title={t("codex.goalTitle")} onClose={() => setGoalOpen(false)}><SnapshotNotice loading={nativeBusy === "goal"} error={nativeError} />{goal && <div className="goal-dialog-status"><span>{t("codex.goalExecution")}</span><Status value={goalRuntimeStatus} /><small>{t("codex.goalUsage", { tokens: goal.tokens_used, seconds: goal.time_used_seconds })}</small></div>}<form onSubmit={async event => { event.preventDefault(); setNativeBusy("goal"); setNativeError(""); const creating = !goal; try { await saveGoal(goalForm.objective.trim(), goalForm.status, goalForm.token_budget ? Number(goalForm.token_budget) : null, creating && goalForm.status === "active" ? false : goal?.status !== "active" && goalForm.status === "active"); notify(t(creating ? "codex.goalStarted" : "codex.goalSaved")); } catch (error) { setNativeError(message(error)); } finally { setNativeBusy(""); } }}><Field label={t("codex.goalObjective")}><textarea rows={3} value={goalForm.objective} onChange={event => setGoalForm({ ...goalForm, objective: event.target.value })} required /></Field><div className="form-grid"><Field label={t("column.state")}><select value={goalForm.status} onChange={event => setGoalForm({ ...goalForm, status: event.target.value })}><option value="active">active</option><option value="paused">paused</option><option value="blocked">blocked</option><option value="complete">complete</option></select></Field><Field label={t("codex.goalTokenBudget")}><input type="number" min="1" value={goalForm.token_budget} onChange={event => setGoalForm({ ...goalForm, token_budget: event.target.value })} placeholder={t("codex.noLimit")} /></Field></div><DialogActions>{goal && <button type="button" className="secondary-button danger" disabled={nativeBusy === "goal"} onClick={async () => { setNativeBusy("goal"); setNativeError(""); try { await remove(`/threads/${thread.id}/goal`); const snapshot = await waitForGoalSnapshot(thread.id); if (!snapshot?.supported || snapshot.status === "failed") throw new Error(snapshot?.reason || snapshot?.error || t("codex.unsupported")); await loadGoal(); notify(t("codex.goalCleared")); } catch (error) { setNativeError(message(error)); } finally { setNativeBusy(""); } }}><Trash2 size={16} />{t("codex.clearGoal")}</button>}<button className="primary-button" disabled={nativeBusy === "goal" || !goalForm.objective.trim()}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={16} /> : <Target size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
     <Dialog open={mcpOpen} title={t("codex.mcpTitle")} onClose={() => setMcpOpen(false)}><SnapshotNotice snapshot={mcpSnapshot} loading={nativeBusy === "mcp"} error={nativeError} />{mcpSnapshot?.data?.length ? <div className="native-list">{mcpSnapshot.data.map(server => <article key={server.name}><header><strong>{server.name}</strong><Status value={server.auth_status || "unknown"} /></header>{(server.server_name || server.server_version) && <small>{[server.server_name, server.server_version].filter(Boolean).join(" ")}</small>}<p>{server.tools.length ? server.tools.join(", ") : t("codex.noTools")}</p><small>{t("codex.mcpResources", { resources: server.resource_count, templates: server.resource_template_count })}</small></article>)}</div> : !nativeBusy && <Empty icon={<Network size={24} />} text={t("codex.noMCPServers")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "mcp"} onClick={() => void loadSnapshot<CodexMCPServer[]>("mcp", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
     <Dialog open={skillsOpen} title={t("codex.skillsTitle")} onClose={() => setSkillsOpen(false)}><SnapshotNotice snapshot={skillsSnapshot} loading={nativeBusy === "skills"} error={nativeError} />{skillsSnapshot?.data?.length ? <div className="native-list">{skillsSnapshot.data.map(skill => <article key={`${skill.scope}:${skill.name}`}><header><strong>{skill.display_name || skill.name}</strong><Status value={skill.enabled ? "enabled" : "disabled"} /></header><p>{skill.short_description || skill.description}</p><small>{skill.scope}</small></article>)}</div> : !nativeBusy && <Empty icon={<Boxes size={24} />} text={t("codex.noSkills")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "skills"} onClick={() => void loadSnapshot<CodexSkill[]>("skills", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
+    <Dialog open={subagentsOpen} title={t("codex.subagentsTitle")} onClose={() => setSubagentsOpen(false)} wide>{subagents.length > 0 ? <div className="subagent-list">{subagents.map(agent => <article key={agent.threadID}><header><span><Users size={15} /><strong>{agent.path || t("codex.subagent")}</strong></span><Status value={agent.status} /></header><code>{agent.threadID}</code>{(agent.model || agent.reasoningEffort) && <small>{[agent.model, agent.reasoningEffort].filter(Boolean).join(" · ")}</small>}{agent.prompt && <p>{agent.prompt}</p>}{agent.message && <p className="subagent-message">{agent.message}</p>}</article>)}</div> : <Empty icon={<Users size={24} />} text={t("codex.noSubagents")} />}</Dialog>
     <Dialog open={planOpen} title={t("codex.planTitle")} onClose={() => setPlanOpen(false)}><div className="unsupported-state"><StickyNote size={24} /><strong>{t("codex.planUnsupportedTitle")}</strong><p>{t("codex.planUnsupportedReason")}</p></div></Dialog>
   </>;
 }
@@ -1418,6 +1501,16 @@ async function waitForGoalSnapshot(threadID: string) {
     if (snapshot.status !== "loading") return snapshot;
     await new Promise(resolve => window.setTimeout(resolve, 500));
   }
+}
+
+async function waitForThreadCodexBinding(threadID: string, timeoutMessage: string) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const threads = await api<Thread[]>("/threads");
+    const thread = threads.find(item => item.id === threadID);
+    if (thread?.codex_thread_id) return thread;
+    await new Promise(resolve => window.setTimeout(resolve, 500));
+  }
+  throw new Error(timeoutMessage);
 }
 
 async function waitForThread(threadID: string, timeoutMessage: string) {
@@ -1473,7 +1566,54 @@ function normalizeStatus(value: unknown): CodexStatusData {
   if (Array.isArray(root.rate_limits)) return { ...root, rate_limits: root.rate_limits as CodexStatusData["rate_limits"] };
   const limits = asRecord(root.rateLimits) ?? root;
   const rate_limits = Object.entries(limits).flatMap(([key, raw]) => { const limit = asRecord(raw); if (!limit || (!key.toLowerCase().includes("primary") && !key.toLowerCase().includes("secondary"))) return []; return [{ name: String(limit.limitName ?? limit.limit_name ?? key), used_percent: typeof (limit.usedPercent ?? limit.used_percent) === "number" ? Number(limit.usedPercent ?? limit.used_percent) : undefined, resets_at: typeof (limit.resetsAt ?? limit.resets_at) === "string" ? String(limit.resetsAt ?? limit.resets_at) : undefined }]; });
-  return { rate_limits };
+  return { ...root, rate_limits };
+}
+
+function collectSubagentActivity(events: StreamEvent[]): SubagentActivity[] {
+  const agents = new Map<string, SubagentActivity>();
+  const update = (threadID: string, changes: Partial<SubagentActivity>, occurredAt: string) => {
+    if (!threadID) return;
+    const previous = agents.get(threadID) ?? { threadID, path: "", status: "pendingInit", message: "", prompt: "", model: "", reasoningEffort: "", updatedAt: occurredAt };
+    agents.set(threadID, { ...previous, ...changes, threadID, updatedAt: occurredAt });
+  };
+  for (const event of events) {
+    if (event.kind !== "codex.item.started" && event.kind !== "codex.item.completed") continue;
+    const payload = asRecord(event.payload);
+    const item = asRecord(payload?.item);
+    if (item?.type === "subAgentActivity") {
+      const kind = String(item.kind ?? item.status ?? "started").toLowerCase();
+      update(String(item.agentThreadId ?? item.newThreadId ?? item.receiverThreadId ?? ""), { path: String(item.agentPath ?? ""), status: kind === "interrupted" ? "interrupted" : kind === "completed" ? "completed" : kind === "failed" ? "errored" : "running" }, event.occurred_at);
+      continue;
+    }
+    if (item?.type === "collabToolCall") {
+      const agentStatus = asRecord(item.agentStatus);
+      const status = typeof item.agentStatus === "string" ? item.agentStatus : String(agentStatus?.status ?? item.status ?? "running");
+      const message = String(agentStatus?.message ?? item.message ?? "");
+      const threadIDs = [item.receiverThreadId, item.newThreadId].filter(value => typeof value === "string" && value);
+      for (const threadID of new Set(threadIDs as string[])) {
+        update(threadID, { status, message, prompt: String(item.prompt ?? ""), model: String(item.model ?? ""), reasoningEffort: String(item.reasoningEffort ?? "") }, event.occurred_at);
+      }
+      continue;
+    }
+    if (item?.type !== "collabAgentToolCall") continue;
+    const states = asRecord(item.agentsStates) ?? {};
+    const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.map(String) : [];
+    for (const threadID of receivers) {
+      const state = asRecord(states[threadID]);
+      update(threadID, {
+        status: String(state?.status ?? (item.status === "failed" ? "errored" : item.status === "completed" ? "completed" : "running")),
+        message: String(state?.message ?? ""),
+        prompt: String(item.prompt ?? ""),
+        model: String(item.model ?? ""),
+        reasoningEffort: String(item.reasoningEffort ?? "")
+      }, event.occurred_at);
+    }
+    for (const [threadID, rawState] of Object.entries(states)) {
+      const state = asRecord(rawState);
+      update(threadID, { status: String(state?.status ?? "running"), message: String(state?.message ?? "") }, event.occurred_at);
+    }
+  }
+  return Array.from(agents.values()).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 function ApprovalPrompt({ item, onDecided, notify }: { item: Approval; onDecided: () => void; notify: (text: string) => void }) {
@@ -1499,7 +1639,7 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
     const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } };
     return <article className="message user"><header><UserRound size={15} /><strong>{t("codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{images.length > 0 ? <MessageImages sources={images} /> : imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button>{onEdit && <button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button>}</div></article>;
   }
-  if (kind === "codex.error" || kind === "codex.turn.failed" || kind === "codex.interrupt.failed" || kind === "codex.approval.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t(kind === "codex.turn.failed" || kind === "codex.error" ? "codex.turnFailed" : "codex.actionFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
+  if (kind === "codex.error" || kind === "codex.turn.failed" || kind === "codex.interrupt.failed" || kind === "codex.approval.failed" || kind === "codex.compact.failed") return <article className="message error"><header><AlertTriangle size={15} /><strong>{t(kind === "codex.turn.failed" || kind === "codex.error" ? "codex.turnFailed" : "codex.actionFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
   if (kind === "codex.turn.completed") {
     const turn = asRecord(payload?.turn);
     const status = String(turn?.status ?? "failed");
@@ -1508,6 +1648,8 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
   }
   const item = asRecord(payload?.item);
   const itemImages = extractImageSources(item);
+  if (item?.type === "contextCompaction") return <article className="context-compaction-event"><header><Minimize2 size={15} /><strong>{t(kind === "codex.item.started" ? "codex.compacting" : "codex.compacted")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{t(kind === "codex.item.started" ? "codex.compactingDetail" : "codex.compactedDetail")}</div></article>;
+  if (item?.type === "collabToolCall" || item?.type === "collabAgentToolCall" || item?.type === "subAgentActivity") return <SubagentEvent event={event} item={item} />;
   if (item?.type === "agentMessage" || item?.type === "plan" || itemImages.length > 0) {
     const text = extractText(item);
     return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{itemImages.length > 0 && <MessageImages sources={itemImages} />}</article>;
@@ -1630,6 +1772,17 @@ export function FileDiffPane({ workspaceID, selection, realtime, writable, notif
     }
   };
   return <section className="file-preview-panel file-diff-panel"><header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button danger" disabled={!writable || discarding} title={t(writable ? "codex.discardFile" : "project.gitReadOnly")} aria-label={t("codex.discardFile")} onClick={() => void discard()}>{discarding ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}</button><button type="button" className="icon-button" disabled={requesting || discarding} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} /></Suspense>}</> : null}</div></section>;
+}
+
+function SubagentEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> }) {
+  const { t } = useI18n();
+  const activity = item.type === "subAgentActivity";
+  const agentStatus = asRecord(item.agentStatus);
+  const status = activity ? String(item.kind ?? item.status ?? "started") : String(agentStatus?.status ?? (typeof item.agentStatus === "string" ? item.agentStatus : item.status ?? "inProgress"));
+  const receiverIDs = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.map(String) : [item.receiverThreadId, item.newThreadId].filter(value => typeof value === "string" && value).map(String);
+  const states = asRecord(item.agentsStates) ?? {};
+  const summary = activity ? String(item.agentPath ?? item.agentThreadId ?? "") : `${String(item.tool ?? "spawnAgent")} · ${receiverIDs.length || Object.keys(states).length} ${t("codex.subagentThreads")}`;
+  return <article className="subagent-event"><header><Users size={15} /><strong>{t(activity ? "codex.subagentActivity" : "codex.subagentToolCall")}</strong><Status value={status} /><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{summary}</div>{typeof item.prompt === "string" && item.prompt && <p>{item.prompt}</p>}{receiverIDs.length > 0 && <code>{receiverIDs.join(", ")}</code>}</article>;
 }
 
 function workspaceFileLink(href: string | undefined, workspaceRoot: string): FilePreviewSelection | null {
@@ -2012,7 +2165,7 @@ function DialogActions({ children }: { children: ReactNode }) { return <div clas
 function Dialog({ open, title, onClose, children, wide = false, className = "" }: { open: boolean; title: string; onClose: () => void; children: ReactNode; wide?: boolean; className?: string }) { const { t } = useI18n(); if (!open) return null; return <div className="dialog-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}><div className={`dialog ${wide ? "wide" : ""} ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title}><div className="dialog-heading"><h2>{title}</h2><button className="icon-button" onClick={onClose} title={t("common.close")}><X size={18} /></button></div>{children}</div></div>; }
 function DataTable({ headers, empty, children }: { headers: string[]; empty: string; children: ReactNode }) { const count = Array.isArray(children) ? children.length : children ? 1 : 0; return <div className="table-wrap"><table><thead><tr>{headers.map(header => <th key={header}>{header}</th>)}</tr></thead><tbody>{count ? children : <tr><td colSpan={headers.length}><Empty icon={<Boxes size={22} />} text={empty} /></td></tr>}</tbody></table></div>; }
 function Empty({ icon, text }: { icon: ReactNode; text: string }) { return <div className="empty">{icon}<span>{text}</span></div>; }
-function Status({ value, icon }: { value: string; icon?: ReactNode }) { const { t } = useI18n(); const normalized = value.toLowerCase().replaceAll("_", "-"); const translated = t(`status.${normalized}`); return <span className={`status-tag ${normalized}`}>{icon}{translated.startsWith("status.") ? value.replaceAll("_", " ") : translated}</span>; }
+function Status({ value, icon }: { value: string; icon?: ReactNode }) { const { t } = useI18n(); const normalized = value.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replaceAll("_", "-"); const translated = t(`status.${normalized}`); return <span className={`status-tag ${normalized}`}>{icon}{translated.startsWith("status.") ? value.replaceAll("_", " ") : translated}</span>; }
 function ErrorBanner({ text }: { text: string }) { return <div className="error-banner"><AlertTriangle size={16} />{text}</div>; }
 function PageLoading() { return <div className="page-loading"><LoaderCircle className="spin" size={24} /></div>; }
 function ErrorState({ error, reload }: { error: string; reload: () => void }) { const { t } = useI18n(); return <div className="error-state"><AlertTriangle size={25} /><strong>{t("error.load")}</strong><span>{error}</span><button className="secondary-button" onClick={reload}><RefreshCw size={16} />{t("common.retry")}</button></div>; }
@@ -2099,7 +2252,7 @@ async function copyText(value: string) {
   if (!copied) throw new Error("Could not copy message");
 }
 function conversationEvents(events: StreamEvent[]) {
-  const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch"]);
+  const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabToolCall", "collabAgentToolCall", "subAgentActivity", "contextCompaction", "webSearch"]);
   const result: StreamEvent[] = [];
   for (const event of events) {
     if (event.kind === "user.message") {
@@ -2107,6 +2260,11 @@ function conversationEvents(events: StreamEvent[]) {
       continue;
     }
     const payload = asRecord(event.payload);
+    if (event.kind === "codex.item.started") {
+      const item = asRecord(payload?.item);
+      if (item?.type === "contextCompaction") result.push(event);
+      continue;
+    }
     if (event.kind === "codex.item.completed") {
       const item = asRecord(payload?.item);
       if (item?.type === "userMessage") {
@@ -2135,7 +2293,7 @@ function conversationEvents(events: StreamEvent[]) {
       if (turn?.status === "failed" || turn?.status === "interrupted") result.push(event);
       continue;
     }
-    if (event.kind === "codex.turn.failed" || event.kind === "codex.interrupt.failed" || event.kind === "codex.approval.failed") result.push(event);
+    if (event.kind === "codex.turn.failed" || event.kind === "codex.interrupt.failed" || event.kind === "codex.approval.failed" || event.kind === "codex.compact.failed") result.push(event);
   }
   return result;
 }

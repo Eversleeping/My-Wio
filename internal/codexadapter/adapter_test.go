@@ -110,6 +110,73 @@ func TestStatusResultProducesRateLimitArray(t *testing.T) {
 	}
 }
 
+func TestStatusSnapshotSkipsChatGPTRateLimitsForAPIKeyAccount(t *testing.T) {
+	var methods []string
+	request := func(_ context.Context, method string, _ any) (json.RawMessage, error) {
+		methods = append(methods, method)
+		if method != "account/read" {
+			t.Fatalf("unexpected method: %s", method)
+		}
+		return json.RawMessage(`{"account":{"type":"apiKey"},"requiresOpenaiAuth":false}`), nil
+	}
+	result, err := (&Adapter{}).codexOperation(context.Background(), "codex.status.snapshot", json.RawMessage(`{"codex_version":"codex-cli 0.145.0"}`), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status protocol.CodexStatusSnapshot
+	if err := json.Unmarshal(result.Data, &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(methods) != 1 || status.AccountType != "apiKey" || status.RateLimitsAvailable || len(status.RateLimits) != 0 {
+		t.Fatalf("unexpected API key status: methods=%#v status=%#v", methods, status)
+	}
+}
+
+func TestStatusSnapshotReadsRateLimitsForChatGPTAccount(t *testing.T) {
+	var methods []string
+	request := func(_ context.Context, method string, _ any) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "account/read":
+			return json.RawMessage(`{"account":{"type":"chatgpt","email":"user@example.com","planType":"plus"},"requiresOpenaiAuth":true}`), nil
+		case "account/rateLimits/read":
+			return json.RawMessage(`{"rateLimits":{"limitId":"codex","limitName":"Codex","primary":{"usedPercent":18,"resetsAt":1700000000}}}`), nil
+		default:
+			t.Fatalf("unexpected method: %s", method)
+			return nil, nil
+		}
+	}
+	result, err := (&Adapter{}).codexOperation(context.Background(), "codex.status.snapshot", json.RawMessage(`{}`), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status protocol.CodexStatusSnapshot
+	if err := json.Unmarshal(result.Data, &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(methods) != 2 || methods[1] != "account/rateLimits/read" || status.AccountType != "chatgpt" || !status.RateLimitsAvailable || len(status.RateLimits) != 1 {
+		t.Fatalf("unexpected ChatGPT status: methods=%#v status=%#v", methods, status)
+	}
+}
+
+func TestCompactOperationUsesCurrentCodexThread(t *testing.T) {
+	var method string
+	var params map[string]string
+	adapter := &Adapter{threads: make(map[string]string)}
+	request := func(_ context.Context, requestedMethod string, raw any) (json.RawMessage, error) {
+		method = requestedMethod
+		params = raw.(map[string]string)
+		return json.RawMessage(`{}`), nil
+	}
+	result, err := adapter.codexOperation(context.Background(), "codex.thread.compact", json.RawMessage(`{"thread_id":"wio-thread","codex_thread_id":"codex-thread","codex_version":"codex-cli 0.145.0"}`), request)
+	if err != nil || !result.Supported || method != "thread/compact/start" || params["threadId"] != "codex-thread" {
+		t.Fatalf("unexpected compact operation: method=%s params=%#v result=%#v err=%v", method, params, result, err)
+	}
+	if adapter.threads["codex-thread"] != "wio-thread" {
+		t.Fatalf("compact operation did not bind notifications to the Wio thread: %#v", adapter.threads)
+	}
+}
+
 func TestStartTurnParamsIncludeReasoningEffort(t *testing.T) {
 	command := protocol.StartTurnCommand{
 		Workspace:       "/srv/project",

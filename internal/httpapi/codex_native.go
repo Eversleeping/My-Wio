@@ -114,6 +114,48 @@ func (a *API) clearThreadGoal(w http.ResponseWriter, r *http.Request) {
 	a.queueThreadCodex(w, r, "codex.goal.clear", nil)
 }
 
+func (a *API) compactThread(w http.ResponseWriter, r *http.Request) {
+	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load thread")
+		return
+	}
+	if thread.ArchivedAt != nil {
+		writeError(w, http.StatusConflict, "archived Codex session is read-only")
+		return
+	}
+	if thread.Status == "queued" || thread.Status == "running" {
+		writeError(w, http.StatusConflict, "active Codex session must finish before compacting context")
+		return
+	}
+	if thread.CodexThreadID == "" {
+		writeError(w, http.StatusConflict, "Codex session is not initialized")
+		return
+	}
+	server, err := a.store.Server(r.Context(), thread.ServerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.Status != "online" {
+		writeError(w, http.StatusConflict, "server is offline")
+		return
+	}
+	command := protocol.CodexSnapshotCommand{ScopeType: "thread", ScopeID: thread.ID, ThreadID: thread.ID, CodexThread: thread.CodexThreadID, Workspace: thread.Path, CodexVersion: server.CodexVersion}
+	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.thread.compact", command, "codex-compact:"+store.NewID())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue context compaction")
+		return
+	}
+	a.gateway.Wake(thread.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "codex.thread.compact", "thread", thread.ID, map[string]string{"operation_id": operationID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
 func (a *API) queueThreadCodex(w http.ResponseWriter, r *http.Request, kind string, extra any) {
 	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
 	if errors.Is(err, sql.ErrNoRows) {
