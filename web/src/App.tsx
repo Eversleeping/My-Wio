@@ -148,6 +148,13 @@ type DataCacheEntry = { data: unknown; dependency: unknown };
 const dataCache = new Map<string, DataCacheEntry>();
 const codexScrollPositions = new Map<string, number>();
 
+function setScrollTopImmediately(element: HTMLElement, top: number) {
+  const scrollBehavior = element.style.scrollBehavior;
+  element.style.scrollBehavior = "auto";
+  element.scrollTop = top;
+  element.style.scrollBehavior = scrollBehavior;
+}
+
 function clearCodexSessionMemory(threadID?: string) {
   const eventPrefix = threadID ? `/threads/${threadID}/events?` : "/threads/";
   for (const path of dataCache.keys()) {
@@ -1241,19 +1248,20 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   useEffect(() => { if (statusOpen && !statusSnapshot) void loadSnapshot<CodexStatusData>("status"); }, [statusOpen, thread.id]);
   useEffect(() => { setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); }, [thread.id]);
   const scrollStateKey = `${thread.id}:${rawEvents ? "raw" : "conversation"}`;
+  const eventsReady = events.data !== null;
   useLayoutEffect(() => {
     const stream = streamRef.current;
-    if (!stream) return;
+    if (!stream || !eventsReady) return;
     if (restoredScrollKeyRef.current !== scrollStateKey) {
-      stream.scrollTop = codexScrollPositions.get(scrollStateKey) ?? stream.scrollHeight;
+      setScrollTopImmediately(stream, codexScrollPositions.get(scrollStateKey) ?? stream.scrollHeight);
       restoredScrollKeyRef.current = scrollStateKey;
       return;
     }
     stream.scrollTop = stream.scrollHeight;
-  }, [scrollStateKey, sourceEvents.length]);
+  }, [eventsReady, scrollStateKey, sourceEvents.length]);
   useLayoutEffect(() => {
     const stream = streamRef.current;
-    return () => { if (stream) codexScrollPositions.set(scrollStateKey, stream.scrollTop); };
+    return () => { if (stream && restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); };
   }, [scrollStateKey]);
   const addImages = async (files: File[]) => {
     const available = 4 - images.length;
@@ -1306,7 +1314,7 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   };
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{thread.status === "running" && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => codexScrollPositions.set(scrollStateKey, event.currentTarget.scrollTop)}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, event.currentTarget.scrollTop); }}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <form className="composer" onSubmit={send}>
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}

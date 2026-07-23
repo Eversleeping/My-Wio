@@ -12,6 +12,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   window.localStorage.clear();
 });
@@ -113,4 +114,37 @@ test("reuses cached conversation events and restores each session scroll positio
 
   rerender(sessionView(first, 1));
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+});
+
+test("restores the saved position after invalidated events finish loading", async () => {
+  const first = thread("reload-scroll-first");
+  const second = thread("reload-scroll-second");
+  const fetchCounts = new Map<string, number>();
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1000);
+  vi.mocked(fetch).mockImplementation(async input => {
+    const threadID = String(input).match(/\/threads\/([^/]+)\/events/)?.[1] ?? "";
+    const count = (fetchCounts.get(threadID) ?? 0) + 1;
+    fetchCounts.set(threadID, count);
+    const messages = threadID === first.id
+      ? [
+        { event_id: "first-1", stream_id: first.id, sequence: 1, kind: "user.message", occurred_at: "2026-07-23T00:00:00Z", payload: { text: "First message" } },
+        ...(count > 1 ? [{ event_id: "first-2", stream_id: first.id, sequence: 2, kind: "user.message", occurred_at: "2026-07-23T00:01:00Z", payload: { text: "New message" } }] : [])
+      ]
+      : [{ event_id: "second-1", stream_id: second.id, sequence: 1, kind: "user.message", occurred_at: "2026-07-23T00:00:00Z", payload: { text: "Second session message" } }];
+    return new Response(JSON.stringify(messages), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+
+  const { container, rerender } = render(sessionView(first));
+  expect(await screen.findByText("First message")).toBeInTheDocument();
+  let stream = container.querySelector<HTMLElement>(".event-stream")!;
+  stream.scrollTop = 360;
+  fireEvent.scroll(stream);
+
+  rerender(sessionView(second));
+  expect(await screen.findByText("Second session message")).toBeInTheDocument();
+
+  rerender(sessionView(first, 1));
+  expect(await screen.findByText("New message")).toBeInTheDocument();
+  stream = container.querySelector<HTMLElement>(".event-stream")!;
+  await waitFor(() => expect(stream).toHaveProperty("scrollTop", 360));
 });
