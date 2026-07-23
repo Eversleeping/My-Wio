@@ -5,6 +5,7 @@ import {
   ArchiveRestore,
   AlertTriangle,
   ArrowDownToLine,
+  ArrowRightLeft,
   ArrowUpFromLine,
   Ban,
   BellRing,
@@ -29,6 +30,7 @@ import {
   FolderTree,
   GitFork,
   GitBranch,
+  GitCommit,
   Gauge,
   HardDrive,
   History,
@@ -832,6 +834,7 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
   const activeThreadSource = showArchived ? archivedThreads : threads;
   const visibleThreads = useMemo(() => activeThreads.filter(thread => !thread.project_hidden_at), [activeThreads]);
   const active = visibleThreads.find(thread => thread.id === selected) ?? visibleThreads[0];
+  const activeWorkspace = workspaces.data?.find(workspace => workspace.id === active?.workspace_id);
   const threadGroups = useMemo(() => groupThreadsByWorkspace(visibleThreads, workspaces.data ?? []), [visibleThreads, workspaces.data]);
   const approvalKey = approvals.map(item => item.id).join(",");
   useEffect(() => {
@@ -999,8 +1002,8 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
           return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions">{acting ? <LoaderCircle className="spin" size={14} /> : <Status value={thread.status} />}{!showArchived && <button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting || !!threadAction} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</div></ContextMenu>;
         })}</div>}
       </section>;
-    })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} taskID={active?.id ?? ""} taskStatus={active?.status ?? ""} realtime={realtime} notify={notify} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
-    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
+    })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} taskID={active?.id ?? ""} taskStatus={active?.status ?? ""} realtime={realtime} notify={notify} writable={activeWorkspace?.management_mode === "managed"} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
+    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} writable={activeWorkspace?.management_mode === "managed"} notify={notify} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
@@ -1032,16 +1035,24 @@ type ThreadGroup = { workspaceID: string; projectID: string; projectName: string
 
 type FileTreeNode = { name: string; path: string; kind: WorkspaceFile["kind"]; size?: number; children: FileTreeNode[] };
 
-export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime, notify, activePath, activeMode, onOpenFile }: { workspaceID: string | null; taskID: string; taskStatus: string; realtime: number; notify: (text: string) => void; activePath: string; activeMode: "file" | "diff"; onOpenFile: (selection: FilePreviewSelection) => void }) {
+export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime, notify, writable = true, activePath, activeMode, onOpenFile }: { workspaceID: string | null; taskID: string; taskStatus: string; realtime: number; notify: (text: string) => void; writable?: boolean; activePath: string; activeMode: "file" | "diff"; onOpenFile: (selection: FilePreviewSelection) => void }) {
   const { t } = useI18n();
   const [mode, setMode] = useState<"files" | "changes">("files");
   const snapshot = useData<WorkspaceFilesSnapshot>(workspaceID ? `/workspaces/${workspaceID}/files` : null, `${realtime}:${workspaceID}`);
   const changes = useData<WorkspaceChangesSnapshot>(workspaceID && mode === "changes" ? `/workspaces/${workspaceID}/changes` : null, `${realtime}:${workspaceID}:${mode}`);
+  const git = useData<WorkspaceGitSnapshot>(workspaceID && mode === "changes" ? `/workspaces/${workspaceID}/git` : null, `${realtime}:${workspaceID}:${mode}`);
   const [requestedWorkspace, setRequestedWorkspace] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [commitMessage, setCommitMessage] = useState("");
+  const [gitAction, setGitAction] = useState<"" | "commit" | "pull" | "push">("");
   const previousTask = useRef({ id: taskID, status: taskStatus });
+  const syncedGitUpdate = useRef("");
   const currentSnapshot = snapshot.data?.workspace_id === workspaceID ? snapshot.data : null;
   const currentChanges = changes.data?.workspace_id === workspaceID ? changes.data : null;
+  const currentGit = git.data?.workspace_id === workspaceID ? git.data : null;
+  const gitData = currentGit?.data;
+  const remote = gitData?.remotes?.[0]?.name ?? "";
+  const branch = gitData?.status.branch ?? "";
   const fileScanning = currentSnapshot?.status === "scanning";
   const changeScanning = currentChanges?.status === "scanning";
   const refreshFiles = useCallback(async (silent = false) => {
@@ -1064,10 +1075,23 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
       notify(message(error));
     }
   }, [changes.reload, notify, t, workspaceID]);
+  const refreshGit = useCallback(async (silent = false) => {
+    if (!workspaceID) return;
+    try {
+      await post(`/workspaces/${workspaceID}/git/refresh`, {});
+      git.reload();
+      if (!silent) notify(t("project.gitRefreshQueued"));
+    } catch (error) {
+      notify(message(error));
+    }
+  }, [git.reload, notify, t, workspaceID]);
   useEffect(() => {
     setMode("files");
     setExpanded(new Set());
     setRequestedWorkspace("");
+    setCommitMessage("");
+    setGitAction("");
+    syncedGitUpdate.current = "";
   }, [workspaceID]);
   useEffect(() => {
     if (workspaceID && currentSnapshot?.status === "idle" && requestedWorkspace !== workspaceID) {
@@ -1082,6 +1106,13 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
     const isActive = taskStatus === "queued" || taskStatus === "running";
     if (mode === "changes" && workspaceID && previous.id === taskID && wasActive && !isActive) void refreshChanges(true);
   }, [mode, refreshChanges, taskID, taskStatus, workspaceID]);
+  useEffect(() => {
+    const gitUpdated = currentGit?.updated_at ?? "";
+    const changesUpdated = currentChanges?.updated_at ?? "";
+    if (mode !== "changes" || currentGit?.status !== "succeeded" || !gitUpdated || gitUpdated <= changesUpdated || syncedGitUpdate.current === gitUpdated) return;
+    syncedGitUpdate.current = gitUpdated;
+    void refreshChanges(true);
+  }, [currentChanges?.updated_at, currentGit?.status, currentGit?.updated_at, mode, refreshChanges]);
   const tree = useMemo(() => buildFileTree(currentSnapshot?.files ?? []), [currentSnapshot?.files]);
   const toggle = (path: string) => setExpanded(current => { const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next; });
   const toggleMode = () => {
@@ -1091,10 +1122,51 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
     }
     setMode("changes");
     void refreshChanges(true);
+    void refreshGit(true);
   };
-  const busy = mode === "changes" ? changeScanning : fileScanning;
-  const refresh = mode === "changes" ? refreshChanges : refreshFiles;
-  return <section className="workspace-files"><div className="panel-heading"><div>{mode === "changes" ? <FileDiff size={17} /> : <FolderTree size={17} />}<h2>{t(mode === "changes" ? "codex.changedFiles" : "codex.projectFiles")}</h2></div><div className="row-actions"><button className={`icon-button ${mode === "changes" ? "active" : ""}`} type="button" aria-pressed={mode === "changes"} disabled={!workspaceID} title={t(mode === "changes" ? "codex.showProjectFiles" : "codex.showChangedFiles")} onClick={toggleMode}><FileDiff size={16} /></button><button className="icon-button" type="button" disabled={!workspaceID || busy} title={t(mode === "changes" ? "codex.refreshChanges" : "codex.refreshFiles")} onClick={() => void refresh()}>{busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div></div><div className="workspace-file-body">{mode === "changes" ? <ChangedFilesView workspaceID={workspaceID} snapshot={currentChanges} loading={changes.loading} activePath={activeMode === "diff" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "diff" })} /> : !workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : fileScanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} activePath={activeMode === "file" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "file" })} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div></section>;
+  const runGitAction = async (action: "commit" | "pull" | "push") => {
+    if (!workspaceID || gitAction) return;
+    const messageText = commitMessage.trim();
+    if (action === "commit" && !messageText) return;
+    setGitAction(action);
+    try {
+      if (action === "commit") {
+        await post(`/workspaces/${workspaceID}/git/commit`, { message: messageText, all: true });
+        setCommitMessage("");
+      } else if (action === "pull") {
+        await post(`/workspaces/${workspaceID}/git/pull`, { remote, branch });
+      } else {
+        await post(`/workspaces/${workspaceID}/git/push`, { remote, ref: branch, set_upstream: !gitData?.status.upstream });
+      }
+      notify(t("project.gitActionQueued"));
+      git.reload();
+      changes.reload();
+    } catch (error) {
+      notify(message(error));
+    } finally {
+      setGitAction("");
+    }
+  };
+  const busy = mode === "changes" ? changeScanning || currentGit?.status === "refreshing" : fileScanning;
+  const refresh = () => {
+    if (mode === "changes") {
+      void refreshChanges();
+      void refreshGit(true);
+    } else {
+      void refreshFiles();
+    }
+  };
+  const changeCount = currentChanges?.changes.length ?? 0;
+  const writeBusy = Boolean(gitAction) || currentGit?.status === "refreshing";
+  const writeDisabled = !workspaceID || !writable || writeBusy;
+  return <section className={`workspace-files ${mode === "changes" ? "changes-mode" : ""}`}>
+    <div className="panel-heading"><div>{mode === "changes" ? <FileDiff size={17} /> : <FolderTree size={17} />}<h2>{t(mode === "changes" ? "codex.changedFiles" : "codex.projectFiles")}</h2></div><div className="row-actions"><button className={`icon-button ${mode === "changes" ? "active" : ""}`} type="button" aria-pressed={mode === "changes"} disabled={!workspaceID} title={t(mode === "changes" ? "codex.showProjectFiles" : "codex.showChangedFiles")} onClick={toggleMode}><FileDiff size={16} /></button><button className="icon-button" type="button" disabled={!workspaceID || busy} title={t(mode === "changes" ? "codex.refreshChanges" : "codex.refreshFiles")} onClick={refresh}>{busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div></div>
+    <div className="workspace-file-body">{mode === "changes" ? <ChangedFilesView workspaceID={workspaceID} snapshot={currentChanges} loading={changes.loading} activePath={activeMode === "diff" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "diff" })} /> : !workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : fileScanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} activePath={activeMode === "file" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "file" })} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div>
+    {mode === "changes" && <div className="workspace-change-actions">
+      <form onSubmit={event => { event.preventDefault(); void runGitAction("commit"); }}><input aria-label={t("project.gitCommitMessage")} value={commitMessage} maxLength={20 * 1024} disabled={writeDisabled} placeholder={t("project.gitCommitPlaceholder")} onChange={event => setCommitMessage(event.target.value)} /><button className="primary-button small" disabled={writeDisabled || changeCount === 0 || !commitMessage.trim()}>{gitAction === "commit" ? <LoaderCircle className="spin" size={14} /> : <GitCommit size={14} />}{t("project.gitCommitAction")}</button></form>
+      <div><button type="button" className="secondary-button small" disabled={writeDisabled || changeCount > 0 || !remote || !branch} title={changeCount > 0 ? t("codex.pullBlockedByChanges") : t("project.gitPull")} onClick={() => void runGitAction("pull")}>{gitAction === "pull" ? <LoaderCircle className="spin" size={14} /> : <ArrowRightLeft size={14} />}{t("project.gitPull")}</button><button type="button" className="secondary-button small" disabled={writeDisabled || !remote || !branch} title={t("project.gitPush")} onClick={() => void runGitAction("push")}>{gitAction === "push" ? <LoaderCircle className="spin" size={14} /> : <ArrowUpFromLine size={14} />}{t("project.gitPush")}</button></div>
+    </div>}
+  </section>;
 }
 
 const changeStatusKeys: Record<string, string> = { modified: "codex.changeModified", added: "codex.changeAdded", deleted: "codex.changeDeleted", renamed: "codex.changeRenamed", copied: "codex.changeCopied", untracked: "codex.changeAdded", conflicted: "codex.changeConflicted" };
@@ -1504,10 +1576,11 @@ function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { worksp
   return <section className="file-preview-panel"><header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}</div></section>;
 }
 
-function FileDiffPane({ workspaceID, selection, realtime, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; onClose: () => void }) {
+export function FileDiffPane({ workspaceID, selection, realtime, writable, notify, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable: boolean; notify: (text: string) => void; onClose: () => void }) {
   const { t } = useI18n();
   const [requestVersion, setRequestVersion] = useState(0);
   const [requesting, setRequesting] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [requestError, setRequestError] = useState("");
   const [requestedAt, setRequestedAt] = useState(0);
   const endpoint = `/workspaces/${workspaceID}/diff-preview?path=${encodeURIComponent(selection.path)}`;
@@ -1543,7 +1616,20 @@ function FileDiffPane({ workspaceID, selection, realtime, onClose }: { workspace
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
   const retry = () => { setRequestVersion(value => value + 1); void requestPreview(); };
-  return <section className="file-preview-panel file-diff-panel"><header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button" disabled={requesting} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} /></Suspense>}</> : null}</div></section>;
+  const discard = async () => {
+    if (!writable || discarding || !window.confirm(t("codex.discardFileConfirm", { path: selection.path }))) return;
+    setDiscarding(true);
+    try {
+      await post(`/workspaces/${workspaceID}/git/discard`, { paths: [selection.path], all: false, include_staged: true });
+      notify(t("codex.discardFileQueued"));
+      onClose();
+    } catch (error) {
+      notify(message(error));
+    } finally {
+      setDiscarding(false);
+    }
+  };
+  return <section className="file-preview-panel file-diff-panel"><header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button danger" disabled={!writable || discarding} title={t(writable ? "codex.discardFile" : "project.gitReadOnly")} aria-label={t("codex.discardFile")} onClick={() => void discard()}>{discarding ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}</button><button type="button" className="icon-button" disabled={requesting || discarding} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} /></Suspense>}</> : null}</div></section>;
 }
 
 function workspaceFileLink(href: string | undefined, workspaceRoot: string): FilePreviewSelection | null {

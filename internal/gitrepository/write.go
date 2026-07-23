@@ -307,6 +307,42 @@ func DiscardUnstaged(ctx context.Context, repositoryPath string, paths []string,
 	return nil
 }
 
+// DiscardChanges restores the selected files to the last commit, including
+// changes that are currently staged. Callers must opt into this explicitly
+// because it removes both index and working-tree changes.
+func DiscardChanges(ctx context.Context, repositoryPath string, paths []string, all bool, managedRoots []string) error {
+	repositoryPath, err := resolveRepository(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return err
+	}
+	selected, err := selectWorkspaceChangePaths(ctx, repositoryPath, paths, all, managedRoots, func(change WorkspaceChange) bool {
+		return change.Status != "conflicted" && (change.Staged || change.Unstaged || change.Status == "untracked")
+	})
+	if err != nil {
+		return err
+	}
+	changes, err := ListWorkspaceChanges(ctx, repositoryPath, managedRoots)
+	if err != nil {
+		return err
+	}
+	selectedSet := make(map[string]struct{}, len(selected))
+	for _, path := range selected {
+		selectedSet[path] = struct{}{}
+	}
+	staged := make([]string, 0, len(selected))
+	for _, change := range changes {
+		if _, ok := selectedSet[change.Path]; ok && change.Staged {
+			staged = append(staged, change.Path)
+		}
+	}
+	if len(staged) > 0 {
+		if err := Unstage(ctx, repositoryPath, staged, false, managedRoots); err != nil {
+			return err
+		}
+	}
+	return DiscardUnstaged(ctx, repositoryPath, selected, false, managedRoots)
+}
+
 func CommitChanges(ctx context.Context, repositoryPath, message string, managedRoots []string) error {
 	repositoryPath, err := resolveRepository(ctx, repositoryPath, managedRoots)
 	if err != nil {

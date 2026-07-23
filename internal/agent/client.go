@@ -551,8 +551,18 @@ func (c *Client) writeWorkspaceGit(ctx context.Context, command protocol.GitWork
 	case "unstage":
 		err = gitrepository.Unstage(ctx, command.Path, command.Paths, command.All, roots)
 	case "discard":
-		err = gitrepository.DiscardUnstaged(ctx, command.Path, command.Paths, command.All, roots)
+		if command.IncludeStaged {
+			err = gitrepository.DiscardChanges(ctx, command.Path, command.Paths, command.All, roots)
+		} else {
+			err = gitrepository.DiscardUnstaged(ctx, command.Path, command.Paths, command.All, roots)
+		}
 	case "commit":
+		if command.All {
+			err = gitrepository.Stage(ctx, command.Path, nil, true, roots)
+		}
+		if err != nil {
+			break
+		}
 		err = gitrepository.CommitChanges(ctx, command.Path, command.Message, roots)
 	default:
 		return protocol.GitWorkspaceWriteResult{}, fmt.Errorf("unsupported workspace Git action %q", command.Action)

@@ -64,6 +64,18 @@ func TestStageUnstageDiscardAndCommitChanges(t *testing.T) {
 		t.Fatalf("expected a clean workspace after discard: %#v", changes)
 	}
 
+	writeGitChangeFile(t, repository, "modified.txt", "staged-change\n")
+	if err := Stage(context.Background(), repository, []string{"modified.txt"}, false, []string{root}); err != nil {
+		t.Fatal(err)
+	}
+	if err := DiscardChanges(context.Background(), repository, []string{"modified.txt"}, false, []string{root}); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(filepath.Join(repository, "modified.txt"))
+	if err != nil || strings.ReplaceAll(string(content), "\r\n", "\n") != "before\n" {
+		t.Fatalf("staged tracked content was not restored: %q %v", content, err)
+	}
+
 	writeGitChangeFile(t, repository, "committed.txt", "ready\n")
 	if err := Stage(context.Background(), repository, nil, true, []string{root}); err != nil {
 		t.Fatal(err)

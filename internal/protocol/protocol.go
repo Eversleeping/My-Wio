@@ -251,21 +251,22 @@ type GitWorkspaceInspectResult struct {
 }
 
 type GitWorkspaceWriteCommand struct {
-	WorkspaceID string   `json:"workspace_id"`
-	Path        string   `json:"path"`
-	Action      string   `json:"action"`
-	Branch      string   `json:"branch,omitempty"`
-	NewBranch   string   `json:"new_branch,omitempty"`
-	StartPoint  string   `json:"start_point,omitempty"`
-	Remote      string   `json:"remote,omitempty"`
-	URL         string   `json:"url,omitempty"`
-	Ref         string   `json:"ref,omitempty"`
-	Force       bool     `json:"force,omitempty"`
-	SetUpstream bool     `json:"set_upstream,omitempty"`
-	Detach      bool     `json:"detach,omitempty"`
-	Paths       []string `json:"paths,omitempty"`
-	All         bool     `json:"all,omitempty"`
-	Message     string   `json:"message,omitempty"`
+	WorkspaceID   string   `json:"workspace_id"`
+	Path          string   `json:"path"`
+	Action        string   `json:"action"`
+	Branch        string   `json:"branch,omitempty"`
+	NewBranch     string   `json:"new_branch,omitempty"`
+	StartPoint    string   `json:"start_point,omitempty"`
+	Remote        string   `json:"remote,omitempty"`
+	URL           string   `json:"url,omitempty"`
+	Ref           string   `json:"ref,omitempty"`
+	Force         bool     `json:"force,omitempty"`
+	SetUpstream   bool     `json:"set_upstream,omitempty"`
+	Detach        bool     `json:"detach,omitempty"`
+	Paths         []string `json:"paths,omitempty"`
+	All           bool     `json:"all,omitempty"`
+	IncludeStaged bool     `json:"include_staged,omitempty"`
+	Message       string   `json:"message,omitempty"`
 }
 
 type GitWorkspaceWriteResult struct {

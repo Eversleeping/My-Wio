@@ -441,6 +441,7 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .thread strong { font-size: 13px; }
 .thread small { color: var(--muted); font-size: 11px; }
 .workspace-files { min-height: 220px; display: grid; overflow: hidden; border-top: 1px solid var(--line); grid-template-rows: auto minmax(0, 1fr); flex: 1 1 0; }
+.workspace-files.changes-mode { grid-template-rows: auto minmax(0, 1fr) auto; }
 .workspace-file-body { min-height: 0; overflow-y: auto; }
 .workspace-file-body .empty { min-height: 150px; }
 .file-tree { padding: 5px 0 12px; }
@@ -466,6 +467,11 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .change-file-name strong { font-size: 11px; }
 .change-file-name small { color: var(--muted); font-size: 9px; }
 .change-file-label { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.workspace-change-actions { display: grid; gap: 7px; padding: 9px; background: #fff; border-top: 1px solid var(--line); }
+.workspace-change-actions form { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.workspace-change-actions input { min-width: 0; height: 32px; padding: 0 8px; font-size: 11px; }
+.workspace-change-actions > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.workspace-change-actions button { width: 100%; min-width: 0; height: 31px; justify-content: center; padding-inline: 7px; white-space: nowrap; }
 .session-area { min-width: 0; min-height: 0; display: grid; overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
 .session-pane-tabs { display: flex; align-items: center; gap: 3px; padding: 7px 9px; background: #f4f6f3; border-bottom: 1px solid var(--line); }
 .session-pane-tabs button { min-height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 10px; color: #5c666d; background: transparent; border: 0; border-radius: 5px; font-size: 11px; }

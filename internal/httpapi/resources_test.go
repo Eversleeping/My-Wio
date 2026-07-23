@@ -887,19 +887,22 @@ func TestWorkspaceGitChangeActionsQueueStructuredWriteCommands(t *testing.T) {
 	}
 	api := resourceTestAPI(database)
 	tests := []struct {
-		name        string
-		path        string
-		body        map[string]any
-		handler     http.HandlerFunc
-		wantAction  string
-		wantPath    string
-		wantAll     bool
-		wantMessage string
+		name              string
+		path              string
+		body              map[string]any
+		handler           http.HandlerFunc
+		wantAction        string
+		wantPath          string
+		wantAll           bool
+		wantIncludeStaged bool
+		wantMessage       string
 	}{
 		{name: "stage file", path: "/api/workspaces/" + workspaceID + "/git/stage", body: map[string]any{"paths": []string{"src/new.ts"}}, handler: api.stageGitChanges, wantAction: "stage", wantPath: "src/new.ts"},
 		{name: "unstage all", path: "/api/workspaces/" + workspaceID + "/git/unstage", body: map[string]any{"all": true}, handler: api.unstageGitChanges, wantAction: "unstage", wantAll: true},
 		{name: "discard file", path: "/api/workspaces/" + workspaceID + "/git/discard", body: map[string]any{"paths": []string{"src/old.ts"}}, handler: api.discardGitChanges, wantAction: "discard", wantPath: "src/old.ts"},
+		{name: "discard reviewed staged file", path: "/api/workspaces/" + workspaceID + "/git/discard", body: map[string]any{"paths": []string{"src/staged.ts"}, "include_staged": true}, handler: api.discardGitChanges, wantAction: "discard", wantPath: "src/staged.ts", wantIncludeStaged: true},
 		{name: "commit", path: "/api/workspaces/" + workspaceID + "/git/commit", body: map[string]any{"message": "Update Git workspace"}, handler: api.commitGitChanges, wantAction: "commit", wantMessage: "Update Git workspace"},
+		{name: "commit all", path: "/api/workspaces/" + workspaceID + "/git/commit", body: map[string]any{"message": "Commit every change", "all": true}, handler: api.commitGitChanges, wantAction: "commit", wantAll: true, wantMessage: "Commit every change"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -919,7 +922,7 @@ func TestWorkspaceGitChangeActionsQueueStructuredWriteCommands(t *testing.T) {
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 				t.Fatal(err)
 			}
-			if command.Action != test.wantAction || command.All != test.wantAll || command.Message != test.wantMessage {
+			if command.Action != test.wantAction || command.All != test.wantAll || command.IncludeStaged != test.wantIncludeStaged || command.Message != test.wantMessage {
 				t.Fatalf("unexpected Git command: %#v", command)
 			}
 			if test.wantPath != "" && (len(command.Paths) != 1 || command.Paths[0] != test.wantPath) {

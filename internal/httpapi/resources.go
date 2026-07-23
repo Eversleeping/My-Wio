@@ -873,8 +873,9 @@ func (a *API) pushGit(w http.ResponseWriter, r *http.Request) {
 }
 
 type gitChangeSelectionInput struct {
-	Paths []string `json:"paths"`
-	All   bool     `json:"all"`
+	Paths         []string `json:"paths"`
+	All           bool     `json:"all"`
+	IncludeStaged bool     `json:"include_staged"`
 }
 
 func decodeGitChangeSelection(w http.ResponseWriter, r *http.Request) (gitChangeSelectionInput, bool) {
@@ -914,12 +915,13 @@ func (a *API) discardGitChanges(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "discard", Paths: in.Paths, All: in.All})
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "discard", Paths: in.Paths, All: in.All, IncludeStaged: in.IncludeStaged})
 }
 
 func (a *API) commitGitChanges(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Message string `json:"message"`
+		All     bool   `json:"all"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -932,7 +934,7 @@ func (a *API) commitGitChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "commit message is too long")
 		return
 	}
-	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "commit", Message: in.Message})
+	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "commit", Message: in.Message, All: in.All})
 }
 
 type createWorktreeInput struct {
