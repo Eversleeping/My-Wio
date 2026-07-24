@@ -109,6 +109,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateServerGitCredentialProfiles(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if driver == "pgx" {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
 			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
@@ -134,6 +138,35 @@ func migrateServerControlPlane(ctx context.Context, db *sqlx.DB, driver string) 
 		if _, err := db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN is_control_plane INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return fmt.Errorf("migrate control-plane server flag: %w", err)
 		}
+	}
+	return nil
+}
+
+func migrateServerGitCredentialProfiles(ctx context.Context, db *sqlx.DB, driver string) error {
+	if driver == "pgx" {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE server_credential_updates ADD COLUMN IF NOT EXISTS git_profile_ids TEXT NOT NULL DEFAULT '[]'"); err != nil {
+			return fmt.Errorf("migrate Git credential update profiles: %w", err)
+		}
+	} else {
+		var count int
+		if err := db.GetContext(ctx, &count, "SELECT COUNT(*) FROM pragma_table_info('server_credential_updates') WHERE name='git_profile_ids'"); err != nil {
+			return fmt.Errorf("inspect Git credential update profiles: %w", err)
+		}
+		if count == 0 {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE server_credential_updates ADD COLUMN git_profile_ids TEXT NOT NULL DEFAULT '[]'"); err != nil {
+				return fmt.Errorf("migrate Git credential update profiles: %w", err)
+			}
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO server_git_credential_profiles(server_id,profile_id,position)
+		SELECT server_id,git_profile_id,0 FROM server_credential_profiles WHERE git_profile_id IS NOT NULL
+		ON CONFLICT(server_id,profile_id) DO NOTHING`); err != nil {
+		return fmt.Errorf("migrate bound Git credential profiles: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE server_credential_updates
+		SET git_profile_ids=CASE WHEN git_profile_id IS NULL THEN '[]' ELSE '["' || git_profile_id || '"]' END
+		WHERE git_profile_ids='[]'`); err != nil {
+		return fmt.Errorf("migrate pending Git credential profiles: %w", err)
 	}
 	return nil
 }
@@ -567,31 +600,32 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 }
 
 type Server struct {
-	ID                   string     `db:"id" json:"id"`
-	Name                 string     `db:"name" json:"name"`
-	Hostname             string     `db:"hostname" json:"hostname"`
-	IsControlPlane       bool       `db:"is_control_plane" json:"is_control_plane"`
-	Status               string     `db:"status" json:"status"`
-	AgentVersion         string     `db:"agent_version" json:"agent_version"`
-	CodexVersion         string     `db:"codex_version" json:"codex_version"`
-	CodexReady           int        `db:"codex_ready" json:"codex_ready"`
-	ScanRoots            string     `db:"scan_roots" json:"-"`
-	ManagedRoots         string     `db:"managed_roots" json:"-"`
-	Address              string     `db:"address" json:"address"`
-	Configuration        string     `db:"configuration" json:"configuration"`
-	Notes                string     `db:"notes" json:"notes"`
-	LastSeenAt           *time.Time `db:"last_seen_at" json:"last_seen_at"`
-	CreatedAt            time.Time  `db:"created_at" json:"created_at"`
-	AgentTargetVersion   string     `db:"-" json:"agent_target_version"`
-	AgentUpdateAvailable bool       `db:"-" json:"agent_update_available"`
-	AgentUpdateSupported bool       `db:"-" json:"agent_update_supported"`
-	CodexTargetVersion   string     `db:"-" json:"codex_target_version"`
-	CodexUpdateAvailable bool       `db:"-" json:"codex_update_available"`
-	CodexUpdateSupported bool       `db:"-" json:"codex_update_supported"`
-	CodexProfileID       string     `db:"codex_profile_id" json:"codex_profile_id"`
-	CodexProfileName     string     `db:"codex_profile_name" json:"codex_profile_name"`
-	GitProfileID         string     `db:"git_profile_id" json:"git_profile_id"`
-	GitProfileName       string     `db:"git_profile_name" json:"git_profile_name"`
+	ID                   string              `db:"id" json:"id"`
+	Name                 string              `db:"name" json:"name"`
+	Hostname             string              `db:"hostname" json:"hostname"`
+	IsControlPlane       bool                `db:"is_control_plane" json:"is_control_plane"`
+	Status               string              `db:"status" json:"status"`
+	AgentVersion         string              `db:"agent_version" json:"agent_version"`
+	CodexVersion         string              `db:"codex_version" json:"codex_version"`
+	CodexReady           int                 `db:"codex_ready" json:"codex_ready"`
+	ScanRoots            string              `db:"scan_roots" json:"-"`
+	ManagedRoots         string              `db:"managed_roots" json:"-"`
+	Address              string              `db:"address" json:"address"`
+	Configuration        string              `db:"configuration" json:"configuration"`
+	Notes                string              `db:"notes" json:"notes"`
+	LastSeenAt           *time.Time          `db:"last_seen_at" json:"last_seen_at"`
+	CreatedAt            time.Time           `db:"created_at" json:"created_at"`
+	AgentTargetVersion   string              `db:"-" json:"agent_target_version"`
+	AgentUpdateAvailable bool                `db:"-" json:"agent_update_available"`
+	AgentUpdateSupported bool                `db:"-" json:"agent_update_supported"`
+	CodexTargetVersion   string              `db:"-" json:"codex_target_version"`
+	CodexUpdateAvailable bool                `db:"-" json:"codex_update_available"`
+	CodexUpdateSupported bool                `db:"-" json:"codex_update_supported"`
+	CodexProfileID       string              `db:"codex_profile_id" json:"codex_profile_id"`
+	CodexProfileName     string              `db:"codex_profile_name" json:"codex_profile_name"`
+	GitProfileID         string              `db:"git_profile_id" json:"git_profile_id"`
+	GitProfileName       string              `db:"git_profile_name" json:"git_profile_name"`
+	GitProfiles          []CredentialProfile `db:"-" json:"git_profiles"`
 }
 
 type ServerMetadata struct {
@@ -603,13 +637,39 @@ type ServerMetadata struct {
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
 	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.is_control_plane DESC,s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return out, s.loadServerGitCredentialProfiles(ctx, out)
 }
 
 func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	var server Server
 	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,s.codex_version,s.codex_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(cp.codex_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN credential_profiles codex ON codex.id=cp.codex_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
-	return server, err
+	if err != nil {
+		return Server{}, err
+	}
+	var profiles []CredentialProfile
+	if err := s.DB.SelectContext(ctx, &profiles, s.Q(`SELECT p.id,p.kind,p.name,p.endpoint,p.username,p.model,p.commit_name,p.commit_email,p.updated_at
+		FROM server_git_credential_profiles binding JOIN credential_profiles p ON p.id=binding.profile_id
+		WHERE binding.server_id=? ORDER BY binding.position,p.name`), server.ID); err != nil {
+		return Server{}, err
+	}
+	server.GitProfiles = profiles
+	return server, nil
+}
+
+func (s *Store) loadServerGitCredentialProfiles(ctx context.Context, servers []Server) error {
+	for index := range servers {
+		var profiles []CredentialProfile
+		if err := s.DB.SelectContext(ctx, &profiles, s.Q(`SELECT p.id,p.kind,p.name,p.endpoint,p.username,p.model,p.commit_name,p.commit_email,p.updated_at
+			FROM server_git_credential_profiles binding JOIN credential_profiles p ON p.id=binding.profile_id
+			WHERE binding.server_id=? ORDER BY binding.position,p.name`), servers[index].ID); err != nil {
+			return err
+		}
+		servers[index].GitProfiles = profiles
+	}
+	return nil
 }
 
 // EnsureControlPlaneServer creates the built-in Agent registration once and

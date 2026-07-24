@@ -37,6 +37,33 @@ func TestOpenMigratesLegacyCredentialProfilesWithCommitIdentity(t *testing.T) {
 	}
 }
 
+func TestMigrateServerGitCredentialProfilesCopiesLegacyBinding(t *testing.T) {
+	database := testStore(t)
+	ctx := context.Background()
+	server := enrollProjectImportTestServer(t, database, "legacy-git-binding")
+	codex, err := database.SaveCredentialProfile(ctx, CredentialProfile{Kind: "codex", Name: "Codex", Endpoint: "https://api.example.com/v1", Model: "gpt-5.6-sol"}, "v1:codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	git, err := database.SaveCredentialProfile(ctx, CredentialProfile{Kind: "git", Name: "Legacy Git", Endpoint: "https://gitee.com", Username: "wio", CommitName: "Wio", CommitEmail: "wio@example.com"}, "v1:git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,?,?,?)"), server.ID, codex.ID, git.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("DELETE FROM server_git_credential_profiles WHERE server_id=?"), server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateServerGitCredentialProfiles(ctx, database.DB, database.driver); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.Server(ctx, server.ID)
+	if err != nil || len(updated.GitProfiles) != 1 || updated.GitProfiles[0].ID != git.ID {
+		t.Fatalf("legacy Git binding was not migrated: %#v %v", updated, err)
+	}
+}
+
 func TestOpenMigratesLegacyUserToTOTPAuthentication(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-user.db")
 	legacy, err := sql.Open("sqlite", path)

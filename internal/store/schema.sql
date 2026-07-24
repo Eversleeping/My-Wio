@@ -289,11 +289,19 @@ CREATE TABLE IF NOT EXISTS server_credential_profiles (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS server_git_credential_profiles (
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  profile_id TEXT NOT NULL REFERENCES credential_profiles(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(server_id, profile_id)
+);
+
 CREATE TABLE IF NOT EXISTS server_credential_updates (
   operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   codex_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
   git_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  git_profile_ids TEXT NOT NULL DEFAULT '[]',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

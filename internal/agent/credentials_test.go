@@ -82,3 +82,41 @@ func TestInvalidCredentialCommandLeavesExistingFilesUnchanged(t *testing.T) {
 		t.Fatalf("invalid update changed the key: %q", key)
 	}
 }
+
+func TestConfigureCredentialsWritesMultipleGitCredentials(t *testing.T) {
+	root := t.TempDir()
+	keyFile := filepath.Join(root, "codex.key")
+	client := NewClient(Config{CodexAPIKeyFile: keyFile, StateDir: filepath.Join(root, "state")}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	command := protocol.ConfigureCredentialsCommand{
+		CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "new-codex-secret", CodexModel: "gpt-5.6-sol",
+		GitCredentials: []protocol.GitCredential{
+			{Endpoint: "https://gitee.com", Username: "gitee-user", Token: "gitee-token", CommitName: "Gitee User", CommitEmail: "gitee@example.com"},
+			{Endpoint: "https://github.com", Username: "github-user", Token: "github-token", CommitName: "GitHub User", CommitEmail: "github@example.com"},
+		},
+	}
+	if err := client.configureCredentials(command); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := os.ReadFile(filepath.Join(root, "state", ".git-credentials"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(credentials)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected two Git credential entries, got %q", credentials)
+	}
+	for index, expected := range command.GitCredentials {
+		parsed, err := url.Parse(lines[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		password, _ := parsed.User.Password()
+		if parsed.Host != strings.TrimPrefix(expected.Endpoint, "https://") || parsed.User.Username() != expected.Username || password != expected.Token {
+			t.Fatalf("unexpected Git credential entry: %q", lines[index])
+		}
+	}
+	config, err := os.ReadFile(filepath.Join(root, "state", ".gitconfig"))
+	if err != nil || !strings.Contains(string(config), `name = "Gitee User"`) || !strings.Contains(string(config), `email = "gitee@example.com"`) {
+		t.Fatalf("first Git profile should define the default commit identity: %q %v", config, err)
+	}
+}

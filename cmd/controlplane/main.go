@@ -227,7 +227,7 @@ func queueDefaultControlPlaneCredentials(ctx context.Context, database *store.St
 		CodexModel:  codex.Model,
 		RemoveGit:   git == nil,
 	}
-	gitProfileID := ""
+	gitProfileIDs := []string(nil)
 	if git != nil {
 		var gitToken string
 		if err := vault.Decrypt(git.Ciphertext, &gitToken); err != nil {
@@ -238,18 +238,19 @@ func queueDefaultControlPlaneCredentials(ctx context.Context, database *store.St
 		command.GitToken = gitToken
 		command.GitCommitName = git.CommitName
 		command.GitCommitEmail = git.CommitEmail
-		gitProfileID = git.ID
+		command.GitCredentials = []protocol.GitCredential{{Endpoint: git.Endpoint, Username: git.Username, Token: gitToken, CommitName: git.CommitName, CommitEmail: git.CommitEmail}}
+		gitProfileIDs = []string{git.ID}
 	}
 	ciphertext, err := vault.Encrypt(command)
 	if err != nil {
 		return fmt.Errorf("protect default control-plane credentials: %w", err)
 	}
-	operationID, err := database.QueueCredentialUpdate(ctx, store.ControlPlaneServerID, ciphertext, codex.ID, gitProfileID, "control-plane-credentials:"+codex.ID+":"+gitProfileID)
+	operationID, err := database.QueueCredentialUpdate(ctx, store.ControlPlaneServerID, ciphertext, codex.ID, gitProfileIDs, "control-plane-credentials:"+codex.ID+":"+strings.Join(gitProfileIDs, ","))
 	if err != nil {
 		return fmt.Errorf("queue default control-plane credentials: %w", err)
 	}
 	gateway.Wake(store.ControlPlaneServerID)
-	log.Info("queued default control-plane Agent credentials", "operation_id", operationID, "codex_profile_id", codex.ID, "git_profile_id", gitProfileID)
+	log.Info("queued default control-plane Agent credentials", "operation_id", operationID, "codex_profile_id", codex.ID, "git_profile_ids", gitProfileIDs)
 	return nil
 }
 

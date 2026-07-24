@@ -26,18 +26,18 @@ type credentialFileSnapshot struct {
 func (c *Client) configureCredentials(command protocol.ConfigureCredentialsCommand) error {
 	command.CodexAPIURL = strings.TrimRight(strings.TrimSpace(command.CodexAPIURL), "/")
 	command.CodexModel = strings.TrimSpace(command.CodexModel)
-	command.GitEndpoint = strings.TrimRight(strings.TrimSpace(command.GitEndpoint), "/")
-	command.GitUsername = strings.TrimSpace(command.GitUsername)
-	command.GitCommitName = strings.TrimSpace(command.GitCommitName)
-	command.GitCommitEmail = strings.TrimSpace(command.GitCommitEmail)
-	if err := validateCredentialCommand(command); err != nil {
+	gitCredentials, err := normalizedGitCredentials(command)
+	if err != nil {
 		return err
 	}
-	gitCredential := ""
-	if !command.RemoveGit {
-		parsed, _ := url.Parse(command.GitEndpoint)
-		parsed.User = url.UserPassword(command.GitUsername, command.GitToken)
-		gitCredential = parsed.String() + "\n"
+	if err := validateCredentialCommand(command, gitCredentials); err != nil {
+		return err
+	}
+	gitCredentialLines := make([]string, 0, len(gitCredentials))
+	for _, credential := range gitCredentials {
+		parsed, _ := url.Parse(credential.Endpoint)
+		parsed.User = url.UserPassword(credential.Username, credential.Token)
+		gitCredentialLines = append(gitCredentialLines, parsed.String())
 	}
 	paths := []string{
 		c.config.CodexAPIKeyFile,
@@ -65,8 +65,8 @@ func (c *Client) configureCredentials(command protocol.ConfigureCredentialsComma
 			changes[paths[2]] = nil
 			changes[paths[3]] = nil
 		} else {
-			changes[paths[2]] = pointer(gitCredential)
-			gitConfig, err := gitidentity.Configuration(command.GitCommitName, command.GitCommitEmail, paths[2])
+			changes[paths[2]] = pointer(strings.Join(gitCredentialLines, "\n") + "\n")
+			gitConfig, err := gitidentity.Configuration(gitCredentials[0].CommitName, gitCredentials[0].CommitEmail, paths[2])
 			if err != nil {
 				return err
 			}
@@ -91,7 +91,34 @@ func (c *Client) configureCredentials(command protocol.ConfigureCredentialsComma
 	return c.codex.ReconfigureEnvironment([]string{"WIO_CODEX_API_KEY=" + command.CodexAPIKey}, apply)
 }
 
-func validateCredentialCommand(command protocol.ConfigureCredentialsCommand) error {
+func normalizedGitCredentials(command protocol.ConfigureCredentialsCommand) ([]protocol.GitCredential, error) {
+	if command.RemoveGit {
+		if len(command.GitCredentials) != 0 || command.GitEndpoint != "" || command.GitUsername != "" || command.GitToken != "" || command.GitCommitName != "" || command.GitCommitEmail != "" {
+			return nil, errors.New("Git credentials must be empty when removal is requested")
+		}
+		return nil, nil
+	}
+	credentials := append([]protocol.GitCredential(nil), command.GitCredentials...)
+	if len(credentials) == 0 {
+		credentials = append(credentials, protocol.GitCredential{Endpoint: command.GitEndpoint, Username: command.GitUsername, Token: command.GitToken, CommitName: command.GitCommitName, CommitEmail: command.GitCommitEmail})
+	}
+	seen := make(map[string]bool, len(credentials))
+	for index := range credentials {
+		credential := &credentials[index]
+		credential.Endpoint = strings.TrimRight(strings.TrimSpace(credential.Endpoint), "/")
+		credential.Username = strings.TrimSpace(credential.Username)
+		credential.CommitName = strings.TrimSpace(credential.CommitName)
+		credential.CommitEmail = strings.TrimSpace(credential.CommitEmail)
+		key := credential.Endpoint + "\x00" + credential.Username
+		if seen[key] {
+			return nil, errors.New("Git credentials must not repeat the same endpoint and username")
+		}
+		seen[key] = true
+	}
+	return credentials, nil
+}
+
+func validateCredentialCommand(command protocol.ConfigureCredentialsCommand, gitCredentials []protocol.GitCredential) error {
 	parsed, err := url.Parse(command.CodexAPIURL)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Scheme != "https" && parsed.Scheme != "http" {
 		return errors.New("Codex API endpoint is invalid")
@@ -103,20 +130,22 @@ func validateCredentialCommand(command protocol.ConfigureCredentialsCommand) err
 		return errors.New("Codex API key is invalid")
 	}
 	if command.RemoveGit {
-		if command.GitEndpoint != "" || command.GitUsername != "" || command.GitToken != "" || command.GitCommitName != "" || command.GitCommitEmail != "" {
-			return errors.New("Git credentials must be empty when removal is requested")
-		}
 		return nil
 	}
-	parsed, err = url.Parse(command.GitEndpoint)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("Git credential endpoint is invalid")
+	if len(gitCredentials) == 0 {
+		return errors.New("at least one Git credential is required")
 	}
-	if command.GitUsername == "" || strings.ContainsAny(command.GitUsername, "\r\n\x00") || !validCredentialValue(command.GitToken) {
-		return errors.New("Git credentials are invalid")
-	}
-	if _, _, err := gitidentity.Normalize(command.GitCommitName, command.GitCommitEmail); err != nil {
-		return err
+	for _, credential := range gitCredentials {
+		parsed, err = url.Parse(credential.Endpoint)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("Git credential endpoint is invalid")
+		}
+		if credential.Username == "" || strings.ContainsAny(credential.Username, "\r\n\x00") || !validCredentialValue(credential.Token) {
+			return errors.New("Git credentials are invalid")
+		}
+		if _, _, err := gitidentity.Normalize(credential.CommitName, credential.CommitEmail); err != nil {
+			return err
+		}
 	}
 	return nil
 }

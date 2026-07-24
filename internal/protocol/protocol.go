@@ -460,10 +460,21 @@ type CodexUpdateCommand struct {
 	Version string `json:"version"`
 }
 
+type GitCredential struct {
+	Endpoint    string `json:"endpoint"`
+	Username    string `json:"username"`
+	Token       string `json:"token"`
+	CommitName  string `json:"commit_name"`
+	CommitEmail string `json:"commit_email"`
+}
+
 type ConfigureCredentialsCommand struct {
-	CodexAPIURL    string `json:"codex_api_url"`
-	CodexAPIKey    string `json:"codex_api_key"`
-	CodexModel     string `json:"codex_model"`
+	CodexAPIURL    string          `json:"codex_api_url"`
+	CodexAPIKey    string          `json:"codex_api_key"`
+	CodexModel     string          `json:"codex_model"`
+	GitCredentials []GitCredential `json:"git_credentials,omitempty"`
+	// Legacy single-Git fields keep credential updates compatible with Agents
+	// that have not yet received the multi-profile update.
 	GitEndpoint    string `json:"git_endpoint,omitempty"`
 	GitUsername    string `json:"git_username,omitempty"`
 	GitToken       string `json:"git_token,omitempty"`

@@ -84,6 +84,60 @@ func TestServerCredentialUpdateRejectsOfflineServerAndWrongProfileKind(t *testin
 	}
 }
 
+func TestServerCredentialUpdateBindsMultipleGitProfiles(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	api := resourceTestAPI(database)
+	server := enrollResourceTestServer(t, database, "multiple-credential-token")
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1"}); err != nil {
+		t.Fatal(err)
+	}
+	codexSecret, _ := api.vault.Encrypt("codex-secret-value")
+	codex, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "codex", Name: "Codex", Endpoint: "https://api.example.com/v1", Model: "gpt-5.6-sol"}, codexSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSecret, _ := api.vault.Encrypt("gitee-token-value")
+	first, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "Gitee", Endpoint: "https://gitee.com", Username: "gitee-user", CommitName: "Gitee User", CommitEmail: "gitee@example.com"}, firstSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSecret, _ := api.vault.Encrypt("github-token-value")
+	second, err := database.SaveCredentialProfile(context.Background(), store.CredentialProfile{Kind: "git", Name: "GitHub", Endpoint: "https://github.com", Username: "github-user", CommitName: "GitHub User", CommitEmail: "github@example.com"}, secondSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serverCredentialRequest(t, server.ID, map[string]any{"codex_profile_id": codex.ID, "git_profile_ids": []string{first.ID, second.ID}}, api.updateServerCredentialProfiles)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("credential update returned %d: %s", response.Code, response.Body.String())
+	}
+	var queued map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &queued); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := database.Operation(context.Background(), queued["operation_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command protocol.ConfigureCredentialsCommand
+	if err := api.vault.Decrypt(operation.Payload, &command); err != nil {
+		t.Fatal(err)
+	}
+	if len(command.GitCredentials) != 2 || command.GitCredentials[0].Username != first.Username || command.GitCredentials[1].Username != second.Username || command.GitUsername != first.Username {
+		t.Fatalf("unexpected multiple Git command: %#v", command)
+	}
+	if err := database.CompleteCredentialUpdate(context.Background(), protocol.OperationResult{OperationID: operation.ID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.Server(context.Background(), server.ID)
+	if err != nil || updated.GitProfileID != first.ID || len(updated.GitProfiles) != 2 || updated.GitProfiles[0].ID != first.ID || updated.GitProfiles[1].ID != second.ID {
+		t.Fatalf("multiple Git profile assignment was not persisted: %#v %v", updated, err)
+	}
+	servers, err := database.ListServers(context.Background())
+	if err != nil || len(servers) != 1 || len(servers[0].GitProfiles) != 2 || servers[0].GitProfiles[0].ID != first.ID || servers[0].GitProfiles[1].ID != second.ID {
+		t.Fatalf("server list did not expose multiple Git profiles: %#v %v", servers, err)
+	}
+}
+
 func serverCredentialRequest(t *testing.T, serverID string, body any, handler http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	route := chi.NewRouteContext()
