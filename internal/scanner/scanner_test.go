@@ -34,8 +34,16 @@ func TestDiscoverGitRepository(t *testing.T) {
 		t.Fatalf("expected one repository, got %d", len(inventory.Repositories))
 	}
 	item := inventory.Repositories[0]
-	if item.Name != "service" || item.RemoteURL != "https://example.com/team/service.git" || item.CommitSHA == "" || item.Dirty {
+	if item.Name != "service" || item.RemoteURL != "https://example.com/team/service.git" || item.Branch == "" || item.CommitSHA == "" || item.Dirty {
 		t.Fatalf("unexpected repository: %#v", item)
+	}
+}
+
+func TestGitOutputTrustsOnlyTheInspectedRepository(t *testing.T) {
+	repository := filepath.Join(string(filepath.Separator), "srv", "wio")
+	args := gitCommandArguments(repository, "status", "--porcelain")
+	if len(args) != 6 || args[0] != "-c" || args[1] != "safe.directory="+repository || args[2] != "-C" || args[3] != repository || args[4] != "status" || args[5] != "--porcelain" {
+		t.Fatalf("unexpected safe-directory Git arguments: %#v", args)
 	}
 }
 

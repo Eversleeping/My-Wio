@@ -822,13 +822,18 @@ func splitLines(output []byte) []string {
 }
 
 func runGit(ctx context.Context, directory string, args ...string) ([]byte, error) {
-	commandArgs := args
-	if directory != "" {
-		commandArgs = append([]string{"-C", directory}, args...)
-	}
+	commandArgs := gitCommandArguments(directory, args...)
 	command := exec.CommandContext(ctx, "git", commandArgs...)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
 	return command.CombinedOutput()
+}
+
+func gitCommandArguments(directory string, args ...string) []string {
+	if directory == "" {
+		return append([]string(nil), args...)
+	}
+	commandArgs := []string{"-c", "safe.directory=" + directory, "-C", directory}
+	return append(commandArgs, args...)
 }
 
 func verifyEmptyRemote(ctx context.Context, remoteURL string) error {

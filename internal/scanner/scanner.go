@@ -257,13 +257,18 @@ func inspect(ctx context.Context, repositoryPath string) protocol.Repository {
 }
 
 func gitOutput(ctx context.Context, repositoryPath string, args ...string) string {
-	commandArgs := append([]string{"-C", repositoryPath}, args...)
+	commandArgs := gitCommandArguments(repositoryPath, args...)
 	command := exec.CommandContext(ctx, "git", commandArgs...)
 	output, err := command.Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func gitCommandArguments(repositoryPath string, args ...string) []string {
+	commandArgs := []string{"-c", "safe.directory=" + repositoryPath, "-C", repositoryPath}
+	return append(commandArgs, args...)
 }
 
 func Import(ctx context.Context, cloneRoot string, command protocol.GitImportCommand) (string, error) {

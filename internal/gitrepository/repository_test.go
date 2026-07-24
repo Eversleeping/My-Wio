@@ -357,6 +357,17 @@ func TestStatusReportsDivergenceChangesAndDetachedHead(t *testing.T) {
 	}
 }
 
+func TestRunGitTrustsOnlyTheTargetRepository(t *testing.T) {
+	directory := filepath.Join(string(filepath.Separator), "srv", "wio")
+	args := gitCommandArguments(directory, "status", "--porcelain=v2")
+	if len(args) != 6 || args[0] != "-c" || args[1] != "safe.directory="+directory || args[2] != "-C" || args[3] != directory || args[4] != "status" || args[5] != "--porcelain=v2" {
+		t.Fatalf("unexpected safe-directory Git arguments: %#v", args)
+	}
+	if args := gitCommandArguments("", "ls-remote", "origin"); len(args) != 2 || args[0] != "ls-remote" || args[1] != "origin" {
+		t.Fatalf("repository-independent Git arguments changed: %#v", args)
+	}
+}
+
 func TestListBranchesAndRemotes(t *testing.T) {
 	requireGit(t)
 	base := t.TempDir()
