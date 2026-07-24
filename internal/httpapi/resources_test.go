@@ -121,6 +121,63 @@ func TestDiscoverProjectsRejectsMissingAndOfflineServers(t *testing.T) {
 	}
 }
 
+func TestImportProjectReusesExistingProjectOnAnotherServer(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	serverA := enrollResourceTestServer(t, database, "import-project-a-token")
+	serverB := enrollResourceTestServer(t, database, "import-project-b-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, serverA.ID, protocol.Heartbeat{Hostname: "node-a", AgentVersion: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Heartbeat(ctx, serverB.ID, protocol.Heartbeat{Hostname: "node-b", AgentVersion: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	body := map[string]string{"name": "shared", "remote_url": "https://example.com/shared.git"}
+	first := map[string]string{"server_id": serverA.ID, "destination": "projects/shared-a"}
+	for key, value := range body {
+		first[key] = value
+	}
+	responseA := directJSONRequest(t, http.MethodPost, "/api/projects/import", first, &store.Session{UserID: "test-user"}, api.importProject)
+	if responseA.Code != http.StatusAccepted {
+		t.Fatalf("server A import returned %d: %s", responseA.Code, responseA.Body.String())
+	}
+	second := map[string]string{"server_id": serverB.ID, "destination": "projects/shared-b"}
+	for key, value := range body {
+		second[key] = value
+	}
+	responseB := directJSONRequest(t, http.MethodPost, "/api/projects/import", second, &store.Session{UserID: "test-user"}, api.importProject)
+	if responseB.Code != http.StatusAccepted {
+		t.Fatalf("server B import returned %d: %s", responseB.Code, responseB.Body.String())
+	}
+
+	var queuedA, queuedB struct {
+		Project     store.Project `json:"project"`
+		OperationID string        `json:"operation_id"`
+	}
+	if err := json.Unmarshal(responseA.Body.Bytes(), &queuedA); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(responseB.Body.Bytes(), &queuedB); err != nil {
+		t.Fatal(err)
+	}
+	if queuedA.Project.ID == "" || queuedA.Project.ID != queuedB.Project.ID || queuedA.OperationID == queuedB.OperationID {
+		t.Fatalf("imports should share project metadata but not operation IDs: %#v %#v", queuedA, queuedB)
+	}
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("cross-server import created duplicate projects: %#v %v", projects, err)
+	}
+	operationsA, err := database.PendingOperations(ctx, serverA.ID)
+	if err != nil || len(operationsA) != 1 || operationsA[0].ProjectID != queuedA.Project.ID {
+		t.Fatalf("unexpected server A operation: %#v %v", operationsA, err)
+	}
+	operationsB, err := database.PendingOperations(ctx, serverB.ID)
+	if err != nil || len(operationsB) != 1 || operationsB[0].ProjectID != queuedA.Project.ID {
+		t.Fatalf("unexpected server B operation: %#v %v", operationsB, err)
+	}
+}
+
 func TestWorkspaceFilesQueuesAgentScanAndReturnsSnapshot(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "workspace-files-token")

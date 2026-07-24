@@ -1052,8 +1052,10 @@ func (a *API) importProject(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.ServerID = strings.TrimSpace(input.ServerID)
 	input.Name = strings.TrimSpace(input.Name)
 	input.RemoteURL = strings.TrimSpace(input.RemoteURL)
+	input.Destination = strings.TrimSpace(input.Destination)
 	if input.ServerID == "" || input.RemoteURL == "" {
 		writeError(w, http.StatusBadRequest, "server_id and remote_url are required")
 		return
@@ -1065,19 +1067,8 @@ func (a *API) importProject(w http.ResponseWriter, r *http.Request) {
 	if input.Name == "" {
 		input.Name = repositoryName(input.RemoteURL)
 	}
-	project, err := a.store.CreateProject(r.Context(), input.Name, input.RemoteURL)
+	project, operationID, err := a.store.QueueProjectImport(r.Context(), input.ServerID, input.Name, input.RemoteURL, input.Destination)
 	if err != nil {
-		if databaseConflict(err) {
-			writeError(w, http.StatusConflict, "project already exists")
-		} else {
-			writeError(w, http.StatusInternalServerError, "could not create project")
-		}
-		return
-	}
-	command := protocol.GitImportCommand{ProjectID: project.ID, Name: project.Name, RemoteURL: project.RemoteURL, Destination: input.Destination}
-	operationID, err := a.store.QueueOperation(r.Context(), input.ServerID, "git.import", command, "git-import:"+project.ID)
-	if err != nil {
-		_, _ = a.store.DB.ExecContext(r.Context(), a.store.Q("DELETE FROM projects WHERE id=?"), project.ID)
 		writeError(w, http.StatusInternalServerError, "could not queue Git import")
 		return
 	}
@@ -1130,7 +1121,7 @@ func (a *API) retryProjectImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.GitImportCommand{ProjectID: project.ID, Name: project.Name, RemoteURL: project.RemoteURL, Destination: latest.Command.Destination}
-	operationID, err := a.store.QueueOperation(r.Context(), server.ID, "git.import", command, "git-import-retry:"+project.ID+":"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), server.ID, "git.import", command, "git-import-retry:"+project.ID+":"+store.NewID(), store.OperationResource{ProjectID: project.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Git import retry")
 		return

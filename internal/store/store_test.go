@@ -160,6 +160,46 @@ func TestCreateProjectRegistersImportedRemote(t *testing.T) {
 	}
 }
 
+func TestQueueProjectImportReusesProjectAcrossServers(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	serverA := enrollProjectImportTestServer(t, database, "import-a")
+	serverB := enrollProjectImportTestServer(t, database, "import-b")
+
+	projectA, operationA, err := database.QueueProjectImport(ctx, serverA.ID, "alpha", "https://example.com/shared.git", "projects/alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectB, operationB, err := database.QueueProjectImport(ctx, serverB.ID, "different name", "https://example.com/shared.git", "projects/shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectA.ID == "" || projectA.ID != projectB.ID || projectB.Name != "alpha" {
+		t.Fatalf("same remote should reuse one project: %#v %#v", projectA, projectB)
+	}
+	if operationA == "" || operationA == operationB {
+		t.Fatalf("different servers should receive different import operations: %q %q", operationA, operationB)
+	}
+
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].ID != projectA.ID {
+		t.Fatalf("unexpected project list: %#v %v", projects, err)
+	}
+	operationsA, err := database.PendingOperations(ctx, serverA.ID)
+	if err != nil || len(operationsA) != 1 || operationsA[0].ID != operationA || operationsA[0].ProjectID != projectA.ID {
+		t.Fatalf("unexpected server A import operations: %#v %v", operationsA, err)
+	}
+	operationsB, err := database.PendingOperations(ctx, serverB.ID)
+	if err != nil || len(operationsB) != 1 || operationsB[0].ID != operationB || operationsB[0].ProjectID != projectA.ID {
+		t.Fatalf("unexpected server B import operations: %#v %v", operationsB, err)
+	}
+
+	repeatedProject, repeatedOperation, err := database.QueueProjectImport(ctx, serverB.ID, "ignored", "https://example.com/shared.git", "projects/shared")
+	if err != nil || repeatedProject.ID != projectA.ID || repeatedOperation != operationB {
+		t.Fatalf("same server/destination should be idempotent: %#v %q %v", repeatedProject, repeatedOperation, err)
+	}
+}
+
 func TestArchiveAndForkThreadCopiesVisibleHistoryTransactionally(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)
@@ -337,6 +377,23 @@ func testStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	return database
+}
+
+func enrollProjectImportTestServer(t *testing.T, database *Store, token string) Server {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, token, []string{"/srv"}, token+"-enrollment", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, token+"-enrollment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, token+".local", token+"-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
 }
 
 func TestControlPlaneServerIsIdempotentAndCannotBeRevoked(t *testing.T) {

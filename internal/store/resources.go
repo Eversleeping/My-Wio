@@ -353,6 +353,54 @@ func (s *Store) ProjectByRemote(ctx context.Context, remoteURL string) (Project,
 	return project, err
 }
 
+// QueueProjectImport reserves the global project record and queues an import
+// for a specific server in one transaction. A remote repository is one
+// project, while each server gets its own import operation and workspace.
+func (s *Store) QueueProjectImport(ctx context.Context, serverID, name, remoteURL, destination string) (Project, string, error) {
+	remoteURL = strings.TrimSpace(remoteURL)
+	normalized := normalizeRemote(remoteURL)
+	if normalized == "" {
+		return Project{}, "", errors.New("project import requires a remote URL")
+	}
+	destination = strings.TrimSpace(destination)
+
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return Project{}, "", err
+	}
+	defer tx.Rollback()
+
+	// ON CONFLICT handles two servers reserving the same remote concurrently.
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?) ON CONFLICT DO NOTHING`), NewID(), name, remoteURL, normalized); err != nil {
+		return Project{}, "", err
+	}
+	var project Project
+	if err := tx.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p WHERE p.normalized_remote=?`), normalized); err != nil {
+		return Project{}, "", err
+	}
+	if err := s.ensureProjectRemote(ctx, tx, project.ID, project.RemoteURL); err != nil {
+		return Project{}, "", err
+	}
+
+	command := protocol.GitImportCommand{ProjectID: project.ID, Name: project.Name, RemoteURL: project.RemoteURL, Destination: destination}
+	payload, err := json.Marshal(command)
+	if err != nil {
+		return Project{}, "", err
+	}
+	operationID := NewID()
+	idempotency := "git-import:" + project.ID + ":" + serverID + ":" + destination
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`), operationID, serverID, project.ID, "git.import", string(payload), idempotency, time.Now().UTC()); err != nil {
+		return Project{}, "", err
+	}
+	if err := tx.GetContext(ctx, &operationID, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); err != nil {
+		return Project{}, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return Project{}, "", err
+	}
+	return project, operationID, nil
+}
+
 type SecretSet struct {
 	ID        string    `db:"id" json:"id"`
 	Name      string    `db:"name" json:"name"`
