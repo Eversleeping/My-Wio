@@ -268,6 +268,96 @@ func TestQueueProjectImportReusesProjectAcrossServers(t *testing.T) {
 	}
 }
 
+func TestUpsertInventoryBackfillsRemoteForExistingPathProject(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "inventory-backfill", []string{"/opt"}, "inventory-backfill-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "inventory-backfill-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "inventory-backfill.local", "inventory-backfill-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/opt/wio", Name: "wio", Branch: "main", CommitSHA: "abc123"}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].RemoteURL != "" {
+		t.Fatalf("unexpected local project: %#v %v", projects, err)
+	}
+	projectID := projects[0].ID
+
+	remoteURL := "https://github.com/Eversleeping/My-Wio.git"
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/opt/wio", Name: "wio", RemoteURL: remoteURL, Branch: "main", CommitSHA: "def456"}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err = database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].ID != projectID || projects[0].RemoteURL != remoteURL || projects[0].WorkspaceCount != 1 {
+		t.Fatalf("remote was not backfilled on the path project: %#v %v", projects, err)
+	}
+	var normalized string
+	if err := database.DB.GetContext(ctx, &normalized, database.Q("SELECT normalized_remote FROM projects WHERE id=?"), projectID); err != nil || normalized != "https://github.com/eversleeping/my-wio" {
+		t.Fatalf("normalized remote was not backfilled: %q %v", normalized, err)
+	}
+	remotes, err := database.ProjectRemotes(ctx, projectID)
+	if err != nil || len(remotes) != 1 || remotes[0].FetchURL != remoteURL {
+		t.Fatalf("project remote was not registered: %#v %v", remotes, err)
+	}
+}
+
+func TestUpsertInventoryMovesPathWorkspaceToExistingRemoteProject(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	if _, err := database.CreateEnrollment(ctx, "inventory-merge", []string{"/opt"}, "inventory-merge-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "inventory-merge-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "inventory-merge.local", "inventory-merge-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/opt/wio", Name: "wio", Branch: "main", CommitSHA: "abc123"}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("unexpected local project: %#v %v", projects, err)
+	}
+	localProjectID := projects[0].ID
+	operationID := NewID()
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO agent_operations(id,server_id,project_id,kind,idempotency_key) VALUES(?,?,?,'inventory.scan',?)"), operationID, server.ID, localProjectID, "inventory-merge-operation"); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteURL := "https://github.com/Eversleeping/My-Wio.git"
+	remoteProject, err := database.CreateProject(ctx, "wio", remoteURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/opt/wio", Name: "wio", RemoteURL: remoteURL, Branch: "main", CommitSHA: "def456"}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err = database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].ID != remoteProject.ID || projects[0].WorkspaceCount != 1 {
+		t.Fatalf("local project was not merged into remote project: %#v %v", projects, err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 || workspaces[0].ProjectID != remoteProject.ID || workspaces[0].CommitSHA != "def456" {
+		t.Fatalf("workspace was not moved to remote project: %#v %v", workspaces, err)
+	}
+	var operationProject sql.NullString
+	if err := database.DB.GetContext(ctx, &operationProject, database.Q("SELECT project_id FROM agent_operations WHERE id=?"), operationID); err != nil || !operationProject.Valid || operationProject.String != remoteProject.ID {
+		t.Fatalf("operation history was not moved to remote project: %#v %v", operationProject, err)
+	}
+}
+
 func TestArchiveAndForkThreadCopiesVisibleHistoryTransactionally(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

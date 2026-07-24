@@ -920,22 +920,41 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 		return err
 	}
 	managedRoots := decodeManagedRoots(managedRootsJSON)
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, repo := range inv.Repositories {
 		normalized := normalizeRemote(repo.RemoteURL)
-		var projectID string
+		var remoteProjectID string
 		if normalized != "" {
-			_ = s.DB.GetContext(ctx, &projectID, s.Q("SELECT id FROM projects WHERE normalized_remote=?"), normalized)
-		}
-		if projectID == "" {
-			_ = s.DB.GetContext(ctx, &projectID, s.Q("SELECT project_id FROM workspaces WHERE server_id=? AND path=?"), serverID, repo.Path)
-		}
-		if projectID == "" {
-			projectID = NewID()
-			if _, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?)"), projectID, repo.Name, repo.RemoteURL, normalized); err != nil {
+			err := tx.GetContext(ctx, &remoteProjectID, s.Q("SELECT id FROM projects WHERE normalized_remote=?"), normalized)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 		}
-		if err := s.ensureProjectRemote(ctx, s.DB, projectID, repo.RemoteURL); err != nil {
+		var pathProjectID string
+		err := tx.GetContext(ctx, &pathProjectID, s.Q("SELECT project_id FROM workspaces WHERE server_id=? AND path=?"), serverID, repo.Path)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		projectID := remoteProjectID
+		if projectID == "" {
+			projectID = pathProjectID
+			if projectID != "" && normalized != "" {
+				if err := s.backfillInventoryProjectRemote(ctx, tx, projectID, repo.RemoteURL, normalized); err != nil {
+					return err
+				}
+			}
+		}
+		if projectID == "" {
+			projectID = NewID()
+			if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?)"), projectID, repo.Name, repo.RemoteURL, normalized); err != nil {
+				return err
+			}
+		}
+		if err := s.ensureProjectRemote(ctx, tx, projectID, repo.RemoteURL); err != nil {
 			return err
 		}
 		workspaceID := NewID()
@@ -948,12 +967,57 @@ func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protoc
 			managementMode = "managed"
 		}
 		now := time.Now().UTC()
-		_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,path) DO UPDATE SET project_id=excluded.project_id,management_mode=CASE WHEN excluded.management_mode='managed' THEN 'managed' ELSE workspaces.management_mode END,branch=excluded.branch,commit_sha=excluded.commit_sha,dirty=excluded.dirty,status='ready',last_git_refresh_at=excluded.last_git_refresh_at,git_error='',last_scanned_at=excluded.last_scanned_at`), workspaceID, projectID, serverID, repo.Path, repo.Name, managementMode, repo.Branch, repo.CommitSHA, dirty, now, now)
+		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,path) DO UPDATE SET project_id=excluded.project_id,management_mode=CASE WHEN excluded.management_mode='managed' THEN 'managed' ELSE workspaces.management_mode END,branch=excluded.branch,commit_sha=excluded.commit_sha,dirty=excluded.dirty,status='ready',last_git_refresh_at=excluded.last_git_refresh_at,git_error='',last_scanned_at=excluded.last_scanned_at`), workspaceID, projectID, serverID, repo.Path, repo.Name, managementMode, repo.Branch, repo.CommitSHA, dirty, now, now)
 		if err != nil {
 			return err
 		}
+		if remoteProjectID != "" && pathProjectID != "" && pathProjectID != remoteProjectID {
+			if err := s.mergeInventoryProjectIfOrphaned(ctx, tx, pathProjectID, remoteProjectID); err != nil {
+				return err
+			}
+		}
 	}
-	return nil
+	return tx.Commit()
+}
+
+func (s *Store) backfillInventoryProjectRemote(ctx context.Context, tx *sqlx.Tx, projectID, remoteURL, normalized string) error {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" || normalized == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, s.Q(`UPDATE projects SET remote_url=?,normalized_remote=?,updated_at=? WHERE id=? AND normalized_remote=''`), remoteURL, normalized, time.Now().UTC(), projectID)
+	return err
+}
+
+func (s *Store) mergeInventoryProjectIfOrphaned(ctx context.Context, tx *sqlx.Tx, sourceProjectID, targetProjectID string) error {
+	if sourceProjectID == "" || targetProjectID == "" || sourceProjectID == targetProjectID {
+		return nil
+	}
+	var remainingWorkspaces int
+	if err := tx.GetContext(ctx, &remainingWorkspaces, s.Q("SELECT COUNT(*) FROM workspaces WHERE project_id=?"), sourceProjectID); err != nil {
+		return err
+	}
+	if remainingWorkspaces != 0 {
+		return nil
+	}
+	var deploymentTargets int
+	if err := tx.GetContext(ctx, &deploymentTargets, s.Q("SELECT COUNT(*) FROM deployment_targets WHERE project_id=?"), sourceProjectID); err != nil {
+		return err
+	}
+	if deploymentTargets != 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET project_id=? WHERE project_id=?"), targetProjectID, sourceProjectID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM project_remotes WHERE project_id=? AND name IN (SELECT name FROM project_remotes WHERE project_id=?)`), sourceProjectID, targetProjectID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE project_remotes SET project_id=?,updated_at=? WHERE project_id=?"), targetProjectID, time.Now().UTC(), sourceProjectID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, s.Q("DELETE FROM projects WHERE id=?"), sourceProjectID)
+	return err
 }
 
 type Project struct {
