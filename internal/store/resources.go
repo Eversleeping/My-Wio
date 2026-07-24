@@ -374,11 +374,33 @@ func (s *Store) QueueProjectImport(ctx context.Context, serverID, name, remoteUR
 	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO projects(id,name,remote_url,normalized_remote) VALUES(?,?,?,?) ON CONFLICT DO NOTHING`), NewID(), name, remoteURL, normalized); err != nil {
 		return Project{}, "", err
 	}
+	projectQuery := `SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p WHERE p.normalized_remote=?`
+	if s.driver == "pgx" {
+		projectQuery += " FOR UPDATE"
+	}
 	var project Project
-	if err := tx.GetContext(ctx, &project, s.Q(`SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p WHERE p.normalized_remote=?`), normalized); err != nil {
+	if err := tx.GetContext(ctx, &project, s.Q(projectQuery), normalized); err != nil {
 		return Project{}, "", err
 	}
 	if err := s.ensureProjectRemote(ctx, tx, project.ID, project.RemoteURL); err != nil {
+		return Project{}, "", err
+	}
+	var workspaceCount int
+	if err := tx.GetContext(ctx, &workspaceCount, s.Q("SELECT COUNT(*) FROM workspaces WHERE project_id=? AND server_id=?"), project.ID, serverID); err != nil {
+		return Project{}, "", err
+	}
+	if workspaceCount > 0 {
+		return Project{}, "", ErrProjectAlreadyOnServer
+	}
+	var activeOperationID string
+	err = tx.GetContext(ctx, &activeOperationID, s.Q("SELECT id FROM agent_operations WHERE project_id=? AND server_id=? AND kind='git.import' AND status IN ('queued','delivered') ORDER BY created_at DESC LIMIT 1"), project.ID, serverID)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return Project{}, "", err
+		}
+		return project, activeOperationID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return Project{}, "", err
 	}
 
@@ -388,11 +410,11 @@ func (s *Store) QueueProjectImport(ctx context.Context, serverID, name, remoteUR
 		return Project{}, "", err
 	}
 	operationID := NewID()
-	idempotency := "git-import:" + project.ID + ":" + serverID + ":" + destination
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`), operationID, serverID, project.ID, "git.import", string(payload), idempotency, time.Now().UTC()); err != nil {
+	idempotency := "git-import:" + project.ID + ":" + serverID + ":" + operationID
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`), operationID, serverID, project.ID, "git.import", string(payload), idempotency, time.Now().UTC()); err != nil {
 		return Project{}, "", err
 	}
-	if err := tx.GetContext(ctx, &operationID, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); err != nil {
+	if err := tx.GetContext(ctx, &operationID, s.Q("SELECT id FROM agent_operations WHERE project_id=? AND server_id=? AND kind='git.import' AND status IN ('queued','delivered') ORDER BY created_at DESC LIMIT 1"), project.ID, serverID); err != nil {
 		return Project{}, "", err
 	}
 	if err := tx.Commit(); err != nil {

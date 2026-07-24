@@ -108,10 +108,10 @@ export function deriveProjectLifecycleState(project: ProjectListRecord): Project
   if (project.status === "provisioning") return "provisioning";
   if (project.status === "partial") return "partial";
   if (project.status === "failed") return "failed";
+  if (project.workspace_count > 0) return "ready";
   if (project.import_status === "queued" || project.import_status === "delivered") return "importing";
   if (project.import_status === "failed") return "failed";
   if (project.status === "ready") return "ready";
-  if (project.workspace_count > 0) return "ready";
   if (project.import_status === "succeeded") return "syncing";
   return "pending";
 }

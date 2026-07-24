@@ -181,10 +181,6 @@ func TestQueueProjectImportReusesProjectAcrossServers(t *testing.T) {
 		t.Fatalf("different servers should receive different import operations: %q %q", operationA, operationB)
 	}
 
-	projects, err := database.ListProjects(ctx)
-	if err != nil || len(projects) != 1 || projects[0].ID != projectA.ID {
-		t.Fatalf("unexpected project list: %#v %v", projects, err)
-	}
 	operationsA, err := database.PendingOperations(ctx, serverA.ID)
 	if err != nil || len(operationsA) != 1 || operationsA[0].ID != operationA || operationsA[0].ProjectID != projectA.ID {
 		t.Fatalf("unexpected server A import operations: %#v %v", operationsA, err)
@@ -194,9 +190,54 @@ func TestQueueProjectImportReusesProjectAcrossServers(t *testing.T) {
 		t.Fatalf("unexpected server B import operations: %#v %v", operationsB, err)
 	}
 
-	repeatedProject, repeatedOperation, err := database.QueueProjectImport(ctx, serverB.ID, "ignored", "https://example.com/shared.git", "projects/shared")
+	repeatedProject, repeatedOperation, err := database.QueueProjectImport(ctx, serverB.ID, "ignored", "https://example.com/shared.git", "projects/another-destination")
 	if err != nil || repeatedProject.ID != projectA.ID || repeatedOperation != operationB {
-		t.Fatalf("same server/destination should be idempotent: %#v %q %v", repeatedProject, repeatedOperation, err)
+		t.Fatalf("same project/server should reuse its active import: %#v %q %v", repeatedProject, repeatedOperation, err)
+	}
+
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: operationB, Status: "failed", Message: "network timeout"}); err != nil {
+		t.Fatal(err)
+	}
+	_, retriedOperationB, err := database.QueueProjectImport(ctx, serverB.ID, "ignored", "https://example.com/shared.git", "projects/shared")
+	if err != nil || retriedOperationB == "" || retriedOperationB == operationB {
+		t.Fatalf("failed import should create a new operation: %q %q %v", operationB, retriedOperationB, err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: operationA, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: retriedOperationB, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, serverA.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/alpha", Name: "alpha", RemoteURL: projectA.RemoteURL, Branch: "main"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, serverB.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/shared", Name: "alpha", RemoteURL: projectA.RemoteURL, Branch: "main"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	projects, err := database.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].ID != projectA.ID || projects[0].WorkspaceCount != 2 {
+		t.Fatalf("unexpected project list after both inventories: %#v %v", projects, err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 2 {
+		t.Fatalf("both server workspaces should be retained: %#v %v", workspaces, err)
+	}
+	workspaceServers := map[string]bool{}
+	for _, workspace := range workspaces {
+		if workspace.ProjectID != projectA.ID {
+			t.Fatalf("workspace changed projects: %#v", workspace)
+		}
+		workspaceServers[workspace.ServerID] = true
+	}
+	if !workspaceServers[serverA.ID] || !workspaceServers[serverB.ID] {
+		t.Fatalf("missing cross-server workspace: %#v", workspaces)
+	}
+	if _, _, err := database.QueueProjectImport(ctx, serverA.ID, "alpha", projectA.RemoteURL, "projects/alpha"); !errors.Is(err, ErrProjectAlreadyOnServer) {
+		t.Fatalf("existing server A workspace should reject another import: %v", err)
+	}
+	if _, _, err := database.QueueProjectImport(ctx, serverB.ID, "alpha", projectA.RemoteURL, "projects/shared"); !errors.Is(err, ErrProjectAlreadyOnServer) {
+		t.Fatalf("existing server B workspace should reject another import: %v", err)
 	}
 }
 

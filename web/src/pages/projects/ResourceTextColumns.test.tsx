@@ -43,3 +43,20 @@ test("keeps repository and workspace values available as overflow tooltips", () 
   expect(path).toHaveClass("truncate-code");
   expect(path.closest("td")).toHaveClass("fluid-text-cell");
 });
+
+test("keeps an existing project ready when another server import fails", () => {
+  const failedSecondaryImport: Project = {
+    ...project,
+    import_status: "failed",
+    import_message: "clone failed",
+    import_server_id: "server-2",
+    import_server_name: "server-2"
+  };
+
+  render(<ProjectTable projects={[failedSecondaryImport]} labels={projectLabels} slots={{ DataTable, Status }} formatTime={value => value} />);
+
+  expect(screen.getByText("ready")).toBeInTheDocument();
+  expect(screen.queryByText("failed")).not.toBeInTheDocument();
+  expect(screen.queryByText("clone failed")).not.toBeInTheDocument();
+  expect(screen.queryByText("server-2")).not.toBeInTheDocument();
+});

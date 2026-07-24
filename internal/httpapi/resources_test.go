@@ -142,6 +142,19 @@ func TestImportProjectReusesExistingProjectOnAnotherServer(t *testing.T) {
 	if responseA.Code != http.StatusAccepted {
 		t.Fatalf("server A import returned %d: %s", responseA.Code, responseA.Body.String())
 	}
+	var queuedA struct {
+		Project     store.Project `json:"project"`
+		OperationID string        `json:"operation_id"`
+	}
+	if err := json.Unmarshal(responseA.Body.Bytes(), &queuedA); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: queuedA.OperationID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, serverA.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/shared-a", Name: "shared", RemoteURL: body["remote_url"], Branch: "main"}}}); err != nil {
+		t.Fatal(err)
+	}
 	second := map[string]string{"server_id": serverB.ID, "destination": "projects/shared-b"}
 	for key, value := range body {
 		second[key] = value
@@ -151,12 +164,9 @@ func TestImportProjectReusesExistingProjectOnAnotherServer(t *testing.T) {
 		t.Fatalf("server B import returned %d: %s", responseB.Code, responseB.Body.String())
 	}
 
-	var queuedA, queuedB struct {
+	var queuedB struct {
 		Project     store.Project `json:"project"`
 		OperationID string        `json:"operation_id"`
-	}
-	if err := json.Unmarshal(responseA.Body.Bytes(), &queuedA); err != nil {
-		t.Fatal(err)
 	}
 	if err := json.Unmarshal(responseB.Body.Bytes(), &queuedB); err != nil {
 		t.Fatal(err)
@@ -164,17 +174,27 @@ func TestImportProjectReusesExistingProjectOnAnotherServer(t *testing.T) {
 	if queuedA.Project.ID == "" || queuedA.Project.ID != queuedB.Project.ID || queuedA.OperationID == queuedB.OperationID {
 		t.Fatalf("imports should share project metadata but not operation IDs: %#v %#v", queuedA, queuedB)
 	}
+	duplicateA := directJSONRequest(t, http.MethodPost, "/api/projects/import", first, &store.Session{UserID: "test-user"}, api.importProject)
+	if duplicateA.Code != http.StatusConflict || !strings.Contains(duplicateA.Body.String(), "already exists on target server") {
+		t.Fatalf("existing server A import returned %d: %s", duplicateA.Code, duplicateA.Body.String())
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: queuedB.OperationID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, serverB.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/shared-b", Name: "shared", RemoteURL: body["remote_url"], Branch: "main"}}}); err != nil {
+		t.Fatal(err)
+	}
 	projects, err := database.ListProjects(ctx)
-	if err != nil || len(projects) != 1 {
-		t.Fatalf("cross-server import created duplicate projects: %#v %v", projects, err)
+	if err != nil || len(projects) != 1 || projects[0].WorkspaceCount != 2 {
+		t.Fatalf("cross-server import did not retain both workspaces: %#v %v", projects, err)
 	}
-	operationsA, err := database.PendingOperations(ctx, serverA.ID)
-	if err != nil || len(operationsA) != 1 || operationsA[0].ProjectID != queuedA.Project.ID {
-		t.Fatalf("unexpected server A operation: %#v %v", operationsA, err)
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 2 || workspaces[0].ProjectID != queuedA.Project.ID || workspaces[1].ProjectID != queuedA.Project.ID {
+		t.Fatalf("unexpected cross-server workspaces: %#v %v", workspaces, err)
 	}
-	operationsB, err := database.PendingOperations(ctx, serverB.ID)
-	if err != nil || len(operationsB) != 1 || operationsB[0].ProjectID != queuedA.Project.ID {
-		t.Fatalf("unexpected server B operation: %#v %v", operationsB, err)
+	duplicateB := directJSONRequest(t, http.MethodPost, "/api/projects/import", second, &store.Session{UserID: "test-user"}, api.importProject)
+	if duplicateB.Code != http.StatusConflict || !strings.Contains(duplicateB.Body.String(), "already exists on target server") {
+		t.Fatalf("existing server B import returned %d: %s", duplicateB.Code, duplicateB.Body.String())
 	}
 }
 

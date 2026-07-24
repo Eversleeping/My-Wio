@@ -1068,6 +1068,10 @@ func (a *API) importProject(w http.ResponseWriter, r *http.Request) {
 		input.Name = repositoryName(input.RemoteURL)
 	}
 	project, operationID, err := a.store.QueueProjectImport(r.Context(), input.ServerID, input.Name, input.RemoteURL, input.Destination)
+	if errors.Is(err, store.ErrProjectAlreadyOnServer) {
+		writeError(w, http.StatusConflict, "project already exists on target server")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Git import")
 		return

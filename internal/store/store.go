@@ -27,6 +27,7 @@ var schema string
 
 var ErrWorkspaceWriteActive = errors.New("workspace already has an active write operation")
 var ErrControlPlaneServer = errors.New("the control-plane server cannot be revoked")
+var ErrProjectAlreadyOnServer = errors.New("project already exists on target server")
 
 type Store struct {
 	DB     *sqlx.DB
@@ -329,6 +330,7 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 	for _, statement := range []string{
 		"CREATE INDEX IF NOT EXISTS operations_project_idx ON agent_operations(project_id, created_at)",
 		"CREATE INDEX IF NOT EXISTS operations_workspace_idx ON agent_operations(workspace_id, created_at)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS operations_project_import_active_unique ON agent_operations(server_id,project_id) WHERE project_id IS NOT NULL AND kind='git.import' AND status IN ('queued','delivered')",
 		"CREATE UNIQUE INDEX IF NOT EXISTS operations_workspace_active_write_unique ON agent_operations(workspace_id) WHERE workspace_id IS NOT NULL AND workspace_write=1 AND status IN ('queued','delivered','running')",
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
