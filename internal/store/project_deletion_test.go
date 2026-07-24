@@ -176,6 +176,53 @@ func TestManagedProjectDeletionStagesWorktreesBeforePrimary(t *testing.T) {
 	}
 }
 
+func TestManagedProjectDeletionPreservesObservedWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	server := createOperationTestServer(t, database, "mixed-delete", "mixed-delete")
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "mixed-delete.local"}); err != nil {
+		t.Fatal(err)
+	}
+	project, err := database.CreateProject(ctx, "mixed-delete", "https://example.com/mixed-delete.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedID := insertDeletionWorkspace(t, database, project.ID, server.ID, "/var/lib/wio-agent/projects/mixed-delete", "managed", "primary", 0)
+	observedID := insertDeletionWorkspace(t, database, project.ID, server.ID, "/opt/mixed-delete", "observed", "primary", 0)
+
+	operationIDs, deleted, err := database.QueueProjectManagedDeletion(ctx, project.ID)
+	if err != nil || deleted || len(operationIDs) != 1 {
+		t.Fatalf("unexpected queued deletion: %#v %v %v", operationIDs, deleted, err)
+	}
+	operation, err := database.Operation(ctx, operationIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeDeletionOperation(t, database, operation, true, "")
+
+	if _, err := database.Workspace(ctx, managedID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted managed workspace remains: %v", err)
+	}
+	if _, err := database.Workspace(ctx, observedID); err != nil {
+		t.Fatalf("observed workspace was removed: %v", err)
+	}
+	current, err := database.Project(ctx, project.ID)
+	if err != nil || current.Status != "ready" || current.WorkspaceCount != 1 {
+		t.Fatalf("project with observed workspace was not preserved: %#v %v", current, err)
+	}
+
+	operationIDs, deleted, err = database.QueueProjectManagedDeletion(ctx, project.ID)
+	if err != nil || !deleted || len(operationIDs) != 0 {
+		t.Fatalf("deleting with only observed workspaces should be a completed no-op: %#v %v %v", operationIDs, deleted, err)
+	}
+	if _, err := database.Workspace(ctx, observedID); err != nil {
+		t.Fatalf("observed workspace was removed by no-op deletion: %v", err)
+	}
+	if _, err := database.Project(ctx, project.ID); err != nil {
+		t.Fatalf("project with observed workspace was removed by no-op deletion: %v", err)
+	}
+}
+
 func TestManagedProjectDeletionFailureIsTrackableAndRetryable(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

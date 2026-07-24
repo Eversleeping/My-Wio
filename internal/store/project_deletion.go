@@ -173,6 +173,12 @@ func (s *Store) QueueProjectManagedDeletion(ctx context.Context, projectID strin
 		}
 	}
 	if len(managed) == 0 {
+		if plan.ObservedWorkspaceCount > 0 {
+			if err := tx.Commit(); err != nil {
+				return nil, false, err
+			}
+			return nil, true, nil
+		}
 		if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM projects WHERE id=?`), projectID); err != nil {
 			return nil, false, err
 		}
@@ -297,11 +303,15 @@ func (s *Store) CompleteProjectDeletion(ctx context.Context, operation Operation
 		return tx.Commit()
 	}
 	var remaining int
-	if err := tx.GetContext(ctx, &remaining, s.Q(`SELECT COUNT(*) FROM workspaces WHERE project_id=? AND management_mode='managed'`), operation.ProjectID); err != nil {
+	if err := tx.GetContext(ctx, &remaining, s.Q(`SELECT COUNT(*) FROM workspaces WHERE project_id=?`), operation.ProjectID); err != nil {
 		return err
 	}
 	if remaining == 0 {
 		if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM projects WHERE id=?`), operation.ProjectID); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, s.Q(`UPDATE projects SET status=CASE WHEN status='deleting' THEN 'ready' ELSE status END,provision_error='',updated_at=? WHERE id=?`), time.Now().UTC(), operation.ProjectID); err != nil {
 			return err
 		}
 	}
