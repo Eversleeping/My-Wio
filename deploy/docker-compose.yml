@@ -28,6 +28,16 @@ services:
       WIO_MASTER_KEY: ${WIO_MASTER_KEY:?set WIO_MASTER_KEY}
       WIO_PUBLIC_URL: https://${WIO_DOMAIN:?set WIO_DOMAIN}
       WIO_CONTROL_AGENT_ENABLED: ${WIO_CONTROL_AGENT_ENABLED:-true}
+      WIO_CONTROL_AGENT_SCAN_ROOTS: /srv,/opt,/home,/var/lib/wio-agent/projects
+      WIO_CONTROL_AGENT_CLONE_ROOT: /var/lib/wio-agent/projects
+      WIO_CONTROL_AGENT_STATE_DIR: /var/lib/wio-agent
+      WIO_CONTROL_AGENT_CODEX_KEY_FILE: /var/lib/wio-agent/codex.key
+    volumes:
+      - controlplane_agent_state:/var/lib/wio-agent
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv:/srv
+      - /opt:/opt
+      - /home:/home
     expose:
       - "8080"
     healthcheck:
@@ -57,3 +67,4 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  controlplane_agent_state:

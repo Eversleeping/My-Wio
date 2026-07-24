@@ -78,6 +78,9 @@ func run(log *slog.Logger) error {
 
 	hub := realtime.New()
 	gateway := agentgateway.New(database, hub, vault, log)
+	if err := queueDefaultControlPlaneCredentials(context.Background(), database, vault, gateway, log); err != nil {
+		log.Warn("could not configure default control-plane Agent credentials", "error", err)
+	}
 	grpcServer := grpc.NewServer(
 		grpc.ForceServerCodec(protocol.Codec()),
 		grpc.MaxRecvMsgSize(8<<20),
@@ -194,7 +197,7 @@ func controlPlaneAgentConfig(address, token string) (agent.Config, error) {
 		CloneRoot:          env("WIO_CONTROL_AGENT_CLONE_ROOT", "/var/lib/wio-agent/projects"),
 		StateDir:           env("WIO_CONTROL_AGENT_STATE_DIR", "/var/lib/wio-agent"),
 		CodexPath:          env("WIO_CONTROL_AGENT_CODEX_PATH", "codex"),
-		CodexAPIKeyFile:    env("WIO_CONTROL_AGENT_CODEX_KEY_FILE", "/etc/wio-agent/codex.key"),
+		CodexAPIKeyFile:    env("WIO_CONTROL_AGENT_CODEX_KEY_FILE", "/var/lib/wio-agent/codex.key"),
 		DockerPath:         env("WIO_CONTROL_AGENT_DOCKER_PATH", "docker"),
 		PrerequisiteSocket: env("WIO_CONTROL_AGENT_PREREQUISITE_SOCKET", "/run/wio-prerequisites/helper.sock"),
 		InsecureSkipVerify: envBool("WIO_CONTROL_AGENT_INSECURE_SKIP_VERIFY"),
@@ -203,6 +206,51 @@ func controlPlaneAgentConfig(address, token string) (agent.Config, error) {
 		return agent.Config{}, err
 	}
 	return config, nil
+}
+
+func queueDefaultControlPlaneCredentials(ctx context.Context, database *store.Store, vault *security.Vault, gateway *agentgateway.Gateway, log *slog.Logger) error {
+	codex, git, initialize, err := database.DefaultControlPlaneCredentialProfiles(ctx)
+	if err != nil || !initialize {
+		return err
+	}
+	active, err := database.HasActiveOperation(ctx, store.ControlPlaneServerID, "credentials.configure")
+	if err != nil || active {
+		return err
+	}
+	var codexAPIKey string
+	if err := vault.Decrypt(codex.Ciphertext, &codexAPIKey); err != nil {
+		return fmt.Errorf("decrypt default Codex credential: %w", err)
+	}
+	command := protocol.ConfigureCredentialsCommand{
+		CodexAPIURL: codex.Endpoint,
+		CodexAPIKey: codexAPIKey,
+		CodexModel:  codex.Model,
+		RemoveGit:   git == nil,
+	}
+	gitProfileID := ""
+	if git != nil {
+		var gitToken string
+		if err := vault.Decrypt(git.Ciphertext, &gitToken); err != nil {
+			return fmt.Errorf("decrypt default Git credential: %w", err)
+		}
+		command.GitEndpoint = git.Endpoint
+		command.GitUsername = git.Username
+		command.GitToken = gitToken
+		command.GitCommitName = git.CommitName
+		command.GitCommitEmail = git.CommitEmail
+		gitProfileID = git.ID
+	}
+	ciphertext, err := vault.Encrypt(command)
+	if err != nil {
+		return fmt.Errorf("protect default control-plane credentials: %w", err)
+	}
+	operationID, err := database.QueueCredentialUpdate(ctx, store.ControlPlaneServerID, ciphertext, codex.ID, gitProfileID, "control-plane-credentials:"+codex.ID+":"+gitProfileID)
+	if err != nil {
+		return fmt.Errorf("queue default control-plane credentials: %w", err)
+	}
+	gateway.Wake(store.ControlPlaneServerID)
+	log.Info("queued default control-plane Agent credentials", "operation_id", operationID, "codex_profile_id", codex.ID, "git_profile_id", gitProfileID)
+	return nil
 }
 
 func controlPlaneAgentRoots() []string {

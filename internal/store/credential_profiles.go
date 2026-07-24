@@ -23,6 +23,54 @@ type CredentialProfile struct {
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
+// DefaultControlPlaneCredentialProfiles returns the credential profiles to
+// install for the built-in Agent on its first start. A credential binding row
+// is an explicit administrator choice, including one with no Git profile, so
+// it is never replaced by this bootstrap default.
+func (s *Store) DefaultControlPlaneCredentialProfiles(ctx context.Context) (CredentialProfile, *CredentialProfile, bool, error) {
+	var bindings int
+	if err := s.DB.GetContext(ctx, &bindings, s.Q("SELECT COUNT(*) FROM server_credential_profiles WHERE server_id=?"), ControlPlaneServerID); err != nil {
+		return CredentialProfile{}, nil, false, err
+	}
+	if bindings != 0 {
+		return CredentialProfile{}, nil, false, nil
+	}
+	codex, err := s.preferredCredentialProfile(ctx, "codex")
+	if errors.Is(err, sql.ErrNoRows) {
+		return CredentialProfile{}, nil, false, nil
+	}
+	if err != nil {
+		return CredentialProfile{}, nil, false, err
+	}
+	git, err := s.preferredCredentialProfile(ctx, "git")
+	if errors.Is(err, sql.ErrNoRows) {
+		return codex, nil, true, nil
+	}
+	if err != nil {
+		return CredentialProfile{}, nil, false, err
+	}
+	return codex, &git, true, nil
+}
+
+func (s *Store) preferredCredentialProfile(ctx context.Context, kind string) (CredentialProfile, error) {
+	profile := CredentialProfile{}
+	profileColumn := "codex_profile_id"
+	if kind == "git" {
+		profileColumn = "git_profile_id"
+	}
+	query := `SELECT p.id,p.kind,p.name,p.endpoint,p.username,p.model,p.commit_name,p.commit_email,p.ciphertext,p.updated_at
+		FROM credential_profiles p
+		WHERE p.kind=? AND p.ciphertext<>''
+		ORDER BY CASE WHEN EXISTS (
+			SELECT 1 FROM server_credential_profiles cp
+			JOIN servers bound_server ON bound_server.id=cp.server_id
+			WHERE bound_server.revoked_at IS NULL AND bound_server.is_control_plane=0 AND cp.` + profileColumn + `=p.id
+		) THEN 0 ELSE 1 END,lower(p.name),p.id
+		LIMIT 1`
+	err := s.DB.GetContext(ctx, &profile, s.Q(query), kind)
+	return profile, err
+}
+
 func (s *Store) SetServerCredentialProfiles(ctx context.Context, serverID, codexProfileID, gitProfileID string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,?,NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`), serverID, codexProfileID, gitProfileID, time.Now().UTC())
 	return err
