@@ -150,8 +150,9 @@ func TestCreateRejectsUnsafePathsAndRemoteURLs(t *testing.T) {
 		t.Fatal("expected existing path rejection")
 	}
 	for name, remote := range map[string]string{
-		"ssh URL": "ssh://git@example.com/team/repo.git",
-		"SCP URL": "git@example.com:team/repo.git",
+		"ssh URL":                           "ssh://git@example.com/team/repo.git",
+		"SCP URL":                           "git@example.com:team/repo.git",
+		"SCP URL with hyphenated namespace": "git@gitee.com:-miaowu-/wio-test.git",
 	} {
 		t.Run(name, func(t *testing.T) {
 			result, err := Create(context.Background(), CreateOptions{ProjectID: "remote-" + name, Path: filepath.Join(root, strings.ToLower(strings.ReplaceAll(name, " ", "-"))), RemoteURL: remote}, []string{root})

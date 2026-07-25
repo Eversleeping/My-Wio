@@ -730,7 +730,7 @@ func validateSCPRemote(raw string) bool {
 	user := raw[:at]
 	host := raw[at+1 : colon]
 	path := raw[colon+1:]
-	if strings.ContainsAny(user, "/\\:@") || strings.ContainsAny(host, "/\\:@") || strings.HasPrefix(path, "-") {
+	if strings.ContainsAny(user, "/\\:@") || strings.ContainsAny(host, "/\\:@") {
 		return false
 	}
 	return user != "" && host != "" && path != ""
