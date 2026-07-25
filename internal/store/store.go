@@ -242,18 +242,26 @@ func migrateDeploymentSources(ctx context.Context, db *sqlx.DB, driver string) e
 
 func migrateDeploymentPublicURL(ctx context.Context, db *sqlx.DB, driver string) error {
 	if driver == "pgx" {
-		if _, err := db.ExecContext(ctx, "ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS public_url TEXT NOT NULL DEFAULT ''"); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE deployment_targets
+			ADD COLUMN IF NOT EXISTS public_url TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS detected_public_url TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("migrate deployment public URL: %w", err)
 		}
 		return nil
 	}
-	var count int
-	if err := db.GetContext(ctx, &count, "SELECT COUNT(*) FROM pragma_table_info('deployment_targets') WHERE name='public_url'"); err != nil {
-		return fmt.Errorf("inspect deployment public URL column: %w", err)
+	var columns []string
+	if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info('deployment_targets')"); err != nil {
+		return fmt.Errorf("inspect deployment public URL columns: %w", err)
 	}
-	if count == 0 {
-		if _, err := db.ExecContext(ctx, "ALTER TABLE deployment_targets ADD COLUMN public_url TEXT NOT NULL DEFAULT ''"); err != nil {
-			return fmt.Errorf("migrate deployment public URL column: %w", err)
+	existing := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		existing[column] = true
+	}
+	for _, column := range []string{"public_url", "detected_public_url"} {
+		if !existing[column] {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE deployment_targets ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("migrate deployment public URL column %s: %w", column, err)
+			}
 		}
 	}
 	return nil

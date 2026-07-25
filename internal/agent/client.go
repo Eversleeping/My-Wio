@@ -745,12 +745,12 @@ func (c *Client) runDeployment(ctx context.Context, command protocol.DeployComma
 	if command.SourceType == "workspace" && !pathWithinRoots(command.SourcePath, c.inventoryRoots()) {
 		return errors.New("deployment workspace is outside configured inventory roots")
 	}
-	status := func(state, message, resolved, content string) {
-		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, command.Repository), ResolvedCommit: resolved, Content: redactDeploymentText(content, command.Environment, command.Repository)}, true)
+	status := func(state, message, resolved, detectedPublicURL, content string) {
+		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, command.Repository), ResolvedCommit: resolved, DetectedPublicURL: detectedPublicURL, Content: redactDeploymentText(content, command.Environment, command.Repository)}, true)
 	}
 	err := c.deployer.Deploy(ctx, command, status)
 	if err != nil {
-		status("failed", truncate(err.Error(), 8192), "", "")
+		status("failed", truncate(err.Error(), 8192), "", "", "")
 	}
 	return err
 }
@@ -767,12 +767,12 @@ func pathWithinRoots(path string, roots []string) bool {
 }
 
 func (c *Client) runRollback(ctx context.Context, command protocol.RollbackCommand) error {
-	status := func(state, message, resolved, content string) {
+	status := func(state, message, resolved, _ string, content string) {
 		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: message, ResolvedCommit: resolved, Content: content}, true)
 	}
 	err := c.deployer.Rollback(ctx, command, status)
 	if err != nil {
-		status("failed", truncate(err.Error(), 8192), "", "")
+		status("failed", truncate(err.Error(), 8192), "", "", "")
 	}
 	return err
 }

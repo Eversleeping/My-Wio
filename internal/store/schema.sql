@@ -321,6 +321,7 @@ CREATE TABLE IF NOT EXISTS deployment_targets (
   health_checks TEXT NOT NULL DEFAULT '[]',
   release_root TEXT NOT NULL DEFAULT '/var/lib/wio-agent/releases',
   public_url TEXT NOT NULL DEFAULT '',
+  detected_public_url TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(project_id, environment)
 );

@@ -8,7 +8,7 @@ const target = {
   id: "target-1", project_id: "project-1", server_id: "server-1", secret_set_id: "", environment: "production",
   source_type: "remote" as const, workspace_id: "", workspace_path: "", workspace_name: "",
   repository: "https://example.com/project.git", git_ref: "main", compose_file: "compose.yaml", working_dir: "",
-  build_mode: "build", health_checks: "[]", release_root: "/var/lib/wio-agent/releases", public_url: "http://203.0.113.10:5000", project_name: "project-management", server_name: "server-1",
+  build_mode: "build", health_checks: "[]", release_root: "/var/lib/wio-agent/releases", public_url: "http://203.0.113.10:5000", configured_public_url: "http://203.0.113.10:5000", detected_public_url: "", project_name: "project-management", server_name: "server-1",
   container_operation_id: "", container_action: "deploy", container_status: "running", container_message: "deployment is healthy", container_updated_at: "2026-07-21T10:00:08Z"
 };
 const deployment = {
@@ -93,4 +93,24 @@ test("creates and edits public access settings, manages containers, and exposes 
 
   await user.click(screen.getByRole("button", { name: "Delete deployment record" }));
   await waitFor(() => expect(requests.some(request => request.url === `/api/deployments/${deployment.id}` && request.method === "DELETE")).toBe(true));
+});
+
+test("shows a detected public URL without treating it as a configured override", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const detectedTarget = { ...target, public_url: "http://203.0.113.10:5010", configured_public_url: "", detected_public_url: "http://203.0.113.10:5010" };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    let payload: unknown = [];
+    if (url === "/api/deployment-targets") payload = [detectedTarget];
+    else if (url === "/api/deployments") payload = [];
+    else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1", status: "online" }];
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
+
+  const user = userEvent.setup();
+  render(<I18nProvider><DeploymentsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  expect(await screen.findByRole("link", { name: "203.0.113.10:5010" })).toHaveAttribute("href", detectedTarget.public_url);
+  await user.click(screen.getByRole("button", { name: "More deployment actions" }));
+  await user.click(screen.getByRole("menuitem", { name: "Edit deployment target" }));
+  expect(screen.getByRole("textbox", { name: "External access URL" })).toHaveValue("");
 });

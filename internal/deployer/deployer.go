@@ -2,14 +2,18 @@ package deployer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +22,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
-type StatusFunc func(status, message, resolvedCommit, content string)
+type StatusFunc func(status, message, resolvedCommit, detectedPublicURL, content string)
 
 const maximumProcessLogSize = 1 << 20
 
@@ -53,16 +57,16 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	}
 	checks := d.Preflight(ctx, command)
 	if missingAutomaticPrerequisite(checks) {
-		status("preparing", "installing missing deployment prerequisites", "", "Missing Git, Docker, Docker Compose, or the Docker daemon will be configured automatically when supported.")
+		status("preparing", "installing missing deployment prerequisites", "", "", "Missing Git, Docker, Docker Compose, or the Docker daemon will be configured automatically when supported.")
 		result, err := prerequisite.Ensure(ctx, d.PrerequisiteSocket)
 		for _, log := range result.Logs {
-			status("preparing", "deployment prerequisite setup", "", log)
+			status("preparing", "deployment prerequisite setup", "", "", log)
 		}
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, net.ErrClosed) {
 				err = fmt.Errorf("%w; this Agent predates automatic prerequisite setup, so re-register the server once to install its restricted helper", err)
 			}
-			status("failed", "deployment prerequisite setup failed", "", err.Error())
+			status("failed", "deployment prerequisite setup failed", "", "", err.Error())
 			return fmt.Errorf("install deployment prerequisites: %w", err)
 		}
 		checks = d.Preflight(ctx, command)
@@ -72,7 +76,7 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		if !check.OK {
 			state = "failed"
 		}
-		status(state, "environment check: "+check.Name, "", check.Message)
+		status(state, "environment check: "+check.Name, "", "", check.Message)
 		if !check.OK {
 			return fmt.Errorf("deployment environment check failed: %s: %s", check.Name, check.Message)
 		}
@@ -81,7 +85,7 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if err != nil {
 		return err
 	}
-	status("preparing", "creating release workspace", "", "Preparing an isolated release directory.")
+	status("preparing", "creating release workspace", "", "", "Preparing an isolated release directory.")
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return err
 	}
@@ -100,34 +104,34 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		}
 		resolvedSource, resolveErr := run(ctx, nil, "git", "-C", source, "rev-parse", "--verify", checkoutRef+"^{commit}")
 		if resolveErr != nil {
-			status("preparing", "workspace revision resolution failed", "", resolvedSource)
+			status("preparing", "workspace revision resolution failed", "", "", resolvedSource)
 			return fmt.Errorf("resolve workspace revision: %w: %s", resolveErr, resolvedSource)
 		}
 		checkoutRef = strings.TrimSpace(resolvedSource)
 	}
 	if output, err := run(ctx, nil, "git", cloneArgs...); err != nil {
-		status("preparing", "repository clone failed", "", output)
+		status("preparing", "repository clone failed", "", "", output)
 		return fmt.Errorf("clone repository: %w: %s", err, output)
 	} else {
-		status("preparing", "repository cloned", "", output)
+		status("preparing", "repository cloned", "", "", output)
 	}
 	if command.SourceType == "workspace" {
-		status("preparing", "using server workspace", checkoutRef, source)
+		status("preparing", "using server workspace", checkoutRef, "", source)
 	} else if output, err := run(ctx, nil, "git", "-C", release, "fetch", "--depth=1", "origin", command.CommitRef); err != nil {
-		status("preparing", "commit fetch failed", "", output)
+		status("preparing", "commit fetch failed", "", "", output)
 		return fmt.Errorf("fetch commit: %w: %s", err, output)
 	} else {
-		status("preparing", "commit fetched", "", output)
+		status("preparing", "commit fetched", "", "", output)
 	}
 	if output, err := run(ctx, nil, "git", "-C", release, "checkout", "--detach", checkoutRef); err != nil {
-		status("preparing", "commit checkout failed", "", output)
+		status("preparing", "commit checkout failed", "", "", output)
 		return fmt.Errorf("checkout commit: %w: %s", err, output)
 	} else {
-		status("preparing", "commit checked out", "", output)
+		status("preparing", "commit checked out", "", "", output)
 	}
 	resolved, err := run(ctx, nil, "git", "-C", release, "rev-parse", "HEAD")
 	if err != nil {
-		status("preparing", "commit resolution failed", "", resolved)
+		status("preparing", "commit resolution failed", "", "", resolved)
 		return fmt.Errorf("resolve commit: %w", err)
 	}
 	resolved = strings.TrimSpace(resolved)
@@ -146,13 +150,13 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		environment = append(environment, key+"="+value)
 	}
 	project := projectName(command.TargetID)
-	status("running", "starting Docker Compose project", resolved, "Compose project initialization started.")
+	status("running", "starting Docker Compose project", resolved, "", "Compose project initialization started.")
 	if command.BuildMode == "pull" {
 		if output, err := d.compose(ctx, workDir, environment, project, composePath, "pull"); err != nil {
-			status("running", "image pull failed", resolved, output)
+			status("running", "image pull failed", resolved, "", output)
 			return fmt.Errorf("docker compose pull: %w: %s", err, output)
 		} else {
-			status("running", "images pulled", resolved, output)
+			status("running", "images pulled", resolved, "", output)
 		}
 	}
 	args := []string{"up", "-d", "--remove-orphans"}
@@ -160,22 +164,28 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		args = append(args, "--build")
 	}
 	if output, err := d.compose(ctx, workDir, environment, project, composePath, args...); err != nil {
-		status("running", "Docker Compose start failed", resolved, output)
+		status("running", "Docker Compose start failed", resolved, "", output)
 		return fmt.Errorf("docker compose up: %w: %s", err, output)
 	} else {
-		status("running", "Docker Compose project started", resolved, output)
+		status("running", "Docker Compose project started", resolved, "", output)
+	}
+	detectedPublicURL := ""
+	if strings.TrimSpace(command.PublicURL) == "" {
+		if output, inspectErr := d.compose(ctx, workDir, environment, project, composePath, "ps", "--format", "json"); inspectErr == nil {
+			detectedPublicURL = composePublicURL(command.ServerAddress, output)
+		}
 	}
 	for _, check := range command.HealthChecks {
-		status("running", "running health check", resolved, check.Address)
+		status("running", "running health check", resolved, "", check.Address)
 		if err := healthCheck(ctx, check); err != nil {
 			return err
 		}
 	}
-	status("running", "health checks passed", resolved, "All configured health checks passed.")
+	status("running", "health checks passed", resolved, "", "All configured health checks passed.")
 	if err := promote(root, release); err != nil {
 		return err
 	}
-	status("succeeded", "deployment is healthy", resolved, "Release promoted and marked as current.")
+	status("succeeded", "deployment is healthy", resolved, detectedPublicURL, "Release promoted and marked as current.")
 	return nil
 }
 
@@ -291,12 +301,12 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 	if err != nil {
 		return err
 	}
-	status("running", "restoring previous Compose release", "", "Starting Docker Compose from the previous release.")
+	status("running", "restoring previous Compose release", "", "", "Starting Docker Compose from the previous release.")
 	if output, err := d.compose(ctx, workDir, nil, projectName(command.TargetID), composePath, "up", "-d", "--remove-orphans"); err != nil {
-		status("running", "rollback Compose start failed", "", output)
+		status("running", "rollback Compose start failed", "", "", output)
 		return fmt.Errorf("docker compose rollback: %w: %s", err, output)
 	} else {
-		status("running", "previous Compose release started", "", output)
+		status("running", "previous Compose release started", "", "", output)
 	}
 	currentLink := filepath.Join(root, "current")
 	current, _ := filepath.EvalSymlinks(currentLink)
@@ -307,7 +317,7 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 		_ = replaceSymlink(previousLink, current)
 	}
 	resolved, _ := run(ctx, nil, "git", "-C", previous, "rev-parse", "HEAD")
-	status("rolled_back", "previous release restored", strings.TrimSpace(resolved), "Previous release promoted and marked as current.")
+	status("rolled_back", "previous release restored", strings.TrimSpace(resolved), "", "Previous release promoted and marked as current.")
 	return nil
 }
 
@@ -501,6 +511,92 @@ func healthCheck(ctx context.Context, check protocol.HealthCheck) error {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+type composeProcess struct {
+	Publishers []composePublisher `json:"Publishers"`
+}
+
+type composePublisher struct {
+	URL           string `json:"URL"`
+	PublishedPort int    `json:"PublishedPort"`
+	Protocol      string `json:"Protocol"`
+}
+
+func composePublicURL(serverAddress, output string) string {
+	processes, err := decodeComposeProcesses(output)
+	if err != nil {
+		return ""
+	}
+	for _, process := range processes {
+		for _, publisher := range process.Publishers {
+			if publisher.PublishedPort <= 0 || !strings.EqualFold(publisher.Protocol, "tcp") || isLoopbackPublisher(publisher.URL) {
+				continue
+			}
+			return publicURLForPort(serverAddress, publisher.PublishedPort)
+		}
+	}
+	return ""
+}
+
+func decodeComposeProcesses(output string) ([]composeProcess, error) {
+	var processes []composeProcess
+	if err := json.Unmarshal([]byte(output), &processes); err == nil {
+		return processes, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(output))
+	for {
+		var process composeProcess
+		if err := decoder.Decode(&process); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		processes = append(processes, process)
+	}
+	return processes, nil
+}
+
+func isLoopbackPublisher(value string) bool {
+	host := strings.Trim(strings.TrimSpace(value), "[]")
+	return host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
+}
+
+func publicURLForPort(serverAddress string, port int) string {
+	scheme, host := publicURLHost(serverAddress)
+	if host == "" {
+		return ""
+	}
+	if port == 443 && scheme == "http" {
+		scheme = "https"
+	}
+	if scheme == "http" && port == 80 || scheme == "https" && port == 443 {
+		return scheme + "://" + host
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func publicURLHost(serverAddress string) (string, string) {
+	value := strings.TrimSpace(serverAddress)
+	if value == "" {
+		return "", ""
+	}
+	if net.ParseIP(strings.Trim(value, "[]")) != nil {
+		return "http", strings.Trim(value, "[]")
+	}
+	candidate := value
+	if !strings.Contains(candidate, "://") {
+		candidate = "//" + candidate
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.Hostname() == "" {
+		return "", ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		scheme = "http"
+	}
+	return scheme, parsed.Hostname()
 }
 
 func run(ctx context.Context, environment []string, command string, args ...string) (string, error) {

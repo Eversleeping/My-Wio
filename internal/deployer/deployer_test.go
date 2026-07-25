@@ -47,7 +47,7 @@ esac`)
 	deployer := New(docker)
 	oldPath := os.Getenv("PATH")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+oldPath)
-	err := deployer.Deploy(context.Background(), command, func(status, message, resolved, content string) {
+	err := deployer.Deploy(context.Background(), command, func(status, message, resolved, detectedPublicURL, content string) {
 		events = append(events, status+":"+message+":"+content)
 		if message == "commit checked out" {
 			if err := os.WriteFile(filepath.Join(root, "target-1", "releases", "deployment-1", "compose.yaml"), []byte("services: {}"), 0o600); err != nil {
@@ -80,6 +80,41 @@ func TestComposePathsRejectTraversal(t *testing.T) {
 	}
 	if _, _, err := composePaths(release, "app", "../../secret"); err == nil {
 		t.Fatal("unsafe compose file was accepted")
+	}
+}
+
+func TestComposePublicURLUsesPublishedTCPPort(t *testing.T) {
+	tests := []struct {
+		name    string
+		address string
+		output  string
+		want    string
+	}{
+		{
+			name:    "JSON array",
+			address: "203.0.113.10",
+			output:  `[{"Publishers":[{"URL":"0.0.0.0","TargetPort":3001,"PublishedPort":5010,"Protocol":"tcp"}]}]`,
+			want:    "http://203.0.113.10:5010",
+		},
+		{
+			name:    "line delimited JSON and HTTPS",
+			address: "https://app.example.com",
+			output:  "{\"Publishers\":[{\"URL\":\"::\",\"PublishedPort\":443,\"Protocol\":\"tcp\"}]}\n{\"Publishers\":[]}",
+			want:    "https://app.example.com",
+		},
+		{
+			name:    "loopback binding is not external",
+			address: "203.0.113.10",
+			output:  `[{"Publishers":[{"URL":"127.0.0.1","PublishedPort":8080,"Protocol":"tcp"}]}]`,
+			want:    "",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := composePublicURL(test.address, test.output); got != test.want {
+				t.Fatalf("composePublicURL() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -128,7 +163,7 @@ func TestPreflightStopsBeforeReleaseWhenDockerIsUnavailable(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "releases")
 	command := protocol.DeployCommand{DeploymentID: "deployment-preflight", TargetID: "target-preflight", SourceType: "remote", Repository: "https://example.com/repo.git", CommitRef: "main", ComposeFile: "compose.yaml", BuildMode: "build", ReleaseRoot: root}
 	var events []string
-	err := New(docker).Deploy(context.Background(), command, func(status, message, resolved, content string) {
+	err := New(docker).Deploy(context.Background(), command, func(status, message, resolved, detectedPublicURL, content string) {
 		events = append(events, status+":"+message+":"+content)
 	})
 	if err == nil || !strings.Contains(err.Error(), "Docker daemon") {

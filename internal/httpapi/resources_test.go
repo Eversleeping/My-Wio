@@ -1244,6 +1244,48 @@ func TestDeploymentTargetUsesServerWorkspaceAndRemoteRepositorySources(t *testin
 	}
 }
 
+func TestStartDeploymentCarriesConfiguredAndFallbackPublicAddressInputs(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "deployment-public-address-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.42", ScanRoots: []string{"/srv"}}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := database.UpdateServerMetadata(ctx, server.ID, store.ServerMetadata{Address: "203.0.113.10"}); err != nil || !ok {
+		t.Fatalf("could not set server address: %v", err)
+	}
+	project, err := database.CreateProject(ctx, "public-address-command", "https://example.com/public-address-command.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := database.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL, PublicURL: "https://app.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/"+target.ID+"/deploy", "targetID", target.ID, map[string]string{"commit_ref": "main"}, api.startDeployment)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("deployment start returned %d: %s", response.Code, response.Body.String())
+	}
+	var queued struct {
+		OperationID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &queued); err != nil || queued.OperationID == "" {
+		t.Fatalf("unexpected deployment response: %#v %v", queued, err)
+	}
+	operation, err := database.Operation(ctx, queued.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command protocol.DeployCommand
+	if err := api.vault.Decrypt(operation.Payload, &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.ServerAddress != "203.0.113.10" || command.PublicURL != "https://app.example.com" {
+		t.Fatalf("deployment command omitted public address inputs: %#v", command)
+	}
+}
+
 func TestDeploymentContainerActionsQueueEncryptedOperationsAndExposeState(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-container-token")

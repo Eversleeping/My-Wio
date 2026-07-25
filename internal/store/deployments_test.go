@@ -74,6 +74,44 @@ func TestDeploymentLifecycleManagement(t *testing.T) {
 	}
 }
 
+func TestDetectedDeploymentPublicURLFallsBackAndConfiguredURLWins(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	server := deploymentTestServer(t, database)
+	project, err := database.CreateProject(ctx, "detected-public-url", "https://example.com/detected-public-url.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := database.CreateDeploymentTarget(ctx, DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := database.CreateDeployment(ctx, target.ID, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "succeeded", Message: "deployment is healthy", DetectedPublicURL: "http://203.0.113.10:5010"}); err != nil {
+		t.Fatal(err)
+	}
+	target, err = database.DeploymentTarget(ctx, target.ID)
+	if err != nil || target.PublicURL != "http://203.0.113.10:5010" || target.ConfiguredPublicURL != "" || target.DetectedPublicURL != "http://203.0.113.10:5010" {
+		t.Fatalf("detected URL was not exposed as the fallback: %#v %v", target, err)
+	}
+	deployment, err = database.Deployment(ctx, deployment.ID)
+	if err != nil || deployment.PublicURL != "http://203.0.113.10:5010" {
+		t.Fatalf("deployment did not expose the detected URL: %#v %v", deployment, err)
+	}
+	target.PublicURL = "https://app.example.com"
+	target, err = database.UpdateDeploymentTarget(ctx, target)
+	if err != nil || target.PublicURL != "https://app.example.com" || target.ConfiguredPublicURL != "https://app.example.com" || target.DetectedPublicURL != "http://203.0.113.10:5010" {
+		t.Fatalf("configured URL did not override the detected URL: %#v %v", target, err)
+	}
+}
+
 func TestDeploymentContainerOperationsTrackStateAndSerializeWrites(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {

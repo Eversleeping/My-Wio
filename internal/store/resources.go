@@ -471,6 +471,8 @@ type DeploymentTarget struct {
 	HealthChecks         string     `db:"health_checks" json:"health_checks"`
 	ReleaseRoot          string     `db:"release_root" json:"release_root"`
 	PublicURL            string     `db:"public_url" json:"public_url"`
+	ConfiguredPublicURL  string     `db:"configured_public_url" json:"configured_public_url"`
+	DetectedPublicURL    string     `db:"detected_public_url" json:"detected_public_url"`
 	ProjectName          string     `db:"project_name" json:"project_name"`
 	ServerName           string     `db:"server_name" json:"server_name"`
 	WorkspacePath        string     `db:"workspace_path" json:"workspace_path"`
@@ -482,7 +484,7 @@ type DeploymentTarget struct {
 	ContainerUpdatedAt   *time.Time `db:"container_updated_at" json:"container_updated_at"`
 }
 
-const deploymentTargetSelect = `SELECT t.id,t.project_id,t.server_id,t.source_type,COALESCE(t.workspace_id,'') workspace_id,COALESCE(t.secret_set_id,'') secret_set_id,t.environment,t.repository,t.git_ref,t.compose_file,t.working_dir,t.build_mode,t.health_checks,t.release_root,t.public_url,p.name project_name,s.name server_name,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,COALESCE(cs.operation_id,'') container_operation_id,COALESCE(cs.action,'') container_action,COALESCE(cs.status,'unknown') container_status,COALESCE(cs.message,'') container_message,cs.updated_at container_updated_at FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id LEFT JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN deployment_container_state cs ON cs.target_id=t.id`
+const deploymentTargetSelect = `SELECT t.id,t.project_id,t.server_id,t.source_type,COALESCE(t.workspace_id,'') workspace_id,COALESCE(t.secret_set_id,'') secret_set_id,t.environment,t.repository,t.git_ref,t.compose_file,t.working_dir,t.build_mode,t.health_checks,t.release_root,COALESCE(NULLIF(t.public_url,''),t.detected_public_url) public_url,t.public_url configured_public_url,t.detected_public_url,p.name project_name,s.name server_name,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,COALESCE(cs.operation_id,'') container_operation_id,COALESCE(cs.action,'') container_action,COALESCE(cs.status,'unknown') container_status,COALESCE(cs.message,'') container_message,cs.updated_at container_updated_at FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id LEFT JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN deployment_container_state cs ON cs.target_id=t.id`
 
 func (s *Store) ListDeploymentTargets(ctx context.Context) ([]DeploymentTarget, error) {
 	var out []DeploymentTarget
@@ -642,7 +644,7 @@ type DeploymentEvent struct {
 
 func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {
 	var out []Deployment
-	err := s.DB.SelectContext(ctx, &out, `SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,t.public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id ORDER BY d.created_at DESC LIMIT 200`)
+	err := s.DB.SelectContext(ctx, &out, `SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,COALESCE(NULLIF(t.public_url,''),t.detected_public_url) public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id ORDER BY d.created_at DESC LIMIT 200`)
 	return out, err
 }
 
@@ -682,7 +684,7 @@ func (s *Store) CreateDeployment(ctx context.Context, targetID, commitRef string
 		return Deployment{}, err
 	}
 	var deployment Deployment
-	err = tx.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,t.public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
+	err = tx.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,COALESCE(NULLIF(t.public_url,''),t.detected_public_url) public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -699,7 +701,7 @@ func (s *Store) AttachDeploymentOperation(ctx context.Context, deploymentID, ope
 
 func (s *Store) Deployment(ctx context.Context, id string) (Deployment, error) {
 	var deployment Deployment
-	err := s.DB.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,t.public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
+	err := s.DB.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,COALESCE(NULLIF(t.public_url,''),t.detected_public_url) public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
 	return deployment, err
 }
 
@@ -778,6 +780,11 @@ func (s *Store) SaveDeploymentStatus(ctx context.Context, update protocol.Deploy
 		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
 			VALUES(?,NULL,?,?,?,?,?)
 			ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action=excluded.action,status=excluded.status,message=excluded.message,content=excluded.content,updated_at=excluded.updated_at`), metadata.TargetID, action, containerStatus, update.Message, update.Content, now); err != nil {
+			return err
+		}
+	}
+	if update.Status == "succeeded" && strings.TrimSpace(update.DetectedPublicURL) != "" {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE deployment_targets SET detected_public_url=? WHERE id=?"), strings.TrimSpace(update.DetectedPublicURL), metadata.TargetID); err != nil {
 			return err
 		}
 	}

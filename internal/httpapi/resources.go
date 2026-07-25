@@ -2313,7 +2313,11 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	var checks []protocol.HealthCheck
 	_ = json.Unmarshal([]byte(target.HealthChecks), &checks)
-	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, SourceType: target.SourceType, SourcePath: target.WorkspacePath, Repository: target.Repository, CommitRef: input.CommitRef, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, BuildMode: target.BuildMode, ReleaseRoot: target.ReleaseRoot, Environment: environment, HealthChecks: checks}
+	serverAddress := strings.TrimSpace(server.Address)
+	if serverAddress == "" {
+		serverAddress = strings.TrimSpace(server.Hostname)
+	}
+	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, ServerAddress: serverAddress, PublicURL: target.ConfiguredPublicURL, SourceType: target.SourceType, SourcePath: target.WorkspacePath, Repository: target.Repository, CommitRef: input.CommitRef, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, BuildMode: target.BuildMode, ReleaseRoot: target.ReleaseRoot, Environment: environment, HealthChecks: checks}
 	ciphertext, err := a.vault.Encrypt(command)
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not protect deployment operation"})

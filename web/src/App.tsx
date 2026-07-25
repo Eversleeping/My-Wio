@@ -1895,7 +1895,7 @@ export function DeploymentsPage({ realtime, notify }: PageProps) {
     let health = "";
     try { health = (JSON.parse(target.health_checks) as Array<{ address?: string }>).map(check => check.address ?? "").filter(Boolean).join("\n"); } catch { health = ""; }
     setEditingTarget(target);
-    setForm({ source_type: target.source_type || "remote", workspace_id: target.workspace_id || "", server_id: target.server_id, secret_set_id: target.secret_set_id, environment: target.environment, repository: target.repository, git_ref: target.git_ref, compose_file: target.compose_file, build_mode: target.build_mode, public_url: target.public_url || "", health });
+    setForm({ source_type: target.source_type || "remote", workspace_id: target.workspace_id || "", server_id: target.server_id, secret_set_id: target.secret_set_id, environment: target.environment, repository: target.repository, git_ref: target.git_ref, compose_file: target.compose_file, build_mode: target.build_mode, public_url: target.configured_public_url || "", health });
     setTargetDialog(true);
   };
   const submit = async (event: FormEvent) => {
