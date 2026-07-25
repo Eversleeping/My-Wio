@@ -67,6 +67,10 @@ func TestInventoryRootsIncludeCloneRoot(t *testing.T) {
 	if len(roots) != 2 || roots[0] != scanRoot || roots[1] != cloneRoot {
 		t.Fatalf("unexpected inventory roots: %#v", roots)
 	}
+	managedRoots := client.managedRoots()
+	if len(managedRoots) != len(roots) || managedRoots[0] != roots[0] || managedRoots[1] != roots[1] {
+		t.Fatalf("managed roots must match inventory roots: %#v", managedRoots)
+	}
 }
 
 func TestInventoryRootsDoNotDuplicateCoveredCloneRoot(t *testing.T) {

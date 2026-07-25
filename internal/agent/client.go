@@ -894,11 +894,7 @@ func (c *Client) inventoryRoots() []string {
 }
 
 func (c *Client) managedRoots() []string {
-	root := filepath.Clean(strings.TrimSpace(c.config.CloneRoot))
-	if root == "." || root == "" {
-		return nil
-	}
-	return []string{root}
+	return c.inventoryRoots()
 }
 
 func (c *Client) queue(kind string, payload any, important bool) error {
