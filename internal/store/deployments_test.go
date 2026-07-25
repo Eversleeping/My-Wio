@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -211,6 +212,49 @@ func TestDeploymentContainerOperationsTrackStateAndSerializeWrites(t *testing.T)
 	target, err = database.DeploymentTarget(ctx, target.ID)
 	if err != nil || target.ContainerStatus != "running" || target.ContainerAction != "rollback" {
 		t.Fatalf("successful rollback did not mark containers running: %#v %v", target, err)
+	}
+}
+
+func TestDeploymentTargetDeletionWaitsForAgentCleanup(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	server := deploymentTestServer(t, database)
+	project, err := database.CreateProject(ctx, "delete-target", "https://example.com/delete-target.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := database.CreateDeploymentTarget(ctx, DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	failedOperation, err := database.QueueDeploymentContainerOperation(ctx, target.ID, server.ID, "delete", "v1:encrypted", "target-delete-failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedData, _ := json.Marshal(protocol.ContainerActionResult{TargetID: target.ID, Action: "delete", State: "failed", Message: "compose down failed"})
+	if err := database.CompleteDeploymentContainerOperation(ctx, failedOperation, protocol.OperationResult{OperationID: failedOperation, Status: "failed", Message: "compose down failed", Data: failedData}); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := database.DeploymentTarget(ctx, target.ID)
+	if err != nil || remaining.ContainerStatus != "failed" {
+		t.Fatalf("failed cleanup removed or hid the target: %#v %v", remaining, err)
+	}
+
+	operationID, err := database.QueueDeploymentContainerOperation(ctx, target.ID, server.ID, "delete", "v1:encrypted", "target-delete-succeeded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(protocol.ContainerActionResult{TargetID: target.ID, Action: "delete", State: "removed", Message: "deployment files deleted"})
+	if err := database.CompleteDeploymentContainerOperation(ctx, operationID, protocol.OperationResult{OperationID: operationID, Status: "succeeded", Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DeploymentTarget(ctx, target.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("target metadata remained after cleanup: %v", err)
 	}
 }
 

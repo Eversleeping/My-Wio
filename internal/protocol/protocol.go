@@ -514,6 +514,7 @@ type RollbackCommand struct {
 type ContainerActionCommand struct {
 	TargetID    string            `json:"target_id"`
 	Action      string            `json:"action"`
+	PublicURL   string            `json:"public_url,omitempty"`
 	ReleaseRoot string            `json:"release_root"`
 	ComposeFile string            `json:"compose_file"`
 	WorkingDir  string            `json:"working_dir,omitempty"`

@@ -116,6 +116,25 @@ func TestComposePublicURLUsesPublishedTCPPort(t *testing.T) {
 			}
 		})
 	}
+	if !composePublishesPort(tests[0].output, 5010) || composePublishesPort(tests[0].output, 3001) {
+		t.Fatal("published port validation did not match Compose output")
+	}
+}
+
+func TestComposeEnvironmentUsesConfiguredPublicPort(t *testing.T) {
+	environment, err := composeEnvironment(map[string]string{"APP_PORT": "3001", "TOKEN": "secret"}, "http://203.0.113.10:5010")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(environment, "\n")
+	if !strings.Contains(joined, "APP_PORT=5010") || strings.Contains(joined, "APP_PORT=3001") || !strings.Contains(joined, "TOKEN=secret") {
+		t.Fatalf("unexpected Compose environment: %q", joined)
+	}
+	for value, want := range map[string]int{"http://203.0.113.10": 0, "https://app.example.com": 0, "": 0} {
+		if got := publicPort(value); got != want {
+			t.Fatalf("publicPort(%q) = %d, want %d", value, got, want)
+		}
+	}
 }
 
 func TestContainerActionSpecsAreConstrained(t *testing.T) {
@@ -148,6 +167,47 @@ func TestCurrentReleaseValidatesRootAndTarget(t *testing.T) {
 		t.Fatal("relative release root was accepted")
 	}
 	if _, _, err := currentRelease(filepath.Join(t.TempDir(), "releases"), "../escape"); err == nil {
+		t.Fatal("unsafe target identifier was accepted")
+	}
+}
+
+func TestDeleteTargetStopsComposeAndRemovesReleaseFiles(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Compose target deletion is supported only on Linux")
+	}
+	releaseRoot := filepath.Join(t.TempDir(), "releases")
+	targetRoot := filepath.Join(releaseRoot, "target-delete")
+	release := filepath.Join(targetRoot, "releases", "deployment-failed")
+	if err := os.MkdirAll(release, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(release, "compose.yaml"), []byte("services: {}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	logPath := filepath.Join(t.TempDir(), "docker.log")
+	writeExecutable(t, docker, "#!/bin/sh\necho \"$@\" > \"$DOCKER_LOG\"")
+	t.Setenv("DOCKER_LOG", logPath)
+
+	result, err := New(docker).ContainerAction(context.Background(), protocol.ContainerActionCommand{TargetID: "target-delete", Action: "delete", ReleaseRoot: releaseRoot, ComposeFile: "compose.yaml"})
+	if err != nil || result.State != "removed" {
+		t.Fatalf("unexpected target deletion result: %#v %v", result, err)
+	}
+	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("target release directory still exists: %v", err)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(log), "down --volumes --remove-orphans") {
+		t.Fatalf("Compose project was not stopped: %q %v", log, err)
+	}
+}
+
+func TestDeploymentTargetRootRejectsUnsafePaths(t *testing.T) {
+	if _, err := deploymentTargetRoot("relative/releases", "target-1"); err == nil {
+		t.Fatal("relative release root was accepted")
+	}
+	if _, err := deploymentTargetRoot(filepath.Join(t.TempDir(), "releases"), "../escape"); err == nil {
 		t.Fatal("unsafe target identifier was accepted")
 	}
 }

@@ -1214,8 +1214,29 @@ func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 		t.Fatalf("deployment delete returned %d: %s", deleted.Code, deleted.Body.String())
 	}
 	targetDeleted := deploymentResourceRequest(t, http.MethodDelete, "/api/deployment-targets/"+target.ID, "targetID", target.ID, nil, api.deleteDeploymentTarget)
-	if targetDeleted.Code != http.StatusOK {
+	if targetDeleted.Code != http.StatusAccepted {
 		t.Fatalf("target delete returned %d: %s", targetDeleted.Code, targetDeleted.Body.String())
+	}
+	var deleteQueued struct {
+		OperationID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal(targetDeleted.Body.Bytes(), &deleteQueued); err != nil || deleteQueued.OperationID == "" {
+		t.Fatalf("unexpected target deletion response: %#v %v", deleteQueued, err)
+	}
+	deleteOperation, err := database.Operation(context.Background(), deleteQueued.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deleteCommand protocol.ContainerActionCommand
+	if err := api.vault.Decrypt(deleteOperation.Payload, &deleteCommand); err != nil || deleteCommand.Action != "delete" || deleteCommand.TargetID != target.ID {
+		t.Fatalf("unexpected target deletion command: %#v %v", deleteCommand, err)
+	}
+	deleteData, _ := json.Marshal(protocol.ContainerActionResult{TargetID: target.ID, Action: "delete", State: "removed", Message: "deployment files deleted"})
+	if err := database.CompleteDeploymentContainerOperation(context.Background(), deleteQueued.OperationID, protocol.OperationResult{OperationID: deleteQueued.OperationID, Status: "succeeded", Data: deleteData}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DeploymentTarget(context.Background(), target.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("target remained after Agent cleanup: %v", err)
 	}
 }
 
@@ -1258,7 +1279,7 @@ func TestStartDeploymentCarriesConfiguredAndFallbackPublicAddressInputs(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := database.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL, PublicURL: "https://app.example.com"})
+	target, err := database.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL, PublicURL: "http://203.0.113.10:5010"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1281,7 +1302,7 @@ func TestStartDeploymentCarriesConfiguredAndFallbackPublicAddressInputs(t *testi
 	if err := api.vault.Decrypt(operation.Payload, &command); err != nil {
 		t.Fatal(err)
 	}
-	if command.ServerAddress != "203.0.113.10" || command.PublicURL != "https://app.example.com" {
+	if command.ServerAddress != "203.0.113.10" || command.PublicURL != "http://203.0.113.10:5010" {
 		t.Fatalf("deployment command omitted public address inputs: %#v", command)
 	}
 }

@@ -821,7 +821,7 @@ func (s *Store) QueueDeploymentContainerOperation(ctx context.Context, targetID,
 		return "", errors.New("encrypted operation payload must use a supported Vault format")
 	}
 	switch action {
-	case "start", "stop", "restart", "remove":
+	case "start", "stop", "restart", "remove", "delete":
 	default:
 		return "", fmt.Errorf("unsupported container action %q", action)
 	}
@@ -934,7 +934,7 @@ func (s *Store) CompleteDeploymentContainerOperation(ctx context.Context, operat
 			status = "running"
 		case "stop":
 			status = "stopped"
-		case "remove":
+		case "remove", "delete":
 			status = "removed"
 		default:
 			return fmt.Errorf("unsupported stored container action %q", state.Action)
@@ -942,6 +942,20 @@ func (s *Store) CompleteDeploymentContainerOperation(ctx context.Context, operat
 	}
 	message = truncateText(strings.ToValidUTF8(message, "?"), 8192)
 	content = truncateText(strings.ToValidUTF8(content, "?"), 1<<20)
+	if state.Action == "delete" && status == "removed" {
+		result, err := tx.ExecContext(ctx, s.Q("DELETE FROM deployment_targets WHERE id=?"), state.TargetID)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return sql.ErrNoRows
+		}
+		return tx.Commit()
+	}
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE deployment_container_state SET status=?,message=?,content=?,updated_at=? WHERE operation_id=?"), status, message, content, time.Now().UTC(), operationID); err != nil {
 		return err
 	}

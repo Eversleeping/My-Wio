@@ -2213,15 +2213,33 @@ func (a *API) deleteDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load deployment target")
 		return
 	}
-	if err := a.store.DeleteDeploymentTarget(r.Context(), id); errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
+	server, err := a.store.Server(r.Context(), target.ServerID)
+	if err != nil || server.Status != "online" {
+		writeError(w, http.StatusConflict, "target server must be online before deleting the target")
+		return
+	}
+	environment, err := a.deploymentEnvironment(r.Context(), target)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not decrypt deployment secrets")
+		return
+	}
+	command := protocol.ContainerActionCommand{TargetID: target.ID, Action: "delete", PublicURL: target.ConfiguredPublicURL, ReleaseRoot: target.ReleaseRoot, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, Environment: environment}
+	ciphertext, err := a.vault.Encrypt(command)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not protect target deletion operation")
+		return
+	}
+	operationID, err := a.store.QueueDeploymentContainerOperation(r.Context(), target.ID, target.ServerID, "delete", ciphertext, "target-delete:"+target.ID+":"+store.NewID())
+	if errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
 		writeError(w, http.StatusConflict, "active deployments and container operations must finish before deleting the target")
 		return
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not delete deployment target")
+		writeError(w, http.StatusInternalServerError, "could not queue deployment target deletion")
 		return
 	}
-	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.target.delete", "deployment_target", id, map[string]string{"project_id": target.ProjectID, "environment": target.Environment}, clientIP(r))
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	a.gateway.Wake(target.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "deployment.target.delete", "deployment_target", id, map[string]string{"operation_id": operationID, "project_id": target.ProjectID, "environment": target.Environment}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "target_id": target.ID, "action": "delete"})
 }
 
 func (a *API) deployments(w http.ResponseWriter, r *http.Request) {
@@ -2373,15 +2391,14 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deploymentEnvironment(ctx context.Context, target store.DeploymentTarget) (map[string]string, error) {
 	environment := map[string]string{}
-	if target.SecretSetID == "" {
-		return environment, nil
-	}
-	ciphertext, err := a.store.SecretCiphertext(ctx, target.SecretSetID)
-	if err != nil {
-		return nil, err
-	}
-	if err := a.vault.Decrypt(ciphertext, &environment); err != nil {
-		return nil, err
+	if target.SecretSetID != "" {
+		ciphertext, err := a.store.SecretCiphertext(ctx, target.SecretSetID)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.vault.Decrypt(ciphertext, &environment); err != nil {
+			return nil, err
+		}
 	}
 	return environment, nil
 }
@@ -2425,7 +2442,7 @@ func (a *API) deploymentContainerAction(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "could not decrypt deployment secrets")
 		return
 	}
-	command := protocol.ContainerActionCommand{TargetID: target.ID, Action: action, ReleaseRoot: target.ReleaseRoot, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, Environment: environment}
+	command := protocol.ContainerActionCommand{TargetID: target.ID, Action: action, PublicURL: target.ConfiguredPublicURL, ReleaseRoot: target.ReleaseRoot, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, Environment: environment}
 	ciphertext, err := a.vault.Encrypt(command)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not protect container operation")

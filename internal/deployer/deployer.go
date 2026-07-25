@@ -142,12 +142,9 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if _, err := os.Stat(composePath); err != nil {
 		return fmt.Errorf("compose file: %w", err)
 	}
-	environment := make([]string, 0, len(command.Environment))
-	for key, value := range command.Environment {
-		if strings.ContainsAny(key, "=\x00") {
-			return fmt.Errorf("invalid environment key %q", key)
-		}
-		environment = append(environment, key+"="+value)
+	environment, err := composeEnvironment(command.Environment, command.PublicURL)
+	if err != nil {
+		return err
 	}
 	project := projectName(command.TargetID)
 	status("running", "starting Docker Compose project", resolved, "", "Compose project initialization started.")
@@ -170,10 +167,14 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		status("running", "Docker Compose project started", resolved, "", output)
 	}
 	detectedPublicURL := ""
-	if strings.TrimSpace(command.PublicURL) == "" {
-		if output, inspectErr := d.compose(ctx, workDir, environment, project, composePath, "ps", "--format", "json"); inspectErr == nil {
+	if output, inspectErr := d.compose(ctx, workDir, environment, project, composePath, "ps", "--format", "json"); inspectErr == nil {
+		if strings.TrimSpace(command.PublicURL) == "" {
 			detectedPublicURL = composePublicURL(command.ServerAddress, output)
+		} else if port := publicPort(command.PublicURL); port > 0 && !composePublishesPort(output, port) {
+			return fmt.Errorf("configured public port %d is not published by Docker Compose", port)
 		}
+	} else if publicPort(command.PublicURL) > 0 {
+		return fmt.Errorf("inspect Docker Compose published ports: %w: %s", inspectErr, output)
 	}
 	for _, check := range command.HealthChecks {
 		status("running", "running health check", resolved, "", check.Address)
@@ -332,6 +333,9 @@ func (d *Deployer) ContainerAction(ctx context.Context, command protocol.Contain
 	if runtime.GOOS != "linux" {
 		return result, errors.New("Compose container actions are supported only on Linux agents")
 	}
+	if command.Action == "delete" {
+		return d.deleteTarget(ctx, command)
+	}
 	_, current, err := currentRelease(command.ReleaseRoot, command.TargetID)
 	if err != nil {
 		return result, err
@@ -346,12 +350,9 @@ func (d *Deployer) ContainerAction(ctx context.Context, command protocol.Contain
 		}
 		return result, errors.New("compose file is a directory")
 	}
-	environment := make([]string, 0, len(command.Environment))
-	for key, value := range command.Environment {
-		if strings.ContainsAny(key, "=\x00") {
-			return result, fmt.Errorf("invalid environment key %q", key)
-		}
-		environment = append(environment, key+"="+value)
+	environment, err := composeEnvironment(command.Environment, command.PublicURL)
+	if err != nil {
+		return result, err
 	}
 	args, state, message, err := containerActionSpec(command.Action)
 	if err != nil {
@@ -367,6 +368,144 @@ func (d *Deployer) ContainerAction(ctx context.Context, command protocol.Contain
 	}
 	result.Message = message
 	return result, nil
+}
+
+func (d *Deployer) deleteTarget(ctx context.Context, command protocol.ContainerActionCommand) (protocol.ContainerActionResult, error) {
+	result := protocol.ContainerActionResult{TargetID: command.TargetID, Action: command.Action, State: "removed"}
+	root, err := deploymentTargetRoot(command.ReleaseRoot, command.TargetID)
+	if err != nil {
+		return result, err
+	}
+	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		result.Message = "Deployment target files already removed"
+		return result, nil
+	} else if err != nil {
+		return result, fmt.Errorf("deployment target directory: %w", err)
+	}
+	workDir, composePath, found, err := targetComposePaths(root, command.WorkingDir, command.ComposeFile)
+	if err != nil {
+		return result, err
+	}
+	if found {
+		environment, err := composeEnvironment(command.Environment, command.PublicURL)
+		if err != nil {
+			return result, err
+		}
+		output, composeErr := d.compose(ctx, workDir, environment, projectName(command.TargetID), composePath, "down", "--volumes", "--remove-orphans")
+		result.Content = truncate(output, maximumProcessLogSize)
+		if composeErr != nil {
+			result.State = "failed"
+			result.Message = "Docker Compose project cleanup failed"
+			return result, fmt.Errorf("docker compose delete: %w: %s", composeErr, output)
+		}
+	}
+	if err := os.RemoveAll(root); err != nil {
+		result.State = "failed"
+		result.Message = "Deployment release cleanup failed"
+		return result, fmt.Errorf("delete deployment target files: %w", err)
+	}
+	result.Message = "Docker Compose project and deployment files deleted"
+	return result, nil
+}
+
+func deploymentTargetRoot(releaseRoot, targetID string) (string, error) {
+	if releaseRoot == "" || !filepath.IsAbs(releaseRoot) {
+		return "", errors.New("release root must be absolute")
+	}
+	if !safeID(targetID) {
+		return "", errors.New("invalid deployment target identifier")
+	}
+	root := filepath.Join(filepath.Clean(releaseRoot), targetID)
+	if !within(filepath.Clean(releaseRoot), root) || root == filepath.Clean(releaseRoot) {
+		return "", errors.New("deployment target directory escapes release root")
+	}
+	return root, nil
+}
+
+func targetComposePaths(root, workingDir, composeFile string) (string, string, bool, error) {
+	currentLink := filepath.Join(root, "current")
+	if _, err := os.Lstat(currentLink); err == nil {
+		current, err := filepath.EvalSymlinks(currentLink)
+		if err != nil {
+			return "", "", false, fmt.Errorf("resolve current release: %w", err)
+		}
+		if !within(root, current) {
+			return "", "", false, errors.New("current release points outside the target release root")
+		}
+		workDir, composePath, err := composePaths(current, workingDir, composeFile)
+		if err != nil {
+			return "", "", false, err
+		}
+		if info, err := os.Stat(composePath); err == nil && !info.IsDir() {
+			return workDir, composePath, true, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", false, fmt.Errorf("inspect current release: %w", err)
+	}
+
+	releasesRoot := filepath.Join(root, "releases")
+	entries, err := os.ReadDir(releasesRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("list deployment releases: %w", err)
+	}
+	var latestWorkDir, latestComposePath string
+	var latestModTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		release := filepath.Join(releasesRoot, entry.Name())
+		workDir, composePath, pathErr := composePaths(release, workingDir, composeFile)
+		if pathErr != nil {
+			return "", "", false, pathErr
+		}
+		info, statErr := os.Stat(composePath)
+		if statErr != nil || info.IsDir() {
+			continue
+		}
+		if latestComposePath == "" || info.ModTime().After(latestModTime) {
+			latestWorkDir = workDir
+			latestComposePath = composePath
+			latestModTime = info.ModTime()
+		}
+	}
+	return latestWorkDir, latestComposePath, latestComposePath != "", nil
+}
+
+func composeEnvironment(values map[string]string, publicURL string) ([]string, error) {
+	merged := make(map[string]string, len(values)+1)
+	for key, value := range values {
+		merged[key] = value
+	}
+	if port := publicPort(publicURL); port > 0 {
+		merged["APP_PORT"] = strconv.Itoa(port)
+	}
+	environment := make([]string, 0, len(merged))
+	for key, value := range merged {
+		if strings.ContainsAny(key, "=\x00") {
+			return nil, fmt.Errorf("invalid environment key %q", key)
+		}
+		environment = append(environment, key+"="+value)
+	}
+	return environment, nil
+}
+
+func publicPort(value string) int {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Hostname() == "" {
+		return 0
+	}
+	if port := parsed.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err == nil && value > 0 && value <= 65535 {
+			return value
+		}
+		return 0
+	}
+	return 0
 }
 
 func containerActionSpec(action string) ([]string, string, string, error) {
@@ -537,6 +676,21 @@ func composePublicURL(serverAddress, output string) string {
 		}
 	}
 	return ""
+}
+
+func composePublishesPort(output string, port int) bool {
+	processes, err := decodeComposeProcesses(output)
+	if err != nil {
+		return false
+	}
+	for _, process := range processes {
+		for _, publisher := range process.Publishers {
+			if publisher.PublishedPort == port && strings.EqualFold(publisher.Protocol, "tcp") && !isLoopbackPublisher(publisher.URL) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func decodeComposeProcesses(output string) ([]composeProcess, error) {

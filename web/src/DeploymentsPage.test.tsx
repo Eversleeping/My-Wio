@@ -95,6 +95,35 @@ test("creates and edits public access settings, manages containers, and exposes 
   await waitFor(() => expect(requests.some(request => request.url === `/api/deployments/${deployment.id}` && request.method === "DELETE")).toBe(true));
 });
 
+test("queues destructive target cleanup with an explicit confirmation", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const confirmation = vi.fn(() => true);
+  const notify = vi.fn();
+  const requests: Array<{ url: string; method: string }> = [];
+  vi.stubGlobal("confirm", confirmation);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = init.method ?? "GET";
+    requests.push({ url, method });
+    let payload: unknown = [];
+    if (url === "/api/deployment-targets" && method === "GET") payload = [target];
+    else if (url === `/api/deployment-targets/${target.id}` && method === "DELETE") payload = { operation_id: "delete-operation-1", action: "delete" };
+    else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1", status: "online" }];
+    return new Response(JSON.stringify(payload), { status: method === "DELETE" ? 202 : 200, headers: { "Content-Type": "application/json" } });
+  }));
+
+  const user = userEvent.setup();
+  render(<I18nProvider><DeploymentsPage realtime={0} notify={notify} /></I18nProvider>);
+  await screen.findByText("project-management");
+  await user.click(screen.getByRole("button", { name: "More deployment actions" }));
+  await user.click(screen.getByRole("menuitem", { name: "Delete deployment target" }));
+
+  expect(confirmation).toHaveBeenCalledWith(expect.stringContaining("remove its containers, project volumes"));
+  expect(confirmation).toHaveBeenCalledWith(expect.stringContaining("project workspace is preserved"));
+  await waitFor(() => expect(requests).toContainEqual({ url: `/api/deployment-targets/${target.id}`, method: "DELETE" }));
+  expect(notify).toHaveBeenCalledWith("Deployment target deletion queued");
+});
+
 test("shows a detected public URL without treating it as a configured override", async () => {
   window.localStorage.setItem("wio_language", "en");
   const detectedTarget = { ...target, public_url: "http://203.0.113.10:5010", configured_public_url: "", detected_public_url: "http://203.0.113.10:5010" };
