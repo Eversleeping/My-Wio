@@ -7,6 +7,7 @@ RUN npm run build
 
 FROM golang:1.22-alpine AS go
 WORKDIR /src
+ENV GOMAXPROCS=1 GOFLAGS=-p=1
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
