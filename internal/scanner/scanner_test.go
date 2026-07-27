@@ -2,10 +2,14 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 func TestDiscoverGitRepository(t *testing.T) {
@@ -36,6 +40,106 @@ func TestDiscoverGitRepository(t *testing.T) {
 	item := inventory.Repositories[0]
 	if item.Name != "service" || item.RemoteURL != "https://example.com/team/service.git" || item.Branch == "" || item.CommitSHA == "" || item.Dirty {
 		t.Fatalf("unexpected repository: %#v", item)
+	}
+}
+
+func TestDiscoverSkipsImportStagingDirectories(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, importStagingPrefix+"partial")
+	if err := os.MkdirAll(filepath.Join(staging, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, err := Discover(context.Background(), []string{root}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Repositories) != 0 {
+		t.Fatalf("import staging repository was discovered: %#v", inventory.Repositories)
+	}
+}
+
+func TestImportRemovesStagingAfterCloneFailure(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	cloneRoot := filepath.Join(root, "projects")
+	destination := filepath.Join(cloneRoot, "service")
+	_, err := Import(context.Background(), cloneRoot, protocol.GitImportCommand{
+		Name:        "service",
+		RemoteURL:   filepath.Join(root, "missing.git"),
+		Destination: destination,
+	})
+	if err == nil {
+		t.Fatal("expected clone to fail")
+	}
+	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed import left the final destination behind: %v", err)
+	}
+	assertNoImportStagingDirectories(t, cloneRoot)
+	inventory, discoverErr := Discover(context.Background(), []string{cloneRoot}, 10)
+	if discoverErr != nil {
+		t.Fatal(discoverErr)
+	}
+	if len(inventory.Repositories) != 0 {
+		t.Fatalf("failed import left a discoverable repository: %#v", inventory.Repositories)
+	}
+}
+
+func TestImportPublishesRepositoryAtFinalDestination(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Wio Test")
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "add", "README.md")
+	runGit(t, source, "commit", "-m", "initial")
+
+	cloneRoot := filepath.Join(root, "projects")
+	destination := filepath.Join(cloneRoot, "service")
+	imported, err := Import(context.Background(), cloneRoot, protocol.GitImportCommand{
+		Name:        "service",
+		RemoteURL:   source,
+		Destination: destination,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported != destination {
+		t.Fatalf("import returned %q, want %q", imported, destination)
+	}
+	if _, err := os.Stat(filepath.Join(destination, ".git")); err != nil {
+		t.Fatalf("published repository is missing .git: %v", err)
+	}
+	assertNoImportStagingDirectories(t, cloneRoot)
+
+	inventory, err := Discover(context.Background(), []string{cloneRoot}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Repositories) != 1 {
+		t.Fatalf("unexpected imported inventory: %#v", inventory.Repositories)
+	}
+	destinationInfo, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoveredInfo, err := os.Stat(inventory.Repositories[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(destinationInfo, discoveredInfo) {
+		t.Fatalf("discovered path %q is not the imported destination %q", inventory.Repositories[0].Path, destination)
 	}
 }
 
@@ -144,5 +248,18 @@ func runGit(t *testing.T, directory string, args ...string) {
 	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+}
+
+func assertNoImportStagingDirectories(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), importStagingPrefix) {
+			t.Fatalf("import staging directory was not removed: %s", entry.Name())
+		}
 	}
 }

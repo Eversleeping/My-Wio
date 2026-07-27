@@ -23,6 +23,8 @@ var skippedDirectories = map[string]bool{
 	"node_modules": true, "vendor": true, "proc": true, "sys": true,
 }
 
+const importStagingPrefix = ".wio-import-"
+
 var skippedFileTreeDirectories = map[string]bool{
 	".git": true, ".cache": true, ".next": true, ".nuxt": true, ".output": true,
 	".pnpm-store": true, "build": true, "coverage": true, "dist": true,
@@ -53,8 +55,10 @@ func Discover(ctx context.Context, roots []string, limit int) (protocol.Inventor
 			if !entry.IsDir() {
 				return nil
 			}
-			if current != root && skippedDirectories[entry.Name()] {
-				return filepath.SkipDir
+			if current != root {
+				if skippedDirectories[entry.Name()] || strings.HasPrefix(entry.Name(), importStagingPrefix) {
+					return filepath.SkipDir
+				}
 			}
 			gitPath := filepath.Join(current, ".git")
 			if _, err := os.Stat(gitPath); err != nil {
@@ -292,13 +296,30 @@ func Import(ctx context.Context, cloneRoot string, command protocol.GitImportCom
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0o750); err != nil {
 		return "", err
 	}
-	process := exec.CommandContext(ctx, "git", "clone", "--", command.RemoteURL, destination)
+	staging, err := os.MkdirTemp(parent, importStagingPrefix)
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(staging)
+	if err := os.Chmod(staging, 0o750); err != nil {
+		return "", err
+	}
+	process := exec.CommandContext(ctx, "git", "clone", "--", command.RemoteURL, staging)
 	output, err := process.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git clone: %w: %s", err, truncate(string(output), 4096))
+	}
+	if _, err := os.Stat(destination); err == nil {
+		return "", fmt.Errorf("destination already exists: %s", destination)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := os.Rename(staging, destination); err != nil {
+		return "", fmt.Errorf("publish cloned repository: %w", err)
 	}
 	return destination, nil
 }
