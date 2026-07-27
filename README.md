@@ -112,6 +112,8 @@ npm --prefix web run typecheck
 
 ## 生产环境部署控制面
 
+当前生产控制机、旧控制机作废说明、宿主机已有反向代理时的隔离部署方式和验收命令见 [生产环境部署记录](docs/PRODUCTION_DEPLOYMENT.md)。
+
 1. 创建生产环境变量文件：
 
    ```bash

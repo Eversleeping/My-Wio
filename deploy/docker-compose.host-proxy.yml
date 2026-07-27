@@ -1,0 +1,14 @@
+services:
+  controlplane:
+    ports:
+      - "127.0.0.1:${WIO_HOST_PORT:-18080}:8080"
+    volumes:
+      - controlplane_agent_state:/var/lib/wio-agent
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${WIO_WORKSPACE_ROOT:?set WIO_WORKSPACE_ROOT}/srv:/srv
+      - ${WIO_WORKSPACE_ROOT:?set WIO_WORKSPACE_ROOT}/opt:/opt
+      - ${WIO_WORKSPACE_ROOT:?set WIO_WORKSPACE_ROOT}/home:/home
+
+  caddy:
+    profiles:
+      - standalone-proxy
