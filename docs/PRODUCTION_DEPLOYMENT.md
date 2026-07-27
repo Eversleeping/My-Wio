@@ -43,24 +43,12 @@ sudo docker compose -p wio-controlplane \
   up -d --build postgres controlplane
 ```
 
-宿主机 Caddy 站点文件为 `/etc/caddy/sites-enabled/wio.caddy`：
+宿主机 Caddy 站点文件为 `/etc/caddy/sites-enabled/wio.caddy`。配置将 WebSocket Upgrade 单独通过 HTTP/1.1 转发，其余 HTTP 和 gRPC 请求通过 h2c 转发：
 
-```caddyfile
-maomi.xin {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:18080 {
-		transport http {
-			versions h2c 1.1
-		}
-	}
-	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		X-Content-Type-Options nosniff
-		X-Frame-Options DENY
-		Referrer-Policy strict-origin-when-cross-origin
-		-Server
-	}
-}
+```bash
+sudo install -m 0644 -o root -g root \
+  deploy/Caddyfile.host-proxy \
+  /etc/caddy/sites-enabled/wio.caddy
 ```
 
 修改后先校验再平滑加载：
@@ -82,5 +70,7 @@ sudo docker compose -p wio-controlplane \
 curl --fail http://127.0.0.1:18080/api/health
 curl --fail https://maomi.xin/api/health
 ```
+
+浏览器登录后，开发者工具中的 `/api/ws` 请求应返回 `101 Switching Protocols`；Caddy 日志中不应出现 `http2: invalid Upgrade request header`。
 
 部署完成后打开 `https://maomi.xin` 创建新的管理员。启用 TOTP 时，应离线保存恢复码；同时应在 Docker 主机之外备份 `.env` 中的 `WIO_MASTER_KEY` 和 PostgreSQL 数据卷。
