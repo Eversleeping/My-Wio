@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 type serverBootstrapper interface {
 	Probe(context.Context, sshbootstrap.HostTarget) (sshbootstrap.HostKeyResult, error)
 	Install(context.Context, sshbootstrap.InstallRequest) (sshbootstrap.InstallResult, error)
+	Uninstall(context.Context, sshbootstrap.UninstallRequest) (sshbootstrap.UninstallResult, error)
 }
 
 type sshHostInput struct {
@@ -59,6 +61,12 @@ type sshBootstrapInput struct {
 	CodexProfileName   string   `json:"-"`
 	GitProfileName     string   `json:"-"`
 	AllowSudo          bool     `json:"allow_sudo"`
+}
+
+type sshUninstallInput struct {
+	sshConnectionInput
+	HostKeyFingerprint string `json:"host_key_fingerprint"`
+	Confirmation       string `json:"confirmation"`
 }
 
 type bootstrapStreamEvent struct {
@@ -118,6 +126,57 @@ func (a *API) bootstrapServerSSH(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) repairServerSSH(w http.ResponseWriter, r *http.Request) {
 	a.bootstrapServerSSHForServer(w, r, chi.URLParam(r, "serverID"))
+}
+
+func (a *API) uninstallServerSSH(w http.ResponseWriter, r *http.Request) {
+	if !a.bootstrapMu.TryLock() {
+		writeBootstrapCode(w, http.StatusTooManyRequests, "server_operation_busy", "another SSH server operation is already running")
+		return
+	}
+	defer a.bootstrapMu.Unlock()
+
+	serverID := chi.URLParam(r, "serverID")
+	server, err := a.store.Server(r.Context(), serverID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load server")
+		return
+	}
+	if server.IsControlPlane {
+		writeError(w, http.StatusForbidden, "the control-plane server cannot be uninstalled")
+		return
+	}
+	var input sshUninstallInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Confirmation != server.Name {
+		writeBootstrapCode(w, http.StatusBadRequest, "confirmation_mismatch", "server name confirmation does not match")
+		return
+	}
+	result, err := a.bootstrapper.Uninstall(r.Context(), sshbootstrap.UninstallRequest{
+		Target:              input.target(),
+		ExpectedFingerprint: strings.TrimSpace(input.HostKeyFingerprint),
+		ExpectedServerID:    server.ID,
+	})
+	if err != nil {
+		a.log.Warn("SSH server uninstall failed", "server_id", server.ID, "host", strings.TrimSpace(input.Host), "error", err)
+		a.writeBootstrapError(w, err)
+		return
+	}
+	if err := a.store.RevokeServer(r.Context(), server.ID); err != nil {
+		a.log.Error("Agent was removed but server revocation failed", "server_id", server.ID, "error", err)
+		writeBootstrapCode(w, http.StatusInternalServerError, "server_revoke_failed", "Agent was removed but the server record could not be revoked")
+		return
+	}
+	session := currentSession(r)
+	_ = a.store.Audit(r.Context(), session.UserID, "server.ssh.uninstall", "server", server.ID, map[string]any{
+		"name": server.Name, "host": strings.TrimSpace(input.Host), "port": input.Port, "user": strings.TrimSpace(input.User), "hostname": result.Hostname,
+	}, clientIP(r))
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (a *API) bootstrapServerSSHForServer(w http.ResponseWriter, r *http.Request, serverID string) {
@@ -372,6 +431,8 @@ func bootstrapErrorInfo(err error) (int, string, string) {
 		return http.StatusBadRequest, "invalid_configuration", "invalid SSH or Codex API configuration"
 	case errors.Is(err, sshbootstrap.ErrHostKeyMismatch):
 		return http.StatusConflict, "fingerprint_changed", "SSH host key fingerprint changed; probe the server again"
+	case errors.Is(err, sshbootstrap.ErrServerMismatch):
+		return http.StatusConflict, "agent_identity_mismatch", "the Agent installed on this host belongs to a different registered server"
 	case errors.Is(err, sshbootstrap.ErrAuthentication):
 		return http.StatusUnprocessableEntity, "ssh_auth_failed", "the SSH username or credential was rejected"
 	case errors.Is(err, sshbootstrap.ErrPrivilegeRequired):
@@ -382,13 +443,15 @@ func bootstrapErrorInfo(err error) (int, string, string) {
 		return http.StatusServiceUnavailable, "assets_unavailable", "agent installation assets are unavailable"
 	case errors.Is(err, sshbootstrap.ErrInstallation):
 		return http.StatusUnprocessableEntity, "installation_failed", "connected to the server but could not install the agent"
+	case errors.Is(err, sshbootstrap.ErrUninstallation):
+		return http.StatusUnprocessableEntity, "uninstallation_failed", "connected to the server but could not completely remove the Agent"
 	default:
 		return http.StatusBadGateway, "connection_failed", "could not connect to or configure the server"
 	}
 }
 
 func bootstrapSafeDetail(err error) string {
-	if !errors.Is(err, sshbootstrap.ErrInstallation) {
+	if !errors.Is(err, sshbootstrap.ErrInstallation) && !errors.Is(err, sshbootstrap.ErrUninstallation) {
 		return ""
 	}
 	detail := strings.Join(strings.Fields(err.Error()), " ")

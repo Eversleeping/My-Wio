@@ -739,6 +739,9 @@ func (s *Store) RevokeServer(ctx context.Context, id string) error {
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_credentials SET revoked_at=? WHERE server_id=?"), now, id); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, s.Q("UPDATE enrollment_tokens SET consumed_at=? WHERE server_id=? AND consumed_at IS NULL"), now, id); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

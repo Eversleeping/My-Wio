@@ -57,6 +57,60 @@ func TestValidateInstallRequest(t *testing.T) {
 	}
 }
 
+func TestValidateUninstallRequest(t *testing.T) {
+	request := UninstallRequest{
+		Target:              Target{Host: "192.0.2.10", Port: 22, User: "root", AuthMethod: "password", Password: "ssh-password"},
+		ExpectedFingerprint: "SHA256:example",
+		ExpectedServerID:    "6d22a53c-6a88-46ec-a201-1fd24dd83bea",
+	}
+	if err := validateUninstallRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	request.ExpectedServerID = "../other-server"
+	if !errors.Is(validateUninstallRequest(request), ErrInvalidTarget) {
+		t.Fatal("unsafe server ID was accepted")
+	}
+	request.ExpectedServerID = "6d22a53c-6a88-46ec-a201-1fd24dd83bea"
+	request.ExpectedFingerprint = ""
+	if !errors.Is(validateUninstallRequest(request), ErrInvalidTarget) {
+		t.Fatal("uninstall without a verified host fingerprint was accepted")
+	}
+}
+
+func TestInstalledServerIDAndUninstallScripts(t *testing.T) {
+	serverID := "6d22a53c-6a88-46ec-a201-1fd24dd83bea"
+	actual, err := installedServerID(`{"server_id":"` + serverID + `","agent_token":"secret"}`)
+	if err != nil || actual != serverID {
+		t.Fatalf("unexpected installed server ID: %q %v", actual, err)
+	}
+	if _, err := installedServerID(`{"server_id":"../other"}`); err == nil {
+		t.Fatal("unsafe installed server ID was accepted")
+	}
+	services := uninstallServicesScript()
+	for _, expected := range []string{"disable --now wio-agent.service", "disable --now wio-prerequisite.service", "systemctl daemon-reload"} {
+		if !strings.Contains(services, expected) {
+			t.Fatalf("service cleanup script missing %q:\n%s", expected, services)
+		}
+	}
+	files := uninstallFilesScript()
+	for _, expected := range []string{"/etc/wio-agent", "/var/lib/wio-agent", "/usr/local/bin/wio-agent", "/etc/sudoers.d/wio-agent", "userdel wio-agent"} {
+		if !strings.Contains(files, expected) {
+			t.Fatalf("file cleanup script missing %q:\n%s", expected, files)
+		}
+	}
+	if strings.Contains(files, "userdel wio-agent || true") || strings.Contains(files, "groupdel wio-agent || true") {
+		t.Fatalf("account cleanup failures must not be ignored:\n%s", files)
+	}
+	if strings.Index(files, "userdel wio-agent") > strings.Index(files, "rm -rf /etc/wio-agent") {
+		t.Fatalf("Agent identity must remain available when account cleanup fails:\n%s", files)
+	}
+	for _, externalRoot := range []string{"/srv", "/opt", "/home/"} {
+		if strings.Contains(files, externalRoot) {
+			t.Fatalf("file cleanup script unexpectedly touches %q:\n%s", externalRoot, files)
+		}
+	}
+}
+
 func TestAgentServiceUnitAllowsExplicitSudo(t *testing.T) {
 	base := []byte("NoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nRestrictSUIDSGID=true\n")
 	if got := string(agentServiceUnit(base, false)); got != string(base) {

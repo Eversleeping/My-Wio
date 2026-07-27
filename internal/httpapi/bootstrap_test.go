@@ -21,13 +21,17 @@ import (
 )
 
 type fakeServerBootstrapper struct {
-	probeTarget     sshbootstrap.HostTarget
-	installRequest  sshbootstrap.InstallRequest
-	probeResult     sshbootstrap.HostKeyResult
-	installResult   sshbootstrap.InstallResult
-	installError    error
-	installProgress []sshbootstrap.InstallProgress
-	installDeadline bool
+	probeTarget      sshbootstrap.HostTarget
+	installRequest   sshbootstrap.InstallRequest
+	uninstallRequest sshbootstrap.UninstallRequest
+	probeResult      sshbootstrap.HostKeyResult
+	installResult    sshbootstrap.InstallResult
+	uninstallResult  sshbootstrap.UninstallResult
+	installError     error
+	uninstallError   error
+	installProgress  []sshbootstrap.InstallProgress
+	installDeadline  bool
+	uninstallCalled  bool
 }
 
 func (fake *fakeServerBootstrapper) Probe(_ context.Context, target sshbootstrap.HostTarget) (sshbootstrap.HostKeyResult, error) {
@@ -44,6 +48,12 @@ func (fake *fakeServerBootstrapper) Install(ctx context.Context, request sshboot
 		}
 	}
 	return fake.installResult, fake.installError
+}
+
+func (fake *fakeServerBootstrapper) Uninstall(_ context.Context, request sshbootstrap.UninstallRequest) (sshbootstrap.UninstallResult, error) {
+	fake.uninstallCalled = true
+	fake.uninstallRequest = request
+	return fake.uninstallResult, fake.uninstallError
 }
 
 func TestProbeServerSSHOnlyRequiresHost(t *testing.T) {
@@ -221,6 +231,113 @@ func TestBootstrapStreamEmitsSafeInstallationError(t *testing.T) {
 	}
 }
 
+func TestUninstallServerSSHRevokesAfterRemoteCleanup(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server, agentToken := enrollBootstrapTestServer(t, database, "retire-node")
+	fake := &fakeServerBootstrapper{uninstallResult: sshbootstrap.UninstallResult{ServerID: server.ID, Hostname: "retire-node.local"}}
+	api := &API{store: database, bootstrapper: fake, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/ssh/uninstall", server.ID, uninstallInput(server.Name), &store.Session{UserID: "test-user"}, api.uninstallServerSSH)
+	if response.Code != http.StatusOK {
+		t.Fatalf("uninstall returned %d: %s", response.Code, response.Body.String())
+	}
+	if !fake.uninstallCalled || fake.uninstallRequest.ExpectedServerID != server.ID || fake.uninstallRequest.ExpectedFingerprint != "SHA256:test" {
+		t.Fatalf("unexpected uninstall request: %#v", fake.uninstallRequest)
+	}
+	if fake.uninstallRequest.Target.Password != "ssh-secret" || fake.uninstallRequest.Target.PrivateKey != "" {
+		t.Fatalf("unexpected SSH credentials in uninstall request: %#v", fake.uninstallRequest.Target)
+	}
+	if _, err := database.Server(context.Background(), server.ID); err == nil {
+		t.Fatal("uninstalled server remained visible")
+	}
+	if _, err := database.AuthenticateAgent(context.Background(), agentToken); err == nil {
+		t.Fatal("uninstalled Agent credential remained valid")
+	}
+	for _, secret := range []string{"ssh-secret", "private-key-secret"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatalf("uninstall response exposed %q", secret)
+		}
+	}
+}
+
+func TestUninstallServerSSHFailureKeepsRegistration(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server, agentToken := enrollBootstrapTestServer(t, database, "retry-node")
+	fake := &fakeServerBootstrapper{uninstallError: fmt.Errorf("%w: service removal failed", sshbootstrap.ErrUninstallation)}
+	api := &API{store: database, bootstrapper: fake, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/ssh/uninstall", server.ID, uninstallInput(server.Name), &store.Session{UserID: "test-user"}, api.uninstallServerSSH)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("uninstall failure returned %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "uninstallation_failed" {
+		t.Fatalf("unexpected uninstall error: %#v", body)
+	}
+	if _, err := database.Server(context.Background(), server.ID); err != nil {
+		t.Fatalf("failed uninstall removed server registration: %v", err)
+	}
+	if authenticated, err := database.AuthenticateAgent(context.Background(), agentToken); err != nil || authenticated != server.ID {
+		t.Fatalf("failed uninstall revoked Agent credential: %q %v", authenticated, err)
+	}
+}
+
+func TestUninstallServerSSHIdentityMismatchKeepsRegistration(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server, agentToken := enrollBootstrapTestServer(t, database, "identity-node")
+	fake := &fakeServerBootstrapper{uninstallError: sshbootstrap.ErrServerMismatch}
+	api := &API{store: database, bootstrapper: fake, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/ssh/uninstall", server.ID, uninstallInput(server.Name), &store.Session{UserID: "test-user"}, api.uninstallServerSSH)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("identity mismatch returned %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "agent_identity_mismatch" {
+		t.Fatalf("unexpected identity mismatch error: %#v", body)
+	}
+	if _, err := database.Server(context.Background(), server.ID); err != nil {
+		t.Fatalf("identity mismatch removed server registration: %v", err)
+	}
+	if authenticated, err := database.AuthenticateAgent(context.Background(), agentToken); err != nil || authenticated != server.ID {
+		t.Fatalf("identity mismatch revoked Agent credential: %q %v", authenticated, err)
+	}
+}
+
+func TestUninstallServerSSHRejectsControlPlane(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server, err := database.EnsureControlPlaneServer(context.Background(), "control-host", "control-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeServerBootstrapper{}
+	api := &API{store: database, bootstrapper: fake, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/ssh/uninstall", server.ID, uninstallInput(server.Name), &store.Session{UserID: "test-user"}, api.uninstallServerSSH)
+	if response.Code != http.StatusForbidden || fake.uninstallCalled {
+		t.Fatalf("control-plane uninstall returned %d, called=%v: %s", response.Code, fake.uninstallCalled, response.Body.String())
+	}
+}
+
+func TestUninstallServerSSHRequiresExactConfirmation(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server, _ := enrollBootstrapTestServer(t, database, "protected-node")
+	fake := &fakeServerBootstrapper{}
+	api := &API{store: database, bootstrapper: fake, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	input := uninstallInput("other-node")
+	response := directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/ssh/uninstall", server.ID, input, &store.Session{UserID: "test-user"}, api.uninstallServerSSH)
+	if response.Code != http.StatusBadRequest || fake.uninstallCalled {
+		t.Fatalf("confirmation mismatch returned %d, called=%v: %s", response.Code, fake.uninstallCalled, response.Body.String())
+	}
+	input = uninstallInput(" " + server.Name + " ")
+	response = directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/ssh/uninstall", server.ID, input, &store.Session{UserID: "test-user"}, api.uninstallServerSSH)
+	if response.Code != http.StatusBadRequest || fake.uninstallCalled {
+		t.Fatalf("whitespace-padded confirmation returned %d, called=%v: %s", response.Code, fake.uninstallCalled, response.Body.String())
+	}
+}
+
 func bootstrapInput() map[string]any {
 	return map[string]any{
 		"name": "node-1", "scan_roots": []string{"/srv"}, "host": "192.0.2.10", "port": 22, "user": "ubuntu",
@@ -228,6 +345,31 @@ func bootstrapInput() map[string]any {
 		"auth_method": "password", "password": "ssh-secret", "private_key": "private-key-secret", "private_key_passphrase": "",
 		"host_key_fingerprint": "SHA256:test", "codex_api_url": "https://api.example.com/v1", "codex_api_key": "api-key-secret", "codex_model": "gpt-5.4",
 	}
+}
+
+func uninstallInput(confirmation string) map[string]any {
+	return map[string]any{
+		"host": "192.0.2.10", "port": 22, "user": "ubuntu", "auth_method": "password",
+		"password": "ssh-secret", "private_key": "private-key-secret", "host_key_fingerprint": "SHA256:test", "confirmation": confirmation,
+	}
+}
+
+func enrollBootstrapTestServer(t *testing.T, database *store.Store, name string) (store.Server, string) {
+	t.Helper()
+	enrollmentToken := name + "-enrollment"
+	agentToken := name + "-agent-token"
+	if _, err := database.CreateEnrollment(context.Background(), name, []string{"/srv"}, enrollmentToken, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(context.Background(), enrollmentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(context.Background(), enrollment, name+".local", agentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, agentToken
 }
 
 func openBootstrapTestStore(t *testing.T) *store.Store {
@@ -253,5 +395,24 @@ func directJSONRequest(t *testing.T, method, target string, body any, session *s
 	}
 	response := httptest.NewRecorder()
 	handler(response, request)
+	return response
+}
+
+func directServerJSONRequest(t *testing.T, method, target, serverID string, body any, session *store.Session, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(method, target, bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("serverID", serverID)
+	requestContext := context.WithValue(request.Context(), chi.RouteCtxKey, routeContext)
+	if session != nil {
+		requestContext = context.WithValue(requestContext, sessionContextKey{}, *session)
+	}
+	response := httptest.NewRecorder()
+	handler(response, request.WithContext(requestContext))
 	return response
 }

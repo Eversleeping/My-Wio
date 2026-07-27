@@ -600,6 +600,9 @@ func TestRevokeServerStillRevokesRegularServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.CreateRepairEnrollment(ctx, server.ID, "pending-repair-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.RevokeServer(ctx, server.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -608,6 +611,9 @@ func TestRevokeServerStillRevokesRegularServers(t *testing.T) {
 	}
 	if _, err := database.AuthenticateAgent(ctx, "regular-agent-token"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("revoked regular Agent remained authenticated: %v", err)
+	}
+	if _, err := database.ConsumeEnrollment(ctx, "pending-repair-token"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("revoked server repair enrollment remained usable: %v", err)
 	}
 }
 

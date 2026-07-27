@@ -402,7 +402,7 @@ function Dashboard({ realtime, onNavigate }: { realtime: number; onNavigate: (vi
   </div>;
 }
 
-function ServersPage({ realtime, notify }: PageProps) {
+export function ServersPage({ realtime, notify }: PageProps) {
   const { t } = useI18n();
   const servers = useData<Server[]>("/servers", realtime);
   const credentialProfiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
@@ -424,6 +424,12 @@ function ServersPage({ realtime, notify }: PageProps) {
   const [credentialBusy, setCredentialBusy] = useState(false);
   const [credentialError, setCredentialError] = useState("");
   const [credentialForm, setCredentialForm] = useState({ codexProfileID: "", gitProfileIDs: [] as string[] });
+  const [retiringServer, setRetiringServer] = useState<Server | null>(null);
+  const [retireStep, setRetireStep] = useState<"form" | "fingerprint">("form");
+  const [retireBusy, setRetireBusy] = useState(false);
+  const [retireError, setRetireError] = useState("");
+  const [retireHostKey, setRetireHostKey] = useState<SSHHostKey | null>(null);
+  const [retireForm, setRetireForm] = useState({ host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" });
   const [metadataForm, setMetadataForm] = useState({ address: "", configuration: "", notes: "" });
   const [form, setForm] = useState({
     name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
@@ -496,6 +502,54 @@ function ServersPage({ realtime, notify }: PageProps) {
     if (file.size > 256 * 1024) { setError(t("server.privateKeyTooLarge")); return; }
     try { const privateKey = await file.text(); setForm(current => ({ ...current, privateKey })); } catch (err) { setError(message(err)); }
   };
+  const openRetirement = (server: Server) => {
+    setRetiringServer(server); setRetireStep("form"); setRetireBusy(false); setRetireError(""); setRetireHostKey(null);
+    setRetireForm({ host: server.address, port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" });
+  };
+  const closeRetirement = () => {
+    if (retireBusy) return;
+    setRetiringServer(null); setRetireStep("form"); setRetireError(""); setRetireHostKey(null);
+    setRetireForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" }));
+  };
+  const probeRetirement = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!retiringServer || retireForm.confirmation !== retiringServer.name) return;
+    setRetireBusy(true); setRetireError("");
+    try {
+      setRetireHostKey(await post<SSHHostKey>("/servers/ssh/probe", { host: retireForm.host.trim(), port: Number(retireForm.port) }));
+      setRetireStep("fingerprint");
+    } catch (err) { setRetireError(enrollmentMessage(err, t)); } finally { setRetireBusy(false); }
+  };
+  const uninstallServer = async () => {
+    if (!retiringServer || !retireHostKey || retireForm.confirmation !== retiringServer.name) return;
+    setRetireBusy(true); setRetireError("");
+    try {
+      await post(`/servers/${retiringServer.id}/ssh/uninstall`, {
+        host: retireForm.host.trim(), port: Number(retireForm.port), user: retireForm.user.trim(), auth_method: retireForm.authMethod,
+        password: retireForm.authMethod === "password" ? retireForm.password : "",
+        private_key: retireForm.authMethod === "private_key" ? retireForm.privateKey : "",
+        private_key_passphrase: retireForm.authMethod === "private_key" ? retireForm.privateKeyPassphrase : "",
+        host_key_fingerprint: retireHostKey.fingerprint, confirmation: retireForm.confirmation
+      });
+      setRetiringServer(null); setRetireHostKey(null); servers.reload(); notify(t("server.retired"));
+      setRetireForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" }));
+    } catch (err) { setRetireError(enrollmentMessage(err, t)); } finally { setRetireBusy(false); }
+  };
+  const forceRevokeServer = async () => {
+    if (!retiringServer || retireForm.confirmation !== retiringServer.name || !confirm(t("server.confirmForceRevoke", { name: retiringServer.name }))) return;
+    setRetireBusy(true); setRetireError("");
+    try {
+      await remove(`/servers/${retiringServer.id}`);
+      setRetiringServer(null); servers.reload(); notify(t("server.revoked"));
+      setRetireForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" }));
+    } catch (err) { setRetireError(message(err)); } finally { setRetireBusy(false); }
+  };
+  const chooseRetirementPrivateKey = async (file?: File) => {
+    setRetireError("");
+    if (!file) { setRetireForm(current => ({ ...current, privateKey: "" })); return; }
+    if (file.size > 256 * 1024) { setRetireError(t("server.privateKeyTooLarge")); return; }
+    try { const privateKey = await file.text(); setRetireForm(current => ({ ...current, privateKey })); } catch (err) { setRetireError(message(err)); }
+  };
   const editServer = (server: Server) => {
     setEditingServer(server); setMetadataError("");
     setMetadataForm({ address: server.address, configuration: server.configuration, notes: server.notes });
@@ -546,7 +600,7 @@ function ServersPage({ realtime, notify }: PageProps) {
       const agentUpdateTitle = server.status !== "online" ? t("server.updateOffline") : server.agent_update_available ? t("server.updateAgent", { version: server.agent_target_version }) : !server.agent_version ? t("common.awaitingHeartbeat") : !server.agent_update_supported ? t("server.updateRequiresReinstall") : server.agent_version === server.agent_target_version ? t("server.agentLatest") : t("server.updateUnavailable");
       const codexUpdateTitle = server.status !== "online" ? t("server.codexUpdateOffline") : !server.codex_update_supported ? t("server.codexUpdateRequiresAgent") : server.codex_update_available ? t("server.updateCodex", { version: server.codex_target_version }) : t("server.codexLatest", { version: server.codex_target_version });
       const serverName = server.is_control_plane ? t("server.controlPlane") : server.name;
-      return <tr key={server.id}><td><div className="cell-main"><strong>{serverName}</strong>{server.is_control_plane && <span className="status-tag neutral"><LockKeyhole size={13} />{t("server.builtIn")}</span>}<small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><ServerCredentialSummary server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" disabled={server.status !== "online" || !server.agent_update_available || updatingServer !== ""} title={agentUpdateTitle} onClick={() => void updateAgent(server)}><RefreshCw className={updatingServer === `agent:${server.id}` ? "spin" : ""} size={15} /></button><button className="icon-button" disabled={server.status !== "online" || !server.codex_update_available || updatingServer !== ""} title={codexUpdateTitle} onClick={() => void updateCodex(server)}>{updatingServer === `codex:${server.id}` ? <LoaderCircle className="spin" size={15} /> : <SquareTerminal size={15} />}</button><button className="icon-button" disabled={server.status !== "online" || updatingServer !== ""} title={server.status === "online" ? t("server.editCredentials") : t("server.credentialsOffline")} onClick={() => editCredentials(server)}><KeyRound size={15} /></button><button className="icon-button" title={t("server.repair")} onClick={() => repair(server)}><Wrench size={15} /></button><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button>{server.is_control_plane ? <button className="icon-button" disabled title={t("server.controlPlaneProtected")}><LockKeyhole size={16} /></button> : <button className="icon-button danger" title={t("server.revoke")} onClick={async () => { if (!confirm(t("server.confirmRevoke", { name: server.name }))) return; await remove(`/servers/${server.id}`); notify(t("server.revoked")); servers.reload(); }}><X size={16} /></button>}</div></td></tr>;
+      return <tr key={server.id}><td><div className="cell-main"><strong>{serverName}</strong>{server.is_control_plane && <span className="status-tag neutral"><LockKeyhole size={13} />{t("server.builtIn")}</span>}<small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><ServerCredentialSummary server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" disabled={server.status !== "online" || !server.agent_update_available || updatingServer !== ""} title={agentUpdateTitle} onClick={() => void updateAgent(server)}><RefreshCw className={updatingServer === `agent:${server.id}` ? "spin" : ""} size={15} /></button><button className="icon-button" disabled={server.status !== "online" || !server.codex_update_available || updatingServer !== ""} title={codexUpdateTitle} onClick={() => void updateCodex(server)}>{updatingServer === `codex:${server.id}` ? <LoaderCircle className="spin" size={15} /> : <SquareTerminal size={15} />}</button><button className="icon-button" disabled={server.status !== "online" || updatingServer !== ""} title={server.status === "online" ? t("server.editCredentials") : t("server.credentialsOffline")} onClick={() => editCredentials(server)}><KeyRound size={15} /></button><button className="icon-button" title={t("server.repair")} onClick={() => repair(server)}><Wrench size={15} /></button><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button>{server.is_control_plane ? <button className="icon-button" disabled title={t("server.controlPlaneProtected")}><LockKeyhole size={16} /></button> : <button className="icon-button danger" title={t("server.retire")} onClick={() => openRetirement(server)}><Trash2 size={16} /></button>}</div></td></tr>;
     })}</DataTable>
   </Section><Dialog open={dialog} title={t(repairingServer ? "server.repairTitle" : "server.enrollLinux")} onClose={close} wide>{step === "form" ? <form onSubmit={probe}>
     {error && <ErrorBanner text={error} />}
@@ -568,6 +622,25 @@ function ServersPage({ realtime, notify }: PageProps) {
     {installLogs.length > 0 && <div className="install-log" aria-live="polite"><div className="install-log-heading"><SquareTerminal size={16} /><strong>{t("server.installLog")}</strong></div><div className="install-log-lines">{installLogs.map(entry => <div className={`install-log-entry ${entry.status}`} key={entry.step}>{entry.status === "running" ? <LoaderCircle className="spin" size={15} /> : entry.status === "done" ? <Check size={15} /> : <AlertTriangle size={15} />}<span>{t(`server.progress.${entry.step}`)}</span>{entry.total > 0 && <code>{Math.min(100, Math.round((entry.current / entry.total) * 100))}%</code>}{entry.detail && <small>{entry.detail}</small>}</div>)}</div></div>}
     <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={() => { setStep("form"); setError(""); setInstallLogs([]); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button" disabled={busy} onClick={() => void install()}>{busy ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{busy ? t("server.installing") : t("server.confirmInstall")}</button></DialogActions>
   </div> : <div className="enrollment-step enrollment-complete"><div className="completion-mark"><Check size={28} /></div><h3>{t(repairingServer ? "server.repaired" : "server.installed")}</h3>{result && <p>{t("server.installedSummary", { hostname: result.hostname, architecture: result.architecture })}</p>}{result && result.warnings.length > 0 && <div className="warning-list"><strong>{t("server.warningTitle")}</strong>{result.warnings.map(warning => <span key={warning}><AlertTriangle size={15} />{t(`server.warning.${warning}`)}</span>)}</div>}<DialogActions><button className="primary-button" onClick={close}><Check size={16} />{t("common.done")}</button></DialogActions></div>}</Dialog>
+  <Dialog open={retiringServer !== null} title={t("server.retireTitle", { name: retiringServer?.name ?? "" })} onClose={closeRetirement} wide>
+    {retireStep === "form" ? <form onSubmit={probeRetirement}>
+      {retireError && <ErrorBanner text={retireError} />}
+      <div className="warning-list retirement-warning"><strong>{t("server.retireRemovesTitle")}</strong><span><Trash2 size={15} />{t("server.retireRemovesAgent")}</span><span><HardDrive size={15} />{t("server.retireRemovesData")}</span></div>
+      <p className="security-notice">{t("server.retirePreserves")}</p>
+      <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={retireForm.host} onChange={event => setRetireForm({ ...retireForm, host: event.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={retireForm.port} onChange={event => setRetireForm({ ...retireForm, port: event.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={retireForm.user} onChange={event => setRetireForm({ ...retireForm, user: event.target.value })} placeholder="root / ubuntu / ec2-user" required /></Field></div>
+      <Field label={t("server.authMethod")}><select value={retireForm.authMethod} onChange={event => setRetireForm({ ...retireForm, authMethod: event.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option></select></Field>
+      {retireForm.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={event => void chooseRetirementPrivateKey(event.target.files?.[0])} required={!retireForm.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={retireForm.privateKeyPassphrase} onChange={event => setRetireForm({ ...retireForm, privateKeyPassphrase: event.target.value })} placeholder={t("common.optional")} /></Field></div> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={retireForm.password} onChange={event => setRetireForm({ ...retireForm, password: event.target.value })} required /></Field>}
+      <Field label={t("server.retireConfirmation", { name: retiringServer?.name ?? "" })}><input value={retireForm.confirmation} onChange={event => setRetireForm({ ...retireForm, confirmation: event.target.value })} placeholder={retiringServer?.name ?? ""} autoComplete="off" required /></Field>
+      <DialogActions><button type="button" className="secondary-button" disabled={retireBusy} onClick={closeRetirement}>{t("common.cancel")}</button><button type="button" className="secondary-button danger" disabled={retireBusy || retireForm.confirmation !== retiringServer?.name} onClick={() => void forceRevokeServer()}><X size={16} />{t("server.forceRevoke")}</button><button className="primary-button" disabled={retireBusy || retireForm.confirmation !== retiringServer?.name}>{retireBusy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{retireBusy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
+    </form> : retireHostKey ? <div className="enrollment-step">
+      {retireError && <ErrorBanner text={retireError} />}
+      <div className="fingerprint-status"><ShieldCheck size={28} /><div><strong>{t("server.fingerprint")}</strong><span>{retireForm.host}:{retireForm.port} · {retireHostKey.key_type}</span></div></div>
+      <code className="fingerprint-value">{retireHostKey.fingerprint}</code>
+      <p className="security-notice">{t("server.retireFingerprintNotice")}</p>
+      <div className="warning-list retirement-warning"><strong>{t("server.retireFinalWarning")}</strong><span><Trash2 size={15} />{t("server.retireRemovesAgent")}</span><span><HardDrive size={15} />{t("server.retireRemovesData")}</span></div>
+      <DialogActions><button type="button" className="secondary-button" disabled={retireBusy} onClick={() => { setRetireStep("form"); setRetireError(""); setRetireHostKey(null); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button danger" disabled={retireBusy} onClick={() => void uninstallServer()}>{retireBusy ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}{retireBusy ? t("server.retiring") : t("server.confirmRetire")}</button></DialogActions>
+    </div> : null}
+  </Dialog>
   <Dialog open={editingServer !== null} title={t("server.editInformation")} onClose={() => { if (!metadataBusy) setEditingServer(null); }}>
     <form onSubmit={saveMetadata}>{metadataError && <ErrorBanner text={metadataError} />}<Field label={t("server.address")}><input maxLength={255} value={metadataForm.address} onChange={e => setMetadataForm({ ...metadataForm, address: e.target.value })} placeholder="192.0.2.10" /></Field><Field label={t("server.configuration")}><textarea rows={4} maxLength={4096} value={metadataForm.configuration} onChange={e => setMetadataForm({ ...metadataForm, configuration: e.target.value })} placeholder={t("server.configurationPlaceholder")} /></Field><Field label={t("server.notes")}><textarea rows={4} maxLength={4096} value={metadataForm.notes} onChange={e => setMetadataForm({ ...metadataForm, notes: e.target.value })} placeholder={t("server.notesPlaceholder")} /></Field><DialogActions><button type="button" className="secondary-button" disabled={metadataBusy} onClick={() => setEditingServer(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={metadataBusy}>{metadataBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("server.saveInformation")}</button></DialogActions></form>
   </Dialog>

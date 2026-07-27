@@ -83,6 +83,8 @@ h2 { font-size: 15px; line-height: 1.35; font-weight: 700; }
 .primary-button, .secondary-button, .text-button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border-radius: 6px; font-size: 13px; font-weight: 680; white-space: nowrap; }
 .primary-button { color: #fff; background: #267b5e; border: 1px solid #267b5e; }
 .primary-button:hover { background: #1d684e; border-color: #1d684e; }
+.primary-button.danger { background: #a33a43; border-color: #a33a43; }
+.primary-button.danger:hover { background: #872e36; border-color: #872e36; }
 .primary-button:disabled, .secondary-button:disabled { cursor: wait; opacity: .62; }
 .secondary-button { color: #32373d; background: #fff; border: 1px solid #cfd3d0; }
 .secondary-button:hover { background: #f3f5f2; }
@@ -191,7 +193,7 @@ td code { font-size: 12px; }
 .dialog-heading { position: sticky; top: 0; z-index: 2; background: #fff; }
 .dialog > form, .dialog > .dialog-heading + div { padding: 17px; }
 .dialog > .dialog-heading + .approval-list { padding: 0; }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 .dialog.workspace-git-dialog-shell, .dialog.workspace-manager-dialog-shell { display: flex; flex-direction: column; overflow: hidden; }
 .dialog.workspace-git-dialog-shell { width: min(1040px, 100%); height: min(780px, calc(100vh - 40px)); }
 .workspace-git-dialog, .workspace-manager { min-height: 0; }
@@ -359,6 +361,8 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .warning-list > strong { font-size: 12px; }
 .warning-list > span { display: flex; align-items: flex-start; gap: 7px; color: #85510c; font-size: 12px; }
 .warning-list svg { flex: 0 0 auto; margin-top: 1px; }
+.retirement-warning { margin: 12px 0; padding: 12px; color: #782b32; background: var(--red-soft); border: 1px solid #ebc2c5; border-radius: 6px; }
+.retirement-warning > span { color: #782b32; }
 .agent-sudo-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: flex-start; gap: 9px; margin: 12px 0 4px; padding: 10px 11px; color: #6f521c; background: #fff9e9; border: 1px solid #ead5ac; border-radius: 6px; cursor: pointer; }
 .agent-sudo-option.enabled { color: #8e2d34; background: var(--red-soft); border-color: #efc3c6; }
 .agent-sudo-option input { width: 16px; height: 16px; min-height: 0; margin-top: 2px; accent-color: var(--red); }

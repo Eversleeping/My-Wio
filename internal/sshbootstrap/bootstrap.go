@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,8 @@ var (
 	ErrUnsupportedPlatform = errors.New("unsupported Linux architecture")
 	ErrAssetsUnavailable   = errors.New("agent installation assets are unavailable")
 	ErrInstallation        = errors.New("agent installation failed")
+	ErrServerMismatch      = errors.New("installed Agent belongs to a different server")
+	ErrUninstallation      = errors.New("agent uninstallation failed")
 )
 
 const (
@@ -91,6 +94,17 @@ type InstallResult struct {
 	Hostname     string   `json:"hostname"`
 	Architecture string   `json:"architecture"`
 	Warnings     []string `json:"warnings"`
+}
+
+type UninstallRequest struct {
+	Target              Target
+	ExpectedFingerprint string
+	ExpectedServerID    string
+}
+
+type UninstallResult struct {
+	ServerID string `json:"server_id"`
+	Hostname string `json:"hostname"`
 }
 
 type Service struct {
@@ -329,6 +343,111 @@ rm -f /etc/sudoers.d/wio-agent`
 	return result, nil
 }
 
+func (s *Service) Uninstall(ctx context.Context, request UninstallRequest) (UninstallResult, error) {
+	target, err := normalizeTarget(request.Target)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	request.Target = target
+	request.ExpectedServerID = strings.TrimSpace(request.ExpectedServerID)
+	if err := validateUninstallRequest(request); err != nil {
+		return UninstallResult{}, err
+	}
+	client, hostKey, err := connect(ctx, request.Target, request.ExpectedFingerprint)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	clientDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = client.Close()
+		case <-clientDone:
+		}
+	}()
+	defer func() {
+		close(clientDone)
+		_ = client.Close()
+	}()
+	probe, err := inspect(client, hostKey)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	if !strings.EqualFold(probe.OS, "linux") {
+		return UninstallResult{}, fmt.Errorf("%w: %s", ErrUnsupportedPlatform, probe.OS)
+	}
+	if !probe.SudoReady {
+		return UninstallResult{}, ErrPrivilegeRequired
+	}
+
+	root := isRoot(client)
+	rawConfig, err := run(client, elevated(root, "cat /etc/wio-agent/config.json"))
+	if err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: could not read the installed Agent identity", ErrUninstallation)
+	}
+	serverID, err := installedServerID(rawConfig)
+	if err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: installed Agent configuration is invalid", ErrUninstallation)
+	}
+	if serverID != request.ExpectedServerID {
+		return UninstallResult{}, ErrServerMismatch
+	}
+	if output, err := run(client, elevated(root, uninstallServicesScript())); err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: could not stop Agent services: %s", ErrUninstallation, remoteErrorDetail(output, err))
+	}
+	if output, err := run(client, elevated(root, uninstallFilesScript())); err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: could not remove Agent files: %s", ErrUninstallation, remoteErrorDetail(output, err))
+	}
+	return UninstallResult{ServerID: serverID, Hostname: probe.Hostname}, nil
+}
+
+func installedServerID(raw string) (string, error) {
+	var config struct {
+		ServerID string `json:"server_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		return "", err
+	}
+	config.ServerID = strings.TrimSpace(config.ServerID)
+	if !validServerID(config.ServerID) {
+		return "", errors.New("invalid server ID")
+	}
+	return config.ServerID, nil
+}
+
+func uninstallServicesScript() string {
+	return `set -eu
+if [ -f /etc/systemd/system/wio-agent.service ]; then
+  systemctl disable --now wio-agent.service >/dev/null
+else
+  systemctl stop wio-agent.service >/dev/null 2>&1 || true
+fi
+if [ -f /etc/systemd/system/wio-prerequisite.service ]; then
+  systemctl disable --now wio-prerequisite.service >/dev/null
+else
+  systemctl stop wio-prerequisite.service >/dev/null 2>&1 || true
+fi
+rm -f /etc/systemd/system/wio-agent.service /etc/systemd/system/wio-prerequisite.service
+systemctl daemon-reload
+systemctl reset-failed wio-agent.service wio-prerequisite.service >/dev/null 2>&1 || true`
+}
+
+func uninstallFilesScript() string {
+	return `set -eu
+if [ -L /usr/local/bin/playwright ]; then
+  playwright_target=$(readlink /usr/local/bin/playwright || true)
+  case "$playwright_target" in
+    /var/lib/wio-agent/playwright/*) rm -f /usr/local/bin/playwright ;;
+  esac
+fi
+if id -u wio-agent >/dev/null 2>&1; then userdel wio-agent; fi
+if getent group wio-agent >/dev/null 2>&1; then groupdel wio-agent; fi
+rm -f /etc/sudoers.d/wio-agent
+rm -rf /var/lib/wio-agent
+rm -f /usr/local/bin/wio-agent
+rm -rf /etc/wio-agent`
+}
+
 func npmCountryDetectionScript() string {
 	return `fetch_country() {
   endpoint=$1
@@ -465,6 +584,29 @@ func validateInstallRequest(request InstallRequest) error {
 		}
 	}
 	return nil
+}
+
+func validateUninstallRequest(request UninstallRequest) error {
+	if _, err := normalizeTarget(request.Target); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(strings.TrimSpace(request.ExpectedFingerprint), "SHA256:") || !validServerID(strings.TrimSpace(request.ExpectedServerID)) {
+		return ErrInvalidTarget
+	}
+	return nil
+}
+
+func validServerID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for index, char := range value {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || index > 0 && (char == '-' || char == '_' || char == '.' || char == ':') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func normalizeHostTarget(target HostTarget) (HostTarget, error) {
