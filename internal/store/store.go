@@ -109,6 +109,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := (&Store{DB: db, driver: driver}).purgeRevokedServers(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("purge revoked servers: %w", err)
+	}
 	if err := migrateServerGitCredentialProfiles(ctx, db, driver); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -125,18 +129,29 @@ func Open(databaseURL string) (*Store, error) {
 
 func migrateServerControlPlane(ctx context.Context, db *sqlx.DB, driver string) error {
 	if driver == "pgx" {
-		if _, err := db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN IF NOT EXISTS is_control_plane INTEGER NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("migrate control-plane server flag: %w", err)
+		if _, err := db.ExecContext(ctx, `ALTER TABLE servers
+			ADD COLUMN IF NOT EXISTS is_control_plane INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP`); err != nil {
+			return fmt.Errorf("migrate server lifecycle columns: %w", err)
 		}
 		return nil
 	}
-	var count int
-	if err := db.GetContext(ctx, &count, "SELECT COUNT(*) FROM pragma_table_info('servers') WHERE name='is_control_plane'"); err != nil {
-		return fmt.Errorf("inspect control-plane server flag: %w", err)
+	var columns []string
+	if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info('servers')"); err != nil {
+		return fmt.Errorf("inspect server lifecycle columns: %w", err)
 	}
-	if count == 0 {
+	existing := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		existing[column] = true
+	}
+	if !existing["is_control_plane"] {
 		if _, err := db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN is_control_plane INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return fmt.Errorf("migrate control-plane server flag: %w", err)
+		}
+	}
+	if !existing["revoked_at"] {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN revoked_at TIMESTAMP"); err != nil {
+			return fmt.Errorf("migrate server revocation timestamp: %w", err)
 		}
 	}
 	return nil
@@ -724,8 +739,47 @@ func (s *Store) RevokeServer(ctx context.Context, id string) error {
 	if isControlPlane != 0 {
 		return ErrControlPlaneServer
 	}
-	now := time.Now().UTC()
-	result, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET revoked_at=?,status='offline' WHERE id=? AND revoked_at IS NULL"), now, id)
+	if err := s.deleteServerRecords(ctx, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) purgeRevokedServers(ctx context.Context) error {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var serverIDs []string
+	if err := tx.SelectContext(ctx, &serverIDs, "SELECT id FROM servers WHERE revoked_at IS NOT NULL AND is_control_plane=0"); err != nil {
+		return err
+	}
+	for _, serverID := range serverIDs {
+		if err := s.deleteServerRecords(ctx, tx, serverID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) deleteServerRecords(ctx context.Context, tx *sqlx.Tx, serverID string) error {
+	var projectIDs []string
+	if err := tx.SelectContext(ctx, &projectIDs, s.Q(`SELECT project_id FROM workspaces WHERE server_id=?
+		UNION SELECT project_id FROM deployment_targets WHERE server_id=?
+		UNION SELECT project_id FROM agent_operations WHERE server_id=? AND project_id IS NOT NULL`), serverID, serverID, serverID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM events WHERE stream_id IN (
+		SELECT t.id FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.server_id=?)`), serverID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM codex_snapshots WHERE
+		(scope_type='workspace' AND scope_id IN (SELECT id FROM workspaces WHERE server_id=?)) OR
+		(scope_type='thread' AND scope_id IN (SELECT t.id FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.server_id=?))`), serverID, serverID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM servers WHERE id=? AND is_control_plane=0"), serverID)
 	if err != nil {
 		return err
 	}
@@ -736,13 +790,14 @@ func (s *Store) RevokeServer(ctx context.Context, id string) error {
 	if rows != 1 {
 		return sql.ErrNoRows
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_credentials SET revoked_at=? WHERE server_id=?"), now, id); err != nil {
-		return err
+	for _, projectID := range projectIDs {
+		if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM projects WHERE id=?
+			AND NOT EXISTS (SELECT 1 FROM workspaces WHERE project_id=projects.id)
+			AND NOT EXISTS (SELECT 1 FROM deployment_targets WHERE project_id=projects.id)`), projectID); err != nil {
+			return err
+		}
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE enrollment_tokens SET consumed_at=? WHERE server_id=? AND consumed_at IS NULL"), now, id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) CreateEnrollment(ctx context.Context, name string, roots []string, token string, expires time.Time) (string, error) {

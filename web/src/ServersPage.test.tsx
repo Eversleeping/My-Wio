@@ -58,6 +58,7 @@ test("verifies the host fingerprint before completely retiring a server", async 
 
   let dialog = screen.getByRole("dialog", { name: "Retire retire-node" });
   expect(within(dialog).getByText(/Projects outside the Agent-managed directory/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/workspace, session, deployment, and orphaned project records/)).toBeInTheDocument();
   await user.selectOptions(within(dialog).getByRole("combobox", { name: "Authentication" }), "password");
   await user.type(within(dialog).getByRole("textbox", { name: "Type retire-node to confirm" }), server.name);
   await user.type(within(dialog).getByLabelText("SSH password"), "temporary-ssh-secret");

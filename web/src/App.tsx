@@ -625,7 +625,7 @@ export function ServersPage({ realtime, notify }: PageProps) {
   <Dialog open={retiringServer !== null} title={t("server.retireTitle", { name: retiringServer?.name ?? "" })} onClose={closeRetirement} wide>
     {retireStep === "form" ? <form onSubmit={probeRetirement}>
       {retireError && <ErrorBanner text={retireError} />}
-      <div className="warning-list retirement-warning"><strong>{t("server.retireRemovesTitle")}</strong><span><Trash2 size={15} />{t("server.retireRemovesAgent")}</span><span><HardDrive size={15} />{t("server.retireRemovesData")}</span></div>
+      <div className="warning-list retirement-warning"><strong>{t("server.retireRemovesTitle")}</strong><span><Trash2 size={15} />{t("server.retireRemovesAgent")}</span><span><HardDrive size={15} />{t("server.retireRemovesData")}</span><span><Database size={15} />{t("server.retireRemovesControlRecords")}</span></div>
       <p className="security-notice">{t("server.retirePreserves")}</p>
       <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={retireForm.host} onChange={event => setRetireForm({ ...retireForm, host: event.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={retireForm.port} onChange={event => setRetireForm({ ...retireForm, port: event.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={retireForm.user} onChange={event => setRetireForm({ ...retireForm, user: event.target.value })} placeholder="root / ubuntu / ec2-user" required /></Field></div>
       <Field label={t("server.authMethod")}><select value={retireForm.authMethod} onChange={event => setRetireForm({ ...retireForm, authMethod: event.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option></select></Field>
@@ -637,7 +637,7 @@ export function ServersPage({ realtime, notify }: PageProps) {
       <div className="fingerprint-status"><ShieldCheck size={28} /><div><strong>{t("server.fingerprint")}</strong><span>{retireForm.host}:{retireForm.port} · {retireHostKey.key_type}</span></div></div>
       <code className="fingerprint-value">{retireHostKey.fingerprint}</code>
       <p className="security-notice">{t("server.retireFingerprintNotice")}</p>
-      <div className="warning-list retirement-warning"><strong>{t("server.retireFinalWarning")}</strong><span><Trash2 size={15} />{t("server.retireRemovesAgent")}</span><span><HardDrive size={15} />{t("server.retireRemovesData")}</span></div>
+      <div className="warning-list retirement-warning"><strong>{t("server.retireFinalWarning")}</strong><span><Trash2 size={15} />{t("server.retireRemovesAgent")}</span><span><HardDrive size={15} />{t("server.retireRemovesData")}</span><span><Database size={15} />{t("server.retireRemovesControlRecords")}</span></div>
       <DialogActions><button type="button" className="secondary-button" disabled={retireBusy} onClick={() => { setRetireStep("form"); setRetireError(""); setRetireHostKey(null); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button danger" disabled={retireBusy} onClick={() => void uninstallServer()}>{retireBusy ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}{retireBusy ? t("server.retiring") : t("server.confirmRetire")}</button></DialogActions>
     </div> : null}
   </Dialog>

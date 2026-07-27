@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -234,6 +235,11 @@ func TestBootstrapStreamEmitsSafeInstallationError(t *testing.T) {
 func TestUninstallServerSSHRevokesAfterRemoteCleanup(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server, agentToken := enrollBootstrapTestServer(t, database, "retire-node")
+	if err := database.UpsertInventory(context.Background(), server.ID, protocol.Inventory{Repositories: []protocol.Repository{{
+		Path: "/srv/retire-node", Name: "retire-node", RemoteURL: "https://example.com/retire-node.git", Branch: "main", CommitSHA: "abc123",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeServerBootstrapper{uninstallResult: sshbootstrap.UninstallResult{ServerID: server.ID, Hostname: "retire-node.local"}}
 	api := &API{store: database, bootstrapper: fake, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	response := directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/ssh/uninstall", server.ID, uninstallInput(server.Name), &store.Session{UserID: "test-user"}, api.uninstallServerSSH)
@@ -251,6 +257,12 @@ func TestUninstallServerSSHRevokesAfterRemoteCleanup(t *testing.T) {
 	}
 	if _, err := database.AuthenticateAgent(context.Background(), agentToken); err == nil {
 		t.Fatal("uninstalled Agent credential remained valid")
+	}
+	if workspaces, err := database.ListWorkspaces(context.Background()); err != nil || len(workspaces) != 0 {
+		t.Fatalf("uninstalled server workspaces remained: %#v %v", workspaces, err)
+	}
+	if projects, err := database.ListProjects(context.Background()); err != nil || len(projects) != 0 {
+		t.Fatalf("uninstalled server orphaned projects remained: %#v %v", projects, err)
 	}
 	for _, secret := range []string{"ssh-secret", "private-key-secret"} {
 		if strings.Contains(response.Body.String(), secret) {

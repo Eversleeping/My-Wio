@@ -603,6 +603,11 @@ func TestRevokeServerStillRevokesRegularServers(t *testing.T) {
 	if _, err := database.CreateRepairEnrollment(ctx, server.ID, "pending-repair-token", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{
+		Path: "/srv/retired-project", Name: "retired-project", RemoteURL: "https://example.com/retired-project.git", Branch: "main", CommitSHA: "abc123",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.RevokeServer(ctx, server.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -614,6 +619,123 @@ func TestRevokeServerStillRevokesRegularServers(t *testing.T) {
 	}
 	if _, err := database.ConsumeEnrollment(ctx, "pending-repair-token"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("revoked server repair enrollment remained usable: %v", err)
+	}
+	var serverRows int
+	if err := database.DB.GetContext(ctx, &serverRows, database.Q("SELECT COUNT(*) FROM servers WHERE id=?"), server.ID); err != nil || serverRows != 0 {
+		t.Fatalf("revoked server record remained: %d %v", serverRows, err)
+	}
+	if workspaces, err := database.ListWorkspaces(ctx); err != nil || len(workspaces) != 0 {
+		t.Fatalf("revoked server workspaces remained: %#v %v", workspaces, err)
+	}
+	if projects, err := database.ListProjects(ctx); err != nil || len(projects) != 0 {
+		t.Fatalf("revoked server orphaned projects remained: %#v %v", projects, err)
+	}
+}
+
+func TestOpenPurgesLegacyRevokedServerRecords(t *testing.T) {
+	databaseURL := filepath.Join(t.TempDir(), "legacy-revoked.db") + "?_pragma=foreign_keys(1)"
+	database, err := Open(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	retired := enrollProjectImportTestServer(t, database, "legacy-retired")
+	survivor := enrollProjectImportTestServer(t, database, "legacy-survivor")
+	if err := database.UpsertInventory(ctx, retired.ID, protocol.Inventory{Repositories: []protocol.Repository{
+		{Path: "/srv/orphan", Name: "orphan", RemoteURL: "https://example.com/orphan.git", Branch: "main", CommitSHA: "orphan-sha"},
+		{Path: "/srv/shared-retired", Name: "shared", RemoteURL: "https://example.com/shared.git", Branch: "main", CommitSHA: "shared-old"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, survivor.ID, protocol.Inventory{Repositories: []protocol.Repository{{
+		Path: "/srv/shared-survivor", Name: "shared", RemoteURL: "https://example.com/shared.git", Branch: "main", CommitSHA: "shared-new",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var orphanWorkspace Workspace
+	for _, workspace := range workspaces {
+		if workspace.ServerID == retired.ID && workspace.Path == "/srv/orphan" {
+			orphanWorkspace = workspace
+		}
+	}
+	if orphanWorkspace.ID == "" {
+		t.Fatalf("orphan workspace not found: %#v", workspaces)
+	}
+	threadID := NewID()
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO codex_threads(id,workspace_id,title,status) VALUES(?,?,?,'idle')"), threadID, orphanWorkspace.ID, "legacy thread"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), NewID(), threadID, 1, "user.message", time.Now().UTC(), `{}`); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := protocol.CodexCapabilityResult{Supported: true, Data: json.RawMessage(`{"ok":true}`)}
+	if err := database.SaveCodexSnapshot(ctx, "workspace", orphanWorkspace.ID, "skills.list", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SaveCodexSnapshot(ctx, "thread", threadID, "goal", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO deployment_targets(id,project_id,server_id,environment,repository) VALUES(?,?,?,?,?)"), NewID(), orphanWorkspace.ProjectID, retired.ID, "production", "repo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRepairEnrollment(ctx, retired.ID, "legacy-repair-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE servers SET revoked_at=?,status='offline' WHERE id=?"), time.Now().UTC(), retired.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	var retiredRows int
+	if err := reopened.DB.GetContext(ctx, &retiredRows, reopened.Q("SELECT COUNT(*) FROM servers WHERE id=?"), retired.ID); err != nil || retiredRows != 0 {
+		t.Fatalf("legacy revoked server remained: %d %v", retiredRows, err)
+	}
+	remainingWorkspaces, err := reopened.ListWorkspaces(ctx)
+	if err != nil || len(remainingWorkspaces) != 1 || remainingWorkspaces[0].ServerID != survivor.ID || remainingWorkspaces[0].Path != "/srv/shared-survivor" {
+		t.Fatalf("unexpected workspaces after legacy cleanup: %#v %v", remainingWorkspaces, err)
+	}
+	remainingProjects, err := reopened.ListProjects(ctx)
+	if err != nil || len(remainingProjects) != 1 || remainingProjects[0].Name != "shared" || remainingProjects[0].WorkspaceCount != 1 {
+		t.Fatalf("shared project was not preserved: %#v %v", remainingProjects, err)
+	}
+	for table, query := range map[string]string{
+		"events":             "SELECT COUNT(*) FROM events WHERE stream_id=?",
+		"codex snapshots":    "SELECT COUNT(*) FROM codex_snapshots WHERE scope_id IN (?,?)",
+		"deployment targets": "SELECT COUNT(*) FROM deployment_targets WHERE server_id=?",
+	} {
+		var count int
+		var queryErr error
+		if table == "codex snapshots" {
+			queryErr = reopened.DB.GetContext(ctx, &count, reopened.Q(query), orphanWorkspace.ID, threadID)
+		} else if table == "events" {
+			queryErr = reopened.DB.GetContext(ctx, &count, reopened.Q(query), threadID)
+		} else {
+			queryErr = reopened.DB.GetContext(ctx, &count, reopened.Q(query), retired.ID)
+		}
+		if queryErr != nil || count != 0 {
+			t.Fatalf("legacy %s remained: %d %v", table, count, queryErr)
+		}
+	}
+	if _, err := reopened.AuthenticateAgent(ctx, "legacy-retired-agent"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("legacy Agent credential remained usable: %v", err)
+	}
+	if _, err := reopened.ConsumeEnrollment(ctx, "legacy-repair-token"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("legacy repair enrollment remained usable: %v", err)
+	}
+	if authenticated, err := reopened.AuthenticateAgent(ctx, "legacy-survivor-agent"); err != nil || authenticated != survivor.ID {
+		t.Fatalf("surviving Agent was affected: %q %v", authenticated, err)
 	}
 }
 

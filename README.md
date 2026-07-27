@@ -156,7 +156,7 @@ Codex provider 配置保存在 `/var/lib/wio-agent/.codex/config.toml`。注册�
 
 Git 和 Docker 未安装时，服务器仍可注册并上报基础指标，但项目发现、Git 操作和部署功能会在完成页面或服务器列表中显示为不可用。Agent 管理的克隆根目录和发布根目录默认分别为 `/var/lib/wio-agent/projects` 与 `/var/lib/wio-agent/releases`。已有服务器可通过“修复注册”重新安装 Agent、更新 Codex/Git 凭据和部署依赖助手，而无需删除服务器记录。
 
-服务器不再使用时，可从服务器列表执行“下线服务器”。彻底下线需要重新提供临时 SSH 凭据并确认目标主机指纹；Wio 会先核对目标机 `/etc/wio-agent/config.json` 中的服务器 ID，再停止并删除 Wio systemd 服务、Agent 二进制、`wio-agent` 用户、`/etc/wio-agent` 与 `/var/lib/wio-agent`，最后撤销控制面中的服务器记录和 Agent Token。该操作会删除 Agent 管理目录内的克隆项目、发布文件、Codex/Git 配置及本地凭据，但不会删除 `/srv`、`/opt`、`/home` 等外部目录中的项目，也不会卸载 Docker、Git、Node.js、npm 或安装 Playwright 时加入的系统依赖。若服务器已经失联，可使用“仅撤销记录”使控制面中的 Agent Token 失效；此兜底操作不会清理远端 Agent 和凭据文件，应在主机恢复后手工处理。
+服务器不再使用时，可从服务器列表执行“下线服务器”。彻底下线需要重新提供临时 SSH 凭据并确认目标主机指纹；Wio 会先核对目标机 `/etc/wio-agent/config.json` 中的服务器 ID，再停止并删除 Wio systemd 服务、Agent 二进制、`wio-agent` 用户、`/etc/wio-agent` 与 `/var/lib/wio-agent`，最后删除控制面中的服务器、Agent Token、关联工作区、Codex 会话、部署和操作记录。仅由该服务器使用且下线后已无工作区或部署目标的项目记录也会一并删除；仍由其他服务器使用的共享项目会保留。该操作会删除 Agent 管理目录内的克隆项目、发布文件、Codex/Git 配置及本地凭据，但不会删除 `/srv`、`/opt`、`/home` 等外部目录中的项目，也不会卸载 Docker、Git、Node.js、npm 或安装 Playwright 时加入的系统依赖。若服务器已经失联，可使用“仅撤销记录”删除同一批控制面记录并使 Agent Token 失效；此兜底操作不会清理远端 Agent 和凭据文件，应在主机恢复后手工处理。
 
 ## 项目与工作区
 
