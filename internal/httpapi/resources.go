@@ -1887,12 +1887,41 @@ func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	turnID, err := a.store.LatestActiveTurnID(r.Context(), thread.ID)
-	if errors.Is(err, sql.ErrNoRows) || turnID == "" {
-		writeError(w, http.StatusConflict, "active Codex turn is not ready to interrupt")
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "could not identify active Codex turn")
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not identify active Codex turn")
+	activeOperation, operationErr := a.store.ActiveCodexTurnOperation(r.Context(), thread.ID)
+	if operationErr != nil && !errors.Is(operationErr, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "could not identify queued Codex turn")
+		return
+	}
+	if operationErr == nil && activeOperation.Status == "queued" {
+		cancelled, cancelErr := a.store.CancelOperation(r.Context(), activeOperation.ID, "cancelled before Codex turn started")
+		if cancelErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not cancel queued Codex turn")
+			return
+		}
+		if cancelled {
+			_ = a.store.SetThreadStatus(r.Context(), thread.ID, "idle")
+			_ = a.store.MarkScheduledTaskByOperation(r.Context(), activeOperation.ID, "cancelled", "cancelled before Codex turn started")
+			event, eventErr := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.cancelled", Payload: eventPayload(map[string]string{"operation_id": activeOperation.ID, "source": "control", "text": "cancelled before Codex turn started"})})
+			if eventErr == nil {
+				a.hub.Publish(event)
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"operation_id": activeOperation.ID, "cancelled": true})
+			return
+		}
+		// A concurrent Agent delivery won the race. Re-read the event stream;
+		// if a turn was accepted we can send a precise interrupt below.
+		turnID, err = a.store.LatestActiveTurnID(r.Context(), thread.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "could not identify active Codex turn")
+			return
+		}
+	}
+	if turnID == "" && operationErr != nil {
+		writeError(w, http.StatusConflict, "active Codex turn is not ready to interrupt")
 		return
 	}
 	command := protocol.InterruptTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, TurnID: turnID}

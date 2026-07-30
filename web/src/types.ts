@@ -28,6 +28,34 @@ export interface Thread { id: string; workspace_id: string; project_id: string; 
 export type CodexSnapshotState = "idle" | "loading" | "refreshing" | "succeeded" | "failed" | "unsupported";
 export interface CodexSnapshot<T> { status: CodexSnapshotState; supported: boolean; reason: string; codex_version: string; data: T | null; error: string; requested_at: string | null; updated_at: string | null }
 export interface CodexGoal { thread_id: string; objective: string; status: string; token_budget: number | null; tokens_used: number; time_used_seconds: number; created_at: number; updated_at: number }
+export interface ScheduledTask {
+  id: string;
+  thread_id: string;
+  thread_title: string;
+  workspace_id: string;
+  project_id: string;
+  project_name: string;
+  server_id: string;
+  server_name: string;
+  server_status: string;
+  codex_thread_id: string;
+  workspace_path: string;
+  name: string;
+  prompt: string;
+  schedule: string;
+  timezone: string;
+  enabled: boolean;
+  model: string;
+  reasoning_effort: string;
+  approval_mode: string;
+  next_run_at: string;
+  last_run_at: string | null;
+  last_run_status: string;
+  last_run_message: string;
+  last_operation_id: string;
+  created_at: string;
+  updated_at: string;
+}
 export interface CodexStatusData { model?: string; reasoning_effort?: string; approval_policy?: string; account_type?: string; rate_limits_available?: boolean; rate_limits?: Array<{ name: string; used_percent?: number; resets_at?: string; detail?: string }>; [key: string]: unknown }
 export interface CodexMCPServer { name: string; auth_status: string; server_name: string; server_version: string; tools: string[]; resource_count: number; resource_template_count: number }
 export interface CodexSkill { name: string; description: string; path: string; scope: "user" | "repo" | "system" | "admin" | string; enabled: boolean; display_name?: string; short_description?: string }

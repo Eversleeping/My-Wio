@@ -41,6 +41,29 @@ func TestFindString(t *testing.T) {
 	}
 }
 
+func TestClientInfoDoesNotIdentifyAsWio(t *testing.T) {
+	adapter := New("echo", slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.StreamEvent) error { return nil })
+	info := adapter.clientInfo(context.Background())
+	if info["name"] == "wio" || info["title"] == "Wio" {
+		t.Fatalf("Codex initialize client info still identifies as Wio: %#v", info)
+	}
+	if info["name"] != "codex_cli_rs" || info["title"] != "Codex CLI" {
+		t.Fatalf("unexpected Codex client info: %#v", info)
+	}
+}
+
+func TestBestEffortInterruptReturnsWhenTurnAlreadyEnded(t *testing.T) {
+	adapter := &Adapter{turns: map[string]turnState{"thread-1": {CodexThread: "codex-1", TurnID: "turn-1", Active: false}}}
+	called := false
+	err := adapter.interrupt(context.Background(), protocol.InterruptTurnCommand{ThreadID: "thread-1", BestEffort: true}, func(context.Context, string, any) (json.RawMessage, error) {
+		called = true
+		return nil, errors.New("interrupt should not be sent")
+	})
+	if err != nil || called {
+		t.Fatalf("best-effort interrupt did not no-op: err=%v called=%v", err, called)
+	}
+}
+
 func TestCodexOperationReturnsUnsupportedForMissingMethod(t *testing.T) {
 	a := &Adapter{}
 	request := func(context.Context, string, any) (json.RawMessage, error) {

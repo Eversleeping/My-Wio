@@ -251,6 +251,30 @@ CREATE TABLE IF NOT EXISTS agent_operations (
 
 CREATE INDEX IF NOT EXISTS operations_server_idx ON agent_operations(server_id, status, created_at);
 
+CREATE TABLE IF NOT EXISTS codex_scheduled_tasks (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES codex_threads(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  model TEXT NOT NULL DEFAULT '',
+  reasoning_effort TEXT NOT NULL DEFAULT '',
+  approval_mode TEXT NOT NULL DEFAULT 'on-request',
+  next_run_at TIMESTAMP NOT NULL,
+  last_run_at TIMESTAMP,
+  last_run_status TEXT NOT NULL DEFAULT '',
+  last_run_message TEXT NOT NULL DEFAULT '',
+  last_operation_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS codex_scheduled_tasks_due_idx ON codex_scheduled_tasks(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS codex_scheduled_tasks_thread_idx ON codex_scheduled_tasks(thread_id);
+
 CREATE TABLE IF NOT EXISTS control_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

@@ -213,6 +213,63 @@ func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
 	}
 }
 
+func TestCancelledQueuedTurnIgnoresLateAgentEvents(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "cancel-node", []string{"/srv"}, "cancel-enrollment-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "cancel-enrollment-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "cancel-node.local", "cancel-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/cancel", Name: "cancel"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "cancelled turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ClaimThreadForTurn(ctx, thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.cancelled", Payload: json.RawMessage(`{"operation_id":"cancelled-operation","source":"control","text":"cancelled before Codex turn started"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetThreadStatus(ctx, thread.ID, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	late := protocol.StreamEvent{StreamID: thread.ID, Kind: "turn.accepted", Payload: json.RawMessage(`{"codex_thread_id":"late-codex","turn_id":"late-turn"}`)}
+	payload, err := json.Marshal(late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.Thread(ctx, thread.ID)
+	if err != nil || updated.Status != "idle" {
+		t.Fatalf("late accepted event resurrected cancelled thread: %#v %v", updated, err)
+	}
+	events, err := database.Events(ctx, thread.ID, 0, 10)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("late accepted event was persisted after cancellation: %#v %v", events, err)
+	}
+}
+
 func TestCodexFirstResponseGeneratesTitleAndExplicitNameOverridesIt(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {
@@ -381,6 +438,18 @@ func TestUpsertApprovalStoresAndReopensReusedRequestID(t *testing.T) {
 	if resolved.Status != "resolved" || resolved.Decision != "cancelled" {
 		t.Fatalf("approval was not resolved with its turn: %#v", resolved)
 	}
+	cancelled := protocol.StreamEvent{EventID: "cancelled-event", StreamID: thread.ID, Kind: "codex.turn.cancelled", Payload: json.RawMessage(`{"turn":{"status":"cancelled"}}`)}
+	cancelledPayload, err := json.Marshal(cancelled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: cancelledPayload}); err != nil {
+		t.Fatal(err)
+	}
+	updatedThread, err = database.Thread(ctx, thread.ID)
+	if err != nil || updatedThread.Status != "interrupted" {
+		t.Fatalf("cancelled turn did not release thread status: %#v %v", updatedThread, err)
+	}
 
 	reused := protocol.StreamEvent{StreamID: thread.ID, Kind: "approval.requested", Payload: json.RawMessage(`{"request_id":"0","kind":"item/commandExecution/requestApproval","detail":{"command":"ps aux","itemId":"call-new","turnId":"turn-new"}}`)}
 	if err := gateway.upsertApproval(ctx, reused); err != nil {
@@ -421,6 +490,7 @@ func TestCompletedTurnStatusUsesOfficialTerminalStatus(t *testing.T) {
 	}{
 		{`{"turn":{"status":"completed"}}`, "idle"},
 		{`{"turn":{"status":"interrupted"}}`, "interrupted"},
+		{`{"turn":{"status":"cancelled"}}`, "interrupted"},
 		{`{"turn":{"status":"failed","error":{"message":"provider disconnected"}}}`, "failed"},
 		{`{"turn":{"status":"inProgress"}}`, "failed"},
 		{`{}`, "failed"},

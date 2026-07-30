@@ -1699,7 +1699,7 @@ func (s *Store) CompleteOperation(ctx context.Context, r protocol.OperationResul
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=?"), r.Status, r.Message, data, time.Now().UTC(), r.OperationID)
+	_, err = s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=? AND status IN ('queued','delivered','running')"), r.Status, r.Message, data, time.Now().UTC(), r.OperationID)
 	return err
 }
 
@@ -1819,8 +1819,12 @@ func (s *Store) LatestActiveTurnID(ctx context.Context, threadID string) (string
 		Kind    string `db:"kind"`
 		Payload string `db:"payload"`
 	}
-	if err := s.DB.GetContext(ctx, &event, s.Q("SELECT kind,payload FROM events WHERE stream_id=? AND kind IN ('turn.accepted','codex.turn.started') ORDER BY sequence DESC LIMIT 1"), threadID); err != nil {
+	if err := s.DB.GetContext(ctx, &event, s.Q("SELECT kind,payload FROM events WHERE stream_id=? AND kind IN ('turn.accepted','codex.turn.started','codex.turn.completed','codex.turn.failed','codex.turn.cancelled') ORDER BY sequence DESC LIMIT 1"), threadID); err != nil {
 		return "", err
+	}
+	switch event.Kind {
+	case "codex.turn.completed", "codex.turn.failed", "codex.turn.cancelled":
+		return "", nil
 	}
 	var value struct {
 		TurnID string `json:"turn_id"`

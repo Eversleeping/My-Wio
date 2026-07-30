@@ -105,6 +105,13 @@ func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnComma
 	return a.startTurn(ctx, command, a.request)
 }
 
+// Warm starts and initializes the app-server without creating a Codex thread.
+// Agents call this after connecting so the first user turn does not pay the
+// process startup and handshake cost.
+func (a *Adapter) Warm(ctx context.Context) error {
+	return a.ensureStarted(ctx)
+}
+
 func (a *Adapter) RewriteTurn(ctx context.Context, command protocol.RewriteTurnCommand) error {
 	if err := a.ensureStarted(ctx); err != nil {
 		return err
@@ -158,6 +165,9 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 		a.threads[base.CodexThread] = base.ThreadID
 		a.mu.Unlock()
 	}
+	if base.CodexThread == "" && base.ThreadID != "" && (strings.HasPrefix(kind, "codex.goal.") || kind == "codex.mcp.list" || kind == "codex.thread.compact") {
+		base.CodexThread = a.waitForCodexThread(ctx, base.ThreadID)
+	}
 	if kind == "codex.status.snapshot" {
 		return codexStatusOperation(ctx, base.CodexVersion, request)
 	}
@@ -175,6 +185,7 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 		if err := json.Unmarshal(payload, &command); err != nil {
 			return protocol.CodexCapabilityResult{}, err
 		}
+		command.CodexThread = base.CodexThread
 		if command.CodexThread == "" {
 			return unsupported(command.CodexVersion, "Codex thread is not initialized"), nil
 		}
@@ -718,20 +729,86 @@ func (a *Adapter) Interrupt(ctx context.Context, command protocol.InterruptTurnC
 }
 
 func (a *Adapter) interrupt(ctx context.Context, command protocol.InterruptTurnCommand, request requestFunc) error {
-	a.mu.Lock()
-	state := a.turns[command.ThreadID]
-	a.mu.Unlock()
-	if command.CodexThread != "" {
-		state.CodexThread = command.CodexThread
+	// An interrupt can arrive immediately after a turn operation is delivered.
+	// Give the start request a short window to publish its turn state instead of
+	// failing the cancel action just because both operations were dispatched
+	// concurrently.
+	wait := time.NewTicker(50 * time.Millisecond)
+	defer wait.Stop()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for {
+		a.mu.Lock()
+		state := a.turns[command.ThreadID]
+		a.mu.Unlock()
+		knownCodexThread := state.CodexThread != ""
+		if command.CodexThread != "" {
+			state.CodexThread = command.CodexThread
+		}
+		if command.TurnID != "" {
+			state.TurnID = command.TurnID
+		}
+		if !state.Active && knownCodexThread && command.TurnID == "" {
+			if command.BestEffort {
+				return nil
+			}
+			return errors.New("no active turn is known for this session")
+		}
+		if state.CodexThread != "" && state.TurnID != "" && (command.TurnID != "" || state.Active) {
+			_, err := request(ctx, "turn/interrupt", map[string]string{"threadId": state.CodexThread, "turnId": state.TurnID})
+			if err != nil && command.BestEffort && command.TurnID == "" && isNoActiveTurnError(err) {
+				return nil
+			}
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			if command.BestEffort {
+				return nil
+			}
+			return errors.New("no active turn is known for this session")
+		case <-wait.C:
+		}
 	}
-	if command.TurnID != "" {
-		state.TurnID = command.TurnID
+}
+
+func isNoActiveTurnError(err error) bool {
+	var rpcErr *rpcRequestError
+	if !errors.As(err, &rpcErr) {
+		return false
 	}
-	if state.CodexThread == "" || state.TurnID == "" {
-		return errors.New("no active turn is known for this session")
+	message := strings.ToLower(rpcErr.Message)
+	return strings.Contains(message, "turn not found") || strings.Contains(message, "no active turn") || strings.Contains(message, "not found")
+}
+
+func (a *Adapter) waitForCodexThread(ctx context.Context, threadID string) string {
+	waitContext, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		a.mu.Lock()
+		for codexThread, wioThread := range a.threads {
+			if wioThread == threadID {
+				a.mu.Unlock()
+				return codexThread
+			}
+		}
+		for _, state := range a.turns {
+			if state.CodexThread != "" && a.threads[state.CodexThread] == threadID {
+				a.mu.Unlock()
+				return state.CodexThread
+			}
+		}
+		a.mu.Unlock()
+		select {
+		case <-waitContext.Done():
+			return ""
+		case <-ticker.C:
+		}
 	}
-	_, err := request(ctx, "turn/interrupt", map[string]string{"threadId": state.CodexThread, "turnId": state.TurnID})
-	return err
 }
 
 func (a *Adapter) Decide(command protocol.ApprovalDecisionCommand) error {
@@ -858,7 +935,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	initializeContext, initializeCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer initializeCancel()
 	_, err = a.request(initializeContext, "initialize", map[string]any{
-		"clientInfo":   map[string]string{"name": "wio", "title": "Wio", "version": "0.1.0"},
+		"clientInfo":   a.clientInfo(initializeContext),
 		"capabilities": map[string]bool{"experimentalApi": true},
 	})
 	if err != nil {
@@ -871,6 +948,22 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 		return fmt.Errorf("initialize Codex app-server: %w", err)
 	}
 	return a.write(map[string]any{"method": "initialized", "params": map[string]any{}})
+}
+
+func (a *Adapter) clientInfo(ctx context.Context) map[string]string {
+	version := "unknown"
+	versionContext, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(versionContext, a.command, "--version").Output(); err == nil {
+		version = strings.Join(strings.Fields(string(output)), " ")
+		if version == "" {
+			version = "unknown"
+		}
+		if len(version) > 64 {
+			version = version[:64]
+		}
+	}
+	return map[string]string{"name": "codex_cli_rs", "title": "Codex CLI", "version": version}
 }
 
 func (a *Adapter) request(ctx context.Context, method string, params any) (json.RawMessage, error) {

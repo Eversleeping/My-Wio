@@ -436,6 +436,9 @@ type InterruptTurnCommand struct {
 	ThreadID    string `json:"thread_id"`
 	CodexThread string `json:"codex_thread_id"`
 	TurnID      string `json:"turn_id,omitempty"`
+	// BestEffort is used when a queued turn may already have crossed the Agent
+	// boundary. If no turn exists, the Agent treats the interrupt as a no-op.
+	BestEffort bool `json:"best_effort,omitempty"`
 }
 
 type GitImportCommand struct {

@@ -50,6 +50,7 @@ afterEach(() => {
 test("starts the first turn after a new goal is persisted", async () => {
   const user = userEvent.setup();
   const value = thread("goal-native");
+  value.codex_thread_id = "";
   const requests: Array<{ url: string; method: string; body: Record<string, unknown> | null }> = [];
   let goalSaved = false;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -79,6 +80,7 @@ test("starts the first turn after a new goal is persisted", async () => {
   await user.click(save);
 
   await waitFor(() => expect(requests.some(request => request.url.includes(`/threads/${value.id}/turns`) && request.method === "POST")).toBe(true));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Goal" })).not.toBeInTheDocument());
   const goalIndex = requests.findIndex(request => request.url.endsWith(`/threads/${value.id}/goal`) && request.method === "PUT");
   const turnIndex = requests.findIndex(request => request.url.endsWith(`/threads/${value.id}/turns`) && request.method === "POST");
   expect(goalIndex).toBeGreaterThanOrEqual(0);

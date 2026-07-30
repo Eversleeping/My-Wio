@@ -136,6 +136,16 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Start the app-server while the Agent connection is becoming ready. The
+	// first user turn can then reuse the initialized process instead of paying
+	// the process startup and handshake cost on its critical path.
+	warmContext, warmCancel := context.WithTimeout(streamContext, 20*time.Second)
+	go func() {
+		defer warmCancel()
+		if err := c.codex.Warm(warmContext); err != nil && warmContext.Err() == nil {
+			c.log.Warn("could not warm Codex app-server", "error", err)
+		}
+	}()
 	_ = c.enqueueHeartbeat(ctx)
 	_ = c.enqueueMetrics(ctx)
 	_ = c.enqueueInventory(ctx)

@@ -81,7 +81,9 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 	if err := sendKeepalive(stream, time.Now()); err != nil {
 		return err
 	}
-	ticker := time.NewTicker(2 * time.Second)
+	// Pending operations are also flushed when Wake is signalled. Keep a short
+	// fallback interval for callers that cannot signal the gateway directly.
+	ticker := time.NewTicker(250 * time.Millisecond)
 	keepalive := time.NewTicker(g.keepaliveEvery)
 	defer ticker.Stop()
 	defer keepalive.Stop()
@@ -159,6 +161,18 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			return err
 		}
 		event.Payload = security.RedactJSON(event.Payload)
+		if event.Kind != "user.message" {
+			cancelled, err := g.store.HasPendingTurnCancellation(ctx, event.StreamID)
+			if err != nil {
+				return err
+			}
+			if cancelled {
+				// A queued turn can cross the Agent boundary just as the UI
+				// cancels it. Its late notifications must not resurrect the
+				// cancelled session or leak stale output into the conversation.
+				return nil
+			}
+		}
 		if strings.Contains(event.Kind, "approval.requested") {
 			if err := g.upsertApproval(ctx, event); err != nil {
 				g.log.Error("could not persist approval request", "thread_id", event.StreamID, "error", err)
@@ -183,16 +197,23 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			if err := g.store.SetThreadStatus(ctx, event.StreamID, "running"); err != nil {
 				return err
 			}
+			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, "running", "")
 			g.hub.Publish(saved)
 			return nil
 		}
-		if event.Kind == "codex.turn.completed" {
+		if event.Kind == "codex.turn.completed" || event.Kind == "codex.turn.cancelled" {
 			_ = g.setThreadTitleFromFirstResponse(ctx, event.StreamID)
-			_ = g.store.SetThreadStatus(ctx, event.StreamID, completedTurnStatus(event.Payload))
+			status := completedTurnStatus(event.Payload)
+			if event.Kind == "codex.turn.cancelled" {
+				status = "interrupted"
+			}
+			_ = g.store.SetThreadStatus(ctx, event.StreamID, status)
+			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, scheduledTurnStatus(status), scheduledTurnMessage(event.Payload))
 			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
 		if event.Kind == "codex.turn.failed" {
 			_ = g.store.SetThreadStatus(ctx, event.StreamID, "failed")
+			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, "failed", scheduledTurnMessage(event.Payload))
 			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
 		return g.publish(ctx, event)
@@ -207,6 +228,12 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		if operation.ServerID != serverID {
 			return errors.New("operation result server mismatch")
+		}
+		// A queued or in-flight operation may be cancelled from the UI. Ignore a
+		// late Agent result so it cannot resurrect a cancelled turn or overwrite
+		// its snapshot with stale data.
+		if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
+			return nil
 		}
 		if operation.Kind == "git.workspace.clone" {
 			var command protocol.GitWorkspaceCloneCommand
@@ -504,6 +531,18 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if err != nil {
 			return err
 		}
+		updatedOperation, statusErr := g.store.Operation(ctx, result.OperationID)
+		if statusErr != nil {
+			return statusErr
+		}
+		if updatedOperation.Status == "cancelled" {
+			return nil
+		}
+		if operation.Kind == "codex.turn.start" || operation.Kind == "codex.turn.rewrite" {
+			if result.Status == "succeeded" {
+				_ = g.store.MarkScheduledTaskByOperation(ctx, result.OperationID, "running", "")
+			}
+		}
 		if (operation.Kind == "codex.turn.start" || operation.Kind == "codex.turn.rewrite") && result.Status == "failed" {
 			if err := g.failCodexTurn(ctx, operation, result); err != nil {
 				return err
@@ -621,7 +660,10 @@ func completedTurnStatus(payload json.RawMessage) string {
 	switch value.Turn.Status {
 	case "completed":
 		return "idle"
-	case "interrupted", "failed":
+	case "interrupted", "cancelled", "failed":
+		if value.Turn.Status == "cancelled" {
+			return "interrupted"
+		}
 		return value.Turn.Status
 	default:
 		return "failed"
@@ -649,11 +691,51 @@ func (g *Gateway) failCodexTurn(ctx context.Context, operation store.Operation, 
 	if err := g.store.SetThreadStatus(ctx, threadID, "failed"); err != nil {
 		return err
 	}
+	_ = g.store.MarkScheduledTaskByOperation(ctx, result.OperationID, "failed", result.Message)
 	payload, err := json.Marshal(map[string]string{"operation_id": result.OperationID, "text": result.Message})
 	if err != nil {
 		return err
 	}
 	return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":turn-failed", StreamID: threadID, Kind: "codex.turn.failed", Payload: security.RedactJSON(payload)})
+}
+
+func scheduledTurnStatus(status string) string {
+	switch status {
+	case "idle":
+		return "succeeded"
+	case "interrupted":
+		return "cancelled"
+	default:
+		return "failed"
+	}
+}
+
+func scheduledTurnMessage(payload json.RawMessage) string {
+	var value struct {
+		Error   json.RawMessage `json:"error"`
+		Text    string          `json:"text"`
+		Message string          `json:"message"`
+	}
+	if json.Unmarshal(payload, &value) != nil {
+		return ""
+	}
+	if value.Text != "" {
+		return value.Text
+	}
+	if value.Message != "" {
+		return value.Message
+	}
+	var errorText string
+	if json.Unmarshal(value.Error, &errorText) == nil && errorText != "" {
+		return errorText
+	}
+	var detail struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(value.Error, &detail) == nil {
+		return detail.Message
+	}
+	return ""
 }
 
 func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID string) error {
@@ -672,8 +754,49 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 		if err := stream.Send(&protocol.ControlEnvelope{OperationID: op.ID, Kind: op.Kind, CreatedAtUnixMS: op.CreatedAt.UnixMilli(), PayloadJSON: payload}); err != nil {
 			return err
 		}
-		_ = g.store.MarkDelivered(stream.Context(), op.ID)
+		if err := g.store.MarkDelivered(stream.Context(), op.ID); err != nil {
+			g.log.Warn("could not mark Agent operation delivered", "operation_id", op.ID, "error", err)
+			continue
+		}
+		updated, statusErr := g.store.Operation(stream.Context(), op.ID)
+		if statusErr == nil && updated.Status == "cancelled" && isCodexTurnOperation(op.Kind) {
+			if err := g.queueBestEffortInterrupt(stream.Context(), serverID, op); err != nil {
+				g.log.Warn("could not queue best-effort Codex interrupt", "operation_id", op.ID, "error", err)
+			}
+		}
 	}
+	return nil
+}
+
+func isCodexTurnOperation(kind string) bool {
+	return kind == "codex.turn.start" || kind == "codex.turn.rewrite"
+}
+
+func (g *Gateway) queueBestEffortInterrupt(ctx context.Context, serverID string, operation store.Operation) error {
+	var command protocol.InterruptTurnCommand
+	switch operation.Kind {
+	case "codex.turn.start":
+		var start protocol.StartTurnCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &start); err != nil {
+			return err
+		}
+		command = protocol.InterruptTurnCommand{ThreadID: start.ThreadID, CodexThread: start.CodexThread, BestEffort: true}
+	case "codex.turn.rewrite":
+		var rewrite protocol.RewriteTurnCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &rewrite); err != nil {
+			return err
+		}
+		command = protocol.InterruptTurnCommand{ThreadID: rewrite.Start.ThreadID, CodexThread: rewrite.Start.CodexThread, BestEffort: true}
+	default:
+		return nil
+	}
+	if command.ThreadID == "" {
+		return errors.New("Codex turn operation has no thread id")
+	}
+	if _, err := g.store.QueueOperation(ctx, serverID, "codex.turn.interrupt", command, "codex-cancel:"+operation.ID); err != nil {
+		return err
+	}
+	g.Wake(serverID)
 	return nil
 }
 

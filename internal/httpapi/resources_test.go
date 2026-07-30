@@ -681,6 +681,54 @@ func TestInterruptQueuesTheCurrentlyAcceptedTurnID(t *testing.T) {
 	}
 }
 
+func TestInterruptCancelsQueuedTurnBeforeDelivery(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "cancel-queued-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/cancel", Name: "cancel"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "cancel queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ClaimThreadForTurn(ctx, thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	operationID, err := database.QueueOperation(ctx, server.ID, "codex.turn.start", protocol.StartTurnCommand{ThreadID: thread.ID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: "cancel me"}, "cancel-queued-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/interrupt", thread.ID, nil, api.interruptTurn)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("queued interrupt returned %d: %s", response.Code, response.Body.String())
+	}
+	operation, err := database.Operation(ctx, operationID)
+	if err != nil || operation.Status != "cancelled" {
+		t.Fatalf("queued operation was not cancelled: %#v %v", operation, err)
+	}
+	updated, err := database.Thread(ctx, thread.ID)
+	if err != nil || updated.Status != "idle" {
+		t.Fatalf("thread was not released after cancellation: %#v %v", updated, err)
+	}
+	events, err := database.Events(ctx, thread.ID, 0, 10)
+	if err != nil || len(events) != 1 || events[0].Kind != "codex.turn.cancelled" {
+		t.Fatalf("unexpected cancellation event: %#v %v", events, err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: operationID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	operation, err = database.Operation(ctx, operationID)
+	if err != nil || operation.Status != "cancelled" {
+		t.Fatalf("late result overwrote cancelled operation: %#v %v", operation, err)
+	}
+}
+
 func TestCreateThreadIgnoresLegacyClientTitle(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "create-thread-title")

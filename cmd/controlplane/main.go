@@ -27,6 +27,7 @@ import (
 	"github.com/wio-platform/wio/internal/httpapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
+	"github.com/wio-platform/wio/internal/scheduler"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/store"
 	webassets "github.com/wio-platform/wio/web"
@@ -119,6 +120,11 @@ func run(log *slog.Logger) error {
 	go func() {
 		log.Info("Wio control plane listening", "address", listenerAddress, "version", buildinfo.Version)
 		errCh <- server.Serve(listener)
+	}()
+	go func() {
+		if runErr := scheduler.New(database, gateway, log).Run(agentContext); runErr != nil && !errors.Is(runErr, context.Canceled) {
+			log.Warn("scheduled Codex task runner stopped", "error", runErr)
+		}
 	}()
 	if runtime.GOOS == "linux" && envBoolDefault("WIO_CONTROL_AGENT_ENABLED", true) {
 		if config, configErr := controlPlaneAgentConfig(listenerAddress, controlAgentToken); configErr != nil {
