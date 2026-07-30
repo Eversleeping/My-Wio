@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SessionView } from "./App";
+import { ScheduledTaskDialog, SessionView } from "./App";
 import { I18nProvider } from "./i18n";
 import type { StreamEvent, Thread } from "./types";
 
@@ -135,4 +135,29 @@ test("queues context compaction from the slash command", async () => {
   await user.type(composer, "/compact");
   await user.click(await screen.findByRole("option", { name: /\/compact/ }));
   await waitFor(() => expect(requests.some(url => url.endsWith(`/threads/${value.id}/compact`))).toBe(true));
+});
+
+test("builds a weekly scheduled task from time and weekday selectors", async () => {
+  const user = userEvent.setup();
+  const value = thread("scheduled-selectors");
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if ((init?.method ?? "GET") === "POST") requests.push({ url, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+    return jsonResponse({ id: "scheduled-task" }, 201);
+  }));
+
+  render(<I18nProvider><ScheduledTaskDialog open initialThreadID={value.id} lockThread threads={[value]} notify={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} /></I18nProvider>);
+  await user.type(screen.getByLabelText("Name"), "Weekly review");
+  await user.type(screen.getByLabelText("Prompt"), "Review open issues");
+  await user.selectOptions(screen.getByLabelText("Frequency"), "weekly");
+  await user.selectOptions(screen.getByLabelText("Hour"), "08");
+  await user.selectOptions(screen.getByLabelText("Minute"), "30");
+  await user.selectOptions(screen.getByLabelText("Weekday"), "2");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0].url).toContain("/scheduled-tasks");
+  expect(requests[0].body.schedule).toBe("30 8 * * 2");
+  expect(requests[0].body.thread_id).toBe(value.id);
 });
