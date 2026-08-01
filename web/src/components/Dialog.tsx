@@ -10,6 +10,10 @@ export interface DialogProps {
   className?: string;
   /** Accessible label for the close button. Defaults to the generic "Close". */
   closeLabel?: string;
+  /** Prevents Escape, backdrop, and close-button dismissal while work is active. */
+  dismissDisabled?: boolean;
+  /** Optional element id describing the dialog contents. */
+  ariaDescribedBy?: string;
 }
 
 export interface DialogActionsProps {
@@ -67,11 +71,13 @@ export function DialogActions({ children }: DialogActionsProps) {
  * A modal dialog that preserves the existing application class names while
  * handling focus, keyboard dismissal, and nested-dialog stacking.
  */
-export function Dialog({ open, title, onClose, children, wide = false, className = "", closeLabel = "Close" }: DialogProps) {
+export function Dialog({ open, title, onClose, children, wide = false, className = "", closeLabel = "Close", dismissDisabled = false, ariaDescribedBy }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
+  const dismissDisabledRef = useRef(dismissDisabled);
   const titleID = useId();
   onCloseRef.current = onClose;
+  dismissDisabledRef.current = dismissDisabled;
 
   useLayoutEffect(() => {
     if (!open || !dialogRef.current) return;
@@ -87,7 +93,7 @@ export function Dialog({ open, title, onClose, children, wide = false, className
 
       if (event.key === "Escape") {
         event.preventDefault();
-        onCloseRef.current();
+        if (!dismissDisabledRef.current) onCloseRef.current();
         return;
       }
 
@@ -121,14 +127,14 @@ export function Dialog({ open, title, onClose, children, wide = false, className
   }, [open]);
 
   const handleBackdropMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.currentTarget === event.target && isTopDialog(dialogRef.current)) onCloseRef.current();
+    if (event.currentTarget === event.target && isTopDialog(dialogRef.current) && !dismissDisabledRef.current) onCloseRef.current();
   };
 
   if (!open) return null;
 
   return <div className="dialog-backdrop" role="presentation" onMouseDown={handleBackdropMouseDown}>
-    <div ref={dialogRef} className={`dialog ${wide ? "wide" : ""} ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby={titleID} tabIndex={-1}>
-      <div className="dialog-heading"><h2 id={titleID}>{title}</h2><button type="button" className="icon-button" onClick={() => onCloseRef.current()} aria-label={closeLabel} title={closeLabel}><X size={18} /></button></div>
+    <div ref={dialogRef} className={`dialog ${wide ? "wide" : ""} ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby={titleID} aria-describedby={ariaDescribedBy} tabIndex={-1}>
+      <div className="dialog-heading"><h2 id={titleID}>{title}</h2><button type="button" className="icon-button" disabled={dismissDisabled} onClick={() => onCloseRef.current()} aria-label={closeLabel} title={closeLabel}><X size={18} /></button></div>
       {children}
     </div>
   </div>;
