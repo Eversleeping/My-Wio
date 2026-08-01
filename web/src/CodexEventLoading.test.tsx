@@ -67,6 +67,40 @@ test("loads the first session view from its recent window without a cursor", asy
   expect(eventRequests).toEqual([`/api/threads/${value.id}/events?view=conversation`]);
 });
 
+test("loads earlier events with a before cursor and preserves the reading anchor", async () => {
+  const value = thread("earlier-window");
+  const eventRequests: string[] = [];
+  const recent = Array.from({ length: 500 }, (_, index) => event(value.id, index + 501, `Recent ${index + 501}`));
+  let renderedHeight = 1_000;
+  vi.stubGlobal("fetch", vi.fn(async input => {
+    const url = String(input);
+    if (!url.includes("/events")) return response([]);
+    eventRequests.push(url);
+    if (url.includes("before=501")) {
+      renderedHeight = 1_300;
+      return response([event(value.id, 499, "Earlier 499"), event(value.id, 500, "Earlier 500")]);
+    }
+    return response(recent);
+  }));
+
+  const user = userEvent.setup();
+  const { container } = render(session(value));
+  expect(await screen.findByText("Recent 501")).toBeInTheDocument();
+  const stream = container.querySelector<HTMLElement>(".event-stream")!;
+  Object.defineProperty(stream, "scrollHeight", { configurable: true, get: () => renderedHeight });
+  stream.scrollTop = 120;
+
+  await user.click(screen.getByRole("button", { name: "Load earlier messages" }));
+
+  expect(await screen.findByText("Earlier 499")).toBeInTheDocument();
+  expect(stream.scrollTop).toBe(420);
+  expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
+  expect(eventRequests).toEqual([
+    `/api/threads/${value.id}/events?view=conversation`,
+    `/api/threads/${value.id}/events?view=conversation&before=501&limit=500`
+  ]);
+});
+
 test("uses an incremental cursor and deduplicates replayed event IDs and sequences", async () => {
   const value = thread("deduplicated-increment");
   const eventRequests: string[] = [];

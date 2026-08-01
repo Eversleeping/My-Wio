@@ -81,6 +81,7 @@ import { api, APIError, patch, post, postStream, put, remove, setSession, socket
 import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
+import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "./components/Dialog";
 import { clearCodexComposerPreferences, defaultCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
 import { currentLocale, useI18n } from "./i18n";
 import {
@@ -142,6 +143,8 @@ import type {
 } from "./types";
 
 type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "monitoring" | "settings";
+type RealtimeScope = View | "approvals";
+type RealtimeRevisions = Record<RealtimeScope, number>;
 type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 type InstallLogEntry = { step: string; status: "running" | "done" | "error"; current: number; total: number; detail: string };
@@ -153,12 +156,25 @@ const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevision = { revision: number; minimumSequence: number | null };
 type StreamRevisions = Record<string, StreamRevision>;
 type DataCacheEntry = { data: unknown; dependency: unknown };
-type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number };
+type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean };
 
 const dataCache = new Map<string, DataCacheEntry>();
 const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
 const codexScrollPositions = new Map<string, number>();
 const codexAutoFollowThreshold = 96;
+const threadEventsPageSize = 500;
+const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "deployments", "monitoring", "settings", "approvals"];
+const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, deployments: 0, monitoring: 0, settings: 0, approvals: 0 });
+
+export function realtimeScopesForEvent(event: Pick<Partial<StreamEvent>, "kind">): RealtimeScope[] {
+  const kind = event.kind ?? "";
+  if (kind === "inventory.updated") return ["dashboard", "servers", "projects", "deployments", "monitoring"];
+  if (kind.startsWith("deployment.")) return ["dashboard", "deployments", "monitoring"];
+  if (kind.startsWith("agent.")) return ["dashboard", "servers", "projects", "deployments", "monitoring"];
+  if (kind.startsWith("approval.") || kind.startsWith("codex.approval.")) return ["codex", "approvals"];
+  if (kind === "user.message" || kind.startsWith("codex.") || kind.startsWith("thread.")) return ["dashboard", "codex"];
+  return allRealtimeScopes;
+}
 
 function setScrollTopImmediately(element: HTMLElement, top: number) {
   const scrollBehavior = element.style.scrollBehavior;
@@ -173,6 +189,23 @@ function latestScrollTop(element: HTMLElement) {
 
 function isNearCodexStreamBottom(element: HTMLElement) {
   return latestScrollTop(element) - element.scrollTop <= codexAutoFollowThreshold;
+}
+
+function useThrottledValue<T>(value: T, minimumInterval: number) {
+  const [throttled, setThrottled] = useState(value);
+  const lastAppliedAt = useRef(Date.now());
+  useEffect(() => {
+    if (Object.is(value, throttled)) return;
+    const remaining = minimumInterval - (Date.now() - lastAppliedAt.current);
+    const apply = () => {
+      lastAppliedAt.current = Date.now();
+      setThrottled(value);
+    };
+    if (remaining <= 0) { apply(); return; }
+    const timer = window.setTimeout(apply, remaining);
+    return () => window.clearTimeout(timer);
+  }, [minimumInterval, throttled, value]);
+  return throttled;
 }
 
 function clearCodexSessionMemory(threadID?: string) {
@@ -237,12 +270,12 @@ export default function App() {
   const [view, setView] = useState<View>(initialLocation.view);
   const [codexThreadID, setCodexThreadID] = useState(initialLocation.threadID);
   const [mobileNav, setMobileNav] = useState(false);
-  const [realtime, setRealtime] = useState(0);
+  const [realtimeRevisions, setRealtimeRevisions] = useState<RealtimeRevisions>(initialRealtimeRevisions);
   const [streamRevisions, setStreamRevisions] = useState<StreamRevisions>({});
   const [socketConnected, setSocketConnected] = useState(false);
   const [approvalSignal, setApprovalSignal] = useState(0);
   const [toast, setToast] = useState("");
-  const approvals = useData<Approval[]>(auth === "authenticated" ? "/approvals" : null, realtime);
+  const approvals = useData<Approval[]>(auth === "authenticated" ? "/approvals" : null, realtimeRevisions.approvals);
 
   const authenticate = useCallback((value: Session | null) => {
     if (!value) clearCodexSessionMemory();
@@ -277,6 +310,7 @@ export default function App() {
     let refreshTimer = 0;
     let stopped = false;
     const pendingStreams = new Map<string, number | null>();
+    const pendingRealtimeScopes = new Set<RealtimeScope>();
     const markPendingStream = (streamID: string, sequence?: number) => {
       const nextSequence = typeof sequence === "number" && Number.isInteger(sequence) && sequence > 0 ? sequence : null;
       const current = pendingStreams.get(streamID);
@@ -284,11 +318,22 @@ export default function App() {
       else if (current === null || nextSequence === null) pendingStreams.set(streamID, null);
       else pendingStreams.set(streamID, Math.min(current, nextSequence));
     };
+    const markPendingRealtimeScopes = (scopes: RealtimeScope[]) => {
+      for (const scope of scopes) pendingRealtimeScopes.add(scope);
+    };
     const scheduleRefresh = () => {
       if (refreshTimer) return;
       refreshTimer = window.setTimeout(() => {
         refreshTimer = 0;
-        setRealtime(value => value + 1);
+        if (pendingRealtimeScopes.size > 0) {
+          const scopes = Array.from(pendingRealtimeScopes);
+          pendingRealtimeScopes.clear();
+          setRealtimeRevisions(current => {
+            const next = { ...current };
+            for (const scope of scopes) next[scope] += 1;
+            return next;
+          });
+        }
         if (pendingStreams.size > 0) {
           const streams = Array.from(pendingStreams.entries());
           pendingStreams.clear();
@@ -303,13 +348,15 @@ export default function App() {
     const connect = () => {
       if (stopped) return;
       socket = new WebSocket(socketURL());
-      socket.onopen = () => { setSocketConnected(true); markPendingStream("*"); scheduleRefresh(); };
+      socket.onopen = () => { setSocketConnected(true); markPendingStream("*"); markPendingRealtimeScopes(allRealtimeScopes); scheduleRefresh(); };
       socket.onmessage = messageEvent => {
         try {
           const event = JSON.parse(String(messageEvent.data)) as Partial<StreamEvent>;
           markPendingStream(event.stream_id || "*", event.sequence);
+          markPendingRealtimeScopes(realtimeScopesForEvent(event));
         } catch {
           markPendingStream("*");
+          markPendingRealtimeScopes(allRealtimeScopes);
         }
         scheduleRefresh();
       };
@@ -361,13 +408,13 @@ export default function App() {
     if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextLocation) window.history[replace ? "replaceState" : "pushState"](null, "", nextLocation);
   };
   const page = {
-    dashboard: <Dashboard realtime={realtime} onNavigate={selectView} />,
-    servers: <ServersPage realtime={realtime} notify={setToast} />,
-    projects: <ProjectsPage realtime={realtime} notify={setToast} />,
-    codex: <CodexPage realtime={realtime} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} />,
-    deployments: <DeploymentsPage realtime={realtime} notify={setToast} />,
-    monitoring: <MonitoringPage realtime={realtime} />,
-    settings: <SettingsPage realtime={realtime} notify={setToast} />
+    dashboard: <Dashboard realtime={realtimeRevisions.dashboard} onNavigate={selectView} />,
+    servers: <ServersPage realtime={realtimeRevisions.servers} notify={setToast} />,
+    projects: <ProjectsPage realtime={realtimeRevisions.projects} notify={setToast} />,
+    codex: <CodexPage realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} />,
+    deployments: <DeploymentsPage realtime={realtimeRevisions.deployments} notify={setToast} />,
+    monitoring: <MonitoringPage realtime={realtimeRevisions.monitoring} />,
+    settings: <SettingsPage realtime={realtimeRevisions.settings} notify={setToast} />
   }[view];
 
   return (
@@ -402,9 +449,10 @@ function LoadingScreen() {
   return <div className="auth-layout"><div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong></div><LoaderCircle className="spin" size={28} /></div>;
 }
 
-function Dashboard({ realtime, onNavigate }: { realtime: number; onNavigate: (view: View) => void }) {
+export function Dashboard({ realtime, onNavigate }: { realtime: number; onNavigate: (view: View) => void }) {
   const { t } = useI18n();
-  const summary = useData<Summary>("/summary", realtime);
+  const summaryRealtime = useThrottledValue(realtime, 1_000);
+  const summary = useData<Summary>("/summary", summaryRealtime);
   if (summary.loading) return <PageLoading />;
   if (!summary.data) return <ErrorState error={summary.error} reload={summary.reload} />;
   const stats = [
@@ -1370,6 +1418,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const restoredScrollKeyRef = useRef("");
   const autoFollowStreamRef = useRef(true);
   const eventCountRef = useRef<{ key: string; count: number } | null>(null);
+  const historyAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const [hasNewEventsBelow, setHasNewEventsBelow] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const slashKeyboardRef = useRef<((event: ReactKeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
@@ -1549,6 +1598,12 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     autoFollowStreamRef.current = true;
     setHasNewEventsBelow(false);
   };
+  const loadEarlierEvents = async () => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    historyAnchorRef.current = { scrollHeight: stream.scrollHeight, scrollTop: stream.scrollTop };
+    if (!await events.loadEarlier()) historyAnchorRef.current = null;
+  };
   useLayoutEffect(() => {
     const stream = streamRef.current;
     if (!stream || !eventsReady) return;
@@ -1563,6 +1618,14 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     const previous = eventCountRef.current;
     const hasAppendedEvents = previous?.key === scrollStateKey && sourceEvents.length > previous.count;
     eventCountRef.current = { key: scrollStateKey, count: sourceEvents.length };
+    const historyAnchor = historyAnchorRef.current;
+    if (historyAnchor) {
+      historyAnchorRef.current = null;
+      setScrollTopImmediately(stream, historyAnchor.scrollTop + stream.scrollHeight - historyAnchor.scrollHeight);
+      codexScrollPositions.set(scrollStateKey, stream.scrollTop);
+      autoFollowStreamRef.current = isNearCodexStreamBottom(stream);
+      return;
+    }
     if (!hasAppendedEvents) return;
     if (autoFollowStreamRef.current) {
       setScrollTopImmediately(stream, latestScrollTop(stream));
@@ -1627,7 +1690,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   };
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{(thread.status === "queued" || thread.status === "running") && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { const stream = event.currentTarget; autoFollowStreamRef.current = isNearCodexStreamBottom(stream); if (autoFollowStreamRef.current) setHasNewEventsBelow(false); if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); }}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { const stream = event.currentTarget; autoFollowStreamRef.current = isNearCodexStreamBottom(stream); if (autoFollowStreamRef.current) setHasNewEventsBelow(false); if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); }}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : <>{events.hasEarlier && <div className="history-loader"><button type="button" className="secondary-button small" disabled={events.loadingEarlier} onClick={() => void loadEarlierEvents()}>{events.loadingEarlier ? <LoaderCircle className="spin" size={15} /> : <ArrowUpFromLine size={15} />}{t(events.loadingEarlier ? "codex.loadingEarlier" : "codex.loadEarlier")}</button></div>}{events.error && events.data && <div className="snapshot-notice warning"><AlertTriangle size={15} />{events.error}</div>}{rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</>}</div>
     {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <form className="composer" onSubmit={send}>
       {hasNewEventsBelow && <button type="button" className="secondary-button" aria-label={t("codex.jumpToLatestMessages")} onClick={scrollToLatestEvent}><ChevronDown size={16} />{t("codex.newMessages")}</button>}
       {subagents.length > 0 && <button type="button" className="subagent-progress-row" onClick={() => setSubagentsOpen(true)}><Users size={16} /><span><strong>{t("codex.subagentActivity")}</strong><small>{activeSubagents.length > 0 ? t("codex.subagentsRunning", { count: activeSubagents.length }) : t("codex.subagentsRecorded", { count: subagents.length })}</small></span><ChevronRight size={15} /></button>}
@@ -2395,8 +2458,7 @@ function ServerCredentialSummary({ server }: { server: Server }) {
   if (!server.codex_profile_name && gitProfiles.length === 0 && !server.git_profile_name) return <span className="muted">{t("server.noBoundCredentials")}</span>;
   return <div className="server-credential-summary">{server.codex_profile_name && <span title={server.codex_profile_name}><SquareTerminal size={13} /><span>{server.codex_profile_name}</span></span>}{gitProfiles.length ? gitProfiles.map(profile => <span key={profile.id} title={`${profile.name} · ${profile.username}`}><GitFork size={13} /><span>{profile.name}</span></span>) : server.git_profile_name && <span title={server.git_profile_name}><GitFork size={13} /><span>{server.git_profile_name}</span></span>}</div>;
 }
-function DialogActions({ children }: { children: ReactNode }) { return <div className="dialog-actions">{children}</div>; }
-function Dialog({ open, title, onClose, children, wide = false, className = "" }: { open: boolean; title: string; onClose: () => void; children: ReactNode; wide?: boolean; className?: string }) { const { t } = useI18n(); if (!open) return null; return <div className="dialog-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}><div className={`dialog ${wide ? "wide" : ""} ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title}><div className="dialog-heading"><h2>{title}</h2><button className="icon-button" onClick={onClose} title={t("common.close")}><X size={18} /></button></div>{children}</div></div>; }
+function Dialog(props: Omit<DialogProps, "closeLabel">) { const { t } = useI18n(); return <AccessibleDialog {...props} closeLabel={t("common.close")} />; }
 function DataTable({ headers, empty, children }: { headers: string[]; empty: string; children: ReactNode }) { const count = Array.isArray(children) ? children.length : children ? 1 : 0; return <div className="table-wrap"><table><thead><tr>{headers.map(header => <th key={header}>{header}</th>)}</tr></thead><tbody>{count ? children : <tr><td colSpan={headers.length}><Empty icon={<Boxes size={22} />} text={empty} /></td></tr>}</tbody></table></div>; }
 function Empty({ icon, text }: { icon: ReactNode; text: string }) { return <div className="empty">{icon}<span>{text}</span></div>; }
 function Status({ value, icon }: { value: string; icon?: ReactNode }) { const { t } = useI18n(); const normalized = value.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replaceAll("_", "-"); const translated = t(`status.${normalized}`); return <span className={`status-tag ${normalized}`}>{icon}{translated.startsWith("status.") ? value.replaceAll("_", " ") : translated}</span>; }
@@ -2537,9 +2599,10 @@ function latestEventSequence(events: StreamEvent[]) {
 function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown, globalRevision = 0, streamRevision = 0, invalidationSequence?: number | null) {
   const view = rawEvents ? "raw" : "conversation";
   const path = `/threads/${threadID}/events?view=${view}`;
-  const [state, setState] = useState<{ path: string; data: StreamEvent[] | null; error: string; loading: boolean }>({ path: "", data: null, error: "", loading: false });
+  const [state, setState] = useState<{ path: string; data: StreamEvent[] | null; error: string; loading: boolean; loadingEarlier: boolean }>({ path: "", data: null, error: "", loading: false, loadingEarlier: false });
   const [reloadNonce, setReloadNonce] = useState(0);
   const appliedReloadNonceRef = useRef(0);
+  const loadingEarlierRef = useRef(false);
   const reload = useCallback(() => setReloadNonce(value => value + 1), []);
 
   useEffect(() => {
@@ -2554,13 +2617,13 @@ function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown
     const windowReload = globalResync || (streamChanged && !hasSafeIncrementalCursor);
     const incrementalLoad = !initialLoad && !windowReload && (manuallyReloaded || streamChanged || !Object.is(cached.dependency, realtime));
     if (!initialLoad && !windowReload && !incrementalLoad) {
-      setState({ path, data: cached.events, error: "", loading: false });
+      setState({ path, data: cached.events, error: "", loading: false, loadingEarlier: false });
       return;
     }
 
     const controller = new AbortController();
     let active = true;
-    setState({ path, data: cached?.events ?? null, error: "", loading: !cached });
+    setState({ path, data: cached?.events ?? null, error: "", loading: !cached, loadingEarlier: false });
     const load = async () => {
       let events = initialLoad || windowReload ? [] : cached?.events ?? [];
       let after = latestEventSequence(events);
@@ -2576,20 +2639,44 @@ function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown
           after = nextAfter;
         } while (true);
         if (!active) return;
-        threadEventsCache.set(path, { events, dependency: realtime, globalRevision, streamRevision });
-        setState({ path, data: events, error: "", loading: false });
+        const hasEarlier = initialLoad || windowReload ? page.length >= threadEventsPageSize : cached?.hasEarlier ?? false;
+        threadEventsCache.set(path, { events, dependency: realtime, globalRevision, streamRevision, hasEarlier });
+        setState({ path, data: events, error: "", loading: false, loadingEarlier: false });
       } catch (error) {
         if (!active || controller.signal.aborted) return;
-        setState({ path, data: cached?.events ?? null, error: message(error), loading: false });
+        setState({ path, data: cached?.events ?? null, error: message(error), loading: false, loadingEarlier: false });
       }
     };
     void load();
     return () => { active = false; controller.abort(); };
   }, [path, realtime, globalRevision, streamRevision, invalidationSequence, reloadNonce]);
 
+  const loadEarlier = useCallback(async () => {
+    const entry = threadEventsCache.get(path);
+    const earliestSequence = entry?.events[0]?.sequence ?? 0;
+    if (!entry?.hasEarlier || earliestSequence <= 0 || loadingEarlierRef.current) return false;
+    loadingEarlierRef.current = true;
+    setState(current => current.path === path ? { ...current, error: "", loadingEarlier: true } : current);
+    try {
+      const page = await api<StreamEvent[]>(`${path}&before=${earliestSequence}&limit=${threadEventsPageSize}`);
+      const current = threadEventsCache.get(path);
+      if (!current || current.globalRevision !== entry.globalRevision || current.streamRevision !== entry.streamRevision) return false;
+      const events = mergeThreadEvents(page, current.events);
+      const next = { ...current, events, hasEarlier: page.length >= threadEventsPageSize };
+      threadEventsCache.set(path, next);
+      setState(currentState => currentState.path === path ? { path, data: events, error: "", loading: false, loadingEarlier: false } : currentState);
+      return true;
+    } catch (error) {
+      setState(current => current.path === path ? { ...current, error: message(error), loadingEarlier: false } : current);
+      return false;
+    } finally {
+      loadingEarlierRef.current = false;
+    }
+  }, [path]);
+
   const cached = threadEventsCache.get(path);
-  const current = state.path === path ? state : { path, data: cached?.events ?? null, error: "", loading: !cached };
-  return { data: current.data, error: current.error, loading: current.loading, reload };
+  const current = state.path === path ? state : { path, data: cached?.events ?? null, error: "", loading: !cached, loadingEarlier: false };
+  return { data: current.data, error: current.error, loading: current.loading, loadingEarlier: current.loadingEarlier, hasEarlier: cached?.hasEarlier ?? false, loadEarlier, reload };
 }
 
 function useData<T>(path: string | null, dependency: unknown, cache = false) {

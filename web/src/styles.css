@@ -546,6 +546,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-diff-content { min-width: 0; padding: 0 12px; white-space: pre; }
 .event-stream { min-height: 0; max-height: calc(100vh - 370px); overflow-y: auto; padding: 20px 18px; scroll-behavior: smooth; background: #f7f8f6; }
 .conversation-stream { display: flex; flex-direction: column; align-items: stretch; }
+.history-loader { display: flex; justify-content: center; padding: 0 0 14px; }
 .message { width: min(82%, 820px); flex: 0 0 auto; align-self: flex-start; margin: 0 0 14px; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 1px 2px rgba(28, 35, 38, .03); }
 .message.user { width: min(74%, 720px); align-self: flex-end; color: #173e31; background: #e8f4ed; border-color: #c4dfd1; }
 .message.assistant { border-left: 3px solid var(--green); }
