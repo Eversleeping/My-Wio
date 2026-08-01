@@ -162,6 +162,57 @@ const managedWorkspace = {
   project_name: workspaceProject.name
 };
 
+const codexThread = {
+  id: "thread-codex-1",
+  workspace_id: managedWorkspace.id,
+  project_id: workspaceProject.id,
+  codex_thread_id: "codex-thread-1",
+  title: "Review deployment readiness",
+  status: "idle",
+  path: managedWorkspace.path,
+  server_id: workspaceServer.id,
+  server_name: workspaceServer.name,
+  project_name: workspaceProject.name,
+  created_at: "2026-08-02T00:00:00Z",
+  updated_at: "2026-08-02T00:00:00Z",
+  pinned_at: null,
+  archived_at: null,
+  project_pinned_at: null,
+  project_hidden_at: null
+};
+
+const codexGoalSnapshot = {
+  status: "succeeded",
+  supported: true,
+  reason: "",
+  codex_version: "1.0.0",
+  data: null,
+  error: "",
+  requested_at: null,
+  updated_at: "2026-08-02T00:00:00Z"
+};
+
+const workspaceFilesSnapshot = {
+  workspace_id: managedWorkspace.id,
+  files: [],
+  truncated: false,
+  status: "succeeded",
+  error: "",
+  requested_at: "2026-08-02T00:00:00Z",
+  updated_at: "2026-08-02T00:00:00Z"
+};
+
+const pendingApproval = {
+  id: "approval-1",
+  thread_id: codexThread.id,
+  request_id: "request-1",
+  kind: "command",
+  detail: { command: "git status" },
+  status: "pending",
+  title: "Run git status",
+  expires_at: "2099-01-01T00:00:00Z"
+};
+
 function deploymentResponse(request: MockAPIRequest) {
   if (request.path === "/deployment-targets" && request.method === "GET") return { body: [deploymentTarget] };
   if (request.path === "/deployments" && request.method === "GET") return { body: [] };
@@ -394,4 +445,88 @@ test("an administrator renames a managed project workspace", async ({ page }, te
   await expect(dialog).not.toBeVisible();
   await workspaceRow.getByTitle("Manage workspace").click();
   await expect(dialog.getByLabel("Workspace name")).toHaveValue("web-console-main");
+});
+
+test("an authenticated user creates a Codex session in a workspace", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Codex session creation is covered at desktop width.");
+  let sessionCreated = false;
+  let threadListLoads = 0;
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/threads" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], has_more: false, next: null } };
+      if (request.path === "/threads" && request.search === "?limit=50" && request.method === "GET") {
+        threadListLoads += 1;
+        return { body: { items: sessionCreated ? [codexThread] : [], has_more: false, next: null } };
+      }
+      if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
+      if (request.path === "/threads" && request.method === "POST") {
+        sessionCreated = true;
+        return { body: codexThread };
+      }
+      if (request.path === `/threads/${codexThread.id}/events` && request.method === "GET") return { body: [] };
+      if (request.path === `/threads/${codexThread.id}/goal` && request.method === "GET") return { body: codexGoalSnapshot };
+      if (request.path === `/workspaces/${managedWorkspace.id}/files` && request.method === "GET") return { body: workspaceFilesSnapshot };
+      return undefined;
+    }
+  });
+  await page.goto("/?view=codex");
+
+  await page.getByTitle("New Codex session").click();
+  const dialog = page.getByRole("dialog", { name: "New Codex session" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Workspace").selectOption(managedWorkspace.id);
+
+  const createRequest = page.waitForRequest(request =>
+    request.method() === "POST" && new URL(request.url()).pathname === "/api/threads"
+  );
+  await dialog.getByRole("button", { name: "Create session", exact: true }).click();
+  expect(JSON.parse((await createRequest).postData() ?? "{}")).toEqual({ workspace_id: managedWorkspace.id });
+
+  await expect(page.locator(".toast")).toContainText("Codex session created");
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: codexThread.title, exact: true })).toBeVisible();
+  await expect.poll(() => threadListLoads).toBeGreaterThanOrEqual(2);
+});
+
+test("an authenticated user approves a pending Codex request", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Codex approvals are covered at desktop width.");
+  let approvalPending = true;
+  let approvalLoads = 0;
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/threads" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], has_more: false, next: null } };
+      if (request.path === "/threads" && request.search === "?limit=50" && request.method === "GET") return { body: { items: [codexThread], has_more: false, next: null } };
+      if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
+      if (request.path === "/approvals" && request.method === "GET") {
+        approvalLoads += 1;
+        return { body: approvalPending ? [pendingApproval] : [] };
+      }
+      if (request.path === `/approvals/${pendingApproval.id}/decision` && request.method === "POST") {
+        approvalPending = false;
+        return { body: {} };
+      }
+      if (request.path === `/threads/${codexThread.id}/events` && request.method === "GET") return { body: [] };
+      if (request.path === `/threads/${codexThread.id}/goal` && request.method === "GET") return { body: codexGoalSnapshot };
+      if (request.path === `/workspaces/${managedWorkspace.id}/files` && request.method === "GET") return { body: workspaceFilesSnapshot };
+      return undefined;
+    }
+  });
+  await page.goto("/?view=codex");
+
+  const dialog = page.getByRole("dialog", { name: "Pending approvals" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Run git status", { exact: true })).toBeVisible();
+  const approvalRequest = page.waitForRequest(request =>
+    request.method() === "POST" && new URL(request.url()).pathname === `/api/approvals/${pendingApproval.id}/decision`
+  );
+  await dialog.getByRole("button", { name: "Approve once", exact: true }).click();
+  expect(JSON.parse((await approvalRequest).postData() ?? "{}")).toEqual({ decision: "approved" });
+
+  await expect(page.locator(".toast")).toContainText("Approval granted");
+  await expect(dialog).not.toBeVisible();
+  await expect.poll(() => approvalLoads).toBeGreaterThanOrEqual(2);
 });

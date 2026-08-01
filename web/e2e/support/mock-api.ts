@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 export type MockAPIRequest = {
   path: string;
+  search: string;
   method: string;
   body: string | null;
 };
@@ -94,7 +95,7 @@ export async function installMockApplication(page: Page, options: MockApplicatio
     const path = url.pathname.replace(/^\/api/, "");
     const method = request.method();
 
-    const mockRequest = { path, method, body: request.postData() ?? null };
+    const mockRequest = { path, search: url.search, method, body: request.postData() ?? null };
     const customResponse = await options.onAPIRequest?.(mockRequest);
     const response = customResponse ?? defaultResponse(path, method, options.configured);
     if (!response) {
