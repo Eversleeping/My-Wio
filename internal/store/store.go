@@ -1786,6 +1786,17 @@ func (s *Store) ConversationEvents(ctx context.Context, streamID string, after i
 		ORDER BY sequence LIMIT ?`), streamID, after, limit)
 }
 
+func (s *Store) RecentConversationEvents(ctx context.Context, streamID string, limit int) ([]protocol.StreamEvent, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM (
+		SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
+		WHERE stream_id=? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed')
+		ORDER BY sequence DESC LIMIT ?
+	) recent ORDER BY sequence`), streamID, limit)
+}
+
 func (s *Store) RecentEvents(ctx context.Context, streamID string, limit int) ([]protocol.StreamEvent, error) {
 	if limit <= 0 || limit > 2000 {
 		limit = 1000

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -20,8 +21,9 @@ import (
 )
 
 type keepaliveStream struct {
-	ctx  context.Context
-	sent chan *protocol.ControlEnvelope
+	ctx      context.Context
+	sent     chan *protocol.ControlEnvelope
+	recvDone chan struct{}
 }
 
 func (s *keepaliveStream) Send(message *protocol.ControlEnvelope) error {
@@ -31,6 +33,9 @@ func (s *keepaliveStream) Send(message *protocol.ControlEnvelope) error {
 
 func (s *keepaliveStream) Recv() (*protocol.AgentEnvelope, error) {
 	<-s.ctx.Done()
+	if s.recvDone != nil {
+		close(s.recvDone)
+	}
 	return nil, s.ctx.Err()
 }
 
@@ -91,6 +96,207 @@ func TestConnectSendsDownlinkKeepalive(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("gateway did not stop after stream cancellation")
 	}
+}
+
+func TestConnectWakeDeliversQueuedOperationWithoutWaitingForFallback(t *testing.T) {
+	database, server := gatewayTestServer(t, "wake-agent-token")
+	streamContext, cancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer wake-agent-token")))
+	defer cancel()
+	stream := &keepaliveStream{ctx: streamContext, sent: make(chan *protocol.ControlEnvelope, 4)}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gateway.keepaliveEvery = time.Hour
+	gateway.pollEvery = time.Hour
+	done := make(chan error, 1)
+	go func() { done <- gateway.Connect(stream) }()
+
+	select {
+	case <-stream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial keepalive")
+	}
+	operationID, err := database.QueueOperation(context.Background(), server.ID, "inventory.scan", map[string]any{}, "wake-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.Wake(server.ID)
+	select {
+	case message := <-stream.sent:
+		if message.OperationID != operationID || message.Kind != "inventory.scan" {
+			t.Fatalf("unexpected operation: %#v", message)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("wake did not deliver queued operation promptly")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("gateway did not stop after stream cancellation")
+	}
+}
+
+func TestConnectFallbackEventuallyDeliversOperationWithoutWake(t *testing.T) {
+	database, server := gatewayTestServer(t, "fallback-agent-token")
+	streamContext, cancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer fallback-agent-token")))
+	defer cancel()
+	stream := &keepaliveStream{ctx: streamContext, sent: make(chan *protocol.ControlEnvelope, 4)}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gateway.keepaliveEvery = time.Hour
+	gateway.pollEvery = 20 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { done <- gateway.Connect(stream) }()
+
+	select {
+	case <-stream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial keepalive")
+	}
+	operationID, err := database.QueueOperation(context.Background(), server.ID, "inventory.scan", map[string]any{}, "fallback-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case message := <-stream.sent:
+		if message.OperationID != operationID {
+			t.Fatalf("unexpected operation: %#v", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fallback poll did not deliver queued operation")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("gateway did not stop after stream cancellation")
+	}
+}
+
+func TestConnectRedeliversTimedOutDeliveredOperationAfterReconnect(t *testing.T) {
+	database, server := gatewayTestServer(t, "reconnect-agent-token")
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gateway.keepaliveEvery = time.Hour
+	gateway.pollEvery = time.Hour
+
+	firstContext, firstCancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer reconnect-agent-token")))
+	defer firstCancel()
+	firstRecvDone := make(chan struct{})
+	firstStream := &keepaliveStream{ctx: firstContext, sent: make(chan *protocol.ControlEnvelope, 4), recvDone: firstRecvDone}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- gateway.Connect(firstStream) }()
+	select {
+	case <-firstStream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial keepalive on first connection")
+	}
+
+	operationID, err := database.QueueOperation(context.Background(), server.ID, "inventory.scan", map[string]any{}, "reconnect-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.Wake(server.ID)
+	select {
+	case message := <-firstStream.sent:
+		if message.OperationID != operationID {
+			t.Fatalf("first connection received unexpected operation: %#v", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first operation delivery")
+	}
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		operation, err := database.Operation(context.Background(), operationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if operation.Status == "delivered" && operation.DeliveredAt != nil {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("first connection did not mark the operation delivered")
+		case <-ticker.C:
+		}
+	}
+	if _, err := database.DB.ExecContext(context.Background(), database.Q("UPDATE agent_operations SET delivered_at=? WHERE id=?"), time.Now().UTC().Add(-31*time.Second), operationID); err != nil {
+		t.Fatal(err)
+	}
+
+	firstCancel()
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("first connection returned %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first connection did not stop after cancellation")
+	}
+	select {
+	case <-firstRecvDone:
+	case <-time.After(time.Second):
+		t.Fatal("first connection receive loop did not stop after cancellation")
+	}
+
+	secondContext, secondCancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer reconnect-agent-token")))
+	defer secondCancel()
+	secondRecvDone := make(chan struct{})
+	secondStream := &keepaliveStream{ctx: secondContext, sent: make(chan *protocol.ControlEnvelope, 4), recvDone: secondRecvDone}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- gateway.Connect(secondStream) }()
+	select {
+	case <-secondStream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial keepalive on reconnected stream")
+	}
+	select {
+	case message := <-secondStream.sent:
+		if message.OperationID != operationID || message.Kind != "inventory.scan" {
+			t.Fatalf("reconnected stream did not receive the timed-out operation: %#v", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed-out delivered operation was not resent after reconnect")
+	}
+
+	secondCancel()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("reconnected stream returned %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconnected stream did not stop after cancellation")
+	}
+	select {
+	case <-secondRecvDone:
+	case <-time.After(time.Second):
+		t.Fatal("reconnected stream receive loop did not stop after cancellation")
+	}
+}
+
+func gatewayTestServer(t *testing.T, agentToken string) (*store.Store, store.Server) {
+	t.Helper()
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	enrollmentToken := agentToken + "-enrollment"
+	if _, err := database.CreateEnrollment(ctx, "queue-node", []string{"/srv"}, enrollmentToken, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, enrollmentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "queue-node.local", agentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return database, server
 }
 
 func TestOperationResultPublishesRealtimeEvent(t *testing.T) {

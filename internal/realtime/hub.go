@@ -35,11 +35,28 @@ func (h *Hub) Unsubscribe(id int) {
 
 func (h *Hub) Publish(event protocol.StreamEvent) {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for _, ch := range h.clients {
+	stalled := make([]int, 0)
+	for id, ch := range h.clients {
 		select {
 		case ch <- event:
 		default:
+			stalled = append(stalled, id)
 		}
 	}
+	h.mu.RUnlock()
+
+	if len(stalled) == 0 {
+		return
+	}
+	// A WebSocket event is an invalidation hint. Silently dropping the final
+	// hint can leave a browser stale forever, so disconnect slow subscribers.
+	// The browser reconnect path performs a full refresh and safely catches up.
+	h.mu.Lock()
+	for _, id := range stalled {
+		if ch, ok := h.clients[id]; ok {
+			delete(h.clients, id)
+			close(ch)
+		}
+	}
+	h.mu.Unlock()
 }

@@ -1720,18 +1720,50 @@ func (a *API) deleteThread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
-	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	const (
+		defaultThreadEventsLimit = 500
+		maxThreadEventsLimit     = 1000
+	)
+	query := r.URL.Query()
+	afterValue, hasAfter := query["after"]
+	var after int64
+	if hasAfter && len(afterValue) > 0 && afterValue[0] != "" {
+		parsedAfter, err := strconv.ParseInt(afterValue[0], 10, 64)
+		if err != nil || parsedAfter < 0 {
+			writeError(w, http.StatusBadRequest, "after must be a non-negative sequence number")
+			return
+		}
+		after = parsedAfter
+	} else if hasAfter {
+		writeError(w, http.StatusBadRequest, "after must be a non-negative sequence number")
+		return
+	}
+
+	limit := defaultThreadEventsLimit
+	if limitValue := query.Get("limit"); limitValue != "" {
+		if parsedLimit, err := strconv.Atoi(limitValue); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
+		}
+	}
+	if limit > maxThreadEventsLimit {
+		limit = maxThreadEventsLimit
+	}
+
 	threadID := chi.URLParam(r, "threadID")
 	var events []protocol.StreamEvent
 	var err error
-	if r.URL.Query().Get("view") == "raw" {
-		if after > 0 {
-			events, err = a.store.Events(r.Context(), threadID, after, 1000)
+	if query.Get("view") == "raw" {
+		if hasAfter {
+			events, err = a.store.Events(r.Context(), threadID, after, limit)
 		} else {
-			events, err = a.store.RecentEvents(r.Context(), threadID, 1000)
+			events, err = a.store.RecentEvents(r.Context(), threadID, limit)
 		}
 	} else {
-		events, err = a.store.ConversationEvents(r.Context(), threadID, after, 10000)
+		if hasAfter {
+			events, err = a.store.ConversationEvents(r.Context(), threadID, after, limit)
+		} else {
+			events, err = a.store.RecentConversationEvents(r.Context(), threadID, limit)
+		}
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load session events")

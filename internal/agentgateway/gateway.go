@@ -28,6 +28,7 @@ type Gateway struct {
 	vault          *security.Vault
 	log            *slog.Logger
 	keepaliveEvery time.Duration
+	pollEvery      time.Duration
 	mu             sync.RWMutex
 	wakes          map[string]chan struct{}
 	metricMu       sync.Mutex
@@ -35,7 +36,7 @@ type Gateway struct {
 }
 
 func New(s *store.Store, hub *realtime.Hub, vault *security.Vault, log *slog.Logger) *Gateway {
-	return &Gateway{store: s, hub: hub, vault: vault, log: log, keepaliveEvery: 20 * time.Second, wakes: make(map[string]chan struct{}), metricBreaches: make(map[string]map[string]int)}
+	return &Gateway{store: s, hub: hub, vault: vault, log: log, keepaliveEvery: 20 * time.Second, pollEvery: 2 * time.Second, wakes: make(map[string]chan struct{}), metricBreaches: make(map[string]map[string]int)}
 }
 
 func (g *Gateway) Wake(serverID string) {
@@ -83,7 +84,7 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 	}
 	// Pending operations are also flushed when Wake is signalled. Keep a short
 	// fallback interval for callers that cannot signal the gateway directly.
-	ticker := time.NewTicker(250 * time.Millisecond)
+	ticker := time.NewTicker(g.pollEvery)
 	keepalive := time.NewTicker(g.keepaliveEvery)
 	defer ticker.Stop()
 	defer keepalive.Stop()
@@ -235,6 +236,17 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
 			return nil
 		}
+		resultLogFields := []any{
+			"server_id", serverID,
+			"operation_id", operation.ID,
+			"kind", operation.Kind,
+			"status", result.Status,
+			"total_elapsed_ms", time.Since(operation.CreatedAt).Milliseconds(),
+		}
+		if operation.DeliveredAt != nil {
+			resultLogFields = append(resultLogFields, "execution_elapsed_ms", time.Since(*operation.DeliveredAt).Milliseconds())
+		}
+		g.log.Info("Agent operation result received", resultLogFields...)
 		if operation.Kind == "git.workspace.clone" {
 			var command protocol.GitWorkspaceCloneCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
@@ -758,6 +770,13 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 			g.log.Warn("could not mark Agent operation delivered", "operation_id", op.ID, "error", err)
 			continue
 		}
+		g.log.Info(
+			"Agent operation delivered",
+			"server_id", serverID,
+			"operation_id", op.ID,
+			"kind", op.Kind,
+			"queue_wait_ms", time.Since(op.CreatedAt).Milliseconds(),
+		)
 		updated, statusErr := g.store.Operation(stream.Context(), op.ID)
 		if statusErr == nil && updated.Status == "cancelled" && isCodexTurnOperation(op.Kind) {
 			if err := g.queueBestEffortInterrupt(stream.Context(), serverID, op); err != nil {

@@ -835,6 +835,113 @@ func TestStartTurnRejectsInvalidReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestThreadEventsUseRecentBoundedWindows(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	ctx := context.Background()
+	server := enrollResourceTestServer(t, database, "thread-events-window-token")
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/thread-events-window", Name: "thread-events-window"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "long thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for sequence := 1; sequence <= 1001; sequence++ {
+		if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: json.RawMessage(`{"text":"message"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := resourceTestAPI(database)
+	for name, test := range map[string]struct {
+		target string
+		count  int
+		first  int64
+	}{
+		"conversation default":              {target: "/api/threads/" + thread.ID + "/events?view=conversation", count: 500, first: 502},
+		"raw default":                       {target: "/api/threads/" + thread.ID + "/events?view=raw", count: 500, first: 502},
+		"non-positive limit uses default":   {target: "/api/threads/" + thread.ID + "/events?view=raw&limit=0", count: 500, first: 502},
+		"oversized limit is capped at 1000": {target: "/api/threads/" + thread.ID + "/events?view=conversation&limit=1001", count: 1000, first: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, api.threadEvents)
+			if response.Code != http.StatusOK {
+				t.Fatalf("thread events returned %d: %s", response.Code, response.Body.String())
+			}
+			var events []protocol.StreamEvent
+			if err := json.Unmarshal(response.Body.Bytes(), &events); err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != test.count || events[0].Sequence != test.first || events[len(events)-1].Sequence != 1001 {
+				t.Fatalf("expected bounded events in sequence order, got first=%#v last=%#v len=%d", events[0], events[len(events)-1], len(events))
+			}
+		})
+	}
+}
+
+func TestThreadEventsSupportCursorsViewsAndLimits(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	ctx := context.Background()
+	server := enrollResourceTestServer(t, database, "thread-events-cursor-token")
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/thread-events-cursor", Name: "thread-events-cursor"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "cursor thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"agent.progress", "user.message", "codex.item.started", "agent.progress", "codex.item.completed", "agent.progress", "codex.turn.completed"} {
+		if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: kind, Payload: json.RawMessage(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := resourceTestAPI(database)
+	for name, test := range map[string]struct {
+		target    string
+		sequences []int64
+		status    int
+	}{
+		"conversation recent window filters raw events": {target: "/api/threads/" + thread.ID + "/events?view=conversation&limit=2", sequences: []int64{5, 7}, status: http.StatusOK},
+		"raw recent window includes every event":        {target: "/api/threads/" + thread.ID + "/events?view=raw&limit=3", sequences: []int64{5, 6, 7}, status: http.StatusOK},
+		"conversation after cursor":                     {target: "/api/threads/" + thread.ID + "/events?view=conversation&after=3&limit=2", sequences: []int64{5, 7}, status: http.StatusOK},
+		"raw after cursor":                              {target: "/api/threads/" + thread.ID + "/events?view=raw&after=3&limit=2", sequences: []int64{4, 5}, status: http.StatusOK},
+		"zero is a valid cursor":                        {target: "/api/threads/" + thread.ID + "/events?view=conversation&after=0&limit=2", sequences: []int64{2, 3}, status: http.StatusOK},
+		"invalid cursor is rejected":                    {target: "/api/threads/" + thread.ID + "/events?view=raw&after=invalid", status: http.StatusBadRequest},
+		"negative cursor is rejected":                   {target: "/api/threads/" + thread.ID + "/events?view=raw&after=-1", status: http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, api.threadEvents)
+			if response.Code != test.status {
+				t.Fatalf("thread events returned %d, want %d: %s", response.Code, test.status, response.Body.String())
+			}
+			if response.Code != http.StatusOK {
+				return
+			}
+			var events []protocol.StreamEvent
+			if err := json.Unmarshal(response.Body.Bytes(), &events); err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != len(test.sequences) {
+				t.Fatalf("event count = %d, want %d: %#v", len(events), len(test.sequences), events)
+			}
+			for index, event := range events {
+				if event.Sequence != test.sequences[index] {
+					t.Fatalf("event %d sequence = %d, want %d: %#v", index, event.Sequence, test.sequences[index], events)
+				}
+			}
+		})
+	}
+}
+
 func TestUpdateProjectReturnsPreferencesAndWritesAudit(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "update-project-token")
