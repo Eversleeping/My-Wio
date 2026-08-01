@@ -1,6 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
+import { Dialog as AccessibleDialog } from "../../components/Dialog";
 import type { WorkspaceGitSnapshot } from "../../types";
 import { WorkspaceGitDialog, type GitDialogLabels } from "./WorkspaceGitDialog";
 import type { DialogSlotProps } from "./slots";
@@ -13,6 +14,7 @@ const snapshot: WorkspaceGitSnapshot = {
   data: { workspace_id: "workspace-1", status: { branch: "main", detached: false, unborn: false, head: "abcdef123456", upstream: "origin/main", ahead: 0, behind: 0, staged: 1, unstaged: 1, untracked: 1, dirty: true }, changes: [{ path: "src/staged.ts", status: "added", staged: true, unstaged: false }, { path: "src/new.ts", status: "untracked", staged: false, unstaged: true }, { path: "src/deleted.ts", status: "deleted", staged: false, unstaged: true }], branches: [{ name: "main", full_name: "refs/heads/main", kind: "local", commit_sha: "abcdef123456", current: true }], remotes: [{ name: "origin", fetch_urls: ["https://example.com/repo.git"], push_urls: ["https://example.com/repo.git"] }], commits: [], has_more: false }
 };
 function Dialog({ open, title, children, className }: DialogSlotProps) { return open ? <div role="dialog" aria-label={title} className={className}>{children}</div> : null; }
+function RealDialog(props: DialogSlotProps) { return <AccessibleDialog {...props} closeLabel="Close" />; }
 
 test("creates a branch with a structured action", async () => {
   const user = userEvent.setup();
@@ -39,7 +41,6 @@ test("allows fetch but blocks pull while the workspace is dirty", async () => {
 test("shows every change and queues stage, unstage, discard, and commit actions", async () => {
   const user = userEvent.setup();
   const onAction = vi.fn().mockResolvedValue(undefined);
-  vi.stubGlobal("confirm", vi.fn(() => true));
   render(<WorkspaceGitDialog open snapshot={snapshot} loading={false} busy={false} error="" labels={labels} Dialog={Dialog} onClose={vi.fn()} onRefresh={vi.fn()} onAction={onAction} />);
 
   expect(screen.getByText("staged.ts")).toBeInTheDocument();
@@ -48,6 +49,10 @@ test("shows every change and queues stage, unstage, discard, and commit actions"
   await user.click(screen.getByRole("button", { name: "Stage: src/new.ts" }));
   await user.click(screen.getByRole("button", { name: "Unstage: src/staged.ts" }));
   await user.click(screen.getByRole("button", { name: "Discard: src/deleted.ts" }));
+  const discardDialog = screen.getByRole("dialog", { name: "Discard" });
+  expect(within(discardDialog).getByText("src/deleted.ts")).toBeInTheDocument();
+  expect(onAction).toHaveBeenCalledTimes(2);
+  await user.click(within(discardDialog).getByRole("button", { name: "Discard" }));
   await user.type(screen.getByRole("textbox", { name: "Commit message" }), "Update files");
   await user.click(screen.getByRole("button", { name: "Commit" }));
 
@@ -57,6 +62,58 @@ test("shows every change and queues stage, unstage, discard, and commit actions"
     expect(onAction).toHaveBeenNthCalledWith(3, { type: "discard", paths: ["src/deleted.ts"], all: false });
     expect(onAction).toHaveBeenNthCalledWith(4, { type: "commit", message: "Update files" });
   });
+});
+
+test("keeps the discard confirmation open and prevents duplicate submissions while a request is pending", async () => {
+  const user = userEvent.setup();
+  let resolveDiscard: (() => void) | undefined;
+  const onAction = vi.fn(() => new Promise<void>(resolve => { resolveDiscard = resolve; }));
+  render(<WorkspaceGitDialog open snapshot={snapshot} loading={false} busy={false} error="" labels={labels} Dialog={Dialog} onClose={vi.fn()} onRefresh={vi.fn()} onAction={onAction} />);
+
+  await user.click(screen.getByRole("button", { name: "Discard: src/deleted.ts" }));
+  const discardDialog = screen.getByRole("dialog", { name: "Discard" });
+  await user.click(within(discardDialog).getByRole("button", { name: "Discard" }));
+
+  await waitFor(() => expect(onAction).toHaveBeenCalledWith({ type: "discard", paths: ["src/deleted.ts"], all: false }));
+  expect(within(discardDialog).getByRole("button", { name: "Discard" })).toBeDisabled();
+  expect(within(discardDialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+  expect(within(discardDialog).getByRole("button", { name: "Close" })).toBeDisabled();
+
+  resolveDiscard?.();
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Discard" })).not.toBeInTheDocument());
+});
+
+test("keeps the discard confirmation available after a failed request", async () => {
+  const user = userEvent.setup();
+  const onAction = vi.fn().mockRejectedValue(new Error("discard failed"));
+  render(<WorkspaceGitDialog open snapshot={snapshot} loading={false} busy={false} error="" labels={labels} Dialog={Dialog} onClose={vi.fn()} onRefresh={vi.fn()} onAction={onAction} />);
+
+  await user.click(screen.getByRole("button", { name: "Discard: src/deleted.ts" }));
+  const discardDialog = screen.getByRole("dialog", { name: "Discard" });
+  await user.click(within(discardDialog).getByRole("button", { name: "Discard" }));
+
+  await waitFor(() => expect(onAction).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("dialog", { name: "Discard" })).toBeInTheDocument();
+  expect(within(discardDialog).getByRole("button", { name: "Discard" })).toBeEnabled();
+});
+
+test("closes only the nested confirmation and restores focus before closing the Git dialog", async () => {
+  const user = userEvent.setup();
+  const onClose = vi.fn();
+  render(<WorkspaceGitDialog open snapshot={snapshot} loading={false} busy={false} error="" labels={labels} Dialog={RealDialog} onClose={onClose} onRefresh={vi.fn()} onAction={vi.fn().mockResolvedValue(undefined)} />);
+
+  const discard = screen.getByRole("button", { name: "Discard: src/deleted.ts" });
+  await user.click(discard);
+  expect(screen.getAllByRole("dialog")).toHaveLength(2);
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "Discard" })).not.toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Git" })).toBeInTheDocument();
+  await waitFor(() => expect(discard).toHaveFocus());
+  expect(onClose).not.toHaveBeenCalled();
+
+  await user.keyboard("{Escape}");
+  expect(onClose).toHaveBeenCalledOnce();
 });
 
 test("adds a remote and queues push with upstream", async () => {

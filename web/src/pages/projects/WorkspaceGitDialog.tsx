@@ -1,5 +1,6 @@
 import { ArrowDownToLine, ArrowRightLeft, ArrowUpFromLine, GitBranch, GitCommit, Globe2, LoaderCircle, Pencil, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
-import { useEffect, useState, type ComponentType, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type FormEvent } from "react";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import type { WorkspaceChange, WorkspaceGitSnapshot } from "../../types";
 import type { DialogSlotProps } from "./slots";
 
@@ -57,6 +58,9 @@ export function WorkspaceGitDialog({ open, snapshot, loading, busy: requestBusy,
   const [syncRef, setSyncRef] = useState("");
   const [setUpstream, setSetUpstream] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  const [discardPath, setDiscardPath] = useState<string | null>(null);
+  const [discardSubmitting, setDiscardSubmitting] = useState(false);
+  const discardReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const data = snapshot?.data;
   const branches = data?.branches ?? [];
   const remotes = data?.remotes ?? [];
@@ -65,6 +69,7 @@ export function WorkspaceGitDialog({ open, snapshot, loading, busy: requestBusy,
   const refreshing = requestBusy || snapshot?.status === "refreshing";
   const busy = refreshing;
   const writeDisabled = busy || !writable;
+  const discardBusy = busy || discardSubmitting;
 
   useEffect(() => {
     if (!open || !data) return;
@@ -75,6 +80,7 @@ export function WorkspaceGitDialog({ open, snapshot, loading, busy: requestBusy,
   }, [open, data?.workspace_id, data?.status.branch, data?.remotes]);
 
   useEffect(() => {
+    setDiscardPath(null);
     if (open) setCommitMessage("");
   }, [open, data?.workspace_id]);
 
@@ -94,8 +100,29 @@ export function WorkspaceGitDialog({ open, snapshot, loading, busy: requestBusy,
     event.preventDefault();
     if (remoteName.trim() && remoteURL.trim()) void run({ type: "remote.add", name: remoteName.trim(), url: remoteURL.trim() }, () => { setRemoteName(""); setRemoteURL(""); });
   };
+  useLayoutEffect(() => {
+    if (!discardPath && discardReturnFocusRef.current?.isConnected) discardReturnFocusRef.current.focus();
+  }, [discardPath]);
+  const requestDiscard = (path: string, trigger: HTMLButtonElement) => {
+    if (!discardBusy) {
+      discardReturnFocusRef.current = trigger;
+      setDiscardPath(path);
+    }
+  };
+  const confirmDiscard = async () => {
+    if (!discardPath || discardBusy) return;
+    setDiscardSubmitting(true);
+    try {
+      await onAction({ type: "discard", paths: [discardPath], all: false });
+      setDiscardPath(null);
+    } catch {
+      // The parent surfaces the API error; keep the confirmation available to retry.
+    } finally {
+      setDiscardSubmitting(false);
+    }
+  };
 
-  return <Dialog open={open} title={labels.title} onClose={onClose} wide className="workspace-git-dialog-shell"><div className="workspace-git-dialog">
+  return <><Dialog open={open} title={labels.title} onClose={onClose} wide className="workspace-git-dialog-shell"><div className="workspace-git-dialog">
     {loading && <div className="empty-state"><LoaderCircle className="spin" size={18} />...</div>}
     {!loading && snapshot?.status === "refreshing" && <div className="git-refresh-state" role="status"><LoaderCircle className="spin" size={16} />{labels.refreshing}</div>}
     {(snapshot?.error || error) && <div className="error-banner" role="alert">{error || snapshot?.error}</div>}
@@ -108,17 +135,19 @@ export function WorkspaceGitDialog({ open, snapshot, loading, busy: requestBusy,
         <button type="button" role="tab" aria-selected={tab === "commits"} className={tab === "commits" ? "active" : ""} onClick={() => setTab("commits")}><GitCommit size={14} />{labels.commits}</button>
       </div>
       <div className="workspace-git-tab-panel" role="tabpanel" tabIndex={0}>
-        {tab === "status" && <GitStatusWorkspace data={data} changes={changes} remotes={remotes} busy={busy} writable={writable} labels={labels} commitMessage={commitMessage} syncRemote={syncRemote} syncRef={syncRef} setUpstream={setUpstream} onCommitMessage={setCommitMessage} onSyncRemote={setSyncRemote} onSyncRef={setSyncRef} onSetUpstream={setSetUpstream} onRun={run} />}
+        {tab === "status" && <GitStatusWorkspace data={data} changes={changes} remotes={remotes} busy={busy} writable={writable} labels={labels} commitMessage={commitMessage} syncRemote={syncRemote} syncRef={syncRef} setUpstream={setUpstream} onCommitMessage={setCommitMessage} onSyncRemote={setSyncRemote} onSyncRef={setSyncRef} onSetUpstream={setSetUpstream} onRun={run} onDiscard={requestDiscard} />}
         {tab === "branches" && <div className="git-tab-stack"><form className="git-command-bar" onSubmit={createBranch}><strong>{labels.createBranch}</strong><input aria-label={labels.branchName} value={branchName} disabled={writeDisabled} onChange={event => setBranchName(event.target.value)} placeholder={labels.branchName} required /><input aria-label={labels.startPoint} value={startPoint} disabled={writeDisabled} onChange={event => setStartPoint(event.target.value)} placeholder="HEAD" /><button className="primary-button small" disabled={writeDisabled || !branchName.trim()}><Plus size={14} />{labels.createBranch}</button></form><div className="git-command-bar"><strong>{labels.checkout}</strong><input aria-label={labels.ref} value={checkoutRef} disabled={writeDisabled} onChange={event => setCheckoutRef(event.target.value)} /><label className="compact-check"><input type="checkbox" checked={detach} disabled={writeDisabled} onChange={event => setDetach(event.target.checked)} />{labels.detach}</label><button type="button" className="secondary-button small" disabled={writeDisabled || !checkoutRef.trim() || data.status.dirty} onClick={() => void run({ type: "checkout", ref: checkoutRef.trim(), detach })}><ArrowRightLeft size={14} />{labels.checkout}</button><label className="compact-check danger"><input type="checkbox" checked={forceDelete} disabled={writeDisabled} onChange={event => setForceDelete(event.target.checked)} />{labels.forceDelete}</label></div><div className="git-list">{branches.length ? branches.map(branch => <div className="git-list-row git-branch-row" key={branch.full_name}><GitBranch size={14} />{editingBranch === branch.name ? <input value={renamedBranch} disabled={writeDisabled} onChange={event => setRenamedBranch(event.target.value)} autoFocus /> : <strong>{branch.name}</strong>}<code>{branch.commit_sha.slice(0, 10)}</code><span className={`status-tag ${branch.current ? "ready" : "neutral"}`}>{branch.current ? labels.current : branch.kind === "local" ? labels.local : labels.remoteBranch}</span><div className="row-actions">{editingBranch === branch.name ? <><button type="button" className="icon-button" title={labels.save} disabled={writeDisabled || !renamedBranch.trim()} onClick={() => void run({ type: "branch.rename", branch: branch.name, name: renamedBranch.trim() }, () => setEditingBranch(""))}><Save size={14} /></button><button type="button" className="icon-button" title={labels.cancel} disabled={writeDisabled} onClick={() => setEditingBranch("")}><X size={14} /></button></> : <>{!branch.current && <button type="button" className="icon-button" title={labels.checkout} disabled={writeDisabled || data.status.dirty} onClick={() => void run({ type: "checkout", ref: branch.name, detach: false })}><ArrowRightLeft size={14} /></button>}{branch.kind === "local" && <button type="button" className="icon-button" title={labels.rename} disabled={writeDisabled} onClick={() => { setEditingBranch(branch.name); setRenamedBranch(branch.name); }}><Pencil size={14} /></button>}{branch.kind === "local" && !branch.current && <button type="button" className="icon-button danger" title={labels.delete} disabled={writeDisabled} onClick={() => void run({ type: "branch.delete", branch: branch.name, force: forceDelete })}><Trash2 size={14} /></button>}</>}</div></div>) : <div className="empty-state">{refreshing ? labels.refreshing : labels.noBranches}</div>}</div></div>}
         {tab === "remotes" && <div className="git-tab-stack"><form className="git-command-bar" onSubmit={addRemote}><strong>{labels.addRemote}</strong><input aria-label={labels.remoteName} value={remoteName} disabled={writeDisabled} onChange={event => setRemoteName(event.target.value)} placeholder="origin" required /><input className="git-url-input" aria-label={labels.remoteURL} value={remoteURL} disabled={writeDisabled} onChange={event => setRemoteURL(event.target.value)} placeholder="https://git.example.com/team/project.git" required /><button className="primary-button small" disabled={writeDisabled || !remoteName.trim() || !remoteURL.trim()}><Plus size={14} />{labels.addRemote}</button></form><div className="git-list">{remotes.length ? remotes.map(remote => { const fetchURL = remote.fetch_urls?.[0] || "-"; return <div className="git-list-row git-remote-row" key={remote.name}><Globe2 size={14} /><strong>{remote.name}</strong>{editingRemote === remote.name ? <input value={editedRemoteURL} disabled={writeDisabled} onChange={event => setEditedRemoteURL(event.target.value)} autoFocus /> : <code className="truncate-code" title={fetchURL}>{fetchURL}</code>}<div className="row-actions">{editingRemote === remote.name ? <><button type="button" className="icon-button" title={labels.save} disabled={writeDisabled || !editedRemoteURL.trim()} onClick={() => void run({ type: "remote.update", remote: remote.name, url: editedRemoteURL.trim() }, () => setEditingRemote(""))}><Save size={14} /></button><button type="button" className="icon-button" title={labels.cancel} disabled={writeDisabled} onClick={() => setEditingRemote("")}><X size={14} /></button></> : <><button type="button" className="icon-button" title={labels.fetch} disabled={writeDisabled} onClick={() => void run({ type: "fetch", remote: remote.name })}><ArrowDownToLine size={14} /></button><button type="button" className="icon-button" title={labels.edit} disabled={writeDisabled} onClick={() => { setEditingRemote(remote.name); setEditedRemoteURL(remote.fetch_urls?.[0] || ""); }}><Pencil size={14} /></button><button type="button" className="icon-button danger" title={labels.delete} disabled={writeDisabled} onClick={() => void run({ type: "remote.delete", remote: remote.name })}><Trash2 size={14} /></button></>}</div></div>; }) : <div className="empty-state">{refreshing ? labels.refreshing : labels.noRemotes}</div>}</div></div>}
         {tab === "commits" && <div className="git-list">{commits.length ? commits.map(commit => <div className="git-commit-row" key={commit.sha}><div><strong>{commit.title}</strong><code>{commit.sha.slice(0, 12)}</code></div><small>{commit.author_name} · {new Date(commit.authored_at).toLocaleString()}</small></div>) : <div className="empty-state">{refreshing ? labels.refreshing : labels.noCommits}</div>}</div>}
       </div>
     </>}
     <div className="dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{labels.close}</button><button type="button" className="primary-button" disabled={refreshing} onClick={onRefresh}>{refreshing ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{refreshing ? labels.refreshing : labels.refresh}</button></div>
-  </div></Dialog>;
+  </div></Dialog>
+  <ConfirmDialog open={open && Boolean(discardPath)} danger title={labels.discard} description={labels.discardConfirm} impact={<span>{labels.discard}: <code>{discardPath}</code></span>} confirmLabel={labels.discard} cancelLabel={labels.cancel} closeLabel={labels.close} busy={discardBusy} onClose={() => { if (!discardBusy) setDiscardPath(null); }} onConfirm={confirmDiscard} />
+  </>;
 }
 
-function GitStatusWorkspace({ data, changes, remotes, busy, writable, labels, commitMessage, syncRemote, syncRef, setUpstream, onCommitMessage, onSyncRemote, onSyncRef, onSetUpstream, onRun }: {
+function GitStatusWorkspace({ data, changes, remotes, busy, writable, labels, commitMessage, syncRemote, syncRef, setUpstream, onCommitMessage, onSyncRemote, onSyncRef, onSetUpstream, onRun, onDiscard }: {
   data: GitData;
   changes: WorkspaceChange[];
   remotes: NonNullable<GitData["remotes"]>;
@@ -134,6 +163,7 @@ function GitStatusWorkspace({ data, changes, remotes, busy, writable, labels, co
   onSyncRef: (value: string) => void;
   onSetUpstream: (value: boolean) => void;
   onRun: (action: WorkspaceGitAction, after?: () => void) => Promise<void>;
+  onDiscard: (path: string, trigger: HTMLButtonElement) => void;
 }) {
   const stagedChanges = changes.filter(change => change.staged);
   const unstagedChanges = changes.filter(change => change.unstaged || change.status === "untracked");
@@ -143,18 +173,14 @@ function GitStatusWorkspace({ data, changes, remotes, busy, writable, labels, co
     const message = commitMessage.trim();
     if (message && stagedChanges.length) void onRun({ type: "commit", message }, () => onCommitMessage(""));
   };
-  const discard = (path: string) => {
-    if (window.confirm(`${labels.discardConfirm}\n${path}`)) void onRun({ type: "discard", paths: [path], all: false });
-  };
-
   return <div className="git-status-workspace">
     <div className="git-changes-column">
       <form className="git-commit-composer" onSubmit={submitCommit}>
         <textarea aria-label={labels.commitMessage} value={commitMessage} disabled={writeDisabled} rows={3} maxLength={20 * 1024} placeholder={labels.commitPlaceholder} onChange={event => onCommitMessage(event.target.value)} />
         <div><span className="git-staged-summary">{labels.stagedChanges} <strong>{stagedChanges.length}</strong></span><button className="primary-button" disabled={writeDisabled || stagedChanges.length === 0 || !commitMessage.trim()}><GitCommit size={16} />{labels.commitAction}</button></div>
       </form>
-      <GitChangeSection title={labels.stagedChanges} empty={labels.noStagedChanges} changes={stagedChanges} mode="staged" disabled={writeDisabled} labels={labels} onAll={() => void onRun({ type: "unstage", paths: [], all: true })} onStage={path => void onRun({ type: "stage", paths: [path], all: false })} onUnstage={path => void onRun({ type: "unstage", paths: [path], all: false })} onDiscard={discard} />
-      <GitChangeSection title={labels.unstagedChanges} empty={labels.noChanges} changes={unstagedChanges} mode="unstaged" disabled={writeDisabled} labels={labels} onAll={() => void onRun({ type: "stage", paths: [], all: true })} onStage={path => void onRun({ type: "stage", paths: [path], all: false })} onUnstage={path => void onRun({ type: "unstage", paths: [path], all: false })} onDiscard={discard} />
+      <GitChangeSection title={labels.stagedChanges} empty={labels.noStagedChanges} changes={stagedChanges} mode="staged" disabled={writeDisabled} labels={labels} onAll={() => void onRun({ type: "unstage", paths: [], all: true })} onStage={path => void onRun({ type: "stage", paths: [path], all: false })} onUnstage={path => void onRun({ type: "unstage", paths: [path], all: false })} onDiscard={onDiscard} />
+      <GitChangeSection title={labels.unstagedChanges} empty={labels.noChanges} changes={unstagedChanges} mode="unstaged" disabled={writeDisabled} labels={labels} onAll={() => void onRun({ type: "stage", paths: [], all: true })} onStage={path => void onRun({ type: "stage", paths: [path], all: false })} onUnstage={path => void onRun({ type: "unstage", paths: [path], all: false })} onDiscard={onDiscard} />
     </div>
     <aside className="git-repository-column">
       <div className="git-repository-heading"><div><GitBranch size={17} /><span><strong>{data.status.branch || "-"}</strong><small>{data.status.upstream || labels.upstream}</small></span></div><span className={`status-tag ${data.status.dirty ? "dirty" : "clean"}`}>{data.status.dirty ? labels.dirty : labels.clean}</span></div>
@@ -179,7 +205,7 @@ function GitChangeSection({ title, empty, changes, mode, disabled, labels, onAll
   onAll: () => void;
   onStage: (path: string) => void;
   onUnstage: (path: string) => void;
-  onDiscard: (path: string) => void;
+  onDiscard: (path: string, trigger: HTMLButtonElement) => void;
 }) {
   const allLabel = mode === "staged" ? labels.unstageAll : labels.stageAll;
   return <section className="git-change-section"><header><div><strong>{title}</strong><span>{changes.length}</span></div>{changes.length > 0 && <button type="button" className="icon-button" title={allLabel} aria-label={allLabel} disabled={disabled} onClick={onAll}>{mode === "staged" ? <ArrowUpFromLine size={15} /> : <Plus size={15} />}</button>}</header>{changes.length ? <div className="git-change-list">{changes.map(change => <GitChangeRow key={`${mode}:${change.path}`} change={change} mode={mode} disabled={disabled} labels={labels} onStage={onStage} onUnstage={onUnstage} onDiscard={onDiscard} />)}</div> : <div className="git-change-empty">{empty}</div>}</section>;
@@ -192,11 +218,11 @@ function GitChangeRow({ change, mode, disabled, labels, onStage, onUnstage, onDi
   labels: GitDialogLabels;
   onStage: (path: string) => void;
   onUnstage: (path: string) => void;
-  onDiscard: (path: string) => void;
+  onDiscard: (path: string, trigger: HTMLButtonElement) => void;
 }) {
   const name = change.path.split("/").pop() || change.path;
   const detail = change.old_path ? `${change.old_path} -> ${change.path}` : change.path;
-  return <div className="git-change-row" title={detail}><span className={`git-change-status ${change.status}`}>{changeStatusCodes[change.status] ?? "M"}</span><span className="git-change-path"><strong>{name}</strong><small>{detail}</small></span><span className="git-change-label">{changeStatusLabel(change.status, labels)}</span><div className="row-actions">{mode === "staged" ? <button type="button" className="icon-button" title={labels.unstage} aria-label={`${labels.unstage}: ${change.path}`} disabled={disabled} onClick={() => onUnstage(change.path)}><ArrowUpFromLine size={14} /></button> : <><button type="button" className="icon-button" title={labels.stage} aria-label={`${labels.stage}: ${change.path}`} disabled={disabled} onClick={() => onStage(change.path)}><Plus size={14} /></button>{change.status !== "conflicted" && <button type="button" className="icon-button danger" title={labels.discard} aria-label={`${labels.discard}: ${change.path}`} disabled={disabled} onClick={() => onDiscard(change.path)}><Trash2 size={14} /></button>}</>}</div></div>;
+  return <div className="git-change-row" title={detail}><span className={`git-change-status ${change.status}`}>{changeStatusCodes[change.status] ?? "M"}</span><span className="git-change-path"><strong>{name}</strong><small>{detail}</small></span><span className="git-change-label">{changeStatusLabel(change.status, labels)}</span><div className="row-actions">{mode === "staged" ? <button type="button" className="icon-button" title={labels.unstage} aria-label={`${labels.unstage}: ${change.path}`} disabled={disabled} onClick={() => onUnstage(change.path)}><ArrowUpFromLine size={14} /></button> : <><button type="button" className="icon-button" title={labels.stage} aria-label={`${labels.stage}: ${change.path}`} disabled={disabled} onClick={() => onStage(change.path)}><Plus size={14} /></button>{change.status !== "conflicted" && <button type="button" className="icon-button danger" title={labels.discard} aria-label={`${labels.discard}: ${change.path}`} disabled={disabled} onClick={event => onDiscard(change.path, event.currentTarget)}><Trash2 size={14} /></button>}</>}</div></div>;
 }
 
 const changeStatusCodes: Record<string, string> = { modified: "M", added: "A", deleted: "D", renamed: "R", copied: "C", untracked: "?", conflicted: "!" };
