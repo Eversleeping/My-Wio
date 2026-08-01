@@ -35,6 +35,13 @@ type Thread struct {
 	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
 }
 
+// ThreadPage is a bounded window of Codex sessions. The API layer turns this
+// into its public pagination response and owns the requested offset.
+type ThreadPage struct {
+	Items   []Thread
+	HasMore bool
+}
+
 func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Thread, error) {
 	var out []Thread
 	archived := ""
@@ -49,6 +56,35 @@ func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Th
 	}
 	err := s.DB.SelectContext(ctx, &out, `SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.pinned_at,t.archived_at,p.pinned_at project_pinned_at,p.hidden_at project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id`+filter+` ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC`)
 	return out, err
+}
+
+// ListThreadsPage returns one ordered session window and one extra row is
+// read to let callers determine whether another window exists. It deliberately
+// leaves ListThreads unchanged for clients that still need the complete list.
+func (s *Store) ListThreadsPage(ctx context.Context, archived string, limit, offset int) (ThreadPage, error) {
+	if limit <= 0 {
+		return ThreadPage{}, errors.New("thread page limit must be positive")
+	}
+	if offset < 0 {
+		return ThreadPage{}, errors.New("thread page offset must not be negative")
+	}
+	filter := " WHERE t.archived_at IS NULL"
+	if archived == "true" {
+		filter = " WHERE t.archived_at IS NOT NULL"
+	} else if archived == "all" {
+		filter = ""
+	}
+	items := make([]Thread, 0, limit+1)
+	err := s.DB.SelectContext(ctx, &items, s.Q(`SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.pinned_at,t.archived_at,p.pinned_at project_pinned_at,p.hidden_at project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id`+filter+` ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC,t.id DESC LIMIT ? OFFSET ?`), limit+1, offset)
+	if err != nil {
+		return ThreadPage{}, err
+	}
+	page := ThreadPage{Items: items}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.HasMore = true
+	}
+	return page, nil
 }
 
 func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {

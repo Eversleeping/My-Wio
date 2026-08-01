@@ -96,7 +96,15 @@ const (
 	projectDestinationLimit  = 1024
 	gitBranchNameLimit       = 240
 	threadTitleLimit         = 200
+	defaultThreadsPageLimit  = 50
+	maxThreadsPageLimit      = 100
 )
+
+type threadListPageResponse struct {
+	Items   []store.Thread `json:"items"`
+	HasMore bool           `json:"has_more"`
+	Next    *int           `json:"next"`
+}
 
 func normalizeServerMetadata(address, configuration, notes string) (store.ServerMetadata, error) {
 	metadata := store.ServerMetadata{
@@ -1529,9 +1537,39 @@ func normalizeWorkspaceFilePath(value string) (string, bool) {
 }
 
 func (a *API) threads(w http.ResponseWriter, r *http.Request) {
-	archived := r.URL.Query().Get("archived")
+	query := r.URL.Query()
+	archived := query.Get("archived")
 	if archived != "" && archived != "true" && archived != "all" {
 		writeError(w, http.StatusBadRequest, "archived must be true or all")
+		return
+	}
+	limitValues, hasLimit := query["limit"]
+	offsetValues, hasOffset := query["offset"]
+	if hasLimit || hasOffset {
+		limit, err := parseThreadPageValue(limitValues, hasLimit, "limit", defaultThreadsPageLimit, true)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if limit > maxThreadsPageLimit {
+			limit = maxThreadsPageLimit
+		}
+		offset, err := parseThreadPageValue(offsetValues, hasOffset, "offset", 0, false)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		page, err := a.store.ListThreadsPage(r.Context(), archived, limit, offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not list Codex sessions")
+			return
+		}
+		var next *int
+		if page.HasMore {
+			value := offset + len(page.Items)
+			next = &value
+		}
+		writeJSON(w, http.StatusOK, threadListPageResponse{Items: page.Items, HasMore: page.HasMore, Next: next})
 		return
 	}
 	threads, err := a.store.ListThreads(r.Context(), archived)
@@ -1540,6 +1578,29 @@ func (a *API) threads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, threads)
+}
+
+func parseThreadPageValue(values []string, present bool, name string, fallback int, positive bool) (int, error) {
+	if !present {
+		return fallback, nil
+	}
+	kind := "non-negative"
+	if positive {
+		kind = "positive"
+	}
+	if len(values) != 1 || values[0] == "" {
+		return 0, fmt.Errorf("%s must be a %s decimal integer", name, kind)
+	}
+	for _, character := range values[0] {
+		if character < '0' || character > '9' {
+			return 0, fmt.Errorf("%s must be a %s decimal integer", name, kind)
+		}
+	}
+	parsed, err := strconv.ParseInt(values[0], 10, 0)
+	if err != nil || (positive && parsed == 0) {
+		return 0, fmt.Errorf("%s must be a %s decimal integer", name, kind)
+	}
+	return int(parsed), nil
 }
 
 func (a *API) updateThread(w http.ResponseWriter, r *http.Request) {

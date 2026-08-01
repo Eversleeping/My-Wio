@@ -804,6 +804,100 @@ func TestDeleteThreadCleansEventsAndRejectsActiveSessions(t *testing.T) {
 	}
 }
 
+func TestThreadsSupportOptionalBoundedPagination(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	ctx := context.Background()
+	server := enrollResourceTestServer(t, database, "thread-pagination")
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/thread-pagination", Name: "thread-pagination"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	var threads []store.Thread
+	for _, title := range []string{"oldest", "middle", "newest", "archived"} {
+		thread, createErr := database.CreateThread(ctx, workspaces[0].ID, title)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		threads = append(threads, thread)
+	}
+	base := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	for index, thread := range threads[:3] {
+		if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE codex_threads SET updated_at=? WHERE id=?"), base.Add(time.Duration(index)*time.Minute), thread.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archived := true
+	if _, err := database.UpdateThread(ctx, threads[3].ID, nil, nil, &archived); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+
+	compatibility := directJSONRequest(t, http.MethodGet, "/api/threads", nil, nil, api.threads)
+	if compatibility.Code != http.StatusOK {
+		t.Fatalf("legacy listing returned %d: %s", compatibility.Code, compatibility.Body.String())
+	}
+	var legacy []store.Thread
+	if err := json.Unmarshal(compatibility.Body.Bytes(), &legacy); err != nil || len(legacy) != 3 || legacy[0].ID != threads[2].ID || legacy[1].ID != threads[1].ID || legacy[2].ID != threads[0].ID {
+		t.Fatalf("legacy response must remain an ordered array: %#v %v", legacy, err)
+	}
+
+	firstResponse := directJSONRequest(t, http.MethodGet, "/api/threads?limit=2", nil, nil, api.threads)
+	if firstResponse.Code != http.StatusOK {
+		t.Fatalf("first page returned %d: %s", firstResponse.Code, firstResponse.Body.String())
+	}
+	var first threadListPageResponse
+	if err := json.Unmarshal(firstResponse.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if !first.HasMore || first.Next == nil || *first.Next != 2 || len(first.Items) != 2 || first.Items[0].ID != threads[2].ID || first.Items[1].ID != threads[1].ID {
+		t.Fatalf("unexpected first page: %#v", first)
+	}
+	secondResponse := directJSONRequest(t, http.MethodGet, "/api/threads?limit=2&offset=2", nil, nil, api.threads)
+	var second threadListPageResponse
+	if secondResponse.Code != http.StatusOK || json.Unmarshal(secondResponse.Body.Bytes(), &second) != nil || second.HasMore || second.Next != nil || len(second.Items) != 1 || second.Items[0].ID != threads[0].ID {
+		t.Fatalf("unexpected second page: %d %#v", secondResponse.Code, second)
+	}
+	defaultLimitResponse := directJSONRequest(t, http.MethodGet, "/api/threads?offset=1", nil, nil, api.threads)
+	var defaultLimit threadListPageResponse
+	if defaultLimitResponse.Code != http.StatusOK || json.Unmarshal(defaultLimitResponse.Body.Bytes(), &defaultLimit) != nil || defaultLimit.HasMore || defaultLimit.Next != nil || len(defaultLimit.Items) != 2 {
+		t.Fatalf("offset-only pagination did not use the default limit: %d %#v", defaultLimitResponse.Code, defaultLimit)
+	}
+	archivedResponse := directJSONRequest(t, http.MethodGet, "/api/threads?archived=true&limit=1", nil, nil, api.threads)
+	var archivedPage threadListPageResponse
+	if archivedResponse.Code != http.StatusOK || json.Unmarshal(archivedResponse.Body.Bytes(), &archivedPage) != nil || archivedPage.HasMore || archivedPage.Next != nil || len(archivedPage.Items) != 1 || archivedPage.Items[0].ID != threads[3].ID {
+		t.Fatalf("archived pagination filter failed: %d %#v", archivedResponse.Code, archivedPage)
+	}
+	allResponse := directJSONRequest(t, http.MethodGet, "/api/threads?archived=all&limit=10", nil, nil, api.threads)
+	var allPage threadListPageResponse
+	if allResponse.Code != http.StatusOK || json.Unmarshal(allResponse.Body.Bytes(), &allPage) != nil || allPage.HasMore || len(allPage.Items) != 4 {
+		t.Fatalf("all-thread pagination filter failed: %d %#v", allResponse.Code, allPage)
+	}
+
+	for _, target := range []string{
+		"/api/threads?limit=", "/api/threads?limit=0", "/api/threads?limit=-1", "/api/threads?limit=one", "/api/threads?limit=1&limit=2",
+		"/api/threads?offset=", "/api/threads?offset=-1", "/api/threads?offset=one", "/api/threads?offset=1&offset=2",
+	} {
+		response := directJSONRequest(t, http.MethodGet, target, nil, nil, api.threads)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid pagination %q returned %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+
+	for count := len(legacy); count <= maxThreadsPageLimit; count++ {
+		if _, err := database.CreateThread(ctx, workspaces[0].ID, "capped"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cappedResponse := directJSONRequest(t, http.MethodGet, "/api/threads?limit=1000", nil, nil, api.threads)
+	var capped threadListPageResponse
+	if cappedResponse.Code != http.StatusOK || json.Unmarshal(cappedResponse.Body.Bytes(), &capped) != nil || !capped.HasMore || capped.Next == nil || *capped.Next != maxThreadsPageLimit || len(capped.Items) != maxThreadsPageLimit {
+		t.Fatalf("page limit was not capped: %d %#v", cappedResponse.Code, capped)
+	}
+}
+
 func TestValidTurnImages(t *testing.T) {
 	valid := protocol.TurnImage{DataURL: "data:image/png;base64,iVBORw0KGgo="}
 	if !validTurnImages([]protocol.TurnImage{valid}) {

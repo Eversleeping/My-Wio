@@ -420,6 +420,64 @@ func TestArchiveAndForkThreadCopiesVisibleHistoryTransactionally(t *testing.T) {
 	}
 }
 
+func TestListThreadsPageUsesStableWindowsAndArchiveFilters(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	server := enrollProjectImportTestServer(t, database, "thread-page")
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/thread-page", Name: "thread-page"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	var threads []Thread
+	for _, title := range []string{"oldest", "middle", "newest", "archived"} {
+		thread, createErr := database.CreateThread(ctx, workspaces[0].ID, title)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		threads = append(threads, thread)
+	}
+	base := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	for index, thread := range threads[:3] {
+		if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE codex_threads SET updated_at=? WHERE id=?"), base.Add(time.Duration(index)*time.Minute), thread.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archived := true
+	if _, err := database.UpdateThread(ctx, threads[3].ID, nil, nil, &archived); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy, err := database.ListThreads(ctx)
+	if err != nil || len(legacy) != 3 || legacy[0].ID != threads[2].ID || legacy[1].ID != threads[1].ID || legacy[2].ID != threads[0].ID {
+		t.Fatalf("legacy thread listing changed: %#v %v", legacy, err)
+	}
+	first, err := database.ListThreadsPage(ctx, "", 2, 0)
+	if err != nil || !first.HasMore || len(first.Items) != 2 || first.Items[0].ID != threads[2].ID || first.Items[1].ID != threads[1].ID {
+		t.Fatalf("unexpected first page: %#v %v", first, err)
+	}
+	second, err := database.ListThreadsPage(ctx, "", 2, 2)
+	if err != nil || second.HasMore || len(second.Items) != 1 || second.Items[0].ID != threads[0].ID {
+		t.Fatalf("unexpected second page: %#v %v", second, err)
+	}
+	archivedPage, err := database.ListThreadsPage(ctx, "true", 2, 0)
+	if err != nil || archivedPage.HasMore || len(archivedPage.Items) != 1 || archivedPage.Items[0].ID != threads[3].ID {
+		t.Fatalf("unexpected archived page: %#v %v", archivedPage, err)
+	}
+	all, err := database.ListThreadsPage(ctx, "all", 10, 0)
+	if err != nil || all.HasMore || len(all.Items) != 4 {
+		t.Fatalf("unexpected all-thread page: %#v %v", all, err)
+	}
+	if _, err := database.ListThreadsPage(ctx, "", 0, 0); err == nil {
+		t.Fatal("zero page limit was accepted")
+	}
+	if _, err := database.ListThreadsPage(ctx, "", 1, -1); err == nil {
+		t.Fatal("negative page offset was accepted")
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
