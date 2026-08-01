@@ -83,9 +83,12 @@ import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "./components/Dialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
 import { clearCodexComposerPreferences, defaultCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
+import { formatDate, formatTime, relative, shortSHA } from "./format";
 import { currentLocale, useI18n } from "./i18n";
 import { compressImage } from "./imageCompression";
+import { clearDataCacheMatching, useData } from "./useData";
 import {
   CreateProjectDialog,
   ProjectDeletionDialog,
@@ -131,7 +134,6 @@ import type {
   SSHBootstrapStreamEvent,
   SSHHostKey,
   StreamEvent,
-  Summary,
   Thread,
   Workspace,
   WorkspaceChange,
@@ -153,14 +155,13 @@ type InstallLogEntry = { step: string; status: "running" | "done" | "error"; cur
 type ComposerImage = { id: string; dataURL: string };
 type FilePreviewSelection = { path: string; line?: number; mode?: "file" | "diff" };
 type SubagentActivity = { threadID: string; path: string; status: string; message: string; prompt: string; model: string; reasoningEffort: string; updatedAt: string };
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevision = { revision: number; minimumSequence: number | null };
 type StreamRevisions = Record<string, StreamRevision>;
-type DataCacheEntry = { data: unknown; dependency: unknown };
 type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean };
 
-const dataCache = new Map<string, DataCacheEntry>();
 const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
 const codexScrollPositions = new Map<string, number>();
 const codexAutoFollowThreshold = 96;
@@ -193,28 +194,9 @@ function isNearCodexStreamBottom(element: HTMLElement) {
   return latestScrollTop(element) - element.scrollTop <= codexAutoFollowThreshold;
 }
 
-function useThrottledValue<T>(value: T, minimumInterval: number) {
-  const [throttled, setThrottled] = useState(value);
-  const lastAppliedAt = useRef(Date.now());
-  useEffect(() => {
-    if (Object.is(value, throttled)) return;
-    const remaining = minimumInterval - (Date.now() - lastAppliedAt.current);
-    const apply = () => {
-      lastAppliedAt.current = Date.now();
-      setThrottled(value);
-    };
-    if (remaining <= 0) { apply(); return; }
-    const timer = window.setTimeout(apply, remaining);
-    return () => window.clearTimeout(timer);
-  }, [minimumInterval, throttled, value]);
-  return throttled;
-}
-
 function clearCodexSessionMemory(threadID?: string) {
   const eventPrefix = threadID ? `/threads/${threadID}/events?` : "/threads/";
-  for (const path of dataCache.keys()) {
-    if (path.startsWith(eventPrefix) && path.includes("/events?")) dataCache.delete(path);
-  }
+  clearDataCacheMatching(path => path.startsWith(eventPrefix) && path.includes("/events?"));
   for (const path of threadEventsCache.keys()) {
     if (!threadID || path.startsWith(`/threads/${threadID}/events?`)) threadEventsCache.delete(path);
   }
@@ -410,7 +392,7 @@ export default function App() {
     if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextLocation) window.history[replace ? "replaceState" : "pushState"](null, "", nextLocation);
   };
   const page = {
-    dashboard: <Dashboard realtime={realtimeRevisions.dashboard} onNavigate={selectView} />,
+    dashboard: <Suspense fallback={<PageLoading />}><DashboardPage realtime={realtimeRevisions.dashboard} onNavigate={selectView} /></Suspense>,
     servers: <ServersPage realtime={realtimeRevisions.servers} notify={setToast} />,
     projects: <ProjectsPage realtime={realtimeRevisions.projects} notify={setToast} />,
     codex: <CodexPage realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} />,
@@ -449,31 +431,6 @@ export default function App() {
 function LoadingScreen() {
   const { t } = useI18n();
   return <div className="auth-layout"><div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong></div><LoaderCircle className="spin" size={28} /></div>;
-}
-
-export function Dashboard({ realtime, onNavigate }: { realtime: number; onNavigate: (view: View) => void }) {
-  const { t } = useI18n();
-  const summaryRealtime = useThrottledValue(realtime, 1_000);
-  const summary = useData<Summary>("/summary", summaryRealtime);
-  if (summary.loading) return <PageLoading />;
-  if (!summary.data) return <ErrorState error={summary.error} reload={summary.reload} />;
-  const stats = [
-    [t("nav.servers"), summary.data.counts.online, t("dashboard.registered", { count: summary.data.counts.servers }), ServerIcon, "green", "servers"],
-    [t("nav.projects"), summary.data.counts.projects, t("dashboard.codexSessions", { count: summary.data.counts.threads }), GitBranch, "cyan", "projects"],
-    [t("dashboard.inProgress"), summary.data.counts.deployments, t("nav.deployments"), Rocket, "amber", "deployments"],
-    [t("dashboard.openAlerts"), summary.data.counts.alerts, t("dashboard.requiresAttention"), BellRing, "red", "monitoring"]
-  ] as const;
-  return <div className="page-stack">
-    <section className="stat-grid">{stats.map(([label, value, detail, Icon, tone, target]) => <button className="stat" key={label} onClick={() => onNavigate(target)}><span className={`stat-icon ${tone}`}><Icon size={20} /></span><span><small>{label}</small><strong>{value ?? 0}</strong><em>{detail}</em></span><ChevronRight size={17} /></button>)}</section>
-    <div className="two-column">
-      <Section title={t("dashboard.recentDeployments")} icon={<Rocket size={18} />} action={<button className="text-button" onClick={() => onNavigate("deployments")}>{t("common.viewAll")}<ChevronRight size={15} /></button>}>
-        <DataTable headers={[t("column.project"), t("column.environment"), t("column.commit"), t("column.status"), t("column.started")]} empty={t("dashboard.noDeployments")}>{(summary.data.deployments ?? []).map(item => <tr key={item.id}><td><strong>{item.project_name}</strong></td><td>{item.environment}</td><td><code>{shortSHA(item.resolved_commit || item.commit_ref)}</code></td><td><Status value={item.status} /></td><td>{relative(item.created_at)}</td></tr>)}</DataTable>
-      </Section>
-      <Section title={t("dashboard.activeAlerts")} icon={<AlertTriangle size={18} />} action={<button className="text-button" onClick={() => onNavigate("monitoring")}>{t("common.viewAll")}<ChevronRight size={15} /></button>}>
-        <div className="alert-list">{(summary.data.alerts ?? []).length === 0 ? <Empty icon={<ShieldCheck size={23} />} text={t("dashboard.noAlerts")} /> : (summary.data.alerts ?? []).map(alert => <div className="alert-row" key={alert.id}><span className={`severity ${alert.severity}`} /><div><strong>{alert.title}</strong><small>{alert.server_name} · {relative(alert.opened_at)}</small></div><Status value={alert.severity} /></div>)}</div>
-      </Section>
-    </div>
-  </div>;
 }
 
 export function ServersPage({ realtime, notify }: PageProps) {
@@ -2463,7 +2420,6 @@ function LanguageSwitch() {
   return <div className="language-switch" role="group" aria-label={t("auth.language")}><button aria-pressed={language === "zh-CN"} className={language === "zh-CN" ? "active" : ""} onClick={() => setLanguage("zh-CN")} type="button">中文</button><button aria-pressed={language === "en"} className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")} type="button">EN</button></div>;
 }
 
-function Section({ title, icon, action, children }: { title: string; icon?: ReactNode; action?: ReactNode; children: ReactNode }) { return <section className="section"><div className="section-heading"><div>{icon}<h2>{title}</h2></div>{action}</div>{children}</section>; }
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
 function CodexModelPicker({ value, onChange, allowServerDefault = false, required = false, requestCustom = 0 }: { value: string; onChange: (value: string) => void; allowServerDefault?: boolean; required?: boolean; requestCustom?: number }) {
   const { t } = useI18n();
@@ -2487,12 +2443,7 @@ function ServerCredentialSummary({ server }: { server: Server }) {
   return <div className="server-credential-summary">{server.codex_profile_name && <span title={server.codex_profile_name}><SquareTerminal size={13} /><span>{server.codex_profile_name}</span></span>}{gitProfiles.length ? gitProfiles.map(profile => <span key={profile.id} title={`${profile.name} · ${profile.username}`}><GitFork size={13} /><span>{profile.name}</span></span>) : server.git_profile_name && <span title={server.git_profile_name}><GitFork size={13} /><span>{server.git_profile_name}</span></span>}</div>;
 }
 function Dialog(props: Omit<DialogProps, "closeLabel">) { const { t } = useI18n(); return <AccessibleDialog {...props} closeLabel={t("common.close")} />; }
-function DataTable({ headers, empty, children }: { headers: string[]; empty: string; children: ReactNode }) { const count = Array.isArray(children) ? children.length : children ? 1 : 0; return <div className="table-wrap"><table><thead><tr>{headers.map(header => <th key={header}>{header}</th>)}</tr></thead><tbody>{count ? children : <tr><td colSpan={headers.length}><Empty icon={<Boxes size={22} />} text={empty} /></td></tr>}</tbody></table></div>; }
-function Empty({ icon, text }: { icon: ReactNode; text: string }) { return <div className="empty">{icon}<span>{text}</span></div>; }
-function Status({ value, icon }: { value: string; icon?: ReactNode }) { const { t } = useI18n(); const normalized = value.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replaceAll("_", "-"); const translated = t(`status.${normalized}`); return <span className={`status-tag ${normalized}`}>{icon}{translated.startsWith("status.") ? value.replaceAll("_", " ") : translated}</span>; }
 function ErrorBanner({ text }: { text: string }) { return <div className="error-banner"><AlertTriangle size={16} />{text}</div>; }
-function PageLoading() { return <div className="page-loading"><LoaderCircle className="spin" size={24} /></div>; }
-function ErrorState({ error, reload }: { error: string; reload: () => void }) { const { t } = useI18n(); return <div className="error-state"><AlertTriangle size={25} /><strong>{t("error.load")}</strong><span>{error}</span><button className="secondary-button" onClick={reload}><RefreshCw size={16} />{t("common.retry")}</button></div>; }
 
 interface PageProps { realtime: number; notify: (text: string) => void }
 const previewPollDelays = [750, 1_500, 3_000, 6_000];
@@ -2707,35 +2658,6 @@ function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown
   return { data: current.data, error: current.error, loading: current.loading, loadingEarlier: current.loadingEarlier, hasEarlier: cached?.hasEarlier ?? false, loadEarlier, reload };
 }
 
-function useData<T>(path: string | null, dependency: unknown, cache = false) {
-  const [result, setResult] = useState<{ path: string | null; data: T | null }>({ path: null, data: null }); const [failure, setFailure] = useState<{ path: string | null; text: string }>({ path: null, text: "" }); const [settledPath, setSettledPath] = useState<string | null>(null); const [version, setVersion] = useState(0);
-  const reload = useCallback(() => setVersion(value => value + 1), []);
-  useEffect(() => {
-    if (!path) { setSettledPath(null); return; }
-    const cached = cache ? dataCache.get(path) : undefined;
-    if (version === 0 && cached && Object.is(cached.dependency, dependency)) {
-      setFailure({ path, text: "" });
-      setSettledPath(path);
-      return;
-    }
-    const controller = new AbortController();
-    api<T>(path, { signal: controller.signal }).then(value => {
-      if (cache) dataCache.set(path, { data: value, dependency });
-      setResult({ path, data: value });
-      setFailure({ path, text: "" });
-    }).catch(err => {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      setFailure({ path, text: message(err) });
-    }).finally(() => { if (!controller.signal.aborted) setSettledPath(path); });
-    return () => controller.abort();
-  }, [path, dependency, version, cache]);
-  const cached = cache && path ? dataCache.get(path) : undefined;
-  const cachedData = cached && Object.is(cached.dependency, dependency) ? cached.data as T : null;
-  const data = result.path === path ? result.data : cachedData;
-  const error = failure.path === path ? failure.text : "";
-  return { data, error, loading: Boolean(path) && data === null && settledPath !== path, reload };
-}
-
 function message(error: unknown) { return error instanceof Error ? error.message : "Request failed"; }
 function enrollmentMessage(error: unknown, translate: (key: string) => string) {
   if (error instanceof APIError && error.code) {
@@ -2914,7 +2836,3 @@ function toolDetail(item: Record<string, unknown> | null, translate: (key: strin
   return pretty({ arguments: item.arguments, result: item.result, error: item.error });
 }
 function readableKind(kind: string) { return kind.replace(/^codex\./, "").replaceAll(".", " / ").replaceAll("/", " / "); }
-function shortSHA(value: string) { return value ? value.slice(0, 8) : "-"; }
-function formatDate(value: string) { return new Intl.DateTimeFormat(currentLocale(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }
-function formatTime(value: string) { return new Intl.DateTimeFormat(currentLocale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value)); }
-function relative(value: string) { const seconds = Math.round((new Date(value).getTime() - Date.now()) / 1000); const formatter = new Intl.RelativeTimeFormat(currentLocale(), { numeric: "auto" }); const ranges: Array<[number, Intl.RelativeTimeFormatUnit]> = [[60, "second"], [60, "minute"], [24, "hour"], [7, "day"], [4.345, "week"], [12, "month"], [Infinity, "year"]]; let duration = seconds; for (const [amount, unit] of ranges) { if (Math.abs(duration) < amount) return formatter.format(Math.round(duration), unit); duration /= amount; } return formatDate(value); }
