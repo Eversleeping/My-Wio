@@ -177,7 +177,7 @@
 | 第三批：前端稳定分包与体积检查 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/vite.config.ts`、构建检查脚本及对应配置 | 已完成 |
 | 第三批：通用 Dialog 可访问性组件 | Terra xhigh 子 Agent，主 Agent 已验收并接入 | 通用组件、独立测试和 `App.tsx` | 已完成 |
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
-| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`b1baaa7` 已部署，本机与公网健康检查通过 |
+| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`44ddc34` 已部署，本机与公网健康检查通过 |
 | 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
 | 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 已完成全部浏览器原生确认迁移 |
 | 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
@@ -244,3 +244,4 @@
 - 2026-08-02：第七批 4 个提交已推送并部署到生产 `b1baaa7`。部署前备份旧 HEAD、Git bundle、`.env` 与 PostgreSQL 到 `/opt/wio-backups/20260801T202434Z`，备份逐项验真；使用 host-proxy 双 Compose 仅重建 controlplane，未启动仓库 Caddy、未修改宿主机 Caddy。部署后 PostgreSQL/controlplane 均 healthy，controlplane 仅绑定 `127.0.0.1:18080`，宿主 Caddy active，内网与公网健康版本均为 `b84333073a556bd4`，首页 SHA-256 一致为 `8fe118eb42ad2571f410f36d9aad41ee3773c99cc76eddcbf41fba5e2c60bd0b`，Projects chunk 两端均返回 HTTP 200，且无残留 Compose/BuildKit 进程。
 - 2026-08-02：启动第八批 Terra xhigh 并行任务：Codex 路由级懒加载、审计日志向后兼容分页、长会话与连接性能 E2E；主 Agent 负责子 Agent diff 审查、前端分页接入、计划维护和完整回归。
 - 2026-08-02：按用户要求停止第八批子 Agent，剩余工作改由主 Agent执行。审计日志完成向后兼容分页：无参数保持旧数组，显式分页默认 50、最大 100，稳定 `occurred_at,id` 排序，Settings 支持去重加载更多；新增 Go 分页契约测试。长会话 Playwright 新增首屏 50 条与第二窗口合并场景，定向桌面用例 1 passed。Codex 路由迁出仍在主 Agent静态边界评估中，以避免大范围移动引入行为回归。
+- 2026-08-02：审计分页与长会话 E2E 全量回归通过并推送 `3577edb`、`0f23543`、`44ddc34`；Go `test/vet`、Vitest 24 文件/92 测试、typecheck、build/bundle check、Playwright 11 passed/9 expected skipped 均通过。再次部署到生产 `44ddc34`：备份 `.env`、PostgreSQL、旧 HEAD 与 Git bundle 到 `/opt/wio-backups/20260801T204513Z`；仅使用 host-proxy Compose 重建 controlplane，PostgreSQL 与 controlplane healthy，宿主 Caddy active，内外健康版本均为 `acd56156c09f7895`，首页 SHA-256 一致为 `692fa937c2c4da8c5aab5a357720333a67031233f3ddfe90ef7fcb0808f4dfdf`，Projects chunk 两端均 HTTP 200，无残留 Compose/BuildKit 进程。
