@@ -777,10 +777,16 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 			"kind", op.Kind,
 			"queue_wait_ms", time.Since(op.CreatedAt).Milliseconds(),
 		)
-		updated, statusErr := g.store.Operation(stream.Context(), op.ID)
-		if statusErr == nil && updated.Status == "cancelled" && isCodexTurnOperation(op.Kind) {
-			if err := g.queueBestEffortInterrupt(stream.Context(), serverID, op); err != nil {
-				g.log.Warn("could not queue best-effort Codex interrupt", "operation_id", op.ID, "error", err)
+		// Only Codex turns need a post-delivery state lookup: a cancellation can
+		// win the race between Send and MarkDelivered, and then needs a best-effort
+		// interrupt. Other operation types do not consume this status, so skipping
+		// their lookup removes one database round trip per delivered operation.
+		if isCodexTurnOperation(op.Kind) {
+			updated, statusErr := g.store.Operation(stream.Context(), op.ID)
+			if statusErr == nil && updated.Status == "cancelled" {
+				if err := g.queueBestEffortInterrupt(stream.Context(), serverID, op); err != nil {
+					g.log.Warn("could not queue best-effort Codex interrupt", "operation_id", op.ID, "error", err)
+				}
 			}
 		}
 	}

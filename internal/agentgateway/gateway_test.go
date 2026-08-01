@@ -24,9 +24,15 @@ type keepaliveStream struct {
 	ctx      context.Context
 	sent     chan *protocol.ControlEnvelope
 	recvDone chan struct{}
+	onSend   func(*protocol.ControlEnvelope) error
 }
 
 func (s *keepaliveStream) Send(message *protocol.ControlEnvelope) error {
+	if s.onSend != nil {
+		if err := s.onSend(message); err != nil {
+			return err
+		}
+	}
 	s.sent <- message
 	return nil
 }
@@ -273,6 +279,71 @@ func TestConnectRedeliversTimedOutDeliveredOperationAfterReconnect(t *testing.T)
 	case <-secondRecvDone:
 	case <-time.After(time.Second):
 		t.Fatal("reconnected stream receive loop did not stop after cancellation")
+	}
+}
+
+func TestFlushRetainsPostDeliveryCancellationProtectionForCodexTurns(t *testing.T) {
+	database, server := gatewayTestServer(t, "flush-cancel-agent-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/flush-cancel", Name: "flush-cancel"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "flush cancellation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.StartTurnCommand{ThreadID: thread.ID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: "cancel after delivery"}
+	operationID, err := database.QueueOperation(ctx, server.ID, "codex.turn.start", command, "flush-cancel-turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &keepaliveStream{
+		ctx:  ctx,
+		sent: make(chan *protocol.ControlEnvelope, 2),
+		onSend: func(message *protocol.ControlEnvelope) error {
+			if message.OperationID != operationID {
+				return nil
+			}
+			cancelled, err := database.CancelOperation(ctx, operationID, "cancelled during delivery")
+			if err != nil {
+				return err
+			}
+			if !cancelled {
+				return errors.New("operation was not cancelled during delivery")
+			}
+			return nil
+		},
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := gateway.flush(stream, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case delivered := <-stream.sent:
+		if delivered.OperationID != operationID || delivered.Kind != "codex.turn.start" {
+			t.Fatalf("unexpected delivered operation: %#v", delivered)
+		}
+	default:
+		t.Fatal("Codex turn was not delivered")
+	}
+	operation, err := database.Operation(ctx, operationID)
+	if err != nil || operation.Status != "cancelled" {
+		t.Fatalf("cancelled operation was overwritten: %#v %v", operation, err)
+	}
+	pending, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(pending) != 1 || pending[0].Kind != "codex.turn.interrupt" {
+		t.Fatalf("best-effort interrupt was not queued: %#v %v", pending, err)
+	}
+	var interrupt protocol.InterruptTurnCommand
+	if err := json.Unmarshal([]byte(pending[0].Payload), &interrupt); err != nil {
+		t.Fatal(err)
+	}
+	if interrupt.ThreadID != thread.ID || !interrupt.BestEffort {
+		t.Fatalf("unexpected best-effort interrupt: %#v", interrupt)
 	}
 }
 
