@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第三批已完成）
+更新时间：2026-08-02（第四批验收完成，待部署）
 
 ## 目标
 
@@ -113,7 +113,7 @@
 1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；第三批先建立稳定的分包边界并记录各 chunk 体积，再逐页从单体入口迁出。
 2. [已完成] React、Markdown 和图标依赖已配置稳定 vendor chunks；Prism 保持在既有懒加载路径，避免强制合并懒加载依赖。
 3. 对会话、审计日志、变更文件和大型文件预览引入分页或虚拟化。
-4. 图片压缩迁移到 Worker/OffscreenCanvas；不支持时分片让出主线程。
+4. [已完成] 图片压缩已迁移到 Worker/OffscreenCanvas，并接入上传流程；Worker 创建、通信、超时或浏览器能力不足时自动回退主线程，保留 WebP、1600px、900KB 与 6 次尝试契约。
 5. [进行中] 已增加构建后单 JS chunk 500,000 bytes 硬门槛和分包配置测试；关键交互性能测试待后续补充。
 
 验收：不再出现单个入口 chunk 超过 500KB 的构建警告；上传大图时输入和滚动保持响应。
@@ -125,8 +125,8 @@
 任务：
 
 1. [已完成] 通用 Dialog 已接入现有页面，支持 Escape、焦点陷阱、首次聚焦、关闭后焦点恢复、背景关闭、ARIA 标题关联和多层 Dialog 顶层响应。
-2. 将原生 `confirm()` 逐步替换为一致的确认对话框，危险操作展示影响范围。
-3. 图标按钮补齐稳定的可访问名称；状态变化通过适当的 live region 通知。
+2. [进行中] 已建立统一确认对话框并迁移部署目标删除、部署历史删除；其余原生 `confirm()` 按风险逐步迁移。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认和关闭。
+3. [已完成] 61 个图标按钮均具备稳定的可访问名称；连接状态、审批计数和操作 toast 通过适当的 live region 通知，并增加静态守卫防止回退。
 4. 增加键盘导航、窄屏、减少动画和屏幕阅读器相关测试。
 
 验收：只使用键盘能够完成登录、创建会话、审批和取消操作，Dialog 期间焦点不会逃逸。
@@ -147,14 +147,14 @@
 
 ### 阶段 8：可复现 E2E 与最终验收
 
-状态：待开始
+状态：进行中
 
 任务：
 
-1. 建立 Playwright 桌面端和 390×844 移动端自动化流程。
+1. [已完成] 已建立 Playwright 桌面端和 390×844 移动端自动化流程，使用本地 Vite 与页面级 API/WebSocket mock，不依赖生产服务、真实会话或真实凭据。
 2. 覆盖登录、注册服务器模拟、项目/工作区、Codex 会话、审批、部署和错误恢复。
 3. 增加 WebSocket 断线、慢客户端、长会话和大文件性能场景。
-4. 运行完整 Go、前端、typecheck、build、vet 和 diff 检查。
+4. [已完成] 第四批完整 Go、前端、typecheck、build、vet、E2E、依赖审计和 diff 检查均通过。
 5. 主 Agent 检查所有子 Agent 的代码、测试、文档和计划状态。
 
 验收：所有自动化检查通过，无未解释的构建警告和未处理的高优先级问题。
@@ -177,7 +177,11 @@
 | 第三批：前端稳定分包与体积检查 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/vite.config.ts`、构建检查脚本及对应配置 | 已完成 |
 | 第三批：通用 Dialog 可访问性组件 | Terra xhigh 子 Agent，主 Agent 已验收并接入 | 通用组件、独立测试和 `App.tsx` | 已完成 |
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
-| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`3caac86` 已部署，本机与公网健康检查通过 |
+| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`e4ae537` 已部署，本机与公网健康检查通过 |
+| 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
+| 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 组件已完成，剩余原生确认迁移进行中 |
+| 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
+| 第四批：图标按钮与 live region 审计 | 主 Agent | 前端主应用与可访问性测试 | 已完成 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -207,3 +211,7 @@
 - 2026-08-02：使用项目目录内、未纳入 Git 的 `aws.pem` 完成生产 SSH 登录；部署前备份 `.env`、PostgreSQL 与旧源码，预构建通过后将 `3caac86` 切换为当前版本。Compose 两个服务均健康，本机和公网 `/api/health` 均返回 HTTP 200，新前端 hash 为 `0cd4dd354fb89e2b`；旧源码目录保留用于回滚，未修改宿主机 Caddy。
 - 2026-08-02：第三批实现并经主 Agent 验收：WebSocket 事件按业务作用域刷新，Dashboard 汇总限频为每秒最多一次；会话事件增加 `before` 向前窗口、前端“加载更早内容”和滚动锚点保持；通用 Dialog 完成键盘与焦点可访问性并接入全部现有页面。
 - 2026-08-02：完成稳定 vendor 分包与构建体积硬门槛，最大 JS chunk 从 673.68KB（gzip 191.65KB）降至 342.75KB（gzip 92.71KB），不再出现 500KB 警告。完整回归通过：`go test ./...`、`go vet ./...`、前端 19 个测试文件/67 个测试、typecheck、build、bundle check 和 `git diff --check`。
+- 2026-08-02：第三批 5 个提交已推送并部署到生产 `e4ae537`；部署前再次备份 `.env` 与 PostgreSQL，Compose 服务、本机和公网健康检查通过，新前端 hash 为 `a81412176e7204f9`。
+- 2026-08-02：启动第四批 Terra xhigh 并行任务：图片压缩 Worker 与兼容回退、统一确认对话框组件、Playwright 桌面/移动 E2E 基础设施；主 Agent 负责图标按钮/live region 审计、接入和完整验收。
+- 2026-08-02：第四批实现完成并进入最终验收：图片压缩迁移至独立 Worker，失败或不支持时安全回退主线程；统一确认对话框已迁移部署目标与部署历史删除；61 个图标按钮通过可访问名称静态审计，连接状态、审批计数和 toast 已增加 live region；Playwright 桌面与 390×844 移动端基础流程使用完全本地 mock，可重复运行且不会访问生产服务。
+- 2026-08-02：主 Agent 与三路 Terra xhigh 完成第四批验收并修正审查问题：图片达到压缩极限后不再回退主线程重复计算，最多两张并发处理且切换会话时可取消；确认对话框忙碌时统一禁用 Escape、背景与关闭按钮，并将影响说明关联到 Dialog。完整回归通过：`go test ./...`、`go vet ./...`、前端 22 个测试文件/80 个测试、typecheck、build、bundle check、Playwright 4 passed/2 skipped、生产依赖审计和 `git diff --check`；最大 JS chunk 348.57KB（gzip 94.68KB），Worker 产物 1.55KB。
