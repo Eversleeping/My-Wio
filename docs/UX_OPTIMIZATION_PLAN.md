@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第四批验收完成，待部署）
+更新时间：2026-08-02（第五批验收中）
 
 ## 目标
 
@@ -84,7 +84,7 @@
 
 1. [已完成] 以 `Wake(serverID)` 作为主要下发机制；操作入队后可立即唤醒在线 Agent。
 2. [已完成] 保留 2 秒低频容错重查，将原先每台 Agent 的 250ms 固定轮询降低为每 2 秒一次。
-3. 合并操作投递后的数据库写入和状态读取，减少逐条往返。
+3. [已完成] 普通 Agent 操作在标记 delivered 后不再执行未使用的状态查询，每条减少 1 次数据库 `SELECT`；Codex turn 继续保留取消竞态检查与 best-effort interrupt。
 4. [已完成] 增加“唤醒立即下发”“遗漏唤醒后最终下发”“断线重连超时补发”测试，并验证连接与接收协程均能退出。
 5. [进行中] 已添加队列等待、投递和执行耗时结构化日志；指标聚合与告警阈值待后续阶段补充。
 
@@ -110,7 +110,7 @@
 
 任务：
 
-1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；第三批先建立稳定的分包边界并记录各 chunk 体积，再逐页从单体入口迁出。
+1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；第五批已提取共享数据 Hook、页面基础组件和格式化工具，并将 Dashboard 迁移为首个真实 `React.lazy` 路由，其他页面继续逐页迁出。
 2. [已完成] React、Markdown 和图标依赖已配置稳定 vendor chunks；Prism 保持在既有懒加载路径，避免强制合并懒加载依赖。
 3. 对会话、审计日志、变更文件和大型文件预览引入分页或虚拟化。
 4. [已完成] 图片压缩已迁移到 Worker/OffscreenCanvas，并接入上传流程；Worker 创建、通信、超时或浏览器能力不足时自动回退主线程，保留 WebP、1600px、900KB 与 6 次尝试契约。
@@ -125,7 +125,7 @@
 任务：
 
 1. [已完成] 通用 Dialog 已接入现有页面，支持 Escape、焦点陷阱、首次聚焦、关闭后焦点恢复、背景关闭、ARIA 标题关联和多层 Dialog 顶层响应。
-2. [进行中] 已建立统一确认对话框并迁移部署目标删除、部署历史删除；其余原生 `confirm()` 按风险逐步迁移。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认和关闭。
+2. [进行中] 已建立统一确认对话框并迁移部署目标删除、部署历史删除和工作区 Git 文件丢弃；其余原生 `confirm()` 按风险逐步迁移。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认和关闭。
 3. [已完成] 61 个图标按钮均具备稳定的可访问名称；连接状态、审批计数和操作 toast 通过适当的 live region 通知，并增加静态守卫防止回退。
 4. 增加键盘导航、窄屏、减少动画和屏幕阅读器相关测试。
 
@@ -152,7 +152,7 @@
 任务：
 
 1. [已完成] 已建立 Playwright 桌面端和 390×844 移动端自动化流程，使用本地 Vite 与页面级 API/WebSocket mock，不依赖生产服务、真实会话或真实凭据。
-2. 覆盖登录、注册服务器模拟、项目/工作区、Codex 会话、审批、部署和错误恢复。
+2. [进行中] 已覆盖登录、桌面/移动导航、部署排队与日志查看，以及 503 错误后恢复和重试；注册服务器模拟、项目/工作区、Codex 会话与审批继续补充。
 3. 增加 WebSocket 断线、慢客户端、长会话和大文件性能场景。
 4. [已完成] 第四批完整 Go、前端、typecheck、build、vet、E2E、依赖审计和 diff 检查均通过。
 5. 主 Agent 检查所有子 Agent 的代码、测试、文档和计划状态。
@@ -177,11 +177,15 @@
 | 第三批：前端稳定分包与体积检查 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/vite.config.ts`、构建检查脚本及对应配置 | 已完成 |
 | 第三批：通用 Dialog 可访问性组件 | Terra xhigh 子 Agent，主 Agent 已验收并接入 | 通用组件、独立测试和 `App.tsx` | 已完成 |
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
-| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`e4ae537` 已部署，本机与公网健康检查通过 |
+| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`89c5469` 已部署，本机与公网健康检查通过 |
 | 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
 | 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 组件已完成，剩余原生确认迁移进行中 |
 | 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
 | 第四批：图标按钮与 live region 审计 | 主 Agent | 前端主应用与可访问性测试 | 已完成 |
+| 第五批：Agent 队列数据库往返优化 | Terra xhigh 子 Agent，主 Agent 已验收 | `internal/agentgateway` 与对应测试 | 已完成 |
+| 第五批：核心流程与错误恢复 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
+| 第五批：工作区 Git 丢弃确认迁移 | Terra xhigh 子 Agent，主 Agent 已验收 | `WorkspaceGitDialog` 与对应测试 | 已完成 |
+| 第五批：Dashboard 路由懒加载 | 主 Agent | 共享前端模块、Dashboard 页面与对应测试 | 已完成 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -215,3 +219,7 @@
 - 2026-08-02：启动第四批 Terra xhigh 并行任务：图片压缩 Worker 与兼容回退、统一确认对话框组件、Playwright 桌面/移动 E2E 基础设施；主 Agent 负责图标按钮/live region 审计、接入和完整验收。
 - 2026-08-02：第四批实现完成并进入最终验收：图片压缩迁移至独立 Worker，失败或不支持时安全回退主线程；统一确认对话框已迁移部署目标与部署历史删除；61 个图标按钮通过可访问名称静态审计，连接状态、审批计数和 toast 已增加 live region；Playwright 桌面与 390×844 移动端基础流程使用完全本地 mock，可重复运行且不会访问生产服务。
 - 2026-08-02：主 Agent 与三路 Terra xhigh 完成第四批验收并修正审查问题：图片达到压缩极限后不再回退主线程重复计算，最多两张并发处理且切换会话时可取消；确认对话框忙碌时统一禁用 Escape、背景与关闭按钮，并将影响说明关联到 Dialog。完整回归通过：`go test ./...`、`go vet ./...`、前端 22 个测试文件/80 个测试、typecheck、build、bundle check、Playwright 4 passed/2 skipped、生产依赖审计和 `git diff --check`；最大 JS chunk 348.57KB（gzip 94.68KB），Worker 产物 1.55KB。
+- 2026-08-02：第四批 5 个提交已推送并部署到生产 `89c5469`。部署前备份 `.env`、PostgreSQL 和旧 HEAD 到 `/opt/wio-backups/20260801T183342Z`；首次前台 SSH 等待超时后确认旧容器仍健康，再使用远端日志安全完成构建与替换。Compose 服务、本机和公网健康检查均通过，生产前端版本为 `cb9f81e1b80a7003`，未修改宿主机 Caddy。
+- 2026-08-02：启动第五批 Terra xhigh 并行任务：Agent 队列数据库往返优化、核心流程与错误恢复 E2E、工作区 Git 丢弃确认迁移；主 Agent 负责路由级懒加载边界审查、计划维护和最终验收。
+- 2026-08-02：第五批实现完成并进入最终审查：普通 Agent 操作每条减少一次 delivered 后状态查询，Codex 取消竞态保护保持不变；工作区 Git 文件丢弃已接入统一危险确认；E2E mock 对未知请求明确返回 501，并新增部署排队、日志与 503 重试恢复；Dashboard 已从单体 `App.tsx` 迁移为独立懒加载路由，共享数据 Hook、页面组件和格式化工具形成后续页面拆分边界。
+- 2026-08-02：第五批主 Agent 完整回归通过：`go test ./...`、`go vet ./...`、前端 22 个测试文件/83 个测试、typecheck、build、bundle check、Playwright 6 passed/4 expected skipped 和 `git diff --check`。构建新增 2.80KB（gzip 1.08KB）的 Dashboard 独立 chunk，最大主 chunk 从 348.57KB 降至 347.13KB（gzip 94.58KB）。最终嵌套 Dialog 集成测试发现并修正丢弃确认关闭后焦点落到页面根节点的问题，现在会明确恢复到原丢弃按钮。
