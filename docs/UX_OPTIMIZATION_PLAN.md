@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第五批已部署，第六批验收完成、待部署）
+更新时间：2026-08-02（第六批已部署，第七批执行中）
 
 ## 目标
 
@@ -177,7 +177,7 @@
 | 第三批：前端稳定分包与体积检查 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/vite.config.ts`、构建检查脚本及对应配置 | 已完成 |
 | 第三批：通用 Dialog 可访问性组件 | Terra xhigh 子 Agent，主 Agent 已验收并接入 | 通用组件、独立测试和 `App.tsx` | 已完成 |
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
-| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`b52377a` 已部署，本机与公网健康检查通过 |
+| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`e3ff7c4` 已部署，本机与公网健康检查通过 |
 | 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
 | 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 组件已完成，剩余原生确认迁移进行中 |
 | 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
@@ -189,6 +189,9 @@
 | 第六批：Servers 路由懒加载 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/src/App.tsx`、Servers 页面与对应测试 | 已完成 |
 | 第六批：注册服务器与项目/工作区 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
 | 第六批：剩余原生确认与长列表审计 | Terra xhigh 子 Agent，主 Agent 已审计并实施高风险项 | 前端危险操作、列表和对应测试 | 已完成审计；Codex 会话分页/窗口化待后续实施 |
+| 第七批：Projects 路由懒加载 | Terra xhigh 子 Agent，主 Agent 待验收 | `web/src/App.tsx`、Projects 页面与对应测试 | 进行中 |
+| 第七批：Codex 会话与审批 E2E | Terra xhigh 子 Agent，主 Agent 待验收 | `web/e2e` | 进行中 |
+| 第七批：Codex 会话列表分页后端 | Terra xhigh 子 Agent，主 Agent 待验收 | `internal/store`、`internal/httpapi` 与对应测试 | 进行中 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -230,3 +233,5 @@
 - 2026-08-02：启动第六批 Terra xhigh 并行任务：Servers 路由级懒加载、注册服务器与项目/工作区 E2E、剩余原生确认与长列表审计；主 Agent 负责第五批部署闭环、子 Agent diff 审查、回归测试与后续确认迁移。
 - 2026-08-02：第六批实现完成并通过主 Agent 与独立审查：Servers 从 `App.tsx` 迁移为独立懒加载路由，生成 25.34KB（gzip 5.78KB）chunk，最大主 chunk 从 347.13KB（gzip 94.58KB）降至 324.68KB（gzip 90.06KB）；diff 文件丢弃、部署回滚及容器 stop/restart/remove 迁移到统一危险确认框，并修复确认期间仍可触发其它部署操作的并发回归。
 - 2026-08-02：E2E 新增服务器 SSH 指纹确认与流式安装、受管工作区重命名流程；Mock 流对齐 `starting → progress → completed` NDJSON 协议，所有实际运行用例通过统一 `afterEach` 检查未匹配 API 与最小启动请求契约。前端 22 个测试文件/83 个测试、typecheck、build、bundle check、Playwright 8 passed/6 expected skipped 和 `git diff --check` 全部通过；独立审查无 P0/P1/P2 遗留。
+- 2026-08-02：第六批 4 个提交已推送并部署到生产 `e3ff7c4`。部署前备份旧 HEAD、Git bundle、`.env` 和 PostgreSQL 到 `/opt/wio-backups/20260801T193447Z`；首次误用基础 Compose 时仓库 Caddy 因 80 端口占用未启动，宿主机 Caddy 未修改。随后终止冗余构建，使用已完成的新镜像与正确 host-proxy 双文件组合恢复 `127.0.0.1:18080`，并移除本次新建且仅含空目录的 Caddy 容器和两个卷。最终仅 controlplane/PostgreSQL 容器运行且均 healthy，宿主机 Caddy active，本机和公网 `/api/health` 均为 HTTP 200，前端 SHA-256 一致为 `67928cebd60c2aba711850dbadeb19369cc88c1512cedfb34026c179f16d3093`。
+- 2026-08-02：启动第七批 Terra xhigh 并行任务：Projects 路由级懒加载、Codex 会话创建与审批 E2E、Codex 会话列表向后兼容分页后端；主 Agent 负责生产部署收口、分页前端接入、剩余确认迁移和完整验收。
