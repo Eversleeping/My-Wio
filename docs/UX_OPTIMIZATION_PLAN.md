@@ -193,7 +193,7 @@
 | 第七批：Codex 会话与审批 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
 | 第七批：Codex 会话列表分页 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | `internal/store`、`internal/httpapi`、`web/src/App.tsx` 与对应测试 | 已完成 |
 | 第七批：剩余危险确认迁移 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | Codex、Servers、Settings 与对应测试 | 已完成 |
-| 第八批：Codex 路由懒加载 | Terra xhigh 子 Agent，主 Agent 待验收 | `web/src/App.tsx`、Codex 页面与对应测试 | 进行中 |
+| 第八批：Codex 路由懒加载 | 主 Agent | `web/src/App.tsx`、Codex 页面与对应测试 | 进行中 |
 | 第八批：审计日志向后兼容分页 | 主 Agent | `internal/store`、`internal/httpapi`、Settings 与对应测试 | 已完成 |
 | 第八批：长会话与连接性能 E2E | 主 Agent | `web/e2e` | 已完成本批范围 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
