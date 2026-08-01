@@ -26,7 +26,6 @@ test("creates and edits public access settings, manages containers, and exposes 
   window.localStorage.setItem("wio_language", "en");
   const requests: Array<{ url: string; method: string; body: string }> = [];
   let detailEvents: unknown = [{ id: "event-1", deployment_id: deployment.id, status: "succeeded", message: "deployment is healthy", content: "clone output\ncompose output", occurred_at: "2026-07-21T10:00:08Z" }];
-  vi.stubGlobal("confirm", vi.fn(() => true));
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     const method = init.method ?? "GET";
@@ -63,6 +62,11 @@ test("creates and edits public access settings, manages containers, and exposes 
   await waitFor(() => expect(requests.some(request => request.url === "/api/deployment-targets" && request.method === "POST" && request.body.includes('"public_url":"http://198.51.100.20:8080"'))).toBe(true));
 
   await user.click(screen.getByRole("button", { name: "Stop containers" }));
+  const stopConfirmation = await screen.findByRole("dialog", { name: "Stop containers" });
+  expect(within(stopConfirmation).getByRole("alert")).toHaveTextContent("project-management production");
+  expect(screen.getByRole("button", { name: "Deploy" })).toBeDisabled();
+  expect(requests.some(request => request.url === `/api/deployment-targets/${target.id}/container` && request.method === "POST")).toBe(false);
+  await user.click(within(stopConfirmation).getByRole("button", { name: "Stop containers" }));
   await waitFor(() => expect(requests.some(request => request.url === `/api/deployment-targets/${target.id}/container` && request.method === "POST" && request.body.includes('"action":"stop"'))).toBe(true));
 
   await user.click(screen.getByRole("button", { name: "More deployment actions" }));

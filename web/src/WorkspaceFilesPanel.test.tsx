@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChangedFilesView, FileDiffPane, WorkspaceFilesPanel } from "./App";
@@ -137,7 +137,6 @@ test("keeps Git actions below the scrolling list and queues commit, pull, and pu
 
 test("discards the reviewed file including staged changes", async () => {
   window.localStorage.setItem("wio_language", "en");
-  vi.spyOn(window, "confirm").mockReturnValue(true);
   const requests: Array<{ method: string; url: string; body: string }> = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -153,6 +152,10 @@ test("discards the reviewed file including staged changes", async () => {
   render(<I18nProvider><FileDiffPane workspaceID="workspace-1" selection={{ path: "src/modified.ts", mode: "diff" }} realtime={0} writable notify={vi.fn()} onClose={onClose} /></I18nProvider>);
 
   await userEvent.click(await screen.findByRole("button", { name: "Discard file changes" }));
+  const confirmation = await screen.findByRole("dialog", { name: "Discard file changes" });
+  expect(confirmation).toHaveTextContent("src/modified.ts");
+  expect(requests.some(request => request.url.endsWith("/git/discard"))).toBe(false);
+  await userEvent.click(within(confirmation).getByRole("button", { name: "Discard file changes" }));
   await waitFor(() => expect(requests.some(request => request.url.endsWith("/git/discard") && request.body === JSON.stringify({ paths: ["src/modified.ts"], all: false, include_staged: true }))).toBe(true));
   expect(onClose).toHaveBeenCalledTimes(1);
 });
