@@ -993,6 +993,49 @@ func TestEventsHaveMonotonicSequence(t *testing.T) {
 	}
 }
 
+func TestEventsBeforeReturnBoundedAscendingWindows(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	for _, kind := range []string{"agent.progress", "user.message", "codex.item.started", "agent.progress", "codex.item.completed", "agent.progress", "codex.turn.completed"} {
+		if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: "thread", Kind: kind, Payload: []byte(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for name, test := range map[string]struct {
+		events func() ([]protocol.StreamEvent, error)
+		want   []int64
+	}{
+		"raw window excludes the cursor and is ascending": {
+			events: func() ([]protocol.StreamEvent, error) { return database.EventsBefore(ctx, "thread", 6, 2) },
+			want:   []int64{4, 5},
+		},
+		"conversation window filters raw events": {
+			events: func() ([]protocol.StreamEvent, error) { return database.ConversationEventsBefore(ctx, "thread", 6, 2) },
+			want:   []int64{3, 5},
+		},
+		"cursor at the first sequence has no earlier events": {
+			events: func() ([]protocol.StreamEvent, error) { return database.EventsBefore(ctx, "thread", 1, 2) },
+			want:   []int64{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			events, err := test.events()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != len(test.want) {
+				t.Fatalf("event count = %d, want %d: %#v", len(events), len(test.want), events)
+			}
+			for index, event := range events {
+				if event.Sequence != test.want[index] {
+					t.Fatalf("event %d sequence = %d, want %d: %#v", index, event.Sequence, test.want[index], events)
+				}
+			}
+		})
+	}
+}
+
 func TestConversationEventsAreNotBlockedByRawEventWindow(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

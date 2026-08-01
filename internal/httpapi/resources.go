@@ -1726,6 +1726,11 @@ func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 	)
 	query := r.URL.Query()
 	afterValue, hasAfter := query["after"]
+	beforeValue, hasBefore := query["before"]
+	if hasAfter && hasBefore {
+		writeError(w, http.StatusBadRequest, "before and after cannot be used together")
+		return
+	}
 	var after int64
 	if hasAfter && len(afterValue) > 0 && afterValue[0] != "" {
 		parsedAfter, err := strconv.ParseInt(afterValue[0], 10, 64)
@@ -1736,6 +1741,18 @@ func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 		after = parsedAfter
 	} else if hasAfter {
 		writeError(w, http.StatusBadRequest, "after must be a non-negative sequence number")
+		return
+	}
+	var before int64
+	if hasBefore && len(beforeValue) > 0 && beforeValue[0] != "" {
+		parsedBefore, err := strconv.ParseInt(beforeValue[0], 10, 64)
+		if err != nil || parsedBefore < 0 {
+			writeError(w, http.StatusBadRequest, "before must be a non-negative sequence number")
+			return
+		}
+		before = parsedBefore
+	} else if hasBefore {
+		writeError(w, http.StatusBadRequest, "before must be a non-negative sequence number")
 		return
 	}
 
@@ -1755,12 +1772,16 @@ func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
 	if query.Get("view") == "raw" {
 		if hasAfter {
 			events, err = a.store.Events(r.Context(), threadID, after, limit)
+		} else if hasBefore {
+			events, err = a.store.EventsBefore(r.Context(), threadID, before, limit)
 		} else {
 			events, err = a.store.RecentEvents(r.Context(), threadID, limit)
 		}
 	} else {
 		if hasAfter {
 			events, err = a.store.ConversationEvents(r.Context(), threadID, after, limit)
+		} else if hasBefore {
+			events, err = a.store.ConversationEventsBefore(r.Context(), threadID, before, limit)
 		} else {
 			events, err = a.store.RecentConversationEvents(r.Context(), threadID, limit)
 		}

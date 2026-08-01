@@ -864,8 +864,10 @@ func TestThreadEventsUseRecentBoundedWindows(t *testing.T) {
 	}{
 		"conversation default":              {target: "/api/threads/" + thread.ID + "/events?view=conversation", count: 500, first: 502},
 		"raw default":                       {target: "/api/threads/" + thread.ID + "/events?view=raw", count: 500, first: 502},
+		"raw before uses default":           {target: "/api/threads/" + thread.ID + "/events?view=raw&before=1002", count: 500, first: 502},
 		"non-positive limit uses default":   {target: "/api/threads/" + thread.ID + "/events?view=raw&limit=0", count: 500, first: 502},
 		"oversized limit is capped at 1000": {target: "/api/threads/" + thread.ID + "/events?view=conversation&limit=1001", count: 1000, first: 2},
+		"before oversized limit is capped":  {target: "/api/threads/" + thread.ID + "/events?view=conversation&before=1002&limit=1001", count: 1000, first: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, api.threadEvents)
@@ -917,6 +919,15 @@ func TestThreadEventsSupportCursorsViewsAndLimits(t *testing.T) {
 		"zero is a valid cursor":                        {target: "/api/threads/" + thread.ID + "/events?view=conversation&after=0&limit=2", sequences: []int64{2, 3}, status: http.StatusOK},
 		"invalid cursor is rejected":                    {target: "/api/threads/" + thread.ID + "/events?view=raw&after=invalid", status: http.StatusBadRequest},
 		"negative cursor is rejected":                   {target: "/api/threads/" + thread.ID + "/events?view=raw&after=-1", status: http.StatusBadRequest},
+		"conversation before cursor filters raw events": {target: "/api/threads/" + thread.ID + "/events?view=conversation&before=6&limit=2", sequences: []int64{3, 5}, status: http.StatusOK},
+		"raw before cursor":                             {target: "/api/threads/" + thread.ID + "/events?view=raw&before=6&limit=2", sequences: []int64{4, 5}, status: http.StatusOK},
+		"before cursor excludes its sequence":           {target: "/api/threads/" + thread.ID + "/events?view=raw&before=5&limit=2", sequences: []int64{3, 4}, status: http.StatusOK},
+		"before at first sequence is empty":             {target: "/api/threads/" + thread.ID + "/events?view=raw&before=1&limit=2", sequences: []int64{}, status: http.StatusOK},
+		"zero is a valid before cursor":                 {target: "/api/threads/" + thread.ID + "/events?view=raw&before=0&limit=2", sequences: []int64{}, status: http.StatusOK},
+		"invalid before cursor is rejected":             {target: "/api/threads/" + thread.ID + "/events?view=raw&before=invalid", status: http.StatusBadRequest},
+		"negative before cursor is rejected":            {target: "/api/threads/" + thread.ID + "/events?view=raw&before=-1", status: http.StatusBadRequest},
+		"empty before cursor is rejected":               {target: "/api/threads/" + thread.ID + "/events?view=raw&before=", status: http.StatusBadRequest},
+		"before and after are mutually exclusive":       {target: "/api/threads/" + thread.ID + "/events?view=raw&before=6&after=3", status: http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, api.threadEvents)

@@ -1777,6 +1777,18 @@ func (s *Store) Events(ctx context.Context, streamID string, after int64, limit 
 	return out, nil
 }
 
+// EventsBefore returns the most recent events before sequence in ascending sequence order.
+func (s *Store) EventsBefore(ctx context.Context, streamID string, before int64, limit int) ([]protocol.StreamEvent, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM (
+		SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
+		WHERE stream_id=? AND sequence<?
+		ORDER BY sequence DESC LIMIT ?
+	) older ORDER BY sequence`), streamID, before, limit)
+}
+
 func (s *Store) ConversationEvents(ctx context.Context, streamID string, after int64, limit int) ([]protocol.StreamEvent, error) {
 	if limit <= 0 || limit > 10000 {
 		limit = 10000
@@ -1784,6 +1796,18 @@ func (s *Store) ConversationEvents(ctx context.Context, streamID string, after i
 	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
 		WHERE stream_id=? AND sequence>? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed')
 		ORDER BY sequence LIMIT ?`), streamID, after, limit)
+}
+
+// ConversationEventsBefore returns the most recent visible conversation events before sequence in ascending sequence order.
+func (s *Store) ConversationEventsBefore(ctx context.Context, streamID string, before int64, limit int) ([]protocol.StreamEvent, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM (
+		SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
+		WHERE stream_id=? AND sequence<? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed')
+		ORDER BY sequence DESC LIMIT ?
+	) older ORDER BY sequence`), streamID, before, limit)
 }
 
 func (s *Store) RecentConversationEvents(ctx context.Context, streamID string, limit int) ([]protocol.StreamEvent, error) {
