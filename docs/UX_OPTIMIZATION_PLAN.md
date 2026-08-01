@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第五批已部署，第六批执行中）
+更新时间：2026-08-02（第五批已部署，第六批验收完成、待部署）
 
 ## 目标
 
@@ -110,7 +110,7 @@
 
 任务：
 
-1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；第五批已提取共享数据 Hook、页面基础组件和格式化工具，并将 Dashboard 迁移为首个真实 `React.lazy` 路由，其他页面继续逐页迁出。
+1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；Dashboard 与 Servers 已迁移为真实 `React.lazy` 路由，共享数据 Hook、页面基础组件和格式化工具作为后续页面迁移边界，其他页面继续逐页迁出。
 2. [已完成] React、Markdown 和图标依赖已配置稳定 vendor chunks；Prism 保持在既有懒加载路径，避免强制合并懒加载依赖。
 3. 对会话、审计日志、变更文件和大型文件预览引入分页或虚拟化。
 4. [已完成] 图片压缩已迁移到 Worker/OffscreenCanvas，并接入上传流程；Worker 创建、通信、超时或浏览器能力不足时自动回退主线程，保留 WebP、1600px、900KB 与 6 次尝试契约。
@@ -125,7 +125,7 @@
 任务：
 
 1. [已完成] 通用 Dialog 已接入现有页面，支持 Escape、焦点陷阱、首次聚焦、关闭后焦点恢复、背景关闭、ARIA 标题关联和多层 Dialog 顶层响应。
-2. [进行中] 已建立统一确认对话框并迁移部署目标删除、部署历史删除和工作区 Git 文件丢弃；其余原生 `confirm()` 按风险逐步迁移。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认和关闭。
+2. [进行中] 已建立统一确认对话框并迁移部署目标删除、部署历史删除、工作区 Git 文件丢弃、diff 文件丢弃、部署回滚及容器停止/重启/删除；其余原生 `confirm()` 按风险逐步迁移。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认、关闭和并发操作，失败后保留确认框以便重试。
 3. [已完成] 61 个图标按钮均具备稳定的可访问名称；连接状态、审批计数和操作 toast 通过适当的 live region 通知，并增加静态守卫防止回退。
 4. 增加键盘导航、窄屏、减少动画和屏幕阅读器相关测试。
 
@@ -152,7 +152,7 @@
 任务：
 
 1. [已完成] 已建立 Playwright 桌面端和 390×844 移动端自动化流程，使用本地 Vite 与页面级 API/WebSocket mock，不依赖生产服务、真实会话或真实凭据。
-2. [进行中] 已覆盖登录、桌面/移动导航、部署排队与日志查看，以及 503 错误后恢复和重试；注册服务器模拟、项目/工作区、Codex 会话与审批继续补充。
+2. [进行中] 已覆盖登录、桌面/移动导航、部署排队与日志查看、503 错误恢复与重试、服务器注册和受管工作区重命名；Codex 会话与审批继续补充。所有用例统一校验页面级 mock、未匹配 API 和最小启动请求契约。
 3. 增加 WebSocket 断线、慢客户端、长会话和大文件性能场景。
 4. [已完成] 第四批完整 Go、前端、typecheck、build、vet、E2E、依赖审计和 diff 检查均通过。
 5. 主 Agent 检查所有子 Agent 的代码、测试、文档和计划状态。
@@ -186,9 +186,9 @@
 | 第五批：核心流程与错误恢复 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
 | 第五批：工作区 Git 丢弃确认迁移 | Terra xhigh 子 Agent，主 Agent 已验收 | `WorkspaceGitDialog` 与对应测试 | 已完成 |
 | 第五批：Dashboard 路由懒加载 | 主 Agent | 共享前端模块、Dashboard 页面与对应测试 | 已完成 |
-| 第六批：Servers 路由懒加载 | Terra xhigh 子 Agent，主 Agent 待验收 | `web/src/App.tsx`、Servers 页面与对应测试 | 进行中 |
-| 第六批：注册服务器与项目/工作区 E2E | Terra xhigh 子 Agent，主 Agent 待验收 | `web/e2e` | 进行中 |
-| 第六批：剩余原生确认与长列表审计 | Terra xhigh 子 Agent，主 Agent 待决策 | 前端危险操作、列表和对应测试 | 进行中 |
+| 第六批：Servers 路由懒加载 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/src/App.tsx`、Servers 页面与对应测试 | 已完成 |
+| 第六批：注册服务器与项目/工作区 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
+| 第六批：剩余原生确认与长列表审计 | Terra xhigh 子 Agent，主 Agent 已审计并实施高风险项 | 前端危险操作、列表和对应测试 | 已完成审计；Codex 会话分页/窗口化待后续实施 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -228,3 +228,5 @@
 - 2026-08-02：第五批主 Agent 完整回归通过：`go test ./...`、`go vet ./...`、前端 22 个测试文件/83 个测试、typecheck、build、bundle check、Playwright 6 passed/4 expected skipped 和 `git diff --check`。构建新增 2.80KB（gzip 1.08KB）的 Dashboard 独立 chunk，最大主 chunk 从 348.57KB 降至 347.13KB（gzip 94.58KB）。最终嵌套 Dialog 集成测试发现并修正丢弃确认关闭后焦点落到页面根节点的问题，现在会明确恢复到原丢弃按钮。
 - 2026-08-02：第五批 5 个提交已推送并部署到生产 `b52377a`。部署前备份 `.env`、PostgreSQL 和旧 HEAD 到 `/opt/wio-backups/20260801T185948Z`；后台构建完成后 controlplane 容器成功 Recreated/Started，PostgreSQL 与 controlplane 均 healthy，远端工作树干净，本机与公网 `/api/health` 均返回 HTTP 200。公网与本机前端 SHA-256 一致，为 `0e8b8f9212bed90b0c35ccddb3f5358ed9484a632223d8806a737dd0944fb977`，未修改宿主机 Caddy。
 - 2026-08-02：启动第六批 Terra xhigh 并行任务：Servers 路由级懒加载、注册服务器与项目/工作区 E2E、剩余原生确认与长列表审计；主 Agent 负责第五批部署闭环、子 Agent diff 审查、回归测试与后续确认迁移。
+- 2026-08-02：第六批实现完成并通过主 Agent 与独立审查：Servers 从 `App.tsx` 迁移为独立懒加载路由，生成 25.34KB（gzip 5.78KB）chunk，最大主 chunk 从 347.13KB（gzip 94.58KB）降至 324.68KB（gzip 90.06KB）；diff 文件丢弃、部署回滚及容器 stop/restart/remove 迁移到统一危险确认框，并修复确认期间仍可触发其它部署操作的并发回归。
+- 2026-08-02：E2E 新增服务器 SSH 指纹确认与流式安装、受管工作区重命名流程；Mock 流对齐 `starting → progress → completed` NDJSON 协议，所有实际运行用例通过统一 `afterEach` 检查未匹配 API 与最小启动请求契约。前端 22 个测试文件/83 个测试、typecheck、build、bundle check、Playwright 8 passed/6 expected skipped 和 `git diff --check` 全部通过；独立审查无 P0/P1/P2 遗留。
