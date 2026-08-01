@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第五批验收中）
+更新时间：2026-08-02（第五批已部署，第六批执行中）
 
 ## 目标
 
@@ -177,7 +177,7 @@
 | 第三批：前端稳定分包与体积检查 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/vite.config.ts`、构建检查脚本及对应配置 | 已完成 |
 | 第三批：通用 Dialog 可访问性组件 | Terra xhigh 子 Agent，主 Agent 已验收并接入 | 通用组件、独立测试和 `App.tsx` | 已完成 |
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
-| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`89c5469` 已部署，本机与公网健康检查通过 |
+| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`b52377a` 已部署，本机与公网健康检查通过 |
 | 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
 | 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 组件已完成，剩余原生确认迁移进行中 |
 | 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
@@ -186,6 +186,9 @@
 | 第五批：核心流程与错误恢复 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
 | 第五批：工作区 Git 丢弃确认迁移 | Terra xhigh 子 Agent，主 Agent 已验收 | `WorkspaceGitDialog` 与对应测试 | 已完成 |
 | 第五批：Dashboard 路由懒加载 | 主 Agent | 共享前端模块、Dashboard 页面与对应测试 | 已完成 |
+| 第六批：Servers 路由懒加载 | Terra xhigh 子 Agent，主 Agent 待验收 | `web/src/App.tsx`、Servers 页面与对应测试 | 进行中 |
+| 第六批：注册服务器与项目/工作区 E2E | Terra xhigh 子 Agent，主 Agent 待验收 | `web/e2e` | 进行中 |
+| 第六批：剩余原生确认与长列表审计 | Terra xhigh 子 Agent，主 Agent 待决策 | 前端危险操作、列表和对应测试 | 进行中 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -223,3 +226,5 @@
 - 2026-08-02：启动第五批 Terra xhigh 并行任务：Agent 队列数据库往返优化、核心流程与错误恢复 E2E、工作区 Git 丢弃确认迁移；主 Agent 负责路由级懒加载边界审查、计划维护和最终验收。
 - 2026-08-02：第五批实现完成并进入最终审查：普通 Agent 操作每条减少一次 delivered 后状态查询，Codex 取消竞态保护保持不变；工作区 Git 文件丢弃已接入统一危险确认；E2E mock 对未知请求明确返回 501，并新增部署排队、日志与 503 重试恢复；Dashboard 已从单体 `App.tsx` 迁移为独立懒加载路由，共享数据 Hook、页面组件和格式化工具形成后续页面拆分边界。
 - 2026-08-02：第五批主 Agent 完整回归通过：`go test ./...`、`go vet ./...`、前端 22 个测试文件/83 个测试、typecheck、build、bundle check、Playwright 6 passed/4 expected skipped 和 `git diff --check`。构建新增 2.80KB（gzip 1.08KB）的 Dashboard 独立 chunk，最大主 chunk 从 348.57KB 降至 347.13KB（gzip 94.58KB）。最终嵌套 Dialog 集成测试发现并修正丢弃确认关闭后焦点落到页面根节点的问题，现在会明确恢复到原丢弃按钮。
+- 2026-08-02：第五批 5 个提交已推送并部署到生产 `b52377a`。部署前备份 `.env`、PostgreSQL 和旧 HEAD 到 `/opt/wio-backups/20260801T185948Z`；后台构建完成后 controlplane 容器成功 Recreated/Started，PostgreSQL 与 controlplane 均 healthy，远端工作树干净，本机与公网 `/api/health` 均返回 HTTP 200。公网与本机前端 SHA-256 一致，为 `0e8b8f9212bed90b0c35ccddb3f5358ed9484a632223d8806a737dd0944fb977`，未修改宿主机 Caddy。
+- 2026-08-02：启动第六批 Terra xhigh 并行任务：Servers 路由级懒加载、注册服务器与项目/工作区 E2E、剩余原生确认与长列表审计；主 Agent 负责第五批部署闭环、子 Agent diff 审查、回归测试与后续确认迁移。
