@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第七批已部署，第八批执行中）
+更新时间：2026-08-02（第七批已部署，第八批部分完成）
 
 ## 目标
 
@@ -194,8 +194,8 @@
 | 第七批：Codex 会话列表分页 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | `internal/store`、`internal/httpapi`、`web/src/App.tsx` 与对应测试 | 已完成 |
 | 第七批：剩余危险确认迁移 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | Codex、Servers、Settings 与对应测试 | 已完成 |
 | 第八批：Codex 路由懒加载 | Terra xhigh 子 Agent，主 Agent 待验收 | `web/src/App.tsx`、Codex 页面与对应测试 | 进行中 |
-| 第八批：审计日志向后兼容分页 | Terra xhigh 子 Agent，主 Agent 待验收 | `internal/store`、`internal/httpapi` 与对应测试 | 进行中 |
-| 第八批：长会话与连接性能 E2E | Terra xhigh 子 Agent，主 Agent 待验收 | `web/e2e` | 进行中 |
+| 第八批：审计日志向后兼容分页 | 主 Agent | `internal/store`、`internal/httpapi`、Settings 与对应测试 | 已完成 |
+| 第八批：长会话与连接性能 E2E | 主 Agent | `web/e2e` | 已完成本批范围 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -243,3 +243,4 @@
 - 2026-08-02：独立审查发现实时首屏刷新会永久合并旧 tail 的 P2；主 Agent 修正为后台重放当前已加载的全部 50 条尾页窗口，刷新期间保留旧列表，成功后原子替换，并以共享请求代次消除 load-more/refresh 竞态。修正后第七批全量回归通过：`go test ./...`、`go vet ./...`、前端 24 个测试文件/92 个测试、typecheck、build、bundle check、Playwright 10 passed/8 expected skipped、乱码扫描和 `git diff --check`。最大主 chunk 为 275.99KB（gzip 79.45KB），Projects chunk 为 54.53KB（gzip 12.66KB），Servers chunk 为 26.60KB（gzip 6.04KB）；项目目录中的 `aws.pem` 仍被 Git 忽略，未进入变更集。
 - 2026-08-02：第七批 4 个提交已推送并部署到生产 `b1baaa7`。部署前备份旧 HEAD、Git bundle、`.env` 与 PostgreSQL 到 `/opt/wio-backups/20260801T202434Z`，备份逐项验真；使用 host-proxy 双 Compose 仅重建 controlplane，未启动仓库 Caddy、未修改宿主机 Caddy。部署后 PostgreSQL/controlplane 均 healthy，controlplane 仅绑定 `127.0.0.1:18080`，宿主 Caddy active，内网与公网健康版本均为 `b84333073a556bd4`，首页 SHA-256 一致为 `8fe118eb42ad2571f410f36d9aad41ee3773c99cc76eddcbf41fba5e2c60bd0b`，Projects chunk 两端均返回 HTTP 200，且无残留 Compose/BuildKit 进程。
 - 2026-08-02：启动第八批 Terra xhigh 并行任务：Codex 路由级懒加载、审计日志向后兼容分页、长会话与连接性能 E2E；主 Agent 负责子 Agent diff 审查、前端分页接入、计划维护和完整回归。
+- 2026-08-02：按用户要求停止第八批子 Agent，剩余工作改由主 Agent执行。审计日志完成向后兼容分页：无参数保持旧数组，显式分页默认 50、最大 100，稳定 `occurred_at,id` 排序，Settings 支持去重加载更多；新增 Go 分页契约测试。长会话 Playwright 新增首屏 50 条与第二窗口合并场景，定向桌面用例 1 passed。Codex 路由迁出仍在主 Agent静态边界评估中，以避免大范围移动引入行为回归。
