@@ -88,3 +88,98 @@ test("verifies the host fingerprint before completely retiring a server", async 
   });
   expect(requests.some(request => request.method === "DELETE")).toBe(false);
 });
+
+test("uses a managed confirmation before force revoking a server record", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const notify = vi.fn();
+  const requests: Array<{ url: string; method: string }> = [];
+  const nativeConfirm = vi.fn(() => true);
+  vi.stubGlobal("confirm", nativeConfirm);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = init.method ?? "GET";
+    requests.push({ url, method });
+    const payload = url === "/api/servers" ? [server] : [];
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
+
+  const user = userEvent.setup();
+  render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
+  await user.click(await screen.findByRole("button", { name: "Retire server" }));
+  const retirement = screen.getByRole("dialog", { name: "Retire retire-node" });
+  await user.type(within(retirement).getByRole("textbox", { name: "Type retire-node to confirm" }), server.name);
+  await user.click(within(retirement).getByRole("button", { name: "Revoke record only" }));
+
+  const confirmation = await screen.findByRole("dialog", { name: "Revoke record only" });
+  expect(within(confirmation).getByText(/Delete the server and its associated records from Wio/)).toBeInTheDocument();
+  expect(requests.some(request => request.method === "DELETE")).toBe(false);
+  expect(nativeConfirm).not.toHaveBeenCalled();
+
+  await user.click(within(confirmation).getByRole("button", { name: "Revoke record only" }));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith("Server revoked"));
+  expect(requests).toContainEqual({ url: `/api/servers/${server.id}`, method: "DELETE" });
+  expect(screen.queryByRole("dialog", { name: "Revoke record only" })).not.toBeInTheDocument();
+});
+
+test("locks the Agent update confirmation while it is being queued", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const notify = vi.fn();
+  const updating = { ...server, agent_version: "0.2.9", agent_target_version: "0.3.0", agent_update_available: true };
+  let resolveAgentUpdate: (response: Response) => void = () => undefined;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = init.method ?? "GET";
+    if (url === "/api/servers" && method === "GET") return Promise.resolve(new Response(JSON.stringify([updating]), { status: 200, headers: { "Content-Type": "application/json" } }));
+    if (url === "/api/credential-profiles" && method === "GET") return Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }));
+    if (url === `/api/servers/${updating.id}/agent-update` && method === "POST") return new Promise<Response>(resolve => { resolveAgentUpdate = resolve; });
+    return Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }));
+  }));
+
+  const user = userEvent.setup();
+  render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
+  await user.click(await screen.findByTitle("Update Agent to 0.3.0"));
+  const confirmation = await screen.findByRole("dialog", { name: "Update Agent to 0.3.0" });
+  expect(within(confirmation).getByText("Update Agent on retire-node to 0.3.0?")).toBeInTheDocument();
+
+  await user.click(within(confirmation).getByRole("button", { name: "Update Agent to 0.3.0" }));
+  await waitFor(() => expect(within(confirmation).getByRole("button", { name: "Cancel" })).toBeDisabled());
+  expect(within(confirmation).getByRole("button", { name: "Update Agent to 0.3.0" })).toBeDisabled();
+
+  resolveAgentUpdate(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith("Agent 0.3.0 update queued"));
+  expect(screen.queryByRole("dialog", { name: "Update Agent to 0.3.0" })).not.toBeInTheDocument();
+});
+
+test("keeps a failed Codex update confirmation open for retry", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const notify = vi.fn();
+  const updating = { ...server, codex_version: "0.144.4", codex_target_version: "0.145.0", codex_update_available: true };
+  let attempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = init.method ?? "GET";
+    if (url === "/api/servers" && method === "GET") return new Response(JSON.stringify([updating]), { status: 200, headers: { "Content-Type": "application/json" } });
+    if (url === "/api/credential-profiles" && method === "GET") return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+    if (url === `/api/servers/${updating.id}/codex-update` && method === "POST") {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(JSON.stringify({ error: "Codex update failed" }), { status: 500, headers: { "Content-Type": "application/json" } })
+        : new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
+
+  const user = userEvent.setup();
+  render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
+  await user.click(await screen.findByTitle("Update Codex CLI to 0.145.0"));
+  const confirmation = await screen.findByRole("dialog", { name: "Update Codex CLI to 0.145.0" });
+  expect(within(confirmation).getByText(/Active Codex turns must finish first/)).toBeInTheDocument();
+
+  await user.click(within(confirmation).getByRole("button", { name: "Update Codex CLI to 0.145.0" }));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith("Codex update failed"));
+  expect(screen.getByRole("dialog", { name: "Update Codex CLI to 0.145.0" })).toBeInTheDocument();
+
+  await user.click(within(confirmation).getByRole("button", { name: "Update Codex CLI to 0.145.0" }));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith("Codex CLI 0.145.0 update queued"));
+  expect(screen.queryByRole("dialog", { name: "Update Codex CLI to 0.145.0" })).not.toBeInTheDocument();
+});

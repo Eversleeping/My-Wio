@@ -89,25 +89,6 @@ import { formatDate, formatTime, relative, shortSHA } from "./format";
 import { currentLocale, useI18n } from "./i18n";
 import { compressImage } from "./imageCompression";
 import { clearDataCacheMatching, useData } from "./useData";
-import {
-  CreateProjectDialog,
-  ProjectDeletionDialog,
-  ProjectDetailsDialog,
-  ProjectTable,
-  WorkspaceGitDialog,
-  WorkspaceManagerDialog,
-  WorkspaceTable,
-  newCreateProjectFormValue,
-  type CreateProjectDialogLabels,
-  type CreateProjectRequest,
-  type ProjectLifecycleState,
-  type ProjectListRecord,
-  type ProjectEditValue,
-  type ProjectDeletionMode,
-  type WorkspaceDeletionMode,
-  type WorkspaceGitAction,
-  type WorkspaceListRecord
-} from "./pages/projects";
 import type {
   Alert,
   Approval,
@@ -124,8 +105,6 @@ import type {
   DeploymentTarget,
   Metric,
   Project,
-  ProjectDeletionPlan,
-  ProjectDetail,
   SecretSet,
   Server,
   Session,
@@ -135,7 +114,6 @@ import type {
   Workspace,
   WorkspaceChange,
   WorkspaceChangesSnapshot,
-  WorkspaceDeletionPlan,
   WorkspaceDiffPreview,
   WorkspaceGitSnapshot,
   WorkspaceFile,
@@ -153,16 +131,19 @@ type FilePreviewSelection = { path: string; line?: number; mode?: "file" | "diff
 type SubagentActivity = { threadID: string; path: string; status: string; message: string; prompt: string; model: string; reasoningEffort: string; updatedAt: string };
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ServersPageRoute = lazy(() => import("./pages/ServersPage"));
+const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevision = { revision: number; minimumSequence: number | null };
 type StreamRevisions = Record<string, StreamRevision>;
 type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean };
+type ThreadListPage = { items: Thread[]; has_more: boolean; next: number | null };
 
 const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
 const codexScrollPositions = new Map<string, number>();
 const codexAutoFollowThreshold = 96;
 const threadEventsPageSize = 500;
+const threadListPageSize = 50;
 const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "deployments", "monitoring", "settings", "approvals"];
 const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, deployments: 0, monitoring: 0, settings: 0, approvals: 0 });
 
@@ -391,7 +372,7 @@ export default function App() {
   const page = {
     dashboard: <Suspense fallback={<PageLoading />}><DashboardPage realtime={realtimeRevisions.dashboard} onNavigate={selectView} /></Suspense>,
     servers: <ServersPage realtime={realtimeRevisions.servers} notify={setToast} />,
-    projects: <ProjectsPage realtime={realtimeRevisions.projects} notify={setToast} />,
+    projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute realtime={realtimeRevisions.projects} notify={setToast} /></Suspense>,
     codex: <CodexPage realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} />,
     deployments: <DeploymentsPage realtime={realtimeRevisions.deployments} notify={setToast} />,
     monitoring: <MonitoringPage realtime={realtimeRevisions.monitoring} />,
@@ -434,244 +415,89 @@ export function ServersPage({ realtime, notify }: PageProps) {
   return <Suspense fallback={<PageLoading />}><ServersPageRoute realtime={realtime} notify={notify} /></Suspense>;
 }
 
-function ProjectsPage({ realtime, notify }: PageProps) {
-  const { t } = useI18n();
-  const projects = useData<Project[]>("/projects", realtime);
-  const workspaces = useData<Workspace[]>("/workspaces", realtime);
-  const servers = useData<Server[]>("/servers", realtime);
-  const [dialog, setDialog] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [createError, setCreateError] = useState("");
-  const [form, setForm] = useState(newCreateProjectFormValue());
-  const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "restore" } | null>(null);
-  const [detailProjectID, setDetailProjectID] = useState<string | null>(null);
-  const [detailBusy, setDetailBusy] = useState(false);
-  const [detailError, setDetailError] = useState("");
-  const detail = useData<ProjectDetail>(detailProjectID ? `/projects/${detailProjectID}` : null, realtime);
-  const [deleteProjectID, setDeleteProjectID] = useState<string | null>(null);
-  const [projectDeletionPlan, setProjectDeletionPlan] = useState<ProjectDeletionPlan | null>(null);
-  const [projectDeletionBusy, setProjectDeletionBusy] = useState(false);
-  const [projectDeletionError, setProjectDeletionError] = useState("");
-  const [manageWorkspaceID, setManageWorkspaceID] = useState<string | null>(null);
-  const [workspaceDeletionPlan, setWorkspaceDeletionPlan] = useState<WorkspaceDeletionPlan | null>(null);
-  const [workspaceManagerBusy, setWorkspaceManagerBusy] = useState(false);
-  const [workspacePlanLoading, setWorkspacePlanLoading] = useState(false);
-  const [workspaceManagerError, setWorkspaceManagerError] = useState("");
 
-  const openDialog = () => {
-    setForm(newCreateProjectFormValue());
-    setCreateError("");
-    setDialog(true);
-  };
-  const close = () => { if (!busy) setDialog(false); };
-  const submit = async (request: CreateProjectRequest) => {
-    setBusy(true);
-    setCreateError("");
+function mergeThreads(...pages: Thread[][]) {
+  const merged: Thread[] = [];
+  const seen = new Set<string>();
+  for (const page of pages) for (const thread of page) {
+    if (seen.has(thread.id)) continue;
+    seen.add(thread.id);
+    merged.push(thread);
+  }
+  return merged;
+}
+
+function useThreadList(archived: boolean, realtime: unknown) {
+  const firstPath = archived ? `/threads?archived=true&limit=${threadListPageSize}` : `/threads?limit=${threadListPageSize}`;
+  const firstPage = useData<ThreadListPage>(firstPath, realtime);
+  const [tail, setTail] = useState<Thread[]>([]);
+  const [tailLoaded, setTailLoaded] = useState(false);
+  const [tailNext, setTailNext] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const requestRef = useRef(0);
+  const tailRef = useRef(tail);
+  const tailLoadedRef = useRef(tailLoaded);
+  tailRef.current = tail;
+  tailLoadedRef.current = tailLoaded;
+  useEffect(() => () => { requestRef.current += 1; }, []);
+  const items = useMemo(() => mergeThreads(firstPage.data?.items ?? [], tail), [firstPage.data?.items, tail]);
+  const next = tailLoaded ? tailNext : firstPage.data?.next ?? null;
+  const hasMore = tailLoaded ? tailNext !== null : Boolean(firstPage.data?.has_more);
+  const loadMore = useCallback(async () => {
+    if (loadingMore || next === null) return;
+    const request = ++requestRef.current;
+    setLoadingMore(true);
+    setLoadError("");
     try {
-      if (request.mode === "blank") {
-        await post("/projects", request);
-        notify(t("project.createQueued"));
-      } else if (request.mode === "clone") {
-        await post("/projects/import", {
-          remote_url: request.remote_url,
-          name: request.name ?? "",
-          server_id: request.server_id,
-          destination: request.destination ?? ""
-        });
-        notify(t("project.queued"));
-      } else {
-        await post("/projects/discover", { server_id: request.server_id });
-        notify(t("project.scanQueued"));
+      const prefix = archived ? "/threads?archived=true&" : "/threads?";
+      const page = await api<ThreadListPage>(`${prefix}limit=${threadListPageSize}&offset=${next}`);
+      if (request !== requestRef.current) return;
+      setTail(current => mergeThreads(current, page.items));
+      setTailLoaded(true);
+      setTailNext(page.next);
+    } catch (error) {
+      if (request === requestRef.current) setLoadError(message(error));
+    } finally {
+      if (request === requestRef.current) setLoadingMore(false);
+    }
+  }, [archived, loadingMore, next]);
+  useEffect(() => {
+    if (!firstPage.data || !tailLoadedRef.current) return;
+    const loadedTailCount = tailRef.current.length;
+    if (loadedTailCount === 0) return;
+    const request = ++requestRef.current;
+    setLoadingMore(true);
+    setLoadError("");
+    void (async () => {
+      try {
+        const refreshed: Thread[] = [];
+        let offset: number | null = threadListPageSize;
+        while (offset !== null && refreshed.length < loadedTailCount) {
+          const prefix = archived ? "/threads?archived=true&" : "/threads?";
+          const page: ThreadListPage = await api<ThreadListPage>(`${prefix}limit=${threadListPageSize}&offset=${offset}`);
+          if (request !== requestRef.current) return;
+          refreshed.push(...page.items);
+          offset = page.next;
+        }
+        if (request !== requestRef.current) return;
+        setTail(mergeThreads(refreshed));
+        setTailNext(offset);
+      } catch (error) {
+        if (request === requestRef.current) setLoadError(message(error));
+      } finally {
+        if (request === requestRef.current) setLoadingMore(false);
       }
-      projects.reload();
-      workspaces.reload();
-      setDialog(false);
-    } catch (err) {
-      const error = message(err);
-      setCreateError(error);
-      notify(error);
-    } finally { setBusy(false); }
-  };
-  const retryProject = async (project: Project) => {
-    setProjectAction({ id: project.id, kind: "retry" });
-    try {
-      const blank = project.status === "failed" || project.status === "partial";
-      await post(`/projects/${project.id}/${blank ? "retry-create" : "retry-import"}`, {});
-      projects.reload();
-      notify(t(blank ? "project.createRetryQueued" : "project.retryQueued"));
-    } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
-  };
-  const openProjectDeletion = async (project: Project) => {
-    setDeleteProjectID(project.id);
-    setProjectDeletionPlan(null);
-    setProjectDeletionError("");
-    setProjectDeletionBusy(true);
-    try { setProjectDeletionPlan(await post<ProjectDeletionPlan>(`/projects/${project.id}/deletion-plan`, {})); }
-    catch (err) { setProjectDeletionError(message(err)); }
-    finally { setProjectDeletionBusy(false); }
-  };
-  const deleteProject = async (mode: ProjectDeletionMode) => {
-    if (!deleteProjectID) return;
-    setProjectDeletionBusy(true);
-    setProjectDeletionError("");
-    try {
-      await api(`/projects/${deleteProjectID}`, { method: "DELETE", body: JSON.stringify({ mode }) });
-      setDeleteProjectID(null);
-      setProjectDeletionPlan(null);
-      projects.reload();
-      workspaces.reload();
-      notify(t(mode === "managed-files" ? "project.deleteFilesQueued" : "project.deleted"));
-    } catch (err) { setProjectDeletionError(message(err)); }
-    finally { setProjectDeletionBusy(false); }
-  };
-  const restoreProject = async (project: Project) => {
-    setProjectAction({ id: project.id, kind: "restore" });
-    try {
-      await patch<Project>(`/projects/${project.id}`, { hidden: false });
-      projects.reload();
-      notify(t("project.restored"));
-    } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
-  };
-  const saveProjectDetails = async (value: ProjectEditValue) => {
-    if (!detailProjectID) return;
-    setDetailBusy(true);
-    setDetailError("");
-    try {
-      await patch(`/projects/${detailProjectID}`, { name: value.name.trim(), description: value.description.trim(), default_branch: value.defaultBranch.trim(), pinned: value.pinned, hidden: value.hidden, archived: value.archived });
-      projects.reload();
-      detail.reload();
-      setDetailProjectID(null);
-      notify(t("project.saved"));
-    } catch (err) { setDetailError(message(err)); } finally { setDetailBusy(false); }
-  };
-  const importMessage = (project: ProjectListRecord) => {
-    const raw = project.provision_error || project.import_message;
-    return /http2 framing|expected flush|timed? out|timeout|could not resolve|temporary failure in name resolution|connection (?:refused|reset)|network is unreachable|dial tcp/i.test(raw) ? t("project.networkFailure") : raw;
-  };
-  const serverOptions = (servers.data ?? []).map(server => ({ id: server.id, name: server.name, status: server.status }));
-  const labels: CreateProjectDialogLabels = {
-    title: t("project.createTitle"), modeLabel: t("project.createMode"), blankMode: t("project.blankMode"), cloneMode: t("project.cloneMode"), discoverMode: t("project.discoverMode"),
-    projectName: t("project.name"), targetServer: t("project.targetServer"), selectServer: t("project.selectServer"), offline: t("status.offline"), destination: t("project.destination"), optional: t("common.optional"), initialBranch: t("project.initialBranch"),
-    remoteSetup: t("project.remoteSetup"), remoteNone: t("project.remoteNone"), remoteExisting: t("project.remoteExisting"), remoteCreate: t("project.remoteCreate"), remoteURL: t("project.remoteURL"), remoteProvider: t("project.remoteProvider"), remoteNamespace: t("project.remoteNamespace"), remoteRepository: t("project.remoteRepository"), remoteVisibility: t("project.remoteVisibility"), visibilityPrivate: t("project.visibilityPrivate"), visibilityInternal: t("project.visibilityInternal"), visibilityPublic: t("project.visibilityPublic"), initializeReadme: t("project.initializeReadme"), existingServer: t("project.existingServer"), comingSoon: t("project.comingSoon"), cancel: t("common.cancel"), working: t("project.working"), create: t("project.create"), clone: t("project.queue"), discover: t("project.scan"),
-    nameRequired: t("project.nameRequired"), serverRequired: t("project.serverRequired"), remoteURLRequired: t("project.remoteURLRequired"), initialBranchRequired: t("project.initialBranchRequired"), remoteProviderRequired: t("project.remoteProviderRequired"), remoteRepositoryRequired: t("project.remoteRepositoryRequired"), remoteUnavailable: t("project.remoteUnavailable")
-  };
-  const detailLabels = {
-    title: t("project.detailTitle"), overview: t("project.detailOverview"), history: t("project.detailHistory"), name: t("project.name"), description: t("project.description"), defaultBranch: t("project.defaultBranch"), pinned: t("project.pin"), hidden: t("project.hide"), archived: t("project.archive"), remote: t("column.remote"), noRemote: t("project.noRemote"), operation: t("project.operation"), state: t("project.status"), time: t("column.updated"), result: t("project.result"), noOperations: t("project.noOperations"), cancel: t("common.cancel"), save: t("common.save"), saving: t("common.saving"), loading: t("common.loading")
-  };
-  const projectLabels = { project: t("column.project"), remote: t("column.remote"), workspaces: t("column.workspaces"), status: t("project.status"), updated: t("column.updated"), actions: t("common.actions"), empty: t("project.none"), local: t("project.local"), hidden: t("project.hidden"), targetServer: (server: string) => t("project.targetSummary", { server }), awaitingWorkspace: t("project.awaitingWorkspace") };
-  const workspaceLabels = { project: t("column.project"), server: t("column.server"), path: t("column.path"), branch: t("column.branch"), commit: t("column.commit"), state: t("column.state"), actions: t("common.actions"), empty: t("project.noWorkspaces"), detached: t("project.detached") };
-  const [gitWorkspaceID, setGitWorkspaceID] = useState<string | null>(null);
-  const [gitBusy, setGitBusy] = useState(false);
-  const [gitError, setGitError] = useState("");
-  const gitSnapshot = useData<WorkspaceGitSnapshot>(gitWorkspaceID ? `/workspaces/${gitWorkspaceID}/git` : null, realtime);
-  const refreshWorkspaceGit = async (workspaceID = gitWorkspaceID, announce = true) => {
-    if (!workspaceID) return;
-    setGitBusy(true);
-    setGitError("");
-    try { await post(`/workspaces/${workspaceID}/git/refresh`, {}); gitSnapshot.reload(); if (announce) notify(t("project.gitRefreshQueued")); } catch (err) { setGitError(message(err)); } finally { setGitBusy(false); }
-  };
-  const openWorkspaceGit = (workspaceID: string) => {
-    setGitError("");
-    setGitWorkspaceID(workspaceID);
-    void refreshWorkspaceGit(workspaceID, false);
-  };
-  const runGitAction = async (action: WorkspaceGitAction) => {
-    if (!gitWorkspaceID) return;
-    const base = `/workspaces/${gitWorkspaceID}/git`;
-    const segment = (value: string) => encodeURIComponent(value);
-    setGitBusy(true);
-    setGitError("");
-    try {
-      switch (action.type) {
-        case "branch.create": await post(`${base}/branches`, { name: action.name, start_point: action.startPoint }); break;
-        case "branch.rename": await patch(`${base}/branches/${segment(action.branch)}`, { name: action.name }); break;
-        case "branch.delete": await remove(`${base}/branches/${segment(action.branch)}?force=${action.force}`); break;
-        case "checkout": await post(`${base}/checkout`, { ref: action.ref, detach: action.detach }); break;
-        case "remote.add": await post(`${base}/remotes`, { name: action.name, url: action.url }); break;
-        case "remote.update": await patch(`${base}/remotes/${segment(action.remote)}`, { url: action.url }); break;
-        case "remote.delete": await remove(`${base}/remotes/${segment(action.remote)}`); break;
-        case "fetch": await post(`${base}/fetch`, { remote: action.remote }); break;
-        case "pull": await post(`${base}/pull`, { remote: action.remote, branch: action.branch }); break;
-        case "push": await post(`${base}/push`, { remote: action.remote, ref: action.ref, set_upstream: action.setUpstream }); break;
-        case "stage": await post(`${base}/stage`, { paths: action.paths, all: action.all }); break;
-        case "unstage": await post(`${base}/unstage`, { paths: action.paths, all: action.all }); break;
-        case "discard": await post(`${base}/discard`, { paths: action.paths, all: action.all }); break;
-        case "commit": await post(`${base}/commit`, { message: action.message }); break;
-      }
-      notify(t("project.gitActionQueued"));
-      gitSnapshot.reload();
-    } catch (err) {
-      const detail = message(err);
-      setGitError(detail);
-      throw err;
-    } finally { setGitBusy(false); }
-  };
-  const openWorkspaceManager = (workspace: Workspace) => {
-    setManageWorkspaceID(workspace.id);
-    setWorkspaceDeletionPlan(null);
-    setWorkspaceManagerError("");
-  };
-  const renameWorkspace = async (name: string) => {
-    if (!manageWorkspaceID) return;
-    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await patch(`/workspaces/${manageWorkspaceID}`, { display_name: name }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceSaved")); }
-    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
-  };
-  const moveWorkspace = async (path: string) => {
-    if (!manageWorkspaceID) return;
-    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await post(`/workspaces/${manageWorkspaceID}/move`, { path }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceMoveQueued")); }
-    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
-  };
-  const copyWorkspace = async (serverID: string, path: string) => {
-    if (!manageWorkspaceID) return;
-    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await post(`/workspaces/${manageWorkspaceID}/copy`, { server_id: serverID, path }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceCopyQueued")); }
-    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
-  };
-  const loadWorkspaceDeletionPlan = async (force: boolean) => {
-    if (!manageWorkspaceID) return;
-    setWorkspacePlanLoading(true); setWorkspaceManagerError("");
-    try { setWorkspaceDeletionPlan(await post<WorkspaceDeletionPlan>(`/workspaces/${manageWorkspaceID}/deletion-plan?force=${force}`, {})); }
-    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspacePlanLoading(false); }
-  };
-  const deleteWorkspace = async (mode: WorkspaceDeletionMode, force: boolean) => {
-    if (!manageWorkspaceID) return;
-    setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await remove(`/workspaces/${manageWorkspaceID}?mode=${mode}&force=${force}`); workspaces.reload(); projects.reload(); setManageWorkspaceID(null); notify(t(mode === "files" ? "project.workspaceDeleteQueued" : "project.workspaceRemoved")); }
-    catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
-  };
-  const gitLabels = { title: t("project.gitTitle"), status: t("project.gitStatus"), branches: t("project.gitBranches"), remotes: t("project.gitRemotes"), commits: t("project.gitCommits"), refresh: t("project.gitRefresh"), refreshing: t("project.gitRefreshing"), branch: t("column.branch"), head: t("project.gitHead"), upstream: t("project.gitUpstream"), ahead: t("project.gitAhead"), behind: t("project.gitBehind"), staged: t("project.gitStaged"), unstaged: t("project.gitUnstaged"), untracked: t("project.gitUntracked"), clean: t("project.gitClean"), dirty: t("project.gitDirty"), noBranches: t("project.gitNoBranches"), noRemotes: t("project.gitNoRemotes"), noCommits: t("project.gitNoCommits"), close: t("common.close"), sync: t("project.gitSync"), remote: t("project.gitRemote"), ref: t("project.gitRef"), fetch: t("project.gitFetch"), pull: t("project.gitPull"), push: t("project.gitPush"), setUpstream: t("project.gitSetUpstream"), createBranch: t("project.gitCreateBranch"), branchName: t("project.gitBranchName"), startPoint: t("project.gitStartPoint"), checkout: t("project.gitCheckout"), detach: t("project.gitDetach"), rename: t("common.rename"), edit: t("common.edit"), delete: t("common.delete"), forceDelete: t("project.gitForceDelete"), addRemote: t("project.gitAddRemote"), remoteName: t("project.gitRemoteName"), remoteURL: t("project.remoteURL"), save: t("common.save"), cancel: t("common.cancel"), current: t("project.gitCurrent"), local: t("project.gitLocal"), remoteBranch: t("project.gitRemoteBranch"), actionQueued: t("project.gitActionQueued"), stagedChanges: t("project.gitStagedChanges"), unstagedChanges: t("project.gitUnstagedChanges"), noStagedChanges: t("project.gitNoStagedChanges"), noChanges: t("codex.noChanges"), stage: t("project.gitStage"), stageAll: t("project.gitStageAll"), unstage: t("project.gitUnstage"), unstageAll: t("project.gitUnstageAll"), discard: t("project.gitDiscard"), discardConfirm: t("project.gitDiscardConfirm"), commitMessage: t("project.gitCommitMessage"), commitPlaceholder: t("project.gitCommitPlaceholder"), commitAction: t("project.gitCommitAction"), readOnly: t("project.gitReadOnly"), modified: t("codex.changeModified"), added: t("codex.changeAdded"), deleted: t("codex.changeDeleted"), renamed: t("codex.changeRenamed"), copied: t("codex.changeCopied"), untrackedFile: t("project.gitUntracked"), conflicted: t("codex.changeConflicted") };
-  const workspaceManagerLabels = { title: t("project.workspaceManage"), rename: t("common.rename"), move: t("project.workspaceMove"), copy: t("project.workspaceCopy"), delete: t("common.delete"), displayName: t("project.workspaceName"), currentPath: t("project.workspaceCurrentPath"), targetPath: t("project.workspaceTargetPath"), targetServer: t("project.workspaceTargetServer"), sameServer: t("project.workspaceSameServer"), managedOnly: t("project.workspaceManagedOnly"), save: t("common.save"), moving: t("project.workspaceMoving"), copying: t("project.workspaceCopying"), loadingPlan: t("project.deletionLoading"), metadataOnly: t("project.deleteMetadataOnly"), deleteFiles: t("project.workspaceDeleteFiles"), metadataDescription: t("project.workspaceMetadataDescription"), filesDescription: t("project.workspaceFilesDescription"), dirty: t("project.gitDirty"), activeOperations: t("project.deleteActiveOperations"), threads: t("project.workspaceThreads"), childWorkspaces: t("project.workspaceChildren"), force: t("project.workspaceForceDelete"), blockers: t("project.deleteBlockers"), noBlockers: t("project.deleteNoBlockers"), confirmLabel: t("project.deleteConfirmLabel"), confirmPlaceholder: t("project.deleteConfirmPlaceholder"), deleting: t("project.deleting"), cancel: t("common.cancel") };
-  const projectDeletionLabels = { title: t("project.deleteTitle"), loading: t("project.deletionLoading"), metadataOnly: t("project.deleteMetadataOnly"), metadataDescription: t("project.deleteMetadataDescription"), managedFiles: t("project.deleteManagedFiles"), managedDescription: t("project.deleteManagedDescription"), workspaces: t("column.workspaces"), managed: t("project.deleteManagedCount"), observed: t("project.deleteObservedCount"), dirty: t("project.gitDirty"), activeOperations: t("project.deleteActiveOperations"), activeTasks: t("project.deleteActiveTasks"), activeDeployments: t("project.deleteActiveDeployments"), remotePreserved: t("project.deleteRemotePreserved"), blockers: t("project.deleteBlockers"), noBlockers: t("project.deleteNoBlockers"), confirmLabel: t("project.deleteConfirmLabel"), confirmPlaceholder: t("project.deleteConfirmPlaceholder"), cancel: t("common.cancel"), deleting: t("project.deleting"), deleteMetadata: t("project.deleteMetadataAction"), deleteFiles: t("project.deleteFilesAction") };
-  const managedWorkspace = (workspaces.data ?? []).find(workspace => workspace.id === manageWorkspaceID) ?? null;
-  const deletingProject = (projects.data ?? []).find(project => project.id === deleteProjectID) ?? null;
-  return <div className="page-stack project-page">
-    <Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={openDialog}><Plus size={17} />{t("project.createEntry")}</button>}>
-      <ProjectTable projects={projects.data ?? []} labels={projectLabels} slots={{ DataTable, Status }} formatTime={relative} formatImportMessage={importMessage} onSelect={project => { setDetailError(""); setDetailProjectID(project.id); }} renderActions={(project, state: ProjectLifecycleState) => {
-        const failed = (state === "failed" || state === "partial") && project.workspace_count === 0;
-        const action = projectAction?.id === project.id ? projectAction.kind : null;
-        const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id);
-        const blankFailure = project.status === "failed" || project.status === "partial";
-        const retryAvailable = blankFailure || targetServer?.status === "online";
-        return <><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button>}<button className="icon-button danger" disabled={projectAction !== null || projectDeletionBusy} title={t("project.deleteTitle")} onClick={() => void openProjectDeletion(project)}><Trash2 size={15} /></button></>;
-      }} />
-    </Section>
-    <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
-      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <><button className="icon-button" title={t("project.viewGit")} onClick={() => openWorkspaceGit(workspace.id)}><GitBranch size={15} /></button><button className="icon-button" title={t("project.workspaceManage")} onClick={() => openWorkspaceManager(workspace)}><Settings size={15} /></button></>} />
-    </Section>
-    <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />
-    <ProjectDetailsDialog open={detailProjectID !== null} detail={detail.data} loading={detail.loading} busy={detailBusy} error={detailError || detail.error} labels={detailLabels} slots={{ Dialog, Field, DialogActions }} onClose={() => { if (!detailBusy) setDetailProjectID(null); }} onSubmit={saveProjectDetails} />
-    <WorkspaceGitDialog open={gitWorkspaceID !== null} snapshot={gitSnapshot.data} loading={gitSnapshot.loading} busy={gitBusy} writable={(workspaces.data ?? []).find(workspace => workspace.id === gitWorkspaceID)?.management_mode === "managed"} error={gitError} labels={gitLabels} Dialog={Dialog} onClose={() => { if (!gitBusy) setGitWorkspaceID(null); }} onRefresh={() => void refreshWorkspaceGit()} onAction={runGitAction} />
-    <WorkspaceManagerDialog open={manageWorkspaceID !== null} workspace={managedWorkspace} servers={servers.data ?? []} plan={workspaceDeletionPlan} planLoading={workspacePlanLoading} busy={workspaceManagerBusy} error={workspaceManagerError} labels={workspaceManagerLabels} Dialog={Dialog} onClose={() => { if (!workspaceManagerBusy) setManageWorkspaceID(null); }} onRename={renameWorkspace} onMove={moveWorkspace} onCopy={copyWorkspace} onLoadDeletionPlan={loadWorkspaceDeletionPlan} onDelete={deleteWorkspace} />
-    <ProjectDeletionDialog open={deleteProjectID !== null} project={deletingProject} plan={projectDeletionPlan} loading={projectDeletionBusy && !projectDeletionPlan} busy={projectDeletionBusy} error={projectDeletionError} labels={projectDeletionLabels} Dialog={Dialog} onClose={() => { if (!projectDeletionBusy) setDeleteProjectID(null); }} onSubmit={deleteProject} />
-  </div>;
+    })();
+  }, [archived, firstPage.data]);
+  const reload = useCallback(() => firstPage.reload(), [firstPage.reload]);
+  return { data: firstPage.data ? items : null, error: firstPage.error, loading: firstPage.loading, reload, hasMore, loadingMore, loadError, loadMore };
 }
 
 export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal, reloadApprovals, notify, selectedThreadID, onSelectThread }: PageProps & { streamRevisions: StreamRevisions; approvals: Approval[]; approvalSignal: number; reloadApprovals: () => void; selectedThreadID: string; onSelectThread: (threadID: string, replace?: boolean) => void }) {
   const { t } = useI18n();
-  const threads = useData<Thread[]>("/threads", realtime);
-  const archivedThreads = useData<Thread[]>("/threads?archived=true", realtime);
+  const threads = useThreadList(false, realtime);
+  const archivedThreads = useThreadList(true, realtime);
   const workspaces = useData<Workspace[]>("/workspaces", realtime);
   const [selected, setSelected] = useState(selectedThreadID);
   const [createOpen, setCreateOpen] = useState(false);
@@ -689,11 +515,21 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
   const [worktreeBusy, setWorktreeBusy] = useState(false);
   const [worktreeError, setWorktreeError] = useState("");
   const [scheduledThread, setScheduledThread] = useState<Thread | null>(null);
+  const [codexConfirmation, setCodexConfirmation] = useState<{ type: "archive-project" | "hide-project"; group: ThreadGroup } | { type: "delete-thread"; thread: Thread } | null>(null);
   const [preview, setPreview] = useState<FilePreviewSelection | null>(null);
   const [activePane, setActivePane] = useState<"conversation" | "preview">("conversation");
   const [mobileView, setMobileView] = useState<"sessions" | "files" | "conversation">(selectedThreadID ? "conversation" : "sessions");
   const listedActiveThreads = threads.data ?? [];
-  const activeThreads = showArchived ? archivedThreads.data ?? [] : pendingThread && !listedActiveThreads.some(thread => thread.id === pendingThread.id) ? [pendingThread, ...listedActiveThreads] : listedActiveThreads;
+  const listedArchivedThreads = archivedThreads.data ?? [];
+  const knownSelectedThread = pendingThread?.id === selectedThreadID ? pendingThread : [...listedActiveThreads, ...listedArchivedThreads].find(thread => thread.id === selectedThreadID);
+  const deepLinkedThread = useData<Thread>(selectedThreadID && !knownSelectedThread ? `/threads/${selectedThreadID}` : null, `${realtime}:${selectedThreadID}`);
+  const requestedThread = knownSelectedThread ?? deepLinkedThread.data;
+  const requestedThreadMatchesView = requestedThread && Boolean(requestedThread.archived_at) === showArchived ? requestedThread : null;
+  const activeThreads = mergeThreads(
+    !showArchived && pendingThread ? [pendingThread] : [],
+    requestedThreadMatchesView ? [requestedThreadMatchesView] : [],
+    showArchived ? listedArchivedThreads : listedActiveThreads
+  );
   const activeThreadSource = showArchived ? archivedThreads : threads;
   const visibleThreads = useMemo(() => activeThreads.filter(thread => !thread.project_hidden_at), [activeThreads]);
   const active = visibleThreads.find(thread => thread.id === selected) ?? visibleThreads[0];
@@ -701,12 +537,16 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
   const threadGroups = useMemo(() => groupThreadsByWorkspace(visibleThreads, workspaces.data ?? []), [visibleThreads, workspaces.data]);
   const approvalKey = approvals.map(item => item.id).join(",");
   useEffect(() => {
+    if (selectedThreadID && requestedThread && Boolean(requestedThread.archived_at) !== showArchived) setShowArchived(Boolean(requestedThread.archived_at));
+  }, [requestedThread, selectedThreadID, showArchived]);
+  useEffect(() => {
     if (!(showArchived ? archivedThreads.data : threads.data)) return;
+    if (selectedThreadID && !visibleThreads.some(thread => thread.id === selectedThreadID) && (deepLinkedThread.loading || (requestedThread && Boolean(requestedThread.archived_at) !== showArchived))) return;
     const requested = selectedThreadID && visibleThreads.some(thread => thread.id === selectedThreadID) ? selectedThreadID : "";
     const next = requested || (visibleThreads.some(thread => thread.id === selected) ? selected : visibleThreads[0]?.id ?? "");
     if (next !== selected) setSelected(next);
     if (next !== selectedThreadID) onSelectThread(next, true);
-  }, [archivedThreads.data, onSelectThread, selected, selectedThreadID, showArchived, threads.data, visibleThreads]);
+  }, [archivedThreads.data, deepLinkedThread.loading, onSelectThread, requestedThread, selected, selectedThreadID, showArchived, threads.data, visibleThreads]);
   useEffect(() => { setApprovalOpen(Boolean(approvalKey)); }, [approvalKey, approvalSignal]);
   useEffect(() => { if (pendingThread && listedActiveThreads.some(thread => thread.id === pendingThread.id)) setPendingThread(null); }, [listedActiveThreads, pendingThread]);
   useEffect(() => { setPreview(null); setActivePane("conversation"); if (active) setMobileView("conversation"); }, [active?.workspace_id]);
@@ -742,13 +582,25 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
     } catch (error) { notify(message(error)); } finally { setThreadAction(""); }
   };
   const archiveProjectThreads = async (group: ThreadGroup) => {
-    if (threadAction || !confirm(t("codex.confirmArchiveProject", { name: group.projectName }))) return;
+    if (threadAction) return;
     setThreadAction(`project:${group.projectID}`);
     try {
       const result = await post<{ archived: number }>(`/projects/${group.projectID}/threads/archive`, {});
       if (active?.project_id === group.projectID) selectThread(visibleThreads.find(item => item.project_id !== group.projectID)?.id ?? "");
       reloadThreadLists();
       notify(t("codex.projectThreadsArchived", { count: result.archived }));
+      setCodexConfirmation(null);
+    } catch (error) { notify(message(error)); } finally { setThreadAction(""); }
+  };
+  const hideProject = async (group: ThreadGroup) => {
+    if (threadAction) return;
+    setThreadAction(`hide:${group.projectID}`);
+    try {
+      await patch<Project>(`/projects/${group.projectID}`, { hidden: true });
+      if (active?.project_id === group.projectID) selectThread(visibleThreads.find(thread => thread.project_id !== group.projectID)?.id ?? "");
+      threads.reload();
+      notify(t("codex.projectHidden"));
+      setCodexConfirmation(null);
     } catch (error) { notify(message(error)); } finally { setThreadAction(""); }
   };
   const continueInNewTask = async (thread: Thread) => {
@@ -813,8 +665,8 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
     { id: "pin", label: t(group.pinnedAt ? "codex.unpinProject" : "codex.pinProject"), icon: group.pinnedAt ? PinOff : Pin, onSelect: async () => { try { await patch<Project>(`/projects/${group.projectID}`, { pinned: !group.pinnedAt }); threads.reload(); notify(t(group.pinnedAt ? "codex.projectUnpinned" : "codex.projectPinned")); } catch (error) { notify(message(error)); } } },
     { id: "rename", label: t("codex.renameProject"), icon: Pencil, onSelect: () => beginRename("project", group.projectID, group.projectName) },
     ...(!showArchived ? [{ id: "create-worktree", label: t("codex.createPermanentWorktree"), icon: GitBranch, disabled: threadAction !== "" || !(workspaces.data ?? []).some(workspace => workspace.project_id === group.projectID), onSelect: () => openWorktreeDialog({ kind: "project", projectID: group.projectID, projectName: group.projectName }) } satisfies ContextMenuAction] : []),
-    ...(!showArchived ? [{ id: "archive-tasks", label: t("codex.archiveProjectThreads"), icon: Archive, danger: true, separatorBefore: true, disabled: threadAction !== "", onSelect: () => archiveProjectThreads(group) } satisfies ContextMenuAction] : []),
-    { id: "hide", label: t("codex.hideProject"), icon: EyeOff, danger: true, separatorBefore: true, onSelect: async () => { if (!confirm(t("codex.confirmHideProject", { name: group.projectName }))) return; try { await patch<Project>(`/projects/${group.projectID}`, { hidden: true }); if (active?.project_id === group.projectID) selectThread(visibleThreads.find(thread => thread.project_id !== group.projectID)?.id ?? ""); threads.reload(); notify(t("codex.projectHidden")); } catch (error) { notify(message(error)); } } }
+    ...(!showArchived ? [{ id: "archive-tasks", label: t("codex.archiveProjectThreads"), icon: Archive, danger: true, separatorBefore: true, disabled: threadAction !== "", onSelect: () => setCodexConfirmation({ type: "archive-project", group }) } satisfies ContextMenuAction] : []),
+    { id: "hide", label: t("codex.hideProject"), icon: EyeOff, danger: true, separatorBefore: true, disabled: threadAction !== "", onSelect: () => setCodexConfirmation({ type: "hide-project", group }) }
   ];
   const threadMenuActions = (thread: Thread): ContextMenuAction[] => [
     ...(showArchived ? [{ id: "restore", label: t("codex.restoreThread"), icon: ArchiveRestore, disabled: threadAction !== "", onSelect: () => setThreadArchived(thread, false) } satisfies ContextMenuAction] : [
@@ -833,7 +685,6 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
   ];
   const deleteSession = async (thread: Thread) => {
     if (thread.status === "queued" || thread.status === "running") return;
-    if (!confirm(t("codex.confirmDeleteSession", { title: thread.title }))) return;
     setDeletingThread(thread.id);
     try {
       await remove(`/threads/${thread.id}`);
@@ -843,6 +694,7 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
       if (active?.id === thread.id) selectThread(next?.id ?? "");
       threads.reload();
       notify(t("codex.sessionDeleted"));
+      setCodexConfirmation(null);
     } catch (error) {
       notify(message(error));
     } finally {
@@ -851,7 +703,7 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
   };
   return <div className="codex-layout">
     <div className="codex-mobile-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={mobileView === "sessions"} className={mobileView === "sessions" ? "active" : ""} onClick={() => setMobileView("sessions")}><Code2 size={15} />{t("codex.sessions")}</button><button type="button" role="tab" aria-selected={mobileView === "files"} className={mobileView === "files" ? "active" : ""} onClick={() => setMobileView("files")}><FolderTree size={15} />{t("codex.projectFiles")}</button><button type="button" role="tab" aria-selected={mobileView === "conversation"} className={mobileView === "conversation" ? "active" : ""} onClick={() => setMobileView("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button></div>
-    <aside className={`codex-sidebar mobile-${mobileView}`}><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t(showArchived ? "codex.archivedTasks" : "codex.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${showArchived ? "active" : ""}`} aria-pressed={showArchived} title={t(showArchived ? "codex.showActiveTasks" : "codex.showArchivedTasks")} onClick={() => { setShowArchived(value => !value); setSelected(""); }}><Archive size={18} /></button>{!showArchived && <button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button>}</div></div><div className="thread-items">{(showArchived ? archivedThreads.loading : threads.loading) ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : threadGroups.length === 0 ? <Empty icon={showArchived ? <Archive size={23} /> : <Code2 size={23} />} text={t(showArchived ? "codex.noArchivedTasks" : "codex.noSessions")} /> : threadGroups.map(group => {
+    <aside className={`codex-sidebar mobile-${mobileView}`}><section className="thread-list"><div className="panel-heading"><div><Code2 size={18} /><h2>{t(showArchived ? "codex.archivedTasks" : "codex.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${showArchived ? "active" : ""}`} aria-pressed={showArchived} title={t(showArchived ? "codex.showActiveTasks" : "codex.showArchivedTasks")} onClick={() => { setShowArchived(value => !value); selectThread(""); }}><Archive size={18} /></button>{!showArchived && <button className="icon-button" title={t("codex.newSession")} onClick={() => setCreateOpen(true)}><Plus size={18} /></button>}</div></div><div className="thread-items">{activeThreadSource.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : <>{threadGroups.length === 0 ? <Empty icon={showArchived ? <Archive size={23} /> : <Code2 size={23} />} text={t(showArchived ? "codex.noArchivedTasks" : "codex.noSessions")} /> : threadGroups.map(group => {
       const collapsed = collapsedWorkspaces.has(group.workspaceID);
       return <section className="thread-project" key={group.workspaceID}>
         <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.label })} actions={projectMenuActions(group)}>
@@ -863,17 +715,18 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
           const activeThread = thread.status === "queued" || thread.status === "running";
           const deleting = deletingThread === thread.id;
           const acting = threadAction.endsWith(`:${thread.id}`);
-          return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions">{acting ? <LoaderCircle className="spin" size={14} /> : <Status value={thread.status} />}{!showArchived && <button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting || !!threadAction} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => void deleteSession(thread)}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</div></ContextMenu>;
+          return <ContextMenu key={thread.id} className={active?.id === thread.id ? "thread active" : "thread"} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}><button type="button" className="thread-select" onClick={() => selectThread(thread.id)}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span>{thread.pinned_at && <Pin className="pinned-icon" size={12} />}</button><div className="thread-actions">{acting ? <LoaderCircle className="spin" size={14} /> : <Status value={thread.status} />}{!showArchived && <button type="button" className="icon-button danger thread-delete" disabled={activeThread || deleting || !!threadAction} title={activeThread ? t("codex.deleteActiveSession") : t("codex.deleteSession")} onClick={() => setCodexConfirmation({ type: "delete-thread", thread })}>{deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</div></ContextMenu>;
         })}</div>}
       </section>;
-    })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} taskID={active?.id ?? ""} taskStatus={active?.status ?? ""} realtime={realtime} notify={notify} writable={activeWorkspace?.management_mode === "managed"} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
+    })}{activeThreadSource.loadError && <div className="snapshot-notice warning"><AlertTriangle size={15} />{activeThreadSource.loadError}</div>}{activeThreadSource.hasMore && <div className="history-loader"><button type="button" className="secondary-button small" disabled={activeThreadSource.loadingMore} onClick={() => void activeThreadSource.loadMore()}>{activeThreadSource.loadingMore ? <LoaderCircle className="spin" size={15} /> : <ArrowDownToLine size={15} />}{t(activeThreadSource.loadingMore ? "codex.loadingMoreSessions" : "codex.loadMoreSessions")}</button></div>}</>}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} taskID={active?.id ?? ""} taskStatus={active?.status ?? ""} realtime={realtime} notify={notify} writable={activeWorkspace?.management_mode === "managed"} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
     <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={streamRevisions[active.id]?.revision ?? 0} globalStreamRevision={streamRevisions["*"]?.revision ?? 0} streamRevision={streamRevisions[active.id]?.revision ?? 0} invalidationSequence={streamRevisions[active.id]?.minimumSequence} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} writable={activeWorkspace?.management_mode === "managed"} notify={notify} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
-    <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
+    <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { setPendingThread(thread); selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
     <Dialog open={worktreeTarget !== null} title={t(worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")} onClose={closeWorktreeDialog}><form onSubmit={submitWorktree}>{worktreeError && <ErrorBanner text={worktreeError} />}<p className="security-notice">{t(worktreeTarget?.kind === "thread" ? "codex.continueWorktreeDescription" : "codex.createWorktreeDescription")}</p>{worktreeTarget?.kind === "project" && <Field label={t("codex.sourceWorkspace")}><select value={worktreeForm.workspace_id} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, workspace_id: event.target.value })} required><option value="">{t("codex.selectWorkspaceOption")}</option>{(workspaces.data ?? []).filter(workspace => workspace.project_id === worktreeTarget.projectID).map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.server_name} · {workspace.branch || t("project.detached")} · {workspace.path}</option>)}</select></Field>}<div className="form-grid"><Field label={t("codex.worktreeBranch")}><input autoFocus value={worktreeForm.branch} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, branch: event.target.value })} placeholder="feature/my-change" required /></Field><Field label={t("codex.worktreeBaseRef")}><input value={worktreeForm.base_ref} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, base_ref: event.target.value })} placeholder="HEAD" required /></Field></div><Field label={t("codex.worktreePath")}><input value={worktreeForm.path} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, path: event.target.value })} placeholder={t("codex.worktreePathPlaceholder")} /></Field><DialogActions><button type="button" className="secondary-button" disabled={worktreeBusy} onClick={closeWorktreeDialog}>{t("common.cancel")}</button><button className="primary-button" disabled={worktreeBusy || !worktreeForm.workspace_id || !worktreeForm.branch.trim()}>{worktreeBusy ? <LoaderCircle className="spin" size={16} /> : worktreeTarget?.kind === "thread" ? <GitFork size={16} /> : <GitBranch size={16} />}{t(worktreeBusy ? "codex.creatingWorktree" : worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")}</button></DialogActions></form></Dialog>
     <ScheduledTaskDialog open={scheduledThread !== null} initialThreadID={scheduledThread?.id} lockThread threads={scheduledThread ? [scheduledThread] : []} notify={notify} onClose={() => setScheduledThread(null)} onSaved={() => undefined} />
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
+    {codexConfirmation?.type === "archive-project" ? <ConfirmDialog open danger title={t("codex.archiveProjectThreads")} impact={t("codex.confirmArchiveProject", { name: codexConfirmation.group.projectName })} confirmLabel={t("codex.archiveProjectThreads")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={threadAction !== ""} onClose={() => setCodexConfirmation(null)} onConfirm={() => archiveProjectThreads(codexConfirmation.group)} /> : codexConfirmation?.type === "hide-project" ? <ConfirmDialog open danger title={t("codex.hideProject")} impact={t("codex.confirmHideProject", { name: codexConfirmation.group.projectName })} confirmLabel={t("codex.hideProject")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={threadAction !== ""} onClose={() => setCodexConfirmation(null)} onConfirm={() => hideProject(codexConfirmation.group)} /> : codexConfirmation?.type === "delete-thread" ? <ConfirmDialog open danger title={t("codex.deleteSession")} impact={t("codex.confirmDeleteSession", { title: codexConfirmation.thread.title })} confirmLabel={t("codex.deleteSession")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={deletingThread !== ""} onClose={() => setCodexConfirmation(null)} onConfirm={() => deleteSession(codexConfirmation.thread)} /> : null}
   </div>;
 }
 
@@ -2027,7 +1880,12 @@ export function ScheduledTaskDialog({ open, task, initialThreadID, lockThread = 
   </form></Dialog>;
 }
 
-function SettingsPage({ realtime, notify }: PageProps) {
+type SettingsConfirmation =
+  | { type: "scheduled-task"; task: ScheduledTask }
+  | { type: "credential-profile"; profile: CredentialProfile }
+  | { type: "secret-set"; secret: SecretSet };
+
+export function SettingsPage({ realtime, notify }: PageProps) {
   const { t } = useI18n();
   const codexSettings = useData<CodexCLISettings>("/settings/codex-cli", realtime);
   const profiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
@@ -2046,6 +1904,9 @@ function SettingsPage({ realtime, notify }: PageProps) {
   const [selectedCodexVersion, setSelectedCodexVersion] = useState("");
   const [scheduledTarget, setScheduledTarget] = useState<{ task?: ScheduledTask; threadID?: string } | null>(null);
   const [scheduledBusy, setScheduledBusy] = useState("");
+  const [settingsConfirmation, setSettingsConfirmation] = useState<SettingsConfirmation | null>(null);
+  const [settingsDeleteBusy, setSettingsDeleteBusy] = useState("");
+  const settingsDeleteBusyRef = useRef("");
   useEffect(() => {
     if (!codexSettings.data) return;
     setCodexVersions(codexSettings.data.versions?.length ? codexSettings.data.versions : [codexSettings.data.target_version]);
@@ -2073,9 +1934,25 @@ function SettingsPage({ realtime, notify }: PageProps) {
     try { await put(`/scheduled-tasks/${task.id}`, { enabled: !task.enabled }); scheduledTasks.reload(); } catch (err) { notify(message(err)); } finally { setScheduledBusy(""); }
   };
   const deleteScheduledTask = async (task: ScheduledTask) => {
-    if (scheduledBusy || !confirm(t("settings.confirmDeleteScheduledTask", { name: task.name }))) return;
-    setScheduledBusy(task.id);
-    try { await remove(`/scheduled-tasks/${task.id}`); scheduledTasks.reload(); notify(t("settings.scheduledTaskDeleted")); } catch (err) { notify(message(err)); } finally { setScheduledBusy(""); }
+    if (scheduledBusy || settingsDeleteBusyRef.current) return;
+    const busyKey = `scheduled-task:${task.id}`;
+    settingsDeleteBusyRef.current = busyKey;
+    setSettingsDeleteBusy(busyKey);
+    try { await remove(`/scheduled-tasks/${task.id}`); scheduledTasks.reload(); notify(t("settings.scheduledTaskDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
+  };
+  const deleteProfile = async (profile: CredentialProfile) => {
+    if (settingsDeleteBusyRef.current) return;
+    const busyKey = `credential-profile:${profile.id}`;
+    settingsDeleteBusyRef.current = busyKey;
+    setSettingsDeleteBusy(busyKey);
+    try { await remove(`/credential-profiles/${profile.id}`); profiles.reload(); notify(t("settings.profileDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
+  };
+  const deleteSecretSet = async (secret: SecretSet) => {
+    if (settingsDeleteBusyRef.current) return;
+    const busyKey = `secret-set:${secret.id}`;
+    settingsDeleteBusyRef.current = busyKey;
+    setSettingsDeleteBusy(busyKey);
+    try { await remove(`/secret-sets/${secret.id}`); secrets.reload(); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
   };
   return <div className="page-stack">
     <Section title={t("settings.codexCLIManagement")} icon={<SquareTerminal size={18} />}>
@@ -2083,13 +1960,13 @@ function SettingsPage({ realtime, notify }: PageProps) {
     </Section>
     <Section title={t("settings.scheduledTasks")} icon={<CalendarClock size={18} />} action={<button className="primary-button" onClick={() => openScheduledTask()}><Plus size={17} />{t("settings.newScheduledTask")}</button>}>
       <DataTable headers={[t("settings.name"), t("settings.scheduledThread"), t("settings.schedule"), t("settings.nextRun"), t("column.state"), ""]} empty={t("settings.noScheduledTasks")}>
-        {(scheduledTasks.data ?? []).map(task => <tr key={task.id}><td><div className="cell-main"><strong>{task.name}</strong><small title={task.prompt}>{task.prompt}</small></div></td><td><div className="cell-main"><strong>{task.thread_title}</strong><small>{task.project_name} / {task.server_name}</small></div></td><td><code title={task.timezone}>{task.schedule}</code></td><td>{task.enabled ? formatDate(task.next_run_at) : t("settings.scheduleDisabled")}</td><td><div className="cell-main"><Status value={task.enabled ? "enabled" : "disabled"} />{task.last_run_status && <small title={task.last_run_message || undefined}>{t("settings.lastRun", { status: task.last_run_status })}</small>}</div></td><td><div className="row-actions"><button className="icon-button" title={t("common.edit")} disabled={Boolean(scheduledBusy)} onClick={() => openScheduledTask(task)}><Pencil size={15} /></button><button className="icon-button" title={t(task.enabled ? "settings.disableScheduledTask" : "settings.enableScheduledTask")} disabled={Boolean(scheduledBusy)} onClick={() => void toggleScheduledTask(task)}>{scheduledBusy === task.id ? <LoaderCircle className="spin" size={15} /> : task.enabled ? <Pause size={15} /> : <Play size={15} />}</button><button className="icon-button danger" title={t("common.delete")} disabled={Boolean(scheduledBusy)} onClick={() => void deleteScheduledTask(task)}><Trash2 size={15} /></button></div></td></tr>)}
+        {(scheduledTasks.data ?? []).map(task => <tr key={task.id}><td><div className="cell-main"><strong>{task.name}</strong><small title={task.prompt}>{task.prompt}</small></div></td><td><div className="cell-main"><strong>{task.thread_title}</strong><small>{task.project_name} / {task.server_name}</small></div></td><td><code title={task.timezone}>{task.schedule}</code></td><td>{task.enabled ? formatDate(task.next_run_at) : t("settings.scheduleDisabled")}</td><td><div className="cell-main"><Status value={task.enabled ? "enabled" : "disabled"} />{task.last_run_status && <small title={task.last_run_message || undefined}>{t("settings.lastRun", { status: task.last_run_status })}</small>}</div></td><td><div className="row-actions"><button className="icon-button" title={t("common.edit")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => openScheduledTask(task)}><Pencil size={15} /></button><button className="icon-button" title={t(task.enabled ? "settings.disableScheduledTask" : "settings.enableScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => void toggleScheduledTask(task)}>{scheduledBusy === task.id ? <LoaderCircle className="spin" size={15} /> : task.enabled ? <Pause size={15} /> : <Play size={15} />}</button><button className="icon-button danger" title={t("settings.deleteScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "scheduled-task", task })}><Trash2 size={15} /></button></div></td></tr>)}
       </DataTable>
     </Section>
     <Section title={t("settings.credentialProfiles")} icon={<KeyRound size={18} />} action={<button className="primary-button" onClick={() => openProfile()}><Plus size={17} />{t("settings.newProfile")}</button>}>
-      <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code" title={profile.endpoint}>{profile.endpoint}</code></td><td>{profile.kind === "codex" ? <code>{profile.model}</code> : <div className="cell-main"><span className="inline"><UserRound size={14} />{profile.username}</span><small>{profile.commit_name && profile.commit_email ? `${profile.commit_name} · ${profile.commit_email}` : t("settings.gitIdentityMissing")}</small></div>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} onClick={async () => { if (!confirm(t("settings.confirmDeleteProfile", { name: profile.name }))) return; await remove(`/credential-profiles/${profile.id}`); profiles.reload(); notify(t("settings.profileDeleted")); }}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
+      <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code" title={profile.endpoint}>{profile.endpoint}</code></td><td>{profile.kind === "codex" ? <code>{profile.model}</code> : <div className="cell-main"><span className="inline"><UserRound size={14} />{profile.username}</span><small>{profile.commit_name && profile.commit_email ? `${profile.commit_name} · ${profile.commit_email}` : t("settings.gitIdentityMissing")}</small></div>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "credential-profile", profile })}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
     </Section>
-    <Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setSecretDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} onClick={async () => { if (!confirm(t("settings.confirmDelete", { name: item.name }))) return; await remove(`/secret-sets/${item.id}`); secrets.reload(); }}><X size={16} /></button></td></tr>)}</DataTable></Section>
+    <Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setSecretDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "secret-set", secret: item })}><X size={16} /></button></td></tr>)}</DataTable></Section>
     <Section title={t("settings.auditLog")} icon={<Clipboard size={18} />}><DataTable headers={[t("column.action"), t("column.resource"), t("column.address"), t("column.time")]} empty={t("settings.noAudit")}>{(audit.data ?? []).map(item => <tr key={item.id}><td><code>{item.action}</code></td><td>{item.resource_type}{item.resource_id ? ` · ${shortSHA(item.resource_id)}` : ""}</td><td><code>{item.ip_address}</code></td><td>{formatDate(item.occurred_at)}</td></tr>)}</DataTable></Section>
     <Dialog open={profileDialog} title={t(profileForm.id ? "settings.editProfile" : "settings.newProfile")} onClose={() => { if (!profileBusy) setProfileDialog(false); }} wide><form onSubmit={saveProfile}>
       <div className="segmented-control" role="tablist" aria-label={t("settings.type")}><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "codex"} aria-selected={profileForm.kind === "codex"} className={profileForm.kind === "codex" ? "active" : ""} onClick={() => changeProfileKind("codex")}><Code2 size={15} />{t("settings.codexType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "git"} aria-selected={profileForm.kind === "git"} className={profileForm.kind === "git" ? "active" : ""} onClick={() => changeProfileKind("git")}><GitBranch size={15} />{t("settings.gitType")}</button></div>
@@ -2100,6 +1977,7 @@ function SettingsPage({ realtime, notify }: PageProps) {
     </form></Dialog>
     <Dialog open={secretDialog} title={t("settings.secretSetTitle")} onClose={() => setSecretDialog(false)}><form onSubmit={submitSecretSet}><Field label={t("settings.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("settings.environmentValues")}><textarea value={lines} onChange={e => setLines(e.target.value)} rows={8} placeholder={"DATABASE_URL=...\nAPI_TOKEN=..."} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setSecretDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("settings.encryptSave")}</button></DialogActions></form></Dialog>
     <ScheduledTaskDialog open={scheduledTarget !== null} task={scheduledTarget?.task} threads={threads.data ?? []} notify={notify} onClose={() => setScheduledTarget(null)} onSaved={scheduledTasks.reload} />
+    {settingsConfirmation?.type === "scheduled-task" ? <ConfirmDialog open danger title={t("settings.deleteScheduledTask")} impact={t("settings.confirmDeleteScheduledTask", { name: settingsConfirmation.task.name })} confirmLabel={t("settings.deleteScheduledTask")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteScheduledTask(settingsConfirmation.task)} /> : settingsConfirmation?.type === "credential-profile" ? <ConfirmDialog open danger title={t("settings.deleteProfile")} impact={t("settings.confirmDeleteProfile", { name: settingsConfirmation.profile.name })} confirmLabel={t("settings.deleteProfile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteProfile(settingsConfirmation.profile)} /> : settingsConfirmation?.type === "secret-set" ? <ConfirmDialog open danger title={t("settings.deleteSecretSet")} impact={t("settings.confirmDelete", { name: settingsConfirmation.secret.name })} confirmLabel={t("settings.deleteSecretSet")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteSecretSet(settingsConfirmation.secret)} /> : null}
   </div>;
 }
 

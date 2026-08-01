@@ -26,6 +26,7 @@ import {
   X
 } from "lucide-react";
 import { APIError, patch, post, postStream, remove } from "../api";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
 import { DataTable, Section, Status } from "../components/PageUI";
 import { relative } from "../format";
@@ -46,6 +47,11 @@ type InstallLogEntry = {
   detail: string;
 };
 
+type ServerConfirmation =
+  | { type: "force-revoke"; server: Server }
+  | { type: "agent-update"; server: Server }
+  | { type: "codex-update"; server: Server };
+
 export function ServersPage({ realtime, notify }: ServersPageProps) {
   const { t } = useI18n();
   const servers = useData<Server[]>("/servers", realtime);
@@ -64,6 +70,8 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
   const [metadataBusy, setMetadataBusy] = useState(false);
   const [metadataError, setMetadataError] = useState("");
   const [updatingServer, setUpdatingServer] = useState("");
+  const [serverConfirmation, setServerConfirmation] = useState<ServerConfirmation | null>(null);
+  const [serverConfirmationError, setServerConfirmationError] = useState("");
   const [credentialServer, setCredentialServer] = useState<Server | null>(null);
   const [credentialBusy, setCredentialBusy] = useState(false);
   const [credentialError, setCredentialError] = useState("");
@@ -151,7 +159,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     setRetireForm({ host: server.address, port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" });
   };
   const closeRetirement = () => {
-    if (retireBusy) return;
+    if (retireBusy || serverConfirmation?.type === "force-revoke") return;
     setRetiringServer(null); setRetireStep("form"); setRetireError(""); setRetireHostKey(null);
     setRetireForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" }));
   };
@@ -180,13 +188,14 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     } catch (err) { setRetireError(enrollmentMessage(err, t)); } finally { setRetireBusy(false); }
   };
   const forceRevokeServer = async () => {
-    if (!retiringServer || retireForm.confirmation !== retiringServer.name || !confirm(t("server.confirmForceRevoke", { name: retiringServer.name }))) return;
+    const target = serverConfirmation?.type === "force-revoke" ? serverConfirmation.server : null;
+    if (!retiringServer || !target || target.id !== retiringServer.id || retireForm.confirmation !== retiringServer.name) return;
     setRetireBusy(true); setRetireError("");
     try {
-      await remove(`/servers/${retiringServer.id}`);
-      setRetiringServer(null); servers.reload(); notify(t("server.revoked"));
+      await remove(`/servers/${target.id}`);
+      setServerConfirmation(null); setServerConfirmationError(""); setRetiringServer(null); servers.reload(); notify(t("server.revoked"));
       setRetireForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" }));
-    } catch (err) { setRetireError(message(err)); } finally { setRetireBusy(false); }
+    } catch (err) { const detail = message(err); setRetireError(detail); setServerConfirmationError(detail); } finally { setRetireBusy(false); }
   };
   const chooseRetirementPrivateKey = async (file?: File) => {
     setRetireError("");
@@ -224,27 +233,38 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     } catch (err) { setCredentialError(message(err)); } finally { setCredentialBusy(false); }
   };
   const updateAgent = async (server: Server) => {
-    if (!server.agent_update_available || !confirm(t("server.confirmUpdate", { name: server.name, version: server.agent_target_version }))) return;
+    if (!server.agent_update_available || serverConfirmation?.type !== "agent-update" || serverConfirmation.server.id !== server.id) return;
     setUpdatingServer(`agent:${server.id}`);
     try {
       await post(`/servers/${server.id}/agent-update`, {});
+      setServerConfirmation(null); setServerConfirmationError("");
       notify(t("server.updateQueued", { version: server.agent_target_version }));
-    } catch (err) { notify(message(err)); } finally { setUpdatingServer(""); }
+    } catch (err) { const detail = message(err); setServerConfirmationError(detail); notify(detail); } finally { setUpdatingServer(""); }
   };
   const updateCodex = async (server: Server) => {
-    if (!server.codex_update_available || !confirm(t("server.confirmCodexUpdate", { name: server.name, version: server.codex_target_version }))) return;
+    if (!server.codex_update_available || serverConfirmation?.type !== "codex-update" || serverConfirmation.server.id !== server.id) return;
     setUpdatingServer(`codex:${server.id}`);
     try {
       await post(`/servers/${server.id}/codex-update`, {});
+      setServerConfirmation(null); setServerConfirmationError("");
       notify(t("server.codexUpdateQueued", { version: server.codex_target_version }));
-    } catch (err) { notify(message(err)); } finally { setUpdatingServer(""); }
+    } catch (err) { const detail = message(err); setServerConfirmationError(detail); notify(detail); } finally { setUpdatingServer(""); }
+  };
+  const requestServerConfirmation = (confirmation: ServerConfirmation) => {
+    setServerConfirmationError("");
+    setServerConfirmation(confirmation);
+  };
+  const closeServerConfirmation = () => {
+    if (retireBusy || updatingServer !== "") return;
+    setServerConfirmation(null);
+    setServerConfirmationError("");
   };
   return <div className="page-stack"><Section title={t("server.registered")} icon={<ServerIcon size={18} />} action={<button className="primary-button" onClick={open}><Plus size={17} />{t("server.enroll")}</button>}>
     <DataTable headers={[t("column.server"), t("server.information"), t("server.boundCredentials"), t("column.connectivity"), t("column.agent"), t("column.codex"), t("column.lastSeen"), ""]} empty={t("server.none")}>{(servers.data ?? []).map(server => {
       const agentUpdateTitle = server.status !== "online" ? t("server.updateOffline") : server.agent_update_available ? t("server.updateAgent", { version: server.agent_target_version }) : !server.agent_version ? t("common.awaitingHeartbeat") : !server.agent_update_supported ? t("server.updateRequiresReinstall") : server.agent_version === server.agent_target_version ? t("server.agentLatest") : t("server.updateUnavailable");
       const codexUpdateTitle = server.status !== "online" ? t("server.codexUpdateOffline") : !server.codex_update_supported ? t("server.codexUpdateRequiresAgent") : server.codex_update_available ? t("server.updateCodex", { version: server.codex_target_version }) : t("server.codexLatest", { version: server.codex_target_version });
       const serverName = server.is_control_plane ? t("server.controlPlane") : server.name;
-      return <tr key={server.id}><td><div className="cell-main"><strong>{serverName}</strong>{server.is_control_plane && <span className="status-tag neutral"><LockKeyhole size={13} />{t("server.builtIn")}</span>}<small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><ServerCredentialSummary server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" disabled={server.status !== "online" || !server.agent_update_available || updatingServer !== ""} title={agentUpdateTitle} onClick={() => void updateAgent(server)}><RefreshCw className={updatingServer === `agent:${server.id}` ? "spin" : ""} size={15} /></button><button className="icon-button" disabled={server.status !== "online" || !server.codex_update_available || updatingServer !== ""} title={codexUpdateTitle} onClick={() => void updateCodex(server)}>{updatingServer === `codex:${server.id}` ? <LoaderCircle className="spin" size={15} /> : <SquareTerminal size={15} />}</button><button className="icon-button" disabled={server.status !== "online" || updatingServer !== ""} title={server.status === "online" ? t("server.editCredentials") : t("server.credentialsOffline")} onClick={() => editCredentials(server)}><KeyRound size={15} /></button><button className="icon-button" title={t("server.repair")} onClick={() => repair(server)}><Wrench size={15} /></button><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button>{server.is_control_plane ? <button className="icon-button" disabled title={t("server.controlPlaneProtected")}><LockKeyhole size={16} /></button> : <button className="icon-button danger" title={t("server.retire")} onClick={() => openRetirement(server)}><Trash2 size={16} /></button>}</div></td></tr>;
+      return <tr key={server.id}><td><div className="cell-main"><strong>{serverName}</strong>{server.is_control_plane && <span className="status-tag neutral"><LockKeyhole size={13} />{t("server.builtIn")}</span>}<small>{server.hostname || t("common.awaitingHeartbeat")}</small></div></td><td><ServerInformation server={server} /></td><td><ServerCredentialSummary server={server} /></td><td><Status value={server.status} icon={server.status === "online" ? <Wifi size={13} /> : <WifiOff size={13} />} /></td><td><code>{server.agent_version || "-"}</code></td><td><span className={server.codex_ready ? "inline-success" : "muted"}>{server.codex_ready ? <Check size={14} /> : <Ban size={14} />}{server.codex_version || t("common.unavailable")}</span></td><td>{server.last_seen_at ? relative(server.last_seen_at) : t("common.never")}</td><td><div className="row-actions"><button className="icon-button" disabled={server.status !== "online" || !server.agent_update_available || updatingServer !== "" || serverConfirmation !== null} title={agentUpdateTitle} onClick={() => requestServerConfirmation({ type: "agent-update", server })}><RefreshCw className={updatingServer === `agent:${server.id}` ? "spin" : ""} size={15} /></button><button className="icon-button" disabled={server.status !== "online" || !server.codex_update_available || updatingServer !== "" || serverConfirmation !== null} title={codexUpdateTitle} onClick={() => requestServerConfirmation({ type: "codex-update", server })}>{updatingServer === `codex:${server.id}` ? <LoaderCircle className="spin" size={15} /> : <SquareTerminal size={15} />}</button><button className="icon-button" disabled={server.status !== "online" || updatingServer !== "" || serverConfirmation !== null} title={server.status === "online" ? t("server.editCredentials") : t("server.credentialsOffline")} onClick={() => editCredentials(server)}><KeyRound size={15} /></button><button className="icon-button" title={t("server.repair")} onClick={() => repair(server)}><Wrench size={15} /></button><button className="icon-button" title={t("server.editInformation")} onClick={() => editServer(server)}><Pencil size={15} /></button>{server.is_control_plane ? <button className="icon-button" disabled title={t("server.controlPlaneProtected")}><LockKeyhole size={16} /></button> : <button className="icon-button danger" disabled={serverConfirmation !== null} title={t("server.retire")} onClick={() => openRetirement(server)}><Trash2 size={16} /></button>}</div></td></tr>;
     })}</DataTable>
   </Section><Dialog open={dialog} title={t(repairingServer ? "server.repairTitle" : "server.enrollLinux")} onClose={close} wide>{step === "form" ? <form onSubmit={probe}>
     {error && <ErrorBanner text={error} />}
@@ -275,7 +295,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
       <Field label={t("server.authMethod")}><select value={retireForm.authMethod} onChange={event => setRetireForm({ ...retireForm, authMethod: event.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option></select></Field>
       {retireForm.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={event => void chooseRetirementPrivateKey(event.target.files?.[0])} required={!retireForm.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={retireForm.privateKeyPassphrase} onChange={event => setRetireForm({ ...retireForm, privateKeyPassphrase: event.target.value })} placeholder={t("common.optional")} /></Field></div> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={retireForm.password} onChange={event => setRetireForm({ ...retireForm, password: event.target.value })} required /></Field>}
       <Field label={t("server.retireConfirmation", { name: retiringServer?.name ?? "" })}><input value={retireForm.confirmation} onChange={event => setRetireForm({ ...retireForm, confirmation: event.target.value })} placeholder={retiringServer?.name ?? ""} autoComplete="off" required /></Field>
-      <DialogActions><button type="button" className="secondary-button" disabled={retireBusy} onClick={closeRetirement}>{t("common.cancel")}</button><button type="button" className="secondary-button danger" disabled={retireBusy || retireForm.confirmation !== retiringServer?.name} onClick={() => void forceRevokeServer()}><X size={16} />{t("server.forceRevoke")}</button><button className="primary-button" disabled={retireBusy || retireForm.confirmation !== retiringServer?.name}>{retireBusy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{retireBusy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
+      <DialogActions><button type="button" className="secondary-button" disabled={retireBusy} onClick={closeRetirement}>{t("common.cancel")}</button><button type="button" className="secondary-button danger" disabled={retireBusy || retireForm.confirmation !== retiringServer?.name || serverConfirmation !== null} onClick={() => retiringServer && requestServerConfirmation({ type: "force-revoke", server: retiringServer })}><X size={16} />{t("server.forceRevoke")}</button><button className="primary-button" disabled={retireBusy || retireForm.confirmation !== retiringServer?.name || serverConfirmation !== null}>{retireBusy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{retireBusy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
     </form> : retireHostKey ? <div className="enrollment-step">
       {retireError && <ErrorBanner text={retireError} />}
       <div className="fingerprint-status"><ShieldCheck size={28} /><div><strong>{t("server.fingerprint")}</strong><span>{retireForm.host}:{retireForm.port} &middot; {retireHostKey.key_type}</span></div></div>
@@ -290,7 +310,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
   </Dialog>
   <Dialog open={credentialServer !== null} title={t("server.editCredentials")} onClose={() => { if (!credentialBusy) setCredentialServer(null); }}>
     <form onSubmit={saveCredentials}>{credentialError && <ErrorBanner text={credentialError} />}<p className="security-notice">{t("server.credentialsDescription", { name: credentialServer?.name ?? "" })}</p><Field label={t("server.codexProfile")}><select value={credentialForm.codexProfileID} onChange={e => setCredentialForm({ ...credentialForm, codexProfileID: e.target.value })} required><option value="">{t(codexProfiles.length ? "server.selectCodexProfile" : "server.noCodexProfiles")}</option>{codexProfiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} &middot; {profile.model}</option>)}</select></Field><Field label={t("server.gitProfiles")}><div className="credential-profile-options">{gitProfiles.length === 0 && <span className="muted">{t("server.noGitProfile")}</span>}{gitProfiles.map(profile => { const ready = Boolean(profile.commit_name && profile.commit_email); const checked = credentialForm.gitProfileIDs.includes(profile.id); return <label className={`credential-profile-option ${checked ? "selected" : ""} ${ready ? "" : "disabled"}`} key={profile.id}><input type="checkbox" checked={checked} disabled={!ready} onChange={event => setCredentialForm(current => ({ ...current, gitProfileIDs: event.target.checked ? [...current.gitProfileIDs, profile.id] : current.gitProfileIDs.filter(id => id !== profile.id) }))} /><span><strong>{profile.name}</strong><small>{profile.username}{ready ? "" : ` ${String.fromCharCode(183)} ${t("settings.gitIdentityMissing")}`}</small></span></label>; })}</div></Field><DialogActions><button type="button" className="secondary-button" disabled={credentialBusy} onClick={() => setCredentialServer(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={credentialBusy || !credentialForm.codexProfileID}>{credentialBusy ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{credentialBusy ? t("server.credentialsUpdating") : t("server.saveCredentials")}</button></DialogActions></form>
-  </Dialog></div>;
+  </Dialog>{serverConfirmation && <ConfirmDialog open danger title={t(serverConfirmation.type === "force-revoke" ? "server.forceRevoke" : serverConfirmation.type === "agent-update" ? "server.updateAgent" : "server.updateCodex", { version: serverConfirmation.type === "codex-update" ? serverConfirmation.server.codex_target_version : serverConfirmation.server.agent_target_version })} description={serverConfirmationError || undefined} impact={t(serverConfirmation.type === "force-revoke" ? "server.confirmForceRevoke" : serverConfirmation.type === "agent-update" ? "server.confirmUpdate" : "server.confirmCodexUpdate", { name: serverConfirmation.server.name, version: serverConfirmation.type === "codex-update" ? serverConfirmation.server.codex_target_version : serverConfirmation.server.agent_target_version })} confirmLabel={t(serverConfirmation.type === "force-revoke" ? "server.forceRevoke" : serverConfirmation.type === "agent-update" ? "server.updateAgent" : "server.updateCodex", { version: serverConfirmation.type === "codex-update" ? serverConfirmation.server.codex_target_version : serverConfirmation.server.agent_target_version })} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={serverConfirmation.type === "force-revoke" ? retireBusy : updatingServer !== ""} onClose={closeServerConfirmation} onConfirm={() => { if (serverConfirmation.type === "force-revoke") return forceRevokeServer(); if (serverConfirmation.type === "agent-update") return updateAgent(serverConfirmation.server); return updateCodex(serverConfirmation.server); }} />}</div>;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
