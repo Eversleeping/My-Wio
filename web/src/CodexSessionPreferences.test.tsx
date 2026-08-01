@@ -152,3 +152,64 @@ test("restores the saved position after invalidated events finish loading", asyn
   stream = container.querySelector<HTMLElement>(".event-stream")!;
   await waitFor(() => expect(stream).toHaveProperty("scrollTop", 360));
 });
+
+test("keeps the current position and offers a jump button when new events arrive below the reader", async () => {
+  const value = thread("history-reader");
+  let includeNewEvent = false;
+  let streamHeight = 1000;
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? streamHeight : 0; });
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? 400 : 0; });
+  vi.mocked(fetch).mockImplementation(async input => {
+    if (!String(input).includes(`/threads/${value.id}/events`)) return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify([
+      { event_id: "history-1", stream_id: value.id, sequence: 1, kind: "user.message", occurred_at: "2026-07-23T00:00:00Z", payload: { text: "Earlier message" } },
+      ...(includeNewEvent ? [{ event_id: "history-2", stream_id: value.id, sequence: 2, kind: "user.message", occurred_at: "2026-07-23T00:01:00Z", payload: { text: "Incoming message" } }] : [])
+    ]), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+
+  const { container, rerender } = render(sessionView(value));
+  expect(await screen.findByText("Earlier message")).toBeInTheDocument();
+  const stream = container.querySelector<HTMLElement>(".event-stream")!;
+  stream.scrollTop = 200;
+  fireEvent.scroll(stream);
+
+  streamHeight = 1400;
+  includeNewEvent = true;
+  rerender(sessionView(value, 1));
+
+  expect(await screen.findByText("Incoming message")).toBeInTheDocument();
+  expect(stream).toHaveProperty("scrollTop", 200);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "New messages below. Jump to latest" }));
+  expect(stream).toHaveProperty("scrollTop", 1000);
+  expect(screen.queryByRole("button", { name: "New messages below. Jump to latest" })).not.toBeInTheDocument();
+});
+
+test("follows new events when the reader remains close to the bottom", async () => {
+  const value = thread("follow-latest");
+  let includeNewEvent = false;
+  let streamHeight = 1000;
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? streamHeight : 0; });
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? 400 : 0; });
+  vi.mocked(fetch).mockImplementation(async input => {
+    if (!String(input).includes(`/threads/${value.id}/events`)) return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify([
+      { event_id: "follow-1", stream_id: value.id, sequence: 1, kind: "user.message", occurred_at: "2026-07-23T00:00:00Z", payload: { text: "Current message" } },
+      ...(includeNewEvent ? [{ event_id: "follow-2", stream_id: value.id, sequence: 2, kind: "user.message", occurred_at: "2026-07-23T00:01:00Z", payload: { text: "Latest message" } }] : [])
+    ]), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+
+  const { container, rerender } = render(sessionView(value));
+  expect(await screen.findByText("Current message")).toBeInTheDocument();
+  const stream = container.querySelector<HTMLElement>(".event-stream")!;
+  stream.scrollTop = 520;
+  fireEvent.scroll(stream);
+
+  streamHeight = 1400;
+  includeNewEvent = true;
+  rerender(sessionView(value, 1));
+
+  expect(await screen.findByText("Latest message")).toBeInTheDocument();
+  await waitFor(() => expect(stream).toHaveProperty("scrollTop", 1000));
+  expect(screen.queryByRole("button", { name: "New messages below. Jump to latest" })).not.toBeInTheDocument();
+});

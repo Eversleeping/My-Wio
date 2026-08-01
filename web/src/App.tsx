@@ -150,11 +150,15 @@ type FilePreviewSelection = { path: string; line?: number; mode?: "file" | "diff
 type SubagentActivity = { threadID: string; path: string; status: string; message: string; prompt: string; model: string; reasoningEffort: string; updatedAt: string };
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
-type StreamRevisions = Record<string, number>;
+type StreamRevision = { revision: number; minimumSequence: number | null };
+type StreamRevisions = Record<string, StreamRevision>;
 type DataCacheEntry = { data: unknown; dependency: unknown };
+type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number };
 
 const dataCache = new Map<string, DataCacheEntry>();
+const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
 const codexScrollPositions = new Map<string, number>();
+const codexAutoFollowThreshold = 96;
 
 function setScrollTopImmediately(element: HTMLElement, top: number) {
   const scrollBehavior = element.style.scrollBehavior;
@@ -163,10 +167,21 @@ function setScrollTopImmediately(element: HTMLElement, top: number) {
   element.style.scrollBehavior = scrollBehavior;
 }
 
+function latestScrollTop(element: HTMLElement) {
+  return Math.max(0, element.scrollHeight - element.clientHeight);
+}
+
+function isNearCodexStreamBottom(element: HTMLElement) {
+  return latestScrollTop(element) - element.scrollTop <= codexAutoFollowThreshold;
+}
+
 function clearCodexSessionMemory(threadID?: string) {
   const eventPrefix = threadID ? `/threads/${threadID}/events?` : "/threads/";
   for (const path of dataCache.keys()) {
     if (path.startsWith(eventPrefix) && path.includes("/events?")) dataCache.delete(path);
+  }
+  for (const path of threadEventsCache.keys()) {
+    if (!threadID || path.startsWith(`/threads/${threadID}/events?`)) threadEventsCache.delete(path);
   }
   for (const key of codexScrollPositions.keys()) {
     if (!threadID || key.startsWith(`${threadID}:`)) codexScrollPositions.delete(key);
@@ -261,18 +276,25 @@ export default function App() {
     let timer = 0;
     let refreshTimer = 0;
     let stopped = false;
-    const pendingStreams = new Set<string>();
+    const pendingStreams = new Map<string, number | null>();
+    const markPendingStream = (streamID: string, sequence?: number) => {
+      const nextSequence = typeof sequence === "number" && Number.isInteger(sequence) && sequence > 0 ? sequence : null;
+      const current = pendingStreams.get(streamID);
+      if (current === undefined) pendingStreams.set(streamID, nextSequence);
+      else if (current === null || nextSequence === null) pendingStreams.set(streamID, null);
+      else pendingStreams.set(streamID, Math.min(current, nextSequence));
+    };
     const scheduleRefresh = () => {
       if (refreshTimer) return;
       refreshTimer = window.setTimeout(() => {
         refreshTimer = 0;
         setRealtime(value => value + 1);
         if (pendingStreams.size > 0) {
-          const streams = Array.from(pendingStreams);
+          const streams = Array.from(pendingStreams.entries());
           pendingStreams.clear();
           setStreamRevisions(current => {
             const next = { ...current };
-            for (const streamID of streams) next[streamID] = (next[streamID] ?? 0) + 1;
+            for (const [streamID, minimumSequence] of streams) next[streamID] = { revision: (next[streamID]?.revision ?? 0) + 1, minimumSequence };
             return next;
           });
         }
@@ -281,13 +303,13 @@ export default function App() {
     const connect = () => {
       if (stopped) return;
       socket = new WebSocket(socketURL());
-      socket.onopen = () => { setSocketConnected(true); pendingStreams.add("*"); scheduleRefresh(); };
+      socket.onopen = () => { setSocketConnected(true); markPendingStream("*"); scheduleRefresh(); };
       socket.onmessage = messageEvent => {
         try {
           const event = JSON.parse(String(messageEvent.data)) as Partial<StreamEvent>;
-          pendingStreams.add(event.stream_id || "*");
+          markPendingStream(event.stream_id || "*", event.sequence);
         } catch {
-          pendingStreams.add("*");
+          markPendingStream("*");
         }
         scheduleRefresh();
       };
@@ -1084,7 +1106,7 @@ export function CodexPage({ realtime, streamRevisions, approvals, approvalSignal
         })}</div>}
       </section>;
     })}</div></section><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} taskID={active?.id ?? ""} taskStatus={active?.status ?? ""} realtime={realtime} notify={notify} writable={activeWorkspace?.management_mode === "managed"} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
-    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={`${streamRevisions["*"] ?? 0}:${streamRevisions[active.id] ?? 0}`} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} writable={activeWorkspace?.management_mode === "managed"} notify={notify} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
+    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={streamRevisions[active.id]?.revision ?? 0} globalStreamRevision={streamRevisions["*"]?.revision ?? 0} streamRevision={streamRevisions[active.id]?.revision ?? 0} invalidationSequence={streamRevisions[active.id]?.minimumSequence} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} writable={activeWorkspace?.management_mode === "managed"} notify={notify} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
@@ -1304,10 +1326,10 @@ function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCr
   return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/threads", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;
 }
 
-export function SessionView({ thread, approvals, realtime, reloadApprovals, notify, onOpenFile, onNewTask }: { thread: Thread; approvals: Approval[]; realtime: unknown; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; onNewTask: () => void }) {
+export function SessionView({ thread, approvals, realtime, globalStreamRevision = 0, streamRevision = 0, invalidationSequence, reloadApprovals, notify, onOpenFile, onNewTask }: { thread: Thread; approvals: Approval[]; realtime: unknown; globalStreamRevision?: number; streamRevision?: number; invalidationSequence?: number | null; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; onNewTask: () => void }) {
   const { t } = useI18n();
   const [rawEvents, setRawEvents] = useState(false);
-  const events = useData<StreamEvent[]>(`/threads/${thread.id}/events?view=${rawEvents ? "raw" : "conversation"}`, realtime, true);
+  const events = useThreadEvents(thread.id, rawEvents, realtime, globalStreamRevision, streamRevision, invalidationSequence);
   const [prompt, setPrompt] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
@@ -1346,6 +1368,9 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   const goalRequestRef = useRef(0);
   const streamRef = useRef<HTMLDivElement>(null);
   const restoredScrollKeyRef = useRef("");
+  const autoFollowStreamRef = useRef(true);
+  const eventCountRef = useRef<{ key: string; count: number } | null>(null);
+  const [hasNewEventsBelow, setHasNewEventsBelow] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const slashKeyboardRef = useRef<((event: ReactKeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
   const sourceEvents = events.data ?? [];
@@ -1516,15 +1541,36 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   useEffect(() => { ++goalRequestRef.current; setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); setGoal(null); setStatusSnapshot(null); setMcpSnapshot(null); setSkillsSnapshot(null); setSubagentsOpen(false); void loadGoal(); }, [thread.id]);
   const scrollStateKey = `${thread.id}:${rawEvents ? "raw" : "conversation"}`;
   const eventsReady = events.data !== null;
+  const scrollToLatestEvent = () => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    setScrollTopImmediately(stream, latestScrollTop(stream));
+    codexScrollPositions.set(scrollStateKey, stream.scrollTop);
+    autoFollowStreamRef.current = true;
+    setHasNewEventsBelow(false);
+  };
   useLayoutEffect(() => {
     const stream = streamRef.current;
     if (!stream || !eventsReady) return;
     if (restoredScrollKeyRef.current !== scrollStateKey) {
-      setScrollTopImmediately(stream, codexScrollPositions.get(scrollStateKey) ?? stream.scrollHeight);
+      setScrollTopImmediately(stream, codexScrollPositions.get(scrollStateKey) ?? latestScrollTop(stream));
       restoredScrollKeyRef.current = scrollStateKey;
+      autoFollowStreamRef.current = isNearCodexStreamBottom(stream);
+      eventCountRef.current = { key: scrollStateKey, count: sourceEvents.length };
+      setHasNewEventsBelow(false);
       return;
     }
-    stream.scrollTop = stream.scrollHeight;
+    const previous = eventCountRef.current;
+    const hasAppendedEvents = previous?.key === scrollStateKey && sourceEvents.length > previous.count;
+    eventCountRef.current = { key: scrollStateKey, count: sourceEvents.length };
+    if (!hasAppendedEvents) return;
+    if (autoFollowStreamRef.current) {
+      setScrollTopImmediately(stream, latestScrollTop(stream));
+      codexScrollPositions.set(scrollStateKey, stream.scrollTop);
+      setHasNewEventsBelow(false);
+      return;
+    }
+    setHasNewEventsBelow(true);
   }, [eventsReady, scrollStateKey, sourceEvents.length]);
   useLayoutEffect(() => {
     const stream = streamRef.current;
@@ -1581,8 +1627,9 @@ export function SessionView({ thread, approvals, realtime, reloadApprovals, noti
   };
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{(thread.status === "queued" || thread.status === "running") && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, event.currentTarget.scrollTop); }}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { const stream = event.currentTarget; autoFollowStreamRef.current = isNearCodexStreamBottom(stream); if (autoFollowStreamRef.current) setHasNewEventsBelow(false); if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); }}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</div>
     {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <form className="composer" onSubmit={send}>
+      {hasNewEventsBelow && <button type="button" className="secondary-button" aria-label={t("codex.jumpToLatestMessages")} onClick={scrollToLatestEvent}><ChevronDown size={16} />{t("codex.newMessages")}</button>}
       {subagents.length > 0 && <button type="button" className="subagent-progress-row" onClick={() => setSubagentsOpen(true)}><Users size={16} /><span><strong>{t("codex.subagentActivity")}</strong><small>{activeSubagents.length > 0 ? t("codex.subagentsRunning", { count: activeSubagents.length }) : t("codex.subagentsRecorded", { count: subagents.length })}</small></span><ChevronRight size={15} /></button>}
       {goal && <div className="goal-progress-row"><Target size={16} /><span title={goal.objective}><strong>{goal.objective}</strong><small>{t("codex.goalUsage", { tokens: goal.tokens_used, seconds: goal.time_used_seconds })}</small></span><Status value={goalRuntimeStatus} /><div>{goal.status === "active" ? <button type="button" className="icon-button" disabled={nativeBusy === "goal"} title={t("codex.pauseGoal")} aria-label={t("codex.pauseGoal")} onClick={() => void updateGoalStatus("paused")}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={14} /> : <Pause size={14} />}</button> : <button type="button" className="icon-button" disabled={nativeBusy === "goal"} title={t("codex.resumeGoal")} aria-label={t("codex.resumeGoal")} onClick={() => void updateGoalStatus("active")}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}</button>}<button type="button" className="icon-button" title={t("codex.editGoal")} aria-label={t("codex.editGoal")} onClick={() => setGoalOpen(true)}><Pencil size={14} /></button><button type="button" className="icon-button danger" disabled={nativeBusy === "goal"} title={t("codex.clearGoal")} aria-label={t("codex.clearGoal")} onClick={() => void clearCurrentGoal()}><Trash2 size={14} /></button></div></div>}
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
@@ -1790,87 +1837,27 @@ function MessageImages({ sources }: { sources: string[] }) {
   return <><div className={"message-images " + (sources.length === 1 ? "single" : "")}>{sources.map((source, index) => <button type="button" key={source.slice(0, 80) + ":" + index} title={t("codex.openImage")} onClick={() => setActive(source)}><img src={source} alt={t("codex.messageImage")} loading="lazy" referrerPolicy="no-referrer" /></button>)}</div>{active && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={t("codex.messageImage")} onClick={() => setActive("")}><button type="button" className="image-lightbox-close" title={t("common.close")} aria-label={t("common.close")} onClick={() => setActive("")}><X size={19} /></button><img src={active} alt={t("codex.messageImage")} referrerPolicy="no-referrer" onClick={event => event.stopPropagation()} /></div>}</>;
 }
 
-function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; onClose: () => void }) {
+export function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; onClose: () => void }) {
   const { t } = useI18n();
-  const [requestVersion, setRequestVersion] = useState(0);
-  const [requesting, setRequesting] = useState(false);
-  const [requestError, setRequestError] = useState("");
-  const [requestedAt, setRequestedAt] = useState(0);
-  const endpoint = `/workspaces/${workspaceID}/file-preview?path=${encodeURIComponent(selection.path)}`;
-  const preview = useData<WorkspaceFilePreview>(endpoint, `${realtime}:${requestVersion}`);
-  const requestPreview = useCallback(async () => {
-    setRequesting(true);
-    setRequestError("");
-    setRequestedAt(Date.now());
-    try {
-      await post(`/workspaces/${workspaceID}/file-preview`, { path: selection.path });
-      preview.reload();
-    } catch (error) {
-      setRequestError(message(error));
-    } finally {
-      setRequesting(false);
-    }
-  }, [preview.reload, selection.path, workspaceID]);
-  useEffect(() => { void requestPreview(); }, [requestPreview]);
-  const data = preview.data?.path === selection.path ? preview.data : null;
-  useEffect(() => {
-    if (!data || data.status !== "loading") return;
-    const timer = window.setInterval(() => {
-      if (requestedAt > 0 && Date.now() - requestedAt >= 20_000) {
-        setRequestError(t("codex.previewTimedOut"));
-        return;
-      }
-      preview.reload();
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [data?.status, preview.reload, requestedAt, t]);
-  const loading = requesting || preview.loading || !data || data.status === "idle" || data.status === "loading";
-  const error = requestError || preview.error || data?.error || "";
+  const preview = useWorkspacePreview<WorkspaceFilePreview>(workspaceID, selection.path, "file-preview", realtime, t("codex.previewTimedOut"));
+  const data = preview.data;
+  const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
+  const error = preview.error || data?.error || "";
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
-  return <section className="file-preview-panel"><header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={() => { setRequestVersion(value => value + 1); void requestPreview(); }}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}</div></section>;
+  return <section className="file-preview-panel"><header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={preview.requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}</div></section>;
 }
 
 export function FileDiffPane({ workspaceID, selection, realtime, writable, notify, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable: boolean; notify: (text: string) => void; onClose: () => void }) {
   const { t } = useI18n();
-  const [requestVersion, setRequestVersion] = useState(0);
-  const [requesting, setRequesting] = useState(false);
   const [discarding, setDiscarding] = useState(false);
-  const [requestError, setRequestError] = useState("");
-  const [requestedAt, setRequestedAt] = useState(0);
-  const endpoint = `/workspaces/${workspaceID}/diff-preview?path=${encodeURIComponent(selection.path)}`;
-  const preview = useData<WorkspaceDiffPreview>(endpoint, `${realtime}:${requestVersion}`);
-  const requestPreview = useCallback(async () => {
-    setRequesting(true);
-    setRequestError("");
-    setRequestedAt(Date.now());
-    try {
-      await post(`/workspaces/${workspaceID}/diff-preview`, { path: selection.path });
-      preview.reload();
-    } catch (error) {
-      setRequestError(message(error));
-    } finally {
-      setRequesting(false);
-    }
-  }, [preview.reload, selection.path, workspaceID]);
-  useEffect(() => { void requestPreview(); }, [requestPreview]);
-  const data = preview.data?.path === selection.path ? preview.data : null;
-  useEffect(() => {
-    if (!data || data.status !== "loading") return;
-    const timer = window.setInterval(() => {
-      if (requestedAt > 0 && Date.now() - requestedAt >= 20_000) {
-        setRequestError(t("codex.diffTimedOut"));
-        return;
-      }
-      preview.reload();
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [data?.status, preview.reload, requestedAt, t]);
-  const loading = requesting || preview.loading || !data || data.status === "idle" || data.status === "loading";
-  const error = requestError || preview.error || data?.error || "";
+  const preview = useWorkspacePreview<WorkspaceDiffPreview>(workspaceID, selection.path, "diff-preview", realtime, t("codex.diffTimedOut"));
+  const data = preview.data;
+  const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
+  const error = preview.error || data?.error || "";
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
-  const retry = () => { setRequestVersion(value => value + 1); void requestPreview(); };
+  const retry = preview.retry;
   const discard = async () => {
     if (!writable || discarding || !window.confirm(t("codex.discardFileConfirm", { path: selection.path }))) return;
     setDiscarding(true);
@@ -1884,7 +1871,7 @@ export function FileDiffPane({ workspaceID, selection, realtime, writable, notif
       setDiscarding(false);
     }
   };
-  return <section className="file-preview-panel file-diff-panel"><header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button danger" disabled={!writable || discarding} title={t(writable ? "codex.discardFile" : "project.gitReadOnly")} aria-label={t("codex.discardFile")} onClick={() => void discard()}>{discarding ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}</button><button type="button" className="icon-button" disabled={requesting || discarding} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} /></Suspense>}</> : null}</div></section>;
+  return <section className="file-preview-panel file-diff-panel"><header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button danger" disabled={!writable || discarding} title={t(writable ? "codex.discardFile" : "project.gitReadOnly")} aria-label={t("codex.discardFile")} onClick={() => void discard()}>{discarding ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}</button><button type="button" className="icon-button" disabled={preview.requesting || discarding} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} /></Suspense>}</> : null}</div></section>;
 }
 
 function SubagentEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> }) {
@@ -2418,6 +2405,193 @@ function PageLoading() { return <div className="page-loading"><LoaderCircle clas
 function ErrorState({ error, reload }: { error: string; reload: () => void }) { const { t } = useI18n(); return <div className="error-state"><AlertTriangle size={25} /><strong>{t("error.load")}</strong><span>{error}</span><button className="secondary-button" onClick={reload}><RefreshCw size={16} />{t("common.retry")}</button></div>; }
 
 interface PageProps { realtime: number; notify: (text: string) => void }
+const previewPollDelays = [750, 1_500, 3_000, 6_000];
+const previewPollTimeout = 20_000;
+type WorkspacePreviewSnapshot = { path: string; status: string; error: string };
+
+function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: string, path: string, kind: "file-preview" | "diff-preview", realtime: number, timeoutMessage: string) {
+  const key = `${workspaceID}:${kind}:${path}`;
+  const endpoint = `/workspaces/${workspaceID}/${kind}?path=${encodeURIComponent(path)}`;
+  const [requestNonce, setRequestNonce] = useState(0);
+  const [state, setState] = useState<{ key: string; data: T | null; error: string; loading: boolean; requesting: boolean }>({ key: "", data: null, error: "", loading: false, requesting: false });
+  const confirmRef = useRef<(() => void) | null>(null);
+  const lastRealtimeRef = useRef(realtime);
+  const retry = useCallback(() => setRequestNonce(value => value + 1), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    let started = false;
+    let checking = false;
+    let waitingForTerminalState = true;
+    let pollAttempt = 0;
+    let timer = 0;
+    let startedAt = 0;
+    let hiddenAt = document.hidden ? Date.now() : 0;
+    let hiddenDuration = 0;
+    const clearTimer = () => { if (timer) { window.clearTimeout(timer); timer = 0; } };
+    const visibleElapsed = () => startedAt ? Date.now() - startedAt - hiddenDuration - (hiddenAt ? Date.now() - hiddenAt : 0) : 0;
+    const fail = (error: string) => {
+      if (!active) return;
+      waitingForTerminalState = false;
+      clearTimer();
+      setState(current => current.key === key ? { ...current, error, loading: false, requesting: false } : current);
+    };
+    const scheduleConfirmation = () => {
+      if (!active || !waitingForTerminalState || document.hidden) return;
+      const remaining = previewPollTimeout - visibleElapsed();
+      if (remaining <= 0) { fail(timeoutMessage); return; }
+      const delay = previewPollDelays[Math.min(pollAttempt, previewPollDelays.length - 1)];
+      pollAttempt += 1;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        if (!document.hidden) void confirm();
+      }, Math.min(delay, remaining));
+    };
+    const confirm = async () => {
+      if (!active || !waitingForTerminalState || checking || document.hidden) return;
+      checking = true;
+      try {
+        const snapshot = await api<T>(endpoint, { signal: controller.signal });
+        if (!active) return;
+        const terminal = snapshot.status === "succeeded" || snapshot.status === "failed";
+        if (terminal) {
+          waitingForTerminalState = false;
+          clearTimer();
+        }
+        setState({ key, data: snapshot, error: snapshot.status === "failed" ? snapshot.error : "", loading: !terminal, requesting: false });
+        if (!terminal) scheduleConfirmation();
+      } catch (error) {
+        if (!active || controller.signal.aborted) return;
+        fail(message(error));
+      } finally {
+        checking = false;
+      }
+    };
+    const start = async () => {
+      if (!active || started || document.hidden) return;
+      started = true;
+      startedAt = Date.now();
+      setState({ key, data: null, error: "", loading: true, requesting: true });
+      try {
+        await api(`/workspaces/${workspaceID}/${kind}`, { method: "POST", body: JSON.stringify({ path }), signal: controller.signal });
+        if (!active) return;
+        setState(current => current.key === key ? { ...current, requesting: false } : current);
+        await confirm();
+      } catch (error) {
+        if (!active || controller.signal.aborted) return;
+        fail(message(error));
+      }
+    };
+    const confirmCurrent = () => { void confirm(); };
+    confirmRef.current = confirmCurrent;
+    const visibilityChanged = () => {
+      if (document.hidden) {
+        if (!hiddenAt) hiddenAt = Date.now();
+        clearTimer();
+        return;
+      }
+      if (hiddenAt) { hiddenDuration += Date.now() - hiddenAt; hiddenAt = 0; }
+      if (!started) void start();
+      else void confirm();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    if (!document.hidden) void start();
+    else setState({ key, data: null, error: "", loading: true, requesting: false });
+    return () => {
+      active = false;
+      clearTimer();
+      controller.abort();
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      if (confirmRef.current === confirmCurrent) confirmRef.current = null;
+    };
+  }, [endpoint, key, kind, path, requestNonce, timeoutMessage, workspaceID]);
+
+  useEffect(() => {
+    if (lastRealtimeRef.current === realtime) return;
+    lastRealtimeRef.current = realtime;
+    confirmRef.current?.();
+  }, [realtime]);
+
+  const current = state.key === key ? state : { key, data: null, error: "", loading: true, requesting: false };
+  return { ...current, retry };
+}
+
+function mergeThreadEvents(existing: StreamEvent[], incoming: StreamEvent[]) {
+  const eventIDs = new Set<string>();
+  const sequences = new Set<number>();
+  const merged: StreamEvent[] = [];
+  for (const event of [...existing, ...incoming]) {
+    if (eventIDs.has(event.event_id) || sequences.has(event.sequence)) continue;
+    eventIDs.add(event.event_id);
+    sequences.add(event.sequence);
+    merged.push(event);
+  }
+  return merged.sort((left, right) => left.sequence - right.sequence);
+}
+
+function latestEventSequence(events: StreamEvent[]) {
+  return events.reduce((latest, event) => Math.max(latest, event.sequence), 0);
+}
+
+function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown, globalRevision = 0, streamRevision = 0, invalidationSequence?: number | null) {
+  const view = rawEvents ? "raw" : "conversation";
+  const path = `/threads/${threadID}/events?view=${view}`;
+  const [state, setState] = useState<{ path: string; data: StreamEvent[] | null; error: string; loading: boolean }>({ path: "", data: null, error: "", loading: false });
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const appliedReloadNonceRef = useRef(0);
+  const reload = useCallback(() => setReloadNonce(value => value + 1), []);
+
+  useEffect(() => {
+    const cached = threadEventsCache.get(path);
+    const manuallyReloaded = reloadNonce !== appliedReloadNonceRef.current;
+    appliedReloadNonceRef.current = reloadNonce;
+    const initialLoad = !cached;
+    const currentMaximumSequence = latestEventSequence(cached?.events ?? []);
+    const globalResync = !initialLoad && cached.globalRevision !== globalRevision;
+    const streamChanged = !initialLoad && cached.streamRevision !== streamRevision;
+    const hasSafeIncrementalCursor = typeof invalidationSequence === "number" && Number.isInteger(invalidationSequence) && invalidationSequence > 0 && invalidationSequence > currentMaximumSequence;
+    const windowReload = globalResync || (streamChanged && !hasSafeIncrementalCursor);
+    const incrementalLoad = !initialLoad && !windowReload && (manuallyReloaded || streamChanged || !Object.is(cached.dependency, realtime));
+    if (!initialLoad && !windowReload && !incrementalLoad) {
+      setState({ path, data: cached.events, error: "", loading: false });
+      return;
+    }
+
+    const controller = new AbortController();
+    let active = true;
+    setState({ path, data: cached?.events ?? null, error: "", loading: !cached });
+    const load = async () => {
+      let events = initialLoad || windowReload ? [] : cached?.events ?? [];
+      let after = latestEventSequence(events);
+      try {
+        let page: StreamEvent[];
+        do {
+          const requestPath = initialLoad || windowReload ? path : `${path}&after=${after}&limit=1000`;
+          page = await api<StreamEvent[]>(requestPath, { signal: controller.signal });
+          if (!active) return;
+          events = mergeThreadEvents(events, page);
+          const nextAfter = latestEventSequence(page);
+          if (initialLoad || windowReload || page.length < 1000 || nextAfter <= after) break;
+          after = nextAfter;
+        } while (true);
+        if (!active) return;
+        threadEventsCache.set(path, { events, dependency: realtime, globalRevision, streamRevision });
+        setState({ path, data: events, error: "", loading: false });
+      } catch (error) {
+        if (!active || controller.signal.aborted) return;
+        setState({ path, data: cached?.events ?? null, error: message(error), loading: false });
+      }
+    };
+    void load();
+    return () => { active = false; controller.abort(); };
+  }, [path, realtime, globalRevision, streamRevision, invalidationSequence, reloadNonce]);
+
+  const cached = threadEventsCache.get(path);
+  const current = state.path === path ? state : { path, data: cached?.events ?? null, error: "", loading: !cached };
+  return { data: current.data, error: current.error, loading: current.loading, reload };
+}
+
 function useData<T>(path: string | null, dependency: unknown, cache = false) {
   const [result, setResult] = useState<{ path: string | null; data: T | null }>({ path: null, data: null }); const [failure, setFailure] = useState<{ path: string | null; text: string }>({ path: null, text: "" }); const [settledPath, setSettledPath] = useState<string | null>(null); const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion(value => value + 1), []);
