@@ -138,12 +138,14 @@ type StreamRevision = { revision: number; minimumSequence: number | null };
 type StreamRevisions = Record<string, StreamRevision>;
 type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean };
 type ThreadListPage = { items: Thread[]; has_more: boolean; next: number | null };
+type AuditListPage = { items: AuditEntry[]; has_more: boolean; next: number | null };
 
 const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
 const codexScrollPositions = new Map<string, number>();
 const codexAutoFollowThreshold = 96;
 const threadEventsPageSize = 500;
 const threadListPageSize = 50;
+const auditListPageSize = 50;
 const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "deployments", "monitoring", "settings", "approvals"];
 const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, deployments: 0, monitoring: 0, settings: 0, approvals: 0 });
 
@@ -490,6 +492,81 @@ function useThreadList(archived: boolean, realtime: unknown) {
       }
     })();
   }, [archived, firstPage.data]);
+  const reload = useCallback(() => firstPage.reload(), [firstPage.reload]);
+  return { data: firstPage.data ? items : null, error: firstPage.error, loading: firstPage.loading, reload, hasMore, loadingMore, loadError, loadMore };
+}
+
+function mergeAuditEntries(...pages: AuditEntry[][]) {
+  const merged: AuditEntry[] = [];
+  const seen = new Set<string>();
+  for (const page of pages) for (const entry of page) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    merged.push(entry);
+  }
+  return merged;
+}
+
+function useAuditList(realtime: unknown) {
+  const firstPage = useData<AuditListPage>(`/audit?limit=${auditListPageSize}`, realtime);
+  const [tail, setTail] = useState<AuditEntry[]>([]);
+  const [tailLoaded, setTailLoaded] = useState(false);
+  const [tailNext, setTailNext] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const requestRef = useRef(0);
+  const tailRef = useRef(tail);
+  const tailLoadedRef = useRef(tailLoaded);
+  tailRef.current = tail;
+  tailLoadedRef.current = tailLoaded;
+  useEffect(() => () => { requestRef.current += 1; }, []);
+  const items = useMemo(() => mergeAuditEntries(firstPage.data?.items ?? [], tail), [firstPage.data?.items, tail]);
+  const next = tailLoaded ? tailNext : firstPage.data?.next ?? null;
+  const hasMore = tailLoaded ? tailNext !== null : Boolean(firstPage.data?.has_more);
+  const loadMore = useCallback(async () => {
+    if (loadingMore || next === null) return;
+    const request = ++requestRef.current;
+    setLoadingMore(true);
+    setLoadError("");
+    try {
+      const page = await api<AuditListPage>(`/audit?limit=${auditListPageSize}&offset=${next}`);
+      if (request !== requestRef.current) return;
+      setTail(current => mergeAuditEntries(current, page.items));
+      setTailLoaded(true);
+      setTailNext(page.next);
+    } catch (error) {
+      if (request === requestRef.current) setLoadError(message(error));
+    } finally {
+      if (request === requestRef.current) setLoadingMore(false);
+    }
+  }, [loadingMore, next]);
+  useEffect(() => {
+    if (!firstPage.data || !tailLoadedRef.current) return;
+    const loadedTailCount = tailRef.current.length;
+    if (loadedTailCount === 0) return;
+    const request = ++requestRef.current;
+    setLoadingMore(true);
+    setLoadError("");
+    void (async () => {
+      try {
+        const refreshed: AuditEntry[] = [];
+        let offset: number | null = auditListPageSize;
+        while (offset !== null && refreshed.length < loadedTailCount) {
+          const page: AuditListPage = await api<AuditListPage>(`/audit?limit=${auditListPageSize}&offset=${offset}`);
+          if (request !== requestRef.current) return;
+          refreshed.push(...page.items);
+          offset = page.next;
+        }
+        if (request !== requestRef.current) return;
+        setTail(mergeAuditEntries(refreshed));
+        setTailNext(offset);
+      } catch (error) {
+        if (request === requestRef.current) setLoadError(message(error));
+      } finally {
+        if (request === requestRef.current) setLoadingMore(false);
+      }
+    })();
+  }, [firstPage.data]);
   const reload = useCallback(() => firstPage.reload(), [firstPage.reload]);
   return { data: firstPage.data ? items : null, error: firstPage.error, loading: firstPage.loading, reload, hasMore, loadingMore, loadError, loadMore };
 }
@@ -1890,7 +1967,7 @@ export function SettingsPage({ realtime, notify }: PageProps) {
   const codexSettings = useData<CodexCLISettings>("/settings/codex-cli", realtime);
   const profiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
   const secrets = useData<SecretSet[]>("/secret-sets", realtime);
-  const audit = useData<AuditEntry[]>("/audit", realtime);
+  const audit = useAuditList(realtime);
   const scheduledTasks = useData<ScheduledTask[]>("/scheduled-tasks", realtime);
   const threads = useData<Thread[]>("/threads", realtime);
   const [profileDialog, setProfileDialog] = useState(false);
@@ -1967,7 +2044,7 @@ export function SettingsPage({ realtime, notify }: PageProps) {
       <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code" title={profile.endpoint}>{profile.endpoint}</code></td><td>{profile.kind === "codex" ? <code>{profile.model}</code> : <div className="cell-main"><span className="inline"><UserRound size={14} />{profile.username}</span><small>{profile.commit_name && profile.commit_email ? `${profile.commit_name} · ${profile.commit_email}` : t("settings.gitIdentityMissing")}</small></div>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "credential-profile", profile })}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
     </Section>
     <Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setSecretDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "secret-set", secret: item })}><X size={16} /></button></td></tr>)}</DataTable></Section>
-    <Section title={t("settings.auditLog")} icon={<Clipboard size={18} />}><DataTable headers={[t("column.action"), t("column.resource"), t("column.address"), t("column.time")]} empty={t("settings.noAudit")}>{(audit.data ?? []).map(item => <tr key={item.id}><td><code>{item.action}</code></td><td>{item.resource_type}{item.resource_id ? ` · ${shortSHA(item.resource_id)}` : ""}</td><td><code>{item.ip_address}</code></td><td>{formatDate(item.occurred_at)}</td></tr>)}</DataTable></Section>
+    <Section title={t("settings.auditLog")} icon={<Clipboard size={18} />}><DataTable headers={[t("column.action"), t("column.resource"), t("column.address"), t("column.time")]} empty={t("settings.noAudit")}>{(audit.data ?? []).map(item => <tr key={item.id}><td><code>{item.action}</code></td><td>{item.resource_type}{item.resource_id ? ` · ${shortSHA(item.resource_id)}` : ""}</td><td><code>{item.ip_address}</code></td><td>{formatDate(item.occurred_at)}</td></tr>)}</DataTable>{audit.loadError && <div className="snapshot-notice warning"><AlertTriangle size={15} />{audit.loadError}</div>}{audit.hasMore && <div className="history-loader"><button type="button" className="secondary-button small" disabled={audit.loadingMore} onClick={() => void audit.loadMore()}>{audit.loadingMore ? <LoaderCircle className="spin" size={15} /> : <ArrowDownToLine size={15} />}{t(audit.loadingMore ? "settings.loadingMoreAudit" : "settings.loadMoreAudit")}</button></div>}</Section>
     <Dialog open={profileDialog} title={t(profileForm.id ? "settings.editProfile" : "settings.newProfile")} onClose={() => { if (!profileBusy) setProfileDialog(false); }} wide><form onSubmit={saveProfile}>
       <div className="segmented-control" role="tablist" aria-label={t("settings.type")}><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "codex"} aria-selected={profileForm.kind === "codex"} className={profileForm.kind === "codex" ? "active" : ""} onClick={() => changeProfileKind("codex")}><Code2 size={15} />{t("settings.codexType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "git"} aria-selected={profileForm.kind === "git"} className={profileForm.kind === "git" ? "active" : ""} onClick={() => changeProfileKind("git")}><GitBranch size={15} />{t("settings.gitType")}</button></div>
       <div className="form-grid"><Field label={t("settings.name")}><input value={profileForm.name} onChange={e => setProfileForm({ ...profileForm, name: e.target.value })} required /></Field><Field label={t("settings.endpoint")}><input type="url" value={profileForm.endpoint} onChange={e => setProfileForm({ ...profileForm, endpoint: e.target.value })} required /></Field></div>

@@ -98,12 +98,20 @@ const (
 	threadTitleLimit         = 200
 	defaultThreadsPageLimit  = 50
 	maxThreadsPageLimit      = 100
+	defaultAuditPageLimit    = 50
+	maxAuditPageLimit        = 100
 )
 
 type threadListPageResponse struct {
 	Items   []store.Thread `json:"items"`
 	HasMore bool           `json:"has_more"`
 	Next    *int           `json:"next"`
+}
+
+type auditListPageResponse struct {
+	Items   []auditEntry `json:"items"`
+	HasMore bool         `json:"has_more"`
+	Next    *int         `json:"next"`
 }
 
 func normalizeServerMetadata(address, configuration, notes string) (store.ServerMetadata, error) {
@@ -2649,6 +2657,37 @@ type auditEntry struct {
 }
 
 func (a *API) auditLog(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	limitValues, hasLimit := query["limit"]
+	offsetValues, hasOffset := query["offset"]
+	if hasLimit || hasOffset {
+		limit, err := parseThreadPageValue(limitValues, hasLimit, "limit", defaultAuditPageLimit, true)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if limit > maxAuditPageLimit {
+			limit = maxAuditPageLimit
+		}
+		offset, err := parseThreadPageValue(offsetValues, hasOffset, "offset", 0, false)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		page, err := a.store.ListAuditPage(r.Context(), limit, offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not list audit log")
+			return
+		}
+		entries := makeAuditEntries(page.Items)
+		var next *int
+		if page.HasMore {
+			value := offset + len(entries)
+			next = &value
+		}
+		writeJSON(w, http.StatusOK, auditListPageResponse{Items: entries, HasMore: page.HasMore, Next: next})
+		return
+	}
 	var entries []auditEntry
 	err := a.store.DB.SelectContext(r.Context(), &entries, "SELECT id,action,resource_type,resource_id,detail,ip_address,occurred_at FROM audit_log ORDER BY occurred_at DESC LIMIT 500")
 	if err != nil {
@@ -2659,6 +2698,14 @@ func (a *API) auditLog(w http.ResponseWriter, r *http.Request) {
 		entries[index].Detail = json.RawMessage(entries[index].DetailText)
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+func makeAuditEntries(records []store.AuditRecord) []auditEntry {
+	entries := make([]auditEntry, len(records))
+	for index, record := range records {
+		entries[index] = auditEntry{ID: record.ID, Action: record.Action, ResourceType: record.ResourceType, ResourceID: record.ResourceID, Detail: json.RawMessage(record.Detail), IPAddress: record.IPAddress, OccurredAt: record.OccurredAt}
+	}
+	return entries
 }
 
 func validGitRemote(remote string) bool {

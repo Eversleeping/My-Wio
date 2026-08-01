@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -908,6 +909,53 @@ func TestValidTurnImages(t *testing.T) {
 	}
 	if validTurnImages([]protocol.TurnImage{{DataURL: "data:image/png;base64,not-base64"}}) {
 		t.Fatal("invalid base64 was accepted")
+	}
+}
+
+func TestAuditLogSupportsOptionalBoundedPagination(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 2, 13, 0, 0, 0, time.UTC)
+	for index, action := range []string{"oldest", "middle", "newest"} {
+		if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO audit_log(id,user_id,action,resource_type,resource_id,detail,ip_address,occurred_at) VALUES(?,?,?,?,?,?,?,?)"), "audit-"+action, "user", action, "thread", action, `{}`, "127.0.0.1", base.Add(time.Duration(index)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := resourceTestAPI(database)
+
+	legacyResponse := directJSONRequest(t, http.MethodGet, "/api/audit", nil, nil, api.auditLog)
+	var legacy []auditEntry
+	if legacyResponse.Code != http.StatusOK || json.Unmarshal(legacyResponse.Body.Bytes(), &legacy) != nil || len(legacy) != 3 || legacy[0].Action != "newest" || legacy[2].Action != "oldest" {
+		t.Fatalf("legacy audit response must remain an ordered array: %d %#v", legacyResponse.Code, legacy)
+	}
+
+	firstResponse := directJSONRequest(t, http.MethodGet, "/api/audit?limit=2", nil, nil, api.auditLog)
+	var first auditListPageResponse
+	if firstResponse.Code != http.StatusOK || json.Unmarshal(firstResponse.Body.Bytes(), &first) != nil || !first.HasMore || first.Next == nil || *first.Next != 2 || len(first.Items) != 2 || first.Items[0].Action != "newest" || first.Items[1].Action != "middle" {
+		t.Fatalf("unexpected first audit page: %d %#v", firstResponse.Code, first)
+	}
+	secondResponse := directJSONRequest(t, http.MethodGet, "/api/audit?limit=2&offset=2", nil, nil, api.auditLog)
+	var second auditListPageResponse
+	if secondResponse.Code != http.StatusOK || json.Unmarshal(secondResponse.Body.Bytes(), &second) != nil || second.HasMore || second.Next != nil || len(second.Items) != 1 || second.Items[0].Action != "oldest" {
+		t.Fatalf("unexpected second audit page: %d %#v", secondResponse.Code, second)
+	}
+
+	for _, target := range []string{"/api/audit?limit=", "/api/audit?limit=0", "/api/audit?limit=-1", "/api/audit?limit=one", "/api/audit?limit=1&limit=2", "/api/audit?offset=", "/api/audit?offset=-1", "/api/audit?offset=one", "/api/audit?offset=1&offset=2"} {
+		response := directJSONRequest(t, http.MethodGet, target, nil, nil, api.auditLog)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid audit pagination %q returned %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+
+	for index := 0; index < 101; index++ {
+		if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO audit_log(id,user_id,action,resource_type,resource_id,detail,ip_address,occurred_at) VALUES(?,?,?,?,?,?,?,?)"), "audit-cap-"+strconv.Itoa(index), "user", "cap", "thread", "cap", `{}`, "127.0.0.1", base.Add(time.Duration(index+10)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cappedResponse := directJSONRequest(t, http.MethodGet, "/api/audit?limit=1000", nil, nil, api.auditLog)
+	var capped auditListPageResponse
+	if cappedResponse.Code != http.StatusOK || json.Unmarshal(cappedResponse.Body.Bytes(), &capped) != nil || !capped.HasMore || capped.Next == nil || *capped.Next != maxAuditPageLimit || len(capped.Items) != maxAuditPageLimit {
+		t.Fatalf("audit page limit was not capped: %d %#v", cappedResponse.Code, capped)
 	}
 }
 

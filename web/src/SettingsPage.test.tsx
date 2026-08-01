@@ -26,7 +26,7 @@ function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Re
     if (url === "/api/settings/codex-cli") return jsonResponse({ target_version: "1.0.0", versions: ["1.0.0"] });
     if (url === "/api/credential-profiles") return jsonResponse([profile]);
     if (url === "/api/secret-sets") return jsonResponse([secretSet]);
-    if (url === "/api/audit") return jsonResponse([]);
+    if (url.startsWith("/api/audit?")) return jsonResponse({ items: [], has_more: false, next: null });
     if (url === "/api/scheduled-tasks") return jsonResponse([scheduledTask]);
     if (url === "/api/threads") return jsonResponse([]);
     return jsonResponse({ error: `Unexpected request: ${method} ${url}` }, 404);
