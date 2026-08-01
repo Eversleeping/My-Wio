@@ -181,6 +181,14 @@ const codexThread = {
   project_hidden_at: null
 };
 
+const longCodexThreads = Array.from({ length: 55 }, (_, index) => ({
+  ...codexThread,
+  id: `thread-long-${index + 1}`,
+  codex_thread_id: `codex-thread-long-${index + 1}`,
+  title: `Long session ${String(index + 1).padStart(2, "0")}`,
+  updated_at: `2026-08-02T00:${String(index).padStart(2, "0")}:00Z`
+}));
+
 const codexGoalSnapshot = {
   status: "succeeded",
   supported: true,
@@ -529,4 +537,35 @@ test("an authenticated user approves a pending Codex request", async ({ page }, 
   await expect(page.locator(".toast")).toContainText("Approval granted");
   await expect(dialog).not.toBeVisible();
   await expect.poll(() => approvalLoads).toBeGreaterThanOrEqual(2);
+});
+
+test("keeps a long Codex session list bounded and loads the next window", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Long-session pagination is covered at desktop width.");
+  const listRequests: string[] = [];
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/threads" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], has_more: false, next: null } };
+      if (request.path === "/threads" && request.method === "GET") {
+        listRequests.push(request.search);
+        if (request.search === "?limit=50") return { body: { items: longCodexThreads.slice(0, 50), has_more: true, next: 50 } };
+        if (request.search === "?limit=50&offset=50") return { body: { items: longCodexThreads.slice(50), has_more: false, next: null } };
+      }
+      if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
+      if (request.path === `/threads/${longCodexThreads[0].id}/events` && request.method === "GET") return { body: [] };
+      if (request.path === `/threads/${longCodexThreads[0].id}/goal` && request.method === "GET") return { body: codexGoalSnapshot };
+      if (request.path === `/workspaces/${managedWorkspace.id}/files` && request.method === "GET") return { body: workspaceFilesSnapshot };
+      return undefined;
+    }
+  });
+  await page.goto("/?view=codex");
+
+  await expect(page.locator(".thread-select")).toHaveCount(50);
+  await expect(page.getByRole("button", { name: "Load more sessions", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load more sessions", exact: true }).click();
+  await expect(page.locator(".thread-select")).toHaveCount(55);
+  await expect(page.getByText("Long session 55", { exact: true })).toBeVisible();
+  expect(listRequests).toContain("?limit=50");
+  expect(listRequests).toContain("?limit=50&offset=50");
 });
