@@ -1,12 +1,12 @@
-maomi.xin {
+{$WIO_PUBLIC_DOMAIN} {
 	encode zstd gzip
 	route {
 		@websocket {
 			header Connection *Upgrade*
 			header Upgrade websocket
 		}
-		reverse_proxy @websocket 127.0.0.1:18080
-		reverse_proxy 127.0.0.1:18080 {
+		reverse_proxy @websocket 127.0.0.1:{$WIO_HOST_PORT}
+		reverse_proxy 127.0.0.1:{$WIO_HOST_PORT} {
 			transport http {
 				versions h2c
 			}
