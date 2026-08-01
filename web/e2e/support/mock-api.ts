@@ -8,11 +8,28 @@ export type MockAPIRequest = {
 
 export type MockAPIResponse = {
   status?: number;
-  body: unknown;
+} & (
+  | { body: unknown; stream?: never }
+  | { stream: unknown[]; body?: never }
+);
+
+export type MockApplication = {
+  defaultAPIRequests: MockAPIRequest[];
+  unexpectedAPIRequests: MockAPIRequest[];
+  assertNoUnexpectedAPIRequests: () => void;
+};
+
+export type MockDefaultRequestContract = {
+  path: string;
+  method?: string;
+  atLeast?: number;
+  atMost?: number;
 };
 
 type MockApplicationOptions = {
   configured: boolean;
+  /** Minimal bootstrap expectations checked automatically after each test. */
+  expectedDefaultRequests?: MockDefaultRequestContract[];
   /**
    * Per-test API responses. Returning undefined delegates to the bootstrap
    * defaults below; requests without a matching response fail loudly.
@@ -44,11 +61,26 @@ function defaultResponse(path: string, method: string, configured: boolean): Moc
   return undefined;
 }
 
+const applications = new WeakMap<Page, MockApplication>();
+
+function matchingRequests(requests: MockAPIRequest[], contract: MockDefaultRequestContract) {
+  return requests.filter(request => request.path === contract.path && (!contract.method || request.method === contract.method));
+}
+
+/** Fails every test that installed a mock when any API request was not modeled. */
+export function assertMockApplication(page: Page) {
+  const application = applications.get(page);
+  if (!application) throw new Error("E2E test did not install a page-level API mock");
+  application.assertNoUnexpectedAPIRequests();
+}
+
 /**
  * Serves the application bootstrap requests inside the browser. This keeps the
  * tests independent of a Go API, a running WebSocket service, and real users.
  */
-export async function installMockApplication(page: Page, options: MockApplicationOptions) {
+export async function installMockApplication(page: Page, options: MockApplicationOptions): Promise<MockApplication> {
+  const defaultAPIRequests: MockAPIRequest[] = [];
+  const unexpectedAPIRequests: MockAPIRequest[] = [];
   await page.addInitScript(() => window.localStorage.setItem("wio_language", "en"));
   await page.routeWebSocket("**/api/ws", webSocket => {
     // Leave the client connection open. The app only listens for events, so no
@@ -62,9 +94,11 @@ export async function installMockApplication(page: Page, options: MockApplicatio
     const path = url.pathname.replace(/^\/api/, "");
     const method = request.method();
 
-    const response = await options.onAPIRequest?.({ path, method, body: request.postData() ?? null })
-      ?? defaultResponse(path, method, options.configured);
+    const mockRequest = { path, method, body: request.postData() ?? null };
+    const customResponse = await options.onAPIRequest?.(mockRequest);
+    const response = customResponse ?? defaultResponse(path, method, options.configured);
     if (!response) {
+      unexpectedAPIRequests.push(mockRequest);
       await route.fulfill({
         status: 501,
         contentType: "application/json",
@@ -72,11 +106,27 @@ export async function installMockApplication(page: Page, options: MockApplicatio
       });
       return;
     }
+    if (!customResponse) defaultAPIRequests.push(mockRequest);
 
     await route.fulfill({
       status: response.status ?? 200,
-      contentType: "application/json",
-      body: JSON.stringify(response.body)
+      contentType: "stream" in response ? "application/x-ndjson" : "application/json",
+      body: "stream" in response ? response.stream.map(event => JSON.stringify(event)).join("\n") : JSON.stringify(response.body)
     });
   });
+
+  const application = {
+    defaultAPIRequests,
+    unexpectedAPIRequests,
+    assertNoUnexpectedAPIRequests: () => {
+      if (unexpectedAPIRequests.length) throw new Error(`Unexpected E2E API request(s): ${unexpectedAPIRequests.map(request => `${request.method} ${request.path}`).join(", ")}`);
+      for (const contract of options.expectedDefaultRequests ?? []) {
+        const count = matchingRequests(defaultAPIRequests, contract).length;
+        if (count < (contract.atLeast ?? 1)) throw new Error(`Expected default E2E API request was not made: ${contract.method ?? "*"} ${contract.path}`);
+        if (contract.atMost !== undefined && count > contract.atMost) throw new Error(`Default E2E API request exceeded its contract: ${contract.method ?? "*"} ${contract.path} (${count})`);
+      }
+    }
+  };
+  applications.set(page, application);
+  return application;
 }

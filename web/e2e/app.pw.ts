@@ -1,5 +1,16 @@
 import { expect, test } from "@playwright/test";
-import { installMockApplication, type MockAPIRequest } from "./support/mock-api";
+import { assertMockApplication, installMockApplication, type MockAPIRequest } from "./support/mock-api";
+
+const authenticatedBootstrapContract = [
+  { method: "GET", path: "/setup/status" },
+  { method: "GET", path: "/auth/session" }
+];
+
+const setupBootstrapContract = [
+  { method: "GET", path: "/setup/status" },
+  { method: "POST", path: "/setup" },
+  { method: "POST", path: "/auth/login" }
+];
 
 const deploymentTarget = {
   id: "target-1",
@@ -83,6 +94,74 @@ const deploymentServer = {
   created_at: "2026-08-02T00:00:00Z"
 };
 
+const codexProfile = {
+  id: "profile-codex-1",
+  kind: "codex",
+  name: "E2E Codex profile",
+  endpoint: "https://api.example.test/v1",
+  username: "",
+  model: "gpt-5.5",
+  commit_name: "",
+  commit_email: "",
+  updated_at: "2026-08-02T00:00:00Z"
+};
+
+const enrolledServer = {
+  ...deploymentServer,
+  id: "server-enrolled-1",
+  name: "e2e-edge-1",
+  hostname: "e2e-edge-1.example.test",
+  address: "192.0.2.55",
+  codex_profile_id: codexProfile.id,
+  codex_profile_name: codexProfile.name
+};
+
+const workspaceProject = {
+  id: "project-workspace-1",
+  name: "Web console",
+  description: "",
+  remote_url: "",
+  default_branch: "main",
+  status: "ready",
+  provision_error: "",
+  updated_at: "2026-08-02T00:00:00Z",
+  workspace_count: 1,
+  import_status: "",
+  import_message: "",
+  import_server_id: "server-workspace-1",
+  import_server_name: "workspace-host",
+  import_operation_id: "",
+  pinned_at: null,
+  hidden_at: null,
+  archived_at: null
+};
+
+const workspaceServer = {
+  ...deploymentServer,
+  id: "server-workspace-1",
+  name: "workspace-host",
+  hostname: "workspace-host.example.test"
+};
+
+const managedWorkspace = {
+  id: "workspace-managed-1",
+  project_id: workspaceProject.id,
+  server_id: workspaceServer.id,
+  path: "/srv/wio/web-console",
+  display_name: "frontend-main",
+  management_mode: "managed",
+  status: "ready",
+  branch: "main",
+  commit_sha: "8f4c2d1a",
+  dirty: 0,
+  last_git_refresh_at: "2026-08-02T00:00:00Z",
+  git_error: "",
+  kind: "primary",
+  parent_workspace_id: null,
+  server_name: workspaceServer.name,
+  project_name: workspaceProject.name
+};
+
 function deploymentResponse(request: MockAPIRequest) {
   if (request.path === "/deployment-targets" && request.method === "GET") return { body: [deploymentTarget] };
   if (request.path === "/deployments" && request.method === "GET") return { body: [] };
@@ -93,8 +172,17 @@ function deploymentResponse(request: MockAPIRequest) {
   return undefined;
 }
 
+function primaryConsoleResponse(request: MockAPIRequest) {
+  if (["/servers", "/credential-profiles", "/projects", "/workspaces"].includes(request.path) && request.method === "GET") return { body: [] };
+  return undefined;
+}
+
+test.afterEach(({ page }, testInfo) => {
+  if (testInfo.status !== "skipped") assertMockApplication(page);
+});
+
 test("an unconfigured installation can reach sign-in without a backend", async ({ page }) => {
-  await installMockApplication(page, { configured: false });
+  await installMockApplication(page, { configured: false, expectedDefaultRequests: setupBootstrapContract });
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Create administrator" })).toBeVisible();
@@ -122,7 +210,7 @@ test("an unconfigured installation can reach sign-in without a backend", async (
 
 test("an authenticated user can navigate the primary console", async ({ page }) => {
   test.skip(test.info().project.name !== "desktop-chromium", "Primary sidebar navigation is covered at desktop width.");
-  await installMockApplication(page, { configured: true });
+  await installMockApplication(page, { configured: true, expectedDefaultRequests: authenticatedBootstrapContract, onAPIRequest: primaryConsoleResponse });
   await page.goto("/");
 
   const topbar = page.locator("header.topbar");
@@ -139,7 +227,7 @@ test("an authenticated user can navigate the primary console", async ({ page }) 
 
 test("the 390px mobile project opens and closes its responsive navigation", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "Responsive menu is covered by the mobile project.");
-  await installMockApplication(page, { configured: true });
+  await installMockApplication(page, { configured: true, expectedDefaultRequests: authenticatedBootstrapContract, onAPIRequest: primaryConsoleResponse });
   await page.goto("/");
 
   const sidebar = page.locator(".sidebar");
@@ -157,6 +245,7 @@ test("an authenticated user queues a deployment and opens its progress log", asy
   test.skip(testInfo.project.name !== "desktop-chromium", "Deployment workflow is covered at desktop width.");
   await installMockApplication(page, {
     configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
     onAPIRequest: request => {
       if (request.path === `/deployment-targets/${deploymentTarget.id}/deploy` && request.method === "POST") return { body: { deployment: queuedDeployment } };
       return deploymentResponse(request);
@@ -185,6 +274,7 @@ test("a deployment retry recovers from a transient API failure", async ({ page }
   let attempts = 0;
   await installMockApplication(page, {
     configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
     onAPIRequest: request => {
       if (request.path === `/deployment-targets/${deploymentTarget.id}/deploy` && request.method === "POST") {
         attempts += 1;
@@ -207,4 +297,101 @@ test("a deployment retry recovers from a transient API failure", async ({ page }
   await expect(page.locator(".toast")).toContainText("Deployment queued");
   await expect(page.getByRole("dialog", { name: /Deployment.*logs/ })).toBeVisible();
   expect(attempts).toBe(2);
+});
+
+test("an administrator enrolls a server after verifying its SSH fingerprint", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Server enrollment is covered at desktop width.");
+  let installed = false;
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/servers" && request.method === "GET") return { body: installed ? [enrolledServer] : [] };
+      if (request.path === "/credential-profiles" && request.method === "GET") return { body: [codexProfile] };
+      if (request.path === "/servers/ssh/probe" && request.method === "POST") return { body: { fingerprint: "SHA256:e2e-server-fingerprint", key_type: "ssh-ed25519" } };
+      if (request.path === "/servers/ssh/bootstrap-stream" && request.method === "POST") {
+        installed = true;
+        return {
+          stream: [
+            { type: "progress", step: "starting" },
+            { type: "progress", step: "installing_agent", current: 1, total: 2 },
+            { type: "complete", step: "completed", result: { server_id: enrolledServer.id, hostname: enrolledServer.hostname, architecture: "amd64", warnings: [] } }
+          ]
+        };
+      }
+      return undefined;
+    }
+  });
+  await page.goto("/?view=servers");
+
+  await page.getByRole("button", { name: "Enroll server", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Enroll Linux server" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Server name").fill(enrolledServer.name);
+  await dialog.getByLabel("SSH host or IP").fill(enrolledServer.address);
+  await dialog.getByLabel("SSH port").fill("2222");
+  await dialog.getByLabel("SSH user").fill("ubuntu");
+  await dialog.getByLabel("Authentication").selectOption("password");
+  await dialog.getByLabel("SSH password").fill("e2e-password");
+  await expect(dialog.getByLabel("Codex API profile")).toHaveValue(codexProfile.id);
+
+  const probeRequest = page.waitForRequest(request => request.method() === "POST" && new URL(request.url()).pathname === "/api/servers/ssh/probe");
+  await dialog.getByRole("button", { name: "Check fingerprint", exact: true }).click();
+  expect(JSON.parse((await probeRequest).postData() ?? "{}")).toEqual({ host: enrolledServer.address, port: 2222 });
+  await expect(dialog.getByText("SHA256:e2e-server-fingerprint", { exact: true })).toBeVisible();
+
+  const installRequest = page.waitForRequest(request => request.method() === "POST" && new URL(request.url()).pathname === "/api/servers/ssh/bootstrap-stream");
+  await dialog.getByRole("button", { name: "Confirm and install", exact: true }).click();
+  expect(JSON.parse((await installRequest).postData() ?? "{}")).toMatchObject({
+    name: enrolledServer.name,
+    host: enrolledServer.address,
+    port: 2222,
+    user: "ubuntu",
+    auth_method: "password",
+    password: "e2e-password",
+    host_key_fingerprint: "SHA256:e2e-server-fingerprint",
+    codex_profile_id: codexProfile.id
+  });
+
+  await expect(dialog.getByRole("heading", { name: "Server added" })).toBeVisible();
+  await expect(page.locator(".toast")).toContainText("Server added");
+  const serverSection = page.locator("section.section").filter({ has: page.getByRole("heading", { name: "Registered servers" }) });
+  await expect(serverSection.locator("tbody tr").filter({ hasText: enrolledServer.name })).toBeVisible();
+});
+
+test("an administrator renames a managed project workspace", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Workspace management is covered at desktop width.");
+  let workspaceName = managedWorkspace.display_name;
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/projects" && request.method === "GET") return { body: [workspaceProject] };
+      if (request.path === "/workspaces" && request.method === "GET") return { body: [{ ...managedWorkspace, display_name: workspaceName }] };
+      if (request.path === "/servers" && request.method === "GET") return { body: [workspaceServer] };
+      if (request.path === `/workspaces/${managedWorkspace.id}` && request.method === "PATCH") {
+        workspaceName = String(JSON.parse(request.body ?? "{}").display_name ?? workspaceName);
+        return { body: { ...managedWorkspace, display_name: workspaceName } };
+      }
+      return undefined;
+    }
+  });
+  await page.goto("/?view=projects");
+
+  const workspaceSection = page.locator("section.section").filter({ has: page.getByRole("heading", { name: "Workspaces" }) });
+  const workspaceRow = workspaceSection.locator("tbody tr").filter({ hasText: managedWorkspace.path });
+  await expect(workspaceRow).toBeVisible();
+  await workspaceRow.getByTitle("Manage workspace").click();
+  const dialog = page.getByRole("dialog", { name: /Manage workspace/ });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Workspace name").fill("web-console-main");
+
+  const renameRequest = page.waitForRequest(request => request.method() === "PATCH" && new URL(request.url()).pathname === `/api/workspaces/${managedWorkspace.id}`);
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  expect(JSON.parse((await renameRequest).postData() ?? "{}")).toEqual({ display_name: "web-console-main" });
+
+  await expect(page.locator(".toast")).toContainText("Workspace saved");
+  await expect(dialog).not.toBeVisible();
+  await workspaceRow.getByTitle("Manage workspace").click();
+  await expect(dialog.getByLabel("Workspace name")).toHaveValue("web-console-main");
 });
