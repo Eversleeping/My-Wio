@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第七批实现与全量回归已完成，待提交部署）
+更新时间：2026-08-02（第七批已部署，第八批执行中）
 
 ## 目标
 
@@ -177,7 +177,7 @@
 | 第三批：前端稳定分包与体积检查 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/vite.config.ts`、构建检查脚本及对应配置 | 已完成 |
 | 第三批：通用 Dialog 可访问性组件 | Terra xhigh 子 Agent，主 Agent 已验收并接入 | 通用组件、独立测试和 `App.tsx` | 已完成 |
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
-| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`e3ff7c4` 已部署，本机与公网健康检查通过 |
+| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`b1baaa7` 已部署，本机与公网健康检查通过 |
 | 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
 | 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 已完成全部浏览器原生确认迁移 |
 | 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
@@ -193,6 +193,9 @@
 | 第七批：Codex 会话与审批 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
 | 第七批：Codex 会话列表分页 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | `internal/store`、`internal/httpapi`、`web/src/App.tsx` 与对应测试 | 已完成 |
 | 第七批：剩余危险确认迁移 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | Codex、Servers、Settings 与对应测试 | 已完成 |
+| 第八批：Codex 路由懒加载 | Terra xhigh 子 Agent，主 Agent 待验收 | `web/src/App.tsx`、Codex 页面与对应测试 | 进行中 |
+| 第八批：审计日志向后兼容分页 | Terra xhigh 子 Agent，主 Agent 待验收 | `internal/store`、`internal/httpapi` 与对应测试 | 进行中 |
+| 第八批：长会话与连接性能 E2E | Terra xhigh 子 Agent，主 Agent 待验收 | `web/e2e` | 进行中 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -238,3 +241,5 @@
 - 2026-08-02：启动第七批 Terra xhigh 并行任务：Projects 路由级懒加载、Codex 会话创建与审批 E2E、Codex 会话列表向后兼容分页后端；主 Agent 负责生产部署收口、分页前端接入、剩余确认迁移和完整验收。
 - 2026-08-02：第七批实现完成并经主 Agent 集成验收：Projects 迁出为 54.53KB（gzip 12.66KB）独立懒加载 chunk；会话列表无分页参数继续返回旧数组，显式分页使用默认 50、最大 100 的稳定 `limit/offset` 窗口；Codex 首屏仅加载 50 条，支持去重加载更多、实时首屏刷新保留尾页和首屏外深链安全加载。Codex、Servers、Settings 剩余 9 类危险操作全部迁入统一确认框，失败保留重试且 busy 期间锁定关闭与重复提交。
 - 2026-08-02：独立审查发现实时首屏刷新会永久合并旧 tail 的 P2；主 Agent 修正为后台重放当前已加载的全部 50 条尾页窗口，刷新期间保留旧列表，成功后原子替换，并以共享请求代次消除 load-more/refresh 竞态。修正后第七批全量回归通过：`go test ./...`、`go vet ./...`、前端 24 个测试文件/92 个测试、typecheck、build、bundle check、Playwright 10 passed/8 expected skipped、乱码扫描和 `git diff --check`。最大主 chunk 为 275.99KB（gzip 79.45KB），Projects chunk 为 54.53KB（gzip 12.66KB），Servers chunk 为 26.60KB（gzip 6.04KB）；项目目录中的 `aws.pem` 仍被 Git 忽略，未进入变更集。
+- 2026-08-02：第七批 4 个提交已推送并部署到生产 `b1baaa7`。部署前备份旧 HEAD、Git bundle、`.env` 与 PostgreSQL 到 `/opt/wio-backups/20260801T202434Z`，备份逐项验真；使用 host-proxy 双 Compose 仅重建 controlplane，未启动仓库 Caddy、未修改宿主机 Caddy。部署后 PostgreSQL/controlplane 均 healthy，controlplane 仅绑定 `127.0.0.1:18080`，宿主 Caddy active，内网与公网健康版本均为 `b84333073a556bd4`，首页 SHA-256 一致为 `8fe118eb42ad2571f410f36d9aad41ee3773c99cc76eddcbf41fba5e2c60bd0b`，Projects chunk 两端均返回 HTTP 200，且无残留 Compose/BuildKit 进程。
+- 2026-08-02：启动第八批 Terra xhigh 并行任务：Codex 路由级懒加载、审计日志向后兼容分页、长会话与连接性能 E2E；主 Agent 负责子 Agent diff 审查、前端分页接入、计划维护和完整回归。
