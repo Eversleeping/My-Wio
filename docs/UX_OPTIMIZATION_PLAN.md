@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第六批已部署，第七批执行中）
+更新时间：2026-08-02（第七批实现与全量回归已完成，待提交部署）
 
 ## 目标
 
@@ -110,9 +110,9 @@
 
 任务：
 
-1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；Dashboard 与 Servers 已迁移为真实 `React.lazy` 路由，共享数据 Hook、页面基础组件和格式化工具作为后续页面迁移边界，其他页面继续逐页迁出。
+1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；Dashboard、Servers 与 Projects 已迁移为真实 `React.lazy` 路由，共享数据 Hook、页面基础组件和格式化工具作为后续页面迁移边界，其他页面继续逐页迁出。
 2. [已完成] React、Markdown 和图标依赖已配置稳定 vendor chunks；Prism 保持在既有懒加载路径，避免强制合并懒加载依赖。
-3. 对会话、审计日志、变更文件和大型文件预览引入分页或虚拟化。
+3. [进行中] Codex 活跃/归档会话已接入每页 50 条的向后兼容分页、去重“加载更多”和首屏外深链保护；实时刷新第一页时保留已加载尾页。审计日志、变更文件和大型文件预览仍待分页或虚拟化。
 4. [已完成] 图片压缩已迁移到 Worker/OffscreenCanvas，并接入上传流程；Worker 创建、通信、超时或浏览器能力不足时自动回退主线程，保留 WebP、1600px、900KB 与 6 次尝试契约。
 5. [进行中] 已增加构建后单 JS chunk 500,000 bytes 硬门槛和分包配置测试；关键交互性能测试待后续补充。
 
@@ -125,7 +125,7 @@
 任务：
 
 1. [已完成] 通用 Dialog 已接入现有页面，支持 Escape、焦点陷阱、首次聚焦、关闭后焦点恢复、背景关闭、ARIA 标题关联和多层 Dialog 顶层响应。
-2. [进行中] 已建立统一确认对话框并迁移部署目标删除、部署历史删除、工作区 Git 文件丢弃、diff 文件丢弃、部署回滚及容器停止/重启/删除；其余原生 `confirm()` 按风险逐步迁移。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认、关闭和并发操作，失败后保留确认框以便重试。
+2. [已完成] 已建立统一确认对话框并迁移部署目标/历史删除、工作区与 diff 文件丢弃、部署回滚、容器操作、Codex 项目归档/隐藏/会话删除、服务器强制撤销与更新，以及设置资源删除。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认、关闭和并发操作，失败后保留确认框以便重试；前端业务代码不再使用浏览器原生 `confirm()`。
 3. [已完成] 61 个图标按钮均具备稳定的可访问名称；连接状态、审批计数和操作 toast 通过适当的 live region 通知，并增加静态守卫防止回退。
 4. 增加键盘导航、窄屏、减少动画和屏幕阅读器相关测试。
 
@@ -152,7 +152,7 @@
 任务：
 
 1. [已完成] 已建立 Playwright 桌面端和 390×844 移动端自动化流程，使用本地 Vite 与页面级 API/WebSocket mock，不依赖生产服务、真实会话或真实凭据。
-2. [进行中] 已覆盖登录、桌面/移动导航、部署排队与日志查看、503 错误恢复与重试、服务器注册和受管工作区重命名；Codex 会话与审批继续补充。所有用例统一校验页面级 mock、未匹配 API 和最小启动请求契约。
+2. [已完成] 已覆盖登录、桌面/移动导航、部署排队与日志查看、503 错误恢复与重试、服务器注册、受管工作区重命名、Codex 会话创建与审批。所有用例统一校验页面级 mock、未匹配 API 和最小启动请求契约。
 3. 增加 WebSocket 断线、慢客户端、长会话和大文件性能场景。
 4. [已完成] 第四批完整 Go、前端、typecheck、build、vet、E2E、依赖审计和 diff 检查均通过。
 5. 主 Agent 检查所有子 Agent 的代码、测试、文档和计划状态。
@@ -179,7 +179,7 @@
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
 | 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`e3ff7c4` 已部署，本机与公网健康检查通过 |
 | 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
-| 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 组件已完成，剩余原生确认迁移进行中 |
+| 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 已完成全部浏览器原生确认迁移 |
 | 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
 | 第四批：图标按钮与 live region 审计 | 主 Agent | 前端主应用与可访问性测试 | 已完成 |
 | 第五批：Agent 队列数据库往返优化 | Terra xhigh 子 Agent，主 Agent 已验收 | `internal/agentgateway` 与对应测试 | 已完成 |
@@ -188,10 +188,11 @@
 | 第五批：Dashboard 路由懒加载 | 主 Agent | 共享前端模块、Dashboard 页面与对应测试 | 已完成 |
 | 第六批：Servers 路由懒加载 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/src/App.tsx`、Servers 页面与对应测试 | 已完成 |
 | 第六批：注册服务器与项目/工作区 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
-| 第六批：剩余原生确认与长列表审计 | Terra xhigh 子 Agent，主 Agent 已审计并实施高风险项 | 前端危险操作、列表和对应测试 | 已完成审计；Codex 会话分页/窗口化待后续实施 |
-| 第七批：Projects 路由懒加载 | Terra xhigh 子 Agent，主 Agent 待验收 | `web/src/App.tsx`、Projects 页面与对应测试 | 进行中 |
-| 第七批：Codex 会话与审批 E2E | Terra xhigh 子 Agent，主 Agent 待验收 | `web/e2e` | 进行中 |
-| 第七批：Codex 会话列表分页后端 | Terra xhigh 子 Agent，主 Agent 待验收 | `internal/store`、`internal/httpapi` 与对应测试 | 进行中 |
+| 第六批：剩余原生确认与长列表审计 | Terra xhigh 子 Agent，主 Agent 已审计并实施高风险项 | 前端危险操作、列表和对应测试 | 已完成审计并在第七批完成会话分页与确认迁移 |
+| 第七批：Projects 路由懒加载 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/src/App.tsx`、Projects 页面与对应测试 | 已完成 |
+| 第七批：Codex 会话与审批 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
+| 第七批：Codex 会话列表分页 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | `internal/store`、`internal/httpapi`、`web/src/App.tsx` 与对应测试 | 已完成 |
+| 第七批：剩余危险确认迁移 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | Codex、Servers、Settings 与对应测试 | 已完成 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
@@ -235,3 +236,5 @@
 - 2026-08-02：E2E 新增服务器 SSH 指纹确认与流式安装、受管工作区重命名流程；Mock 流对齐 `starting → progress → completed` NDJSON 协议，所有实际运行用例通过统一 `afterEach` 检查未匹配 API 与最小启动请求契约。前端 22 个测试文件/83 个测试、typecheck、build、bundle check、Playwright 8 passed/6 expected skipped 和 `git diff --check` 全部通过；独立审查无 P0/P1/P2 遗留。
 - 2026-08-02：第六批 4 个提交已推送并部署到生产 `e3ff7c4`。部署前备份旧 HEAD、Git bundle、`.env` 和 PostgreSQL 到 `/opt/wio-backups/20260801T193447Z`；首次误用基础 Compose 时仓库 Caddy 因 80 端口占用未启动，宿主机 Caddy 未修改。随后终止冗余构建，使用已完成的新镜像与正确 host-proxy 双文件组合恢复 `127.0.0.1:18080`，并移除本次新建且仅含空目录的 Caddy 容器和两个卷。最终仅 controlplane/PostgreSQL 容器运行且均 healthy，宿主机 Caddy active，本机和公网 `/api/health` 均为 HTTP 200，前端 SHA-256 一致为 `67928cebd60c2aba711850dbadeb19369cc88c1512cedfb34026c179f16d3093`。
 - 2026-08-02：启动第七批 Terra xhigh 并行任务：Projects 路由级懒加载、Codex 会话创建与审批 E2E、Codex 会话列表向后兼容分页后端；主 Agent 负责生产部署收口、分页前端接入、剩余确认迁移和完整验收。
+- 2026-08-02：第七批实现完成并经主 Agent 集成验收：Projects 迁出为 54.53KB（gzip 12.66KB）独立懒加载 chunk；会话列表无分页参数继续返回旧数组，显式分页使用默认 50、最大 100 的稳定 `limit/offset` 窗口；Codex 首屏仅加载 50 条，支持去重加载更多、实时首屏刷新保留尾页和首屏外深链安全加载。Codex、Servers、Settings 剩余 9 类危险操作全部迁入统一确认框，失败保留重试且 busy 期间锁定关闭与重复提交。
+- 2026-08-02：独立审查发现实时首屏刷新会永久合并旧 tail 的 P2；主 Agent 修正为后台重放当前已加载的全部 50 条尾页窗口，刷新期间保留旧列表，成功后原子替换，并以共享请求代次消除 load-more/refresh 竞态。修正后第七批全量回归通过：`go test ./...`、`go vet ./...`、前端 24 个测试文件/92 个测试、typecheck、build、bundle check、Playwright 10 passed/8 expected skipped、乱码扫描和 `git diff --check`。最大主 chunk 为 275.99KB（gzip 79.45KB），Projects chunk 为 54.53KB（gzip 12.66KB），Servers chunk 为 26.60KB（gzip 6.04KB）；项目目录中的 `aws.pem` 仍被 Git 忽略，未进入变更集。
