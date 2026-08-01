@@ -92,15 +92,15 @@ test("creates and edits public access settings, manages containers, and exposes 
   await user.click(screen.getByRole("button", { name: "Close" }));
 
   await user.click(screen.getByRole("button", { name: "Delete deployment record" }));
+  const deleteHistoryDialog = await screen.findByRole("dialog", { name: "Delete deployment record" });
+  await user.click(within(deleteHistoryDialog).getByRole("button", { name: "Delete deployment record" }));
   await waitFor(() => expect(requests.some(request => request.url === `/api/deployments/${deployment.id}` && request.method === "DELETE")).toBe(true));
 });
 
 test("queues destructive target cleanup with an explicit confirmation", async () => {
   window.localStorage.setItem("wio_language", "en");
-  const confirmation = vi.fn(() => true);
   const notify = vi.fn();
   const requests: Array<{ url: string; method: string }> = [];
-  vi.stubGlobal("confirm", confirmation);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     const method = init.method ?? "GET";
@@ -118,8 +118,10 @@ test("queues destructive target cleanup with an explicit confirmation", async ()
   await user.click(screen.getByRole("button", { name: "More deployment actions" }));
   await user.click(screen.getByRole("menuitem", { name: "Delete deployment target" }));
 
-  expect(confirmation).toHaveBeenCalledWith(expect.stringContaining("remove its containers, project volumes"));
-  expect(confirmation).toHaveBeenCalledWith(expect.stringContaining("project workspace is preserved"));
+  const confirmation = await screen.findByRole("dialog", { name: "Delete deployment target" });
+  expect(within(confirmation).getByRole("alert")).toHaveTextContent("remove its containers, project volumes");
+  expect(within(confirmation).getByRole("alert")).toHaveTextContent("project workspace is preserved");
+  await user.click(within(confirmation).getByRole("button", { name: "Delete deployment target" }));
   await waitFor(() => expect(requests).toContainEqual({ url: `/api/deployment-targets/${target.id}`, method: "DELETE" }));
   expect(notify).toHaveBeenCalledWith("Deployment target deletion queued");
 });

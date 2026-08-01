@@ -82,8 +82,10 @@ import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "./components/Dialog";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { clearCodexComposerPreferences, defaultCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
 import { currentLocale, useI18n } from "./i18n";
+import { compressImage } from "./imageCompression";
 import {
   CreateProjectDialog,
   ProjectDeletionDialog,
@@ -424,7 +426,7 @@ export default function App() {
         <nav aria-label={t("nav.primary")}>
           {navigation.map(item => {
             const Icon = item.icon;
-            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><Icon size={18} /><span>{t(item.labelKey)}</span>{item.id === "codex" && (approvals.data?.length ?? 0) > 0 && <b className="nav-count">{approvals.data?.length}</b>}</button>;
+            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><Icon size={18} /><span>{t(item.labelKey)}</span>{item.id === "codex" && (approvals.data?.length ?? 0) > 0 && <b className="nav-count" aria-live="polite">{approvals.data?.length}</b>}</button>;
           })}
         </nav>
         <div className="sidebar-language"><LanguageSwitch /></div>
@@ -435,11 +437,11 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} title={t("nav.open")}><Menu size={20} /></button>
           <div><p className="eyebrow">{t("app.controlPlane")}</p><h1>{t(navigation.find(item => item.id === view)?.labelKey ?? "nav.overview")}</h1></div>
-          <div className="topbar-actions"><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`}>{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
+          <div className="topbar-actions"><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`} role="status" aria-live="polite">{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
         </header>
         <div className="page-content">{page}</div>
       </main>
-      {toast && <div className="toast"><Check size={17} />{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><Check size={17} />{toast}</div>}
     </div>
   );
 }
@@ -1381,6 +1383,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const [prompt, setPrompt] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
+  const imageCompressionRef = useRef<AbortController | null>(null);
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [editingEventID, setEditingEventID] = useState("");
@@ -1639,19 +1642,42 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     const stream = streamRef.current;
     return () => { if (stream && restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); };
   }, [scrollStateKey]);
+  useEffect(() => {
+    setImageBusy(false);
+    return () => {
+      imageCompressionRef.current?.abort();
+      imageCompressionRef.current = null;
+    };
+  }, [thread.id]);
   const addImages = async (files: File[]) => {
     const available = 4 - images.length;
     if (available <= 0) { notify(t("codex.imageLimit")); return; }
+    imageCompressionRef.current?.abort();
+    const controller = new AbortController();
+    imageCompressionRef.current = controller;
     setImageBusy(true);
     try {
-      const prepared: ComposerImage[] = [];
-      for (const file of files.slice(0, available)) prepared.push({ id: crypto.randomUUID(), dataURL: await compressImage(file) });
+      const selected = files.slice(0, available);
+      const prepared = new Array<ComposerImage>(selected.length);
+      let nextIndex = 0;
+      const prepareNext = async () => {
+        while (nextIndex < selected.length) {
+          const index = nextIndex++;
+          prepared[index] = { id: crypto.randomUUID(), dataURL: await compressImage(selected[index], { signal: controller.signal }) };
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(2, selected.length) }, () => prepareNext()));
       setImages(current => [...current, ...prepared].slice(0, 4));
       if (files.length > available) notify(t("codex.imageLimit"));
     } catch {
-      notify(t("codex.imageFailed"));
+      const wasCancelled = controller.signal.aborted;
+      controller.abort();
+      if (!wasCancelled) notify(t("codex.imageFailed"));
     } finally {
-      setImageBusy(false);
+      if (imageCompressionRef.current === controller) {
+        imageCompressionRef.current = null;
+        setImageBusy(false);
+      }
     }
   };
   const send = async (event: FormEvent) => {
@@ -2051,6 +2077,7 @@ export function DeploymentsPage({ realtime, notify }: PageProps) {
   const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState("");
   const [detailID, setDetailID] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ type: "target"; target: DeploymentTarget } | { type: "history"; deployment: Deployment } | null>(null);
   const detail = useData<DeploymentDetail>(detailID ? `/deployments/${detailID}` : null, realtime);
   const active = (status: string) => ["queued", "preparing", "running"].includes(status);
   const openCreate = () => { setEditingTarget(null); setForm(emptyForm); setTargetDialog(true); };
@@ -2086,8 +2113,8 @@ export function DeploymentsPage({ realtime, notify }: PageProps) {
       notify(t(`deployment.container${action[0].toUpperCase()}${action.slice(1)}Queued`));
     } catch (err) { notify(message(err)); } finally { setBusy(""); }
   };
-  const deleteTarget = async (target: DeploymentTarget) => { if (!confirm(t("deployment.confirmDeleteTarget", { project: target.project_name, environment: target.environment }))) return; setBusy(`delete-target:${target.id}`); try { await remove(`/deployment-targets/${target.id}`); targets.reload(); deployments.reload(); notify(t("deployment.targetDeleteQueued")); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
-  const deleteHistory = async (item: Deployment) => { if (!confirm(t("deployment.confirmDeleteHistory"))) return; setBusy(`delete-deployment:${item.id}`); try { await remove(`/deployments/${item.id}`); if (detailID === item.id) setDetailID(""); deployments.reload(); notify(t("deployment.historyDeleted")); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
+  const deleteTarget = async (target: DeploymentTarget) => { setBusy(`delete-target:${target.id}`); try { await remove(`/deployment-targets/${target.id}`); targets.reload(); deployments.reload(); notify(t("deployment.targetDeleteQueued")); setDeleteConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
+  const deleteHistory = async (item: Deployment) => { setBusy(`delete-deployment:${item.id}`); try { await remove(`/deployments/${item.id}`); if (detailID === item.id) setDetailID(""); deployments.reload(); notify(t("deployment.historyDeleted")); setDeleteConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
   const availableWorkspaces = (workspaces.data ?? []).filter(item => item.server_id === form.server_id && item.status === "ready");
   return <div className="page-stack deployment-page"><Section title={t("deployment.targets")} icon={<Rocket size={18} />} action={<button className="primary-button" onClick={openCreate}><Plus size={17} />{t("deployment.newTarget")}</button>}><DataTable headers={[t("column.project"), t("column.environment"), t("column.server"), t("deployment.containerState"), t("column.gitRef"), t("column.compose"), t("deployment.publicAccess"), t("common.actions")]} empty={t("deployment.noTargets")}>{(targets.data ?? []).map(target => {
     const sourcePath = target.source_type === "workspace" ? target.workspace_path : target.repository;
@@ -2099,10 +2126,11 @@ export function DeploymentsPage({ realtime, notify }: PageProps) {
     const actions: ContextMenuAction[] = [
       { id: "rollback", label: t("deployment.rollback"), icon: Undo2, disabled: locked, onSelect: () => rollback(target) },
       { id: "edit", label: t("deployment.editTarget"), icon: Pencil, disabled: busy !== "", onSelect: () => openEdit(target) },
-      { id: "delete-target", label: t("deployment.deleteTarget"), icon: Trash2, danger: true, separatorBefore: true, disabled: busy !== "" || containerStatus === "pending", onSelect: () => deleteTarget(target) }
+      { id: "delete-target", label: t("deployment.deleteTarget"), icon: Trash2, danger: true, separatorBefore: true, disabled: busy !== "" || containerStatus === "pending", onSelect: () => setDeleteConfirmation({ type: "target", target }) }
     ];
     return <tr key={target.id}><td><div className="cell-main"><strong>{target.project_name}</strong><small title={sourcePath}>{sourcePath}</small></div></td><td><Status value={target.environment} /></td><td>{target.server_name}</td><td><div className="cell-main container-state-cell"><Status value={containerStatus} />{target.container_message && <small title={target.container_message}>{target.container_message}</small>}</div></td><td><code>{target.git_ref}</code></td><td><code>{target.compose_file}</code></td><td><DeploymentPublicLink url={target.public_url} /></td><td><div className="row-actions deployment-target-actions"><button type="button" className="primary-button small" disabled={locked} onClick={() => void run(target)}>{busy === `deploy:${target.id}` ? <LoaderCircle className="spin" size={14} /> : <Rocket size={14} />}{t("deployment.deploy")}</button><button type="button" className="secondary-button small deployment-lifecycle-button" disabled={locked} title={primaryContainerLabel} onClick={() => void manageContainer(target, primaryContainerAction)}>{busy === `container:${primaryContainerAction}:${target.id}` ? <LoaderCircle className="spin" size={14} /> : primaryContainerAction === "stop" ? <Square size={14} /> : <Play size={14} />}{primaryContainerLabel}</button><button type="button" className="icon-button" disabled={locked || containerStatus === "stopped" || containerStatus === "removed"} title={t("deployment.containerRestart")} aria-label={t("deployment.containerRestart")} onClick={() => void manageContainer(target, "restart")}>{busy === `container:restart:${target.id}` ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}</button><button type="button" className="icon-button danger" disabled={locked || containerStatus === "removed"} title={t("deployment.containerRemove")} aria-label={t("deployment.containerRemove")} onClick={() => void manageContainer(target, "remove")}>{busy === `container:remove:${target.id}` ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button><ContextMenu label={t("deployment.actions")} actions={actions}>{null}</ContextMenu></div></td></tr>;
-  })}</DataTable></Section><Section title={t("deployment.history")} icon={<History size={18} />} action={<button className="icon-button" title={t("common.refresh")} onClick={deployments.reload}><RefreshCw size={16} /></button>}><DataTable headers={[t("column.project"), t("column.environment"), t("column.commit"), t("column.status"), t("deployment.duration"), t("column.message"), t("column.created"), t("deployment.publicAccess"), t("common.actions")]} empty={t("deployment.noHistory")}>{(deployments.data ?? []).map(item => <tr key={item.id}><td><strong>{item.project_name}</strong></td><td>{item.environment}</td><td><code>{shortSHA(item.resolved_commit || item.commit_ref)}</code></td><td><Status value={item.status} /></td><td className="deployment-duration">{deploymentDuration(item)}</td><td className="message-cell" title={item.message}>{item.message || "-"}</td><td>{relative(item.created_at)}</td><td>{item.status === "succeeded" ? <DeploymentPublicLink url={item.public_url} /> : <span className="muted">-</span>}</td><td><div className="row-actions"><button className="icon-button" title={t("deployment.viewLogs")} onClick={() => setDetailID(item.id)}><SquareTerminal size={15} /></button><button className="icon-button danger" disabled={active(item.status) || busy !== ""} title={active(item.status) ? t("deployment.activeCannotDelete") : t("deployment.deleteHistory")} onClick={() => void deleteHistory(item)}><Trash2 size={15} /></button></div></td></tr>)}</DataTable></Section>
+  })}</DataTable></Section><Section title={t("deployment.history")} icon={<History size={18} />} action={<button className="icon-button" title={t("common.refresh")} onClick={deployments.reload}><RefreshCw size={16} /></button>}><DataTable headers={[t("column.project"), t("column.environment"), t("column.commit"), t("column.status"), t("deployment.duration"), t("column.message"), t("column.created"), t("deployment.publicAccess"), t("common.actions")]} empty={t("deployment.noHistory")}>{(deployments.data ?? []).map(item => <tr key={item.id}><td><strong>{item.project_name}</strong></td><td>{item.environment}</td><td><code>{shortSHA(item.resolved_commit || item.commit_ref)}</code></td><td><Status value={item.status} /></td><td className="deployment-duration">{deploymentDuration(item)}</td><td className="message-cell" title={item.message}>{item.message || "-"}</td><td>{relative(item.created_at)}</td><td>{item.status === "succeeded" ? <DeploymentPublicLink url={item.public_url} /> : <span className="muted">-</span>}</td><td><div className="row-actions"><button className="icon-button" title={t("deployment.viewLogs")} onClick={() => setDetailID(item.id)}><SquareTerminal size={15} /></button><button className="icon-button danger" disabled={active(item.status) || busy !== ""} title={active(item.status) ? t("deployment.activeCannotDelete") : t("deployment.deleteHistory")} onClick={() => setDeleteConfirmation({ type: "history", deployment: item })}><Trash2 size={15} /></button></div></td></tr>)}</DataTable></Section>
+  {deleteConfirmation?.type === "target" ? <ConfirmDialog open danger title={t("deployment.deleteTarget")} impact={t("deployment.confirmDeleteTarget", { project: deleteConfirmation.target.project_name, environment: deleteConfirmation.target.environment })} confirmLabel={t("deployment.deleteTarget")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy === `delete-target:${deleteConfirmation.target.id}`} onClose={() => setDeleteConfirmation(null)} onConfirm={() => deleteTarget(deleteConfirmation.target)} /> : deleteConfirmation?.type === "history" ? <ConfirmDialog open danger title={t("deployment.deleteHistory")} impact={t("deployment.confirmDeleteHistory")} confirmLabel={t("deployment.deleteHistory")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy === `delete-deployment:${deleteConfirmation.deployment.id}`} onClose={() => setDeleteConfirmation(null)} onConfirm={() => deleteHistory(deleteConfirmation.deployment)} /> : null}
   <Dialog open={targetDialog} title={t(editingTarget ? "deployment.editTargetTitle" : "deployment.targetTitle")} onClose={() => setTargetDialog(false)} wide><form onSubmit={submit}><div className="segmented-control deployment-source-control" role="group" aria-label={t("deployment.sourceType")}><button type="button" className={form.source_type === "workspace" ? "active" : ""} onClick={() => setForm({ ...form, source_type: "workspace", repository: "", git_ref: "", workspace_id: "" })}><ServerIcon size={15} />{t("deployment.sourceWorkspace")}</button><button type="button" className={form.source_type === "remote" ? "active" : ""} onClick={() => setForm({ ...form, source_type: "remote", workspace_id: "", git_ref: form.git_ref || "main" })}><GitBranch size={15} />{t("deployment.sourceRemote")}</button></div><div className="form-grid"><Field label={t("column.server")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value, workspace_id: "" })} required><option value="">{t("deployment.selectServer")}</option>{(servers.data ?? []).filter(item => item.status === "online").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>{form.source_type === "workspace" ? <Field label={t("deployment.workspace")}><select value={form.workspace_id} onChange={e => { const workspace = availableWorkspaces.find(item => item.id === e.target.value); setForm({ ...form, workspace_id: e.target.value, git_ref: workspace?.branch || "" }); }} required><option value="">{t("deployment.selectWorkspace")}</option>{availableWorkspaces.map(item => <option key={item.id} value={item.id}>{item.project_name} · {item.display_name || item.path}</option>)}</select></Field> : <Field label={t("deployment.repository")}><input value={form.repository} onChange={e => setForm({ ...form, repository: e.target.value })} placeholder="https://example.com/team/project.git" required /></Field>}<Field label={t("column.environment")}><input value={form.environment} onChange={e => setForm({ ...form, environment: e.target.value })} required /></Field><Field label={t("deployment.secretSet")}><select value={form.secret_set_id} onChange={e => setForm({ ...form, secret_set_id: e.target.value })}><option value="">{t("common.none")}</option>{(secrets.data ?? []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field></div><div className="form-grid thirds"><Field label={t("column.gitRef")}><input value={form.git_ref} onChange={e => setForm({ ...form, git_ref: e.target.value })} placeholder={form.source_type === "workspace" ? t("deployment.currentBranch") : "main"} /></Field><Field label={t("deployment.composeFile")}><input value={form.compose_file} onChange={e => setForm({ ...form, compose_file: e.target.value })} /></Field><Field label={t("deployment.buildMode")}><select value={form.build_mode} onChange={e => setForm({ ...form, build_mode: e.target.value })}><option value="build">{t("deployment.build")}</option><option value="pull">{t("deployment.pull")}</option></select></Field></div><Field label={t("deployment.publicURL")}><input type="text" inputMode="url" autoComplete="url" value={form.public_url} onChange={e => setForm({ ...form, public_url: e.target.value })} placeholder={t("deployment.publicURLPlaceholder")} /></Field><Field label={t("deployment.healthCheck")}><textarea rows={2} value={form.health} onChange={e => setForm({ ...form, health: e.target.value })} placeholder={t("deployment.healthPlaceholder")} /></Field><div className="deployment-preflight-note"><ShieldCheck size={17} /><span>{t("deployment.preflightNote")}</span></div><DialogActions><button type="button" className="secondary-button" onClick={() => setTargetDialog(false)}>{t("common.cancel")}</button><button className="primary-button" disabled={busy !== ""}>{busy ? <LoaderCircle className="spin" size={16} /> : editingTarget ? <Check size={16} /> : <Rocket size={16} />}{t(editingTarget ? "deployment.saveTarget" : "deployment.createTarget")}</button></DialogActions></form></Dialog>
   <Dialog open={Boolean(detailID)} title={t("deployment.logTitle")} onClose={() => setDetailID("")} wide className="deployment-log-dialog"><div className="deployment-log-content">{detail.loading && <div className="deployment-log-loading"><LoaderCircle className="spin" size={20} />{t("common.loading")}</div>}{detail.error && <ErrorBanner text={detail.error} />}{detail.data && <><div className="deployment-log-summary"><div><small>{t("column.project")}</small><strong>{detail.data.deployment.project_name}</strong></div><div><small>{t("column.environment")}</small><Status value={detail.data.deployment.environment} /></div><div><small>{t("column.commit")}</small><code>{shortSHA(detail.data.deployment.resolved_commit || detail.data.deployment.commit_ref)}</code></div><div><small>{t("deployment.duration")}</small><strong>{deploymentDuration(detail.data.deployment)}</strong></div>{detail.data.deployment.status === "succeeded" && detail.data.deployment.public_url && <div className="deployment-log-public"><small>{t("deployment.publicAccess")}</small><DeploymentPublicLink url={detail.data.deployment.public_url} /></div>}</div><div className="deployment-event-list">{(detail.data.events ?? []).length ? (detail.data.events ?? []).map(event => <article className={`deployment-event ${event.status}`} key={event.id}><span className="deployment-event-marker" /><header><Status value={event.status} /><strong>{event.message || t("deployment.processStep")}</strong><time>{formatTime(event.occurred_at)}</time></header>{event.content && <pre>{event.content}</pre>}</article>) : <Empty icon={<SquareTerminal size={22} />} text={t("deployment.noLogs")} />}</div></>}</div></Dialog></div>;
 }
@@ -2718,32 +2746,6 @@ function enrollmentMessage(error: unknown, translate: (key: string) => string) {
 }
 function pretty(value: unknown) { try { return JSON.stringify(value, null, 2); } catch { return String(value); } }
 function approvalDetail(detail: unknown) { const value = asRecord(detail); if (!value) return pretty(detail); for (const key of ["command", "reason", "message", "question"]) if (typeof value[key] === "string" && value[key]) return value[key] as string; return pretty(detail); }
-async function compressImage(file: File): Promise<string> {
-  if (!new Set(["image/png", "image/jpeg", "image/webp"]).has(file.type)) throw new Error("Unsupported image type");
-  const sourceURL = URL.createObjectURL(file);
-  try {
-    const image = document.createElement("img");
-    image.src = sourceURL;
-    await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error("Could not read image")); });
-    let maxDimension = 1600;
-    let quality = 0.84;
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("Could not process image");
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/webp", quality));
-      if (blob && blob.size <= 900 * 1024) return await blobDataURL(blob);
-      maxDimension = Math.round(maxDimension * 0.82);
-      quality = Math.max(0.62, quality - 0.05);
-    }
-    throw new Error("Image is too large");
-  } finally { URL.revokeObjectURL(sourceURL); }
-}
-function blobDataURL(blob: Blob) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error("Could not read image")); reader.readAsDataURL(blob); }); }
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
