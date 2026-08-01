@@ -3,6 +3,31 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
+/**
+ * Keep the largest shared runtime dependencies in stable, cacheable chunks.
+ * Dependencies of a matched package stay with that package under Rollup's
+ * default manual-chunk behaviour, while React is deliberately isolated so
+ * the markdown chunk cannot pull a second copy of the runtime into its graph.
+ */
+export function manualChunks(id: string): string | undefined {
+  const normalizedId = id.replaceAll("\\", "/");
+  const isPackage = (packageName: string) => normalizedId.includes(`/node_modules/${packageName}/`);
+
+  if (isPackage("react") || isPackage("react-dom") || isPackage("scheduler")) {
+    return "vendor-react";
+  }
+
+  if (isPackage("react-markdown") || isPackage("remark-gfm")) {
+    return "vendor-markdown";
+  }
+
+  if (isPackage("lucide-react")) {
+    return "vendor-icons";
+  }
+
+  return undefined;
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -34,5 +59,13 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     css: false
   },
-  build: { target: "es2022", sourcemap: true }
+  build: {
+    target: "es2022",
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks
+      }
+    }
+  }
 });
