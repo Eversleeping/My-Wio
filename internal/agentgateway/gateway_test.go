@@ -490,6 +490,65 @@ func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
 	}
 }
 
+func TestFailedInterruptWithNoActiveTurnReconcilesThreadStatus(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "interrupt-node", []string{"/srv"}, "interrupt-enrollment-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "interrupt-enrollment-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "interrupt-node.local", "interrupt-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/interrupt", Name: "interrupt"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "stale interrupt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetThreadStatus(ctx, thread.ID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.InterruptTurnCommand{ThreadID: thread.ID, CodexThread: "codex-thread", TurnID: "turn-1"}
+	operationID, err := database.QueueOperation(ctx, server.ID, "codex.turn.interrupt", command, "stale-interrupt-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	result := protocol.OperationResult{OperationID: operationID, Status: "failed", Message: "Codex turn/interrupt: no active turn to interrupt (-32600)"}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.Thread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "interrupted" {
+		t.Fatalf("stale interrupt did not reconcile thread status: %q", updated.Status)
+	}
+	events, err := database.Events(ctx, thread.ID, 0, 10)
+	if err != nil || len(events) != 1 || events[0].Kind != "codex.turn.cancelled" {
+		t.Fatalf("unexpected stale interrupt events: %#v %v", events, err)
+	}
+}
+
 func TestCancelledQueuedTurnIgnoresLateAgentEvents(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {

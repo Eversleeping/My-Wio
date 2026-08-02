@@ -631,11 +631,36 @@ func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store
 	if threadID == "" {
 		return errors.New("failed Codex control operation has no thread id")
 	}
+	// Codex can lose the in-memory turn state when the Agent or Codex
+	// subprocess reconnects. In that case an interrupt is already complete from
+	// the user's perspective: there is no live turn left to stop. Reconcile the
+	// persisted Wio session instead of leaving it stuck in "running" forever.
+	if operation.Kind == "codex.turn.interrupt" && noActiveCodexTurn(result.Message) {
+		if err := g.store.SetThreadStatus(ctx, threadID, "interrupted"); err != nil {
+			return err
+		}
+		_ = g.store.MarkScheduledTaskByThread(ctx, threadID, "cancelled", result.Message)
+		_ = g.store.ResolvePendingApprovals(ctx, threadID, "cancelled")
+		payload, err := json.Marshal(map[string]string{
+			"operation_id": result.OperationID,
+			"source":       "control",
+			"text":         "Codex turn was already inactive; the session was marked interrupted",
+		})
+		if err != nil {
+			return err
+		}
+		return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":turn-cancelled", StreamID: threadID, Kind: "codex.turn.cancelled", Payload: security.RedactJSON(payload)})
+	}
 	payload, err := json.Marshal(map[string]string{"operation_id": result.OperationID, "text": result.Message})
 	if err != nil {
 		return err
 	}
 	return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":control-failed", StreamID: threadID, Kind: kind, Payload: security.RedactJSON(payload)})
+}
+
+func noActiveCodexTurn(message string) bool {
+	normalized := strings.ToLower(message)
+	return strings.Contains(normalized, "no active turn") || strings.Contains(normalized, "turn not found")
 }
 
 func (g *Gateway) acceptCodexTurn(ctx context.Context, event protocol.StreamEvent) error {
