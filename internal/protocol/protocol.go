@@ -556,6 +556,10 @@ type OperationResult struct {
 	Data        json.RawMessage `json:"data,omitempty"`
 }
 
+type OperationStarted struct {
+	OperationID string `json:"operation_id"`
+}
+
 type jsonCodec struct{}
 
 func (jsonCodec) Name() string                       { return "json" }

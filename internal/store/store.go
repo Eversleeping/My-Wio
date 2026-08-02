@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -301,6 +303,7 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 				ADD COLUMN IF NOT EXISTS project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
 				ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
 				ADD COLUMN IF NOT EXISTS workspace_write INTEGER NOT NULL DEFAULT 0,
+				ADD COLUMN IF NOT EXISTS started_at TIMESTAMP,
 				ADD COLUMN IF NOT EXISTS result_data TEXT NOT NULL DEFAULT '{}'`,
 			`ALTER TABLE servers ADD COLUMN IF NOT EXISTS managed_roots TEXT NOT NULL DEFAULT '[]'`,
 		}
@@ -340,6 +343,7 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 				"project_id":      "TEXT REFERENCES projects(id) ON DELETE SET NULL",
 				"workspace_id":    "TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
 				"workspace_write": "INTEGER NOT NULL DEFAULT 0",
+				"started_at":      "TIMESTAMP",
 				"result_data":     "TEXT NOT NULL DEFAULT '{}'",
 			}},
 			{name: "servers", columns: map[string]string{
@@ -1623,10 +1627,11 @@ type Operation struct {
 	ResultData     string     `db:"result_data" json:"result_data"`
 	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
 	DeliveredAt    *time.Time `db:"delivered_at" json:"delivered_at"`
+	StartedAt      *time.Time `db:"started_at" json:"started_at"`
 	CompletedAt    *time.Time `db:"completed_at" json:"completed_at"`
 }
 
-const operationSelect = `SELECT id,server_id,COALESCE(project_id,'') project_id,COALESCE(workspace_id,'') workspace_id,kind,payload,status,workspace_write,COALESCE(result,'') result,COALESCE(result_data,'{}') result_data,created_at,delivered_at,completed_at FROM agent_operations`
+const operationSelect = `SELECT id,server_id,COALESCE(project_id,'') project_id,COALESCE(workspace_id,'') workspace_id,kind,payload,status,workspace_write,COALESCE(result,'') result,COALESCE(result_data,'{}') result_data,created_at,delivered_at,started_at,completed_at FROM agent_operations`
 
 func (s *Store) Operation(ctx context.Context, id string) (Operation, error) {
 	var operation Operation
@@ -1694,6 +1699,12 @@ func (s *Store) MarkDelivered(ctx context.Context, id string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='delivered',delivered_at=? WHERE id=? AND status='queued'"), time.Now().UTC(), id)
 	return err
 }
+
+func (s *Store) MarkRunning(ctx context.Context, id string) error {
+	now := time.Now().UTC()
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='running',started_at=COALESCE(started_at,delivered_at,?) WHERE id=? AND status IN ('queued','delivered','running')"), now, id)
+	return err
+}
 func (s *Store) CompleteOperation(ctx context.Context, r protocol.OperationResult) error {
 	data, err := operationResultData(r.Data)
 	if err != nil {
@@ -1701,6 +1712,104 @@ func (s *Store) CompleteOperation(ctx context.Context, r protocol.OperationResul
 	}
 	_, err = s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=? AND status IN ('queued','delivered','running')"), r.Status, r.Message, data, time.Now().UTC(), r.OperationID)
 	return err
+}
+
+type OperationMetricAggregate struct {
+	Count   int     `json:"count"`
+	Average float64 `json:"average_ms"`
+	P95     float64 `json:"p95_ms"`
+	Max     int64   `json:"max_ms"`
+}
+
+type OperationMetrics struct {
+	ServerID  string                   `json:"server_id"`
+	Since     time.Time                `json:"since"`
+	UpdatedAt time.Time                `json:"updated_at"`
+	Total     int                      `json:"total"`
+	Queued    int                      `json:"queued"`
+	Delivered int                      `json:"delivered"`
+	Running   int                      `json:"running"`
+	Succeeded int                      `json:"succeeded"`
+	Failed    int                      `json:"failed"`
+	Cancelled int                      `json:"cancelled"`
+	QueueWait OperationMetricAggregate `json:"queue_wait"`
+	Delivery  OperationMetricAggregate `json:"delivery"`
+	Execution OperationMetricAggregate `json:"execution"`
+}
+
+func (s *Store) OperationMetrics(ctx context.Context, serverID string, since time.Time) (OperationMetrics, error) {
+	var rows []struct {
+		Status      string     `db:"status"`
+		CreatedAt   time.Time  `db:"created_at"`
+		DeliveredAt *time.Time `db:"delivered_at"`
+		StartedAt   *time.Time `db:"started_at"`
+		CompletedAt *time.Time `db:"completed_at"`
+	}
+	if err := s.DB.SelectContext(ctx, &rows, s.Q("SELECT status,created_at,delivered_at,started_at,completed_at FROM agent_operations WHERE server_id=? AND created_at>=? ORDER BY created_at"), serverID, since); err != nil {
+		return OperationMetrics{}, err
+	}
+	result := OperationMetrics{ServerID: serverID, Since: since, UpdatedAt: time.Now().UTC()}
+	queueWait := make([]int64, 0, len(rows))
+	delivery := make([]int64, 0, len(rows))
+	execution := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		result.Total++
+		switch row.Status {
+		case "queued":
+			result.Queued++
+		case "delivered":
+			result.Delivered++
+		case "running":
+			result.Running++
+		case "succeeded":
+			result.Succeeded++
+		case "failed", "partial":
+			result.Failed++
+		case "cancelled":
+			result.Cancelled++
+		}
+		if row.DeliveredAt != nil {
+			queueWait = append(queueWait, maxDurationMS(row.DeliveredAt.Sub(row.CreatedAt)))
+		}
+		start := row.StartedAt
+		if start == nil {
+			start = row.DeliveredAt
+		}
+		if row.DeliveredAt != nil && start != nil {
+			delivery = append(delivery, maxDurationMS(start.Sub(*row.DeliveredAt)))
+		}
+		if row.CompletedAt != nil && start != nil {
+			execution = append(execution, maxDurationMS(row.CompletedAt.Sub(*start)))
+		}
+	}
+	result.QueueWait = aggregateOperationDurations(queueWait)
+	result.Delivery = aggregateOperationDurations(delivery)
+	result.Execution = aggregateOperationDurations(execution)
+	return result, nil
+}
+
+func maxDurationMS(value time.Duration) int64 {
+	if value <= 0 {
+		return 0
+	}
+	return value.Milliseconds()
+}
+
+func aggregateOperationDurations(values []int64) OperationMetricAggregate {
+	if len(values) == 0 {
+		return OperationMetricAggregate{}
+	}
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(left, right int) bool { return sorted[left] < sorted[right] })
+	var total int64
+	for _, value := range sorted {
+		total += value
+	}
+	index := int(math.Ceil(float64(len(sorted))*0.95)) - 1
+	if index < 0 {
+		index = 0
+	}
+	return OperationMetricAggregate{Count: len(sorted), Average: float64(total) / float64(len(sorted)), P95: float64(sorted[index]), Max: sorted[len(sorted)-1]}
 }
 
 func operationResultData(data json.RawMessage) (string, error) {

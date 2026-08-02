@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS agent_operations (
   idempotency_key TEXT NOT NULL UNIQUE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   delivered_at TIMESTAMP,
+  started_at TIMESTAMP,
   completed_at TIMESTAMP,
   result TEXT,
   result_data TEXT NOT NULL DEFAULT '{}'

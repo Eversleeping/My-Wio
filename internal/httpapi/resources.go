@@ -242,6 +242,19 @@ func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, points)
 }
 
+func (a *API) operationMetrics(w http.ResponseWriter, r *http.Request) {
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+	metrics, err := a.store.OperationMetrics(r.Context(), chi.URLParam(r, "serverID"), time.Now().UTC().Add(-time.Duration(hours)*time.Hour))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load operation metrics")
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
+}
+
 func (a *API) projects(w http.ResponseWriter, r *http.Request) {
 	projects, err := a.store.ListProjects(r.Context())
 	if err != nil {

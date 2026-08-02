@@ -110,6 +110,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/servers/{serverID}/ssh/uninstall", api.uninstallServerSSH)
 			private.Delete("/servers/{serverID}", api.revokeServer)
 			private.Get("/servers/{serverID}/metrics", api.metrics)
+			private.Get("/servers/{serverID}/operation-metrics", api.operationMetrics)
 			private.Get("/projects", api.projects)
 			private.Post("/projects", api.createProject)
 			private.Get("/projects/{projectID}", api.projectDetail)
