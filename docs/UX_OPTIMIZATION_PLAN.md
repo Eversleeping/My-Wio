@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第七批已部署，第八批部分完成）
+更新时间：2026-08-02（第八批已完成并部署）
 
 ## 目标
 
@@ -196,9 +196,11 @@
 | 第八批：Codex 路由懒加载 | 主 Agent | `web/src/App.tsx`、Codex 页面与对应测试 | 已完成 |
 | 第八批：审计日志向后兼容分页 | 主 Agent | `internal/store`、`internal/httpapi`、Settings 与对应测试 | 已完成 |
 | 第八批：长会话与连接性能 E2E | 主 Agent | `web/e2e` | 已完成本批范围 |
-| 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
+| 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 已完成 |
 
 ## 进度日志
+
+- 2026-08-02：提交 `7b4b909` 已推送并部署到生产；部署前备份 `.env`、PostgreSQL dump、旧 HEAD bundle 到 `/opt/wio-backups/20260802T025231Z`。仅使用 host-proxy Compose 重建 `controlplane`，PostgreSQL/controlplane 均 healthy，宿主 Caddy active 且无仓库 Caddy 容器；内外 `/api/health` 均返回 HTTP 200，首页 SHA-256 均为 `ba4c0eb97e7c1a0353e0dc0aeec17fb5d7888458554fdfde0a29c78813b6f490`，Codex chunk HTTP 200。
 
 - 2026-08-02：主 Agent 完成 Codex 路由级懒加载迁移：`App.tsx` 使用 `React.lazy` 加载独立 `CodexPage` chunk，保留测试入口的 Suspense 包装并修正审批展示与列表交互；Codex chunk 18.43KB（gzip 5.50KB），入口主 chunk 260.71KB（gzip 76.03KB）。完整回归通过：Go test/vet、Vitest 24 文件/92 测试、typecheck、build/bundle check、Playwright 11 passed/9 expected skipped、`git diff --check`。
 
