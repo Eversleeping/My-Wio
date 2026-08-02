@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第九批已完成实现，待提交部署）
+更新时间：2026-08-02（第九批已提交并完成生产部署）
 
 ## 目标
 
@@ -177,7 +177,7 @@
 | 第三批：前端稳定分包与体积检查 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/vite.config.ts`、构建检查脚本及对应配置 | 已完成 |
 | 第三批：通用 Dialog 可访问性组件 | Terra xhigh 子 Agent，主 Agent 已验收并接入 | 通用组件、独立测试和 `App.tsx` | 已完成 |
 | 第三批：精准实时刷新与 Dashboard 限频 | 主 Agent | `web/src/App.tsx`、`web/src/RealtimeRefresh.test.tsx` | 已完成 |
-| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`44ddc34` 已部署，本机与公网健康检查通过 |
+| 生产部署 | 主 Agent | 服务器仓库、Compose、健康检查 | 已完成：`f518c1e` 已部署，本机与公网健康检查、首页及懒加载资源检查通过 |
 | 第四批：图片压缩 Worker 与回退 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 压缩模块、Worker、`App.tsx` 与测试 | 已完成 |
 | 第四批：统一确认对话框组件 | Terra xhigh 子 Agent，主 Agent 已接入并验收 | 新增组件、部署删除迁移与测试 | 已完成全部浏览器原生确认迁移 |
 | 第四批：Playwright E2E 基础设施 | Terra xhigh 子 Agent，主 Agent 已验收 | E2E 配置、用例、测试脚本和说明 | 已完成 |
@@ -256,3 +256,4 @@
 
 - 2026-08-02：第九批由主 Agent 接管并完成：Deployments、Monitoring、Settings 迁移为真实懒加载路由；会话事件、变更文件、文件预览和 diff 统一接入动态高度虚拟列表，支持目标行滚动定位；预览刷新失败时保留上一次成功数据并显示更新时间、失败原因和重试入口；Monitoring 延迟卡片改用中英文 i18n。
 - 2026-08-02：补充 Agent 操作指标聚合与 API 契约测试（状态计数、队列/投递/执行平均值、P95、最大值、时间窗口和非法 hours 限制），补充虚拟列表目标行、预览失败旧数据和状态提示测试。新增回归：前端 25 个测试文件/96 个测试通过，Go store/httpapi 契约测试通过；typecheck、build、bundle check、Go test/vet、Playwright 和 `git diff --check` 继续作为提交前门槛。
+- 2026-08-02：第九批最终提交 `f518c1e` 已推送并部署到生产。部署前备份 `.env`、PostgreSQL 压缩备份、旧 Git bundle 和旧源码归档至 `/opt/wio-backups/20260802T045933Z`；远端仓库版本为 `f518c1e`，host-proxy Compose 下 controlplane 与 PostgreSQL 均 healthy，宿主 Caddy active，未启动仓库 Caddy。服务器本机与公网 `/api/health` 均返回 HTTP 200（版本 `0.2.44`、前端版本 `8a6236be3d26500d`）；首页及入口静态资源、Deployments/Monitoring/Settings 懒加载 chunk 均返回 HTTP 200；无残留 Compose/BuildKit 进程。
