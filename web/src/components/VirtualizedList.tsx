@@ -130,7 +130,7 @@ export function VirtualizedItems<T>({ items, scrollRef, getKey, estimateSize, ov
       {items.slice(virtual.start, virtual.end).map((item, relativeIndex) => {
         const index = virtual.start + relativeIndex;
         const key = getKey ? getKey(item, index) : String(index);
-        return <div key={key} data-virtual-index={index} data-virtual-key={key} ref={element => virtual.onMeasure(index, element)} style={{ position: "absolute", top: virtual.offsets[index], left: 0, right: 0 }}>
+        return <div key={key} className="virtualized-item" data-virtual-index={index} data-virtual-key={key} ref={element => virtual.onMeasure(index, element)} style={{ position: "absolute", top: virtual.offsets[index], left: 0, right: 0 }}>
           {renderItem(item, index)}
         </div>;
       })}

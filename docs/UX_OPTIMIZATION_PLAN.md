@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第九批已提交并完成生产部署）
+更新时间：2026-08-02（第九批已部署，运行中状态与无效工作区已收口）
 
 ## 目标
 
@@ -200,6 +200,9 @@
 | 第九批：文件/diff/会话长列表虚拟化与目标行定位 | 主 Agent | `web/src/components/VirtualizedList.tsx`、`web/src/App.tsx`、预览组件及对应测试 | 已完成 |
 | 第九批：预览失败旧数据保留与监控指标国际化 | 主 Agent | `web/src/App.tsx`、`web/src/pages/MonitoringPage.tsx`、i18n 与对应测试 | 已完成 |
 | 第九批：Deployments/Monitoring/Settings 真实路由懒加载 | 主 Agent | `web/src/App.tsx`、`web/src/pages` | 已完成 |
+| 失效 Codex 中断状态回收 | 主 Agent | `internal/agentgateway/gateway.go`、`gateway_test.go` | 已完成：无活动 turn 时回收为 `interrupted` 并发布取消事件 |
+| 无效工作区元数据清理 | 主 Agent | 生产工作区记录、工作区管理删除预检 | 已完成：仅删除 `/opt/wio-controlplane` 元数据，保留服务器文件 |
+| Codex 用户消息右侧对齐 | 主 Agent | `web/src/components/VirtualizedList.tsx`、`web/src/styles.css`、对应测试 | 已完成：兼容虚拟列表包装层，桌面与移动端沿用右侧布局 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 已完成 |
 
 ## 进度日志
@@ -257,3 +260,7 @@
 - 2026-08-02：第九批由主 Agent 接管并完成：Deployments、Monitoring、Settings 迁移为真实懒加载路由；会话事件、变更文件、文件预览和 diff 统一接入动态高度虚拟列表，支持目标行滚动定位；预览刷新失败时保留上一次成功数据并显示更新时间、失败原因和重试入口；Monitoring 延迟卡片改用中英文 i18n。
 - 2026-08-02：补充 Agent 操作指标聚合与 API 契约测试（状态计数、队列/投递/执行平均值、P95、最大值、时间窗口和非法 hours 限制），补充虚拟列表目标行、预览失败旧数据和状态提示测试。新增回归：前端 25 个测试文件/96 个测试通过，Go store/httpapi 契约测试通过；typecheck、build、bundle check、Go test/vet、Playwright 和 `git diff --check` 继续作为提交前门槛。
 - 2026-08-02：第九批最终提交 `f518c1e` 已推送并部署到生产。部署前备份 `.env`、PostgreSQL 压缩备份、旧 Git bundle 和旧源码归档至 `/opt/wio-backups/20260802T045933Z`；远端仓库版本为 `f518c1e`，host-proxy Compose 下 controlplane 与 PostgreSQL 均 healthy，宿主 Caddy active，未启动仓库 Caddy。服务器本机与公网 `/api/health` 均返回 HTTP 200（版本 `0.2.44`、前端版本 `8a6236be3d26500d`）；首页及入口静态资源、Deployments/Monitoring/Settings 懒加载 chunk 均返回 HTTP 200；无残留 Compose/BuildKit 进程。
+- 2026-08-02：提交 `f379b43` 修复失效 Codex 中断状态回收：Agent 返回 `no active turn/turn not found` 时，线程、定时任务和待审批均回收，并发布 `codex.turn.cancelled`。已部署到生产；备份位于 `/opt/wio-backups/20260802T053649Z`，远端仓库、controlplane/PostgreSQL、宿主 Caddy 和内外 `/api/health` 均验收通过。
+- 2026-08-02：生产复验“种田游戏”线程：再次点击中断后页面从“运行中”变为“已中断”，数据库状态为 `interrupted`，无活动 Codex 操作，新增取消事件；此前两条 `codex.interrupt.failed` 仅为上游无活动 turn 的历史记录。
+- 2026-08-02：核对并清理空工作区记录 `01b1bac4-7326-44ae-af7c-8c91889d5aac`（项目 `My-Wio`、路径 `/opt/wio-controlplane`）。删除预检显示改动/进行中操作/会话/关联工作区均为 0，使用“仅删除元数据”后记录消失，服务器 `/opt/wio-controlplane` 文件保留；有效工作区 `/var/lib/wio-agent/projects/My-Wio` 仍保留。
+- 2026-08-02：按用户偏好恢复 Codex 用户消息右侧显示。修复虚拟列表绝对定位包装层导致 `align-self` 失效的问题，为虚拟行增加布局标记并在会话流中启用纵向 flex；新增回归测试。前端 25 个测试文件/97 个测试、typecheck、build、bundle check 和 `git diff --check` 通过，最大 JS chunk 216.94KB（gzip 66.23KB）。

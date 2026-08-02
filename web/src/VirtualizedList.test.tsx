@@ -12,6 +12,11 @@ test("only mounts a bounded window for long lists", () => {
   expect(list?.querySelectorAll("[data-virtual-index]").length).toBeLessThan(100);
 });
 
+test("marks each virtualized row for conversation-specific layout", () => {
+  const { container } = render(<VirtualizedList items={["message"]} style={{ height: 120 }} renderItem={item => <article>{item}</article>} />);
+  expect(container.querySelector("[data-virtual-index='0']")).toHaveClass("virtualized-item");
+});
+
 test("updates the rendered window when the list scrolls", async () => {
   const items = Array.from({ length: 500 }, (_, index) => index);
   const { container } = render(<VirtualizedList items={items} style={{ height: 200 }} estimateSize={20} renderItem={item => <div>{item}</div>} />);
