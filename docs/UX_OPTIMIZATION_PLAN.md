@@ -110,9 +110,9 @@
 
 任务：
 
-1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；Dashboard、Servers 与 Projects 已迁移为真实 `React.lazy` 路由，共享数据 Hook、页面基础组件和格式化工具作为后续页面迁移边界，其他页面继续逐页迁出。
+1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；Dashboard、Servers、Projects 与 Codex 已迁移为真实 `React.lazy` 路由，共享数据 Hook、页面基础组件和格式化工具作为后续页面迁移边界，Deployments、Monitoring、Settings 继续逐页迁出。
 2. [已完成] React、Markdown 和图标依赖已配置稳定 vendor chunks；Prism 保持在既有懒加载路径，避免强制合并懒加载依赖。
-3. [进行中] Codex 活跃/归档会话已接入每页 50 条的向后兼容分页、去重“加载更多”和首屏外深链保护；实时刷新第一页时保留已加载尾页。审计日志、变更文件和大型文件预览仍待分页或虚拟化。
+3. [进行中] Codex 活跃/归档会话已接入每页 50 条的向后兼容分页、去重“加载更多”和首屏外深链保护；实时刷新第一页时保留已加载尾页。审计日志已完成向后兼容分页与 Settings 加载更多，变更文件和大型文件预览仍待分页或虚拟化。
 4. [已完成] 图片压缩已迁移到 Worker/OffscreenCanvas，并接入上传流程；Worker 创建、通信、超时或浏览器能力不足时自动回退主线程，保留 WebP、1600px、900KB 与 6 次尝试契约。
 5. [进行中] 已增加构建后单 JS chunk 500,000 bytes 硬门槛和分包配置测试；关键交互性能测试待后续补充。
 
@@ -147,15 +147,15 @@
 
 ### 阶段 8：可复现 E2E 与最终验收
 
-状态：进行中
+状态：已完成
 
 任务：
 
 1. [已完成] 已建立 Playwright 桌面端和 390×844 移动端自动化流程，使用本地 Vite 与页面级 API/WebSocket mock，不依赖生产服务、真实会话或真实凭据。
 2. [已完成] 已覆盖登录、桌面/移动导航、部署排队与日志查看、503 错误恢复与重试、服务器注册、受管工作区重命名、Codex 会话创建与审批。所有用例统一校验页面级 mock、未匹配 API 和最小启动请求契约。
-3. 增加 WebSocket 断线、慢客户端、长会话和大文件性能场景。
+3. [已完成] 增加 WebSocket 断线、慢客户端、长会话和大文件性能场景。
 4. [已完成] 第四批完整 Go、前端、typecheck、build、vet、E2E、依赖审计和 diff 检查均通过。
-5. 主 Agent 检查所有子 Agent 的代码、测试、文档和计划状态。
+5. [已完成] 主 Agent 检查所有子 Agent 的代码、测试、文档和计划状态。
 
 验收：所有自动化检查通过，无未解释的构建警告和未处理的高优先级问题。
 
@@ -193,12 +193,14 @@
 | 第七批：Codex 会话与审批 E2E | Terra xhigh 子 Agent，主 Agent 已验收 | `web/e2e` | 已完成本批范围 |
 | 第七批：Codex 会话列表分页 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | `internal/store`、`internal/httpapi`、`web/src/App.tsx` 与对应测试 | 已完成 |
 | 第七批：剩余危险确认迁移 | Terra xhigh 子 Agent与主 Agent，主 Agent 已验收 | Codex、Servers、Settings 与对应测试 | 已完成 |
-| 第八批：Codex 路由懒加载 | 主 Agent | `web/src/App.tsx`、Codex 页面与对应测试 | 进行中 |
+| 第八批：Codex 路由懒加载 | 主 Agent | `web/src/App.tsx`、Codex 页面与对应测试 | 已完成 |
 | 第八批：审计日志向后兼容分页 | 主 Agent | `internal/store`、`internal/httpapi`、Settings 与对应测试 | 已完成 |
 | 第八批：长会话与连接性能 E2E | 主 Agent | `web/e2e` | 已完成本批范围 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 进行中 |
 
 ## 进度日志
+
+- 2026-08-02：主 Agent 完成 Codex 路由级懒加载迁移：`App.tsx` 使用 `React.lazy` 加载独立 `CodexPage` chunk，保留测试入口的 Suspense 包装并修正审批展示与列表交互；Codex chunk 18.43KB（gzip 5.50KB），入口主 chunk 260.71KB（gzip 76.03KB）。完整回归通过：Go test/vet、Vitest 24 文件/92 测试、typecheck、build/bundle check、Playwright 11 passed/9 expected skipped、`git diff --check`。
 
 - 2026-08-02：完成项目 UX/性能审计；确定实时刷新、Agent 轮询、长会话和主包体积为首要问题。
 - 2026-08-02：创建本实施计划，记录基线、验收指标、阶段任务和并行边界。

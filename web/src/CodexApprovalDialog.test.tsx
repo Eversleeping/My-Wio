@@ -37,7 +37,7 @@ test("closes the approval dialog after the final request is approved", async () 
   const user = userEvent.setup();
   render(<ApprovalPage />);
 
-  expect(screen.getByRole("dialog", { name: "Pending approvals" })).toBeInTheDocument();
+  expect(await screen.findByRole("dialog", { name: "Pending approvals" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Approve once" }));
 
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Pending approvals" })).not.toBeInTheDocument());
