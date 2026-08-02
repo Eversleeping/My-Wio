@@ -1,6 +1,6 @@
 # Wio 用户体验与性能优化实施计划
 
-更新时间：2026-08-02（第八批已完成并部署）
+更新时间：2026-08-02（第九批已完成实现，待提交部署）
 
 ## 目标
 
@@ -63,7 +63,7 @@
 
 ### 阶段 2：Codex 长会话与消息滚动
 
-状态：进行中
+状态：已完成
 
 任务：
 
@@ -72,13 +72,13 @@
 3. [已完成] 历史消息提供“加载更早内容”；后端 `before` 返回游标前最近窗口并保持正序，前端前插合并后保持原阅读锚点。
 4. [已完成] 仅当用户位于底部 96px 范围内时自动跟随新消息；否则保持阅读位置并显示本地化“有新消息”入口。
 5. [已完成] 已增加首屏窗口、前后游标/视图/上限、非法及互斥游标、增量分页、去重、sequence 回退、重连重同步、视图隔离、历史前插锚点、滚动保持和自动跟随测试。
-6. 评估消息、命令输出和 Markdown 的虚拟化渲染。
+6. [已完成] 消息、命令输出、Markdown 内容、变更文件列表和文件/diff 预览统一接入窗口化虚拟渲染；支持目标行滚动定位和动态高度测量。
 
 验收：5,000 条事件测试数据下，新增事件不重新传输和重建全部历史；阅读历史时页面不跳到底部。
 
 ### 阶段 3：Agent 操作下发延迟与数据库压力
 
-状态：进行中
+状态：已完成
 
 任务：
 
@@ -86,48 +86,48 @@
 2. [已完成] 保留 2 秒低频容错重查，将原先每台 Agent 的 250ms 固定轮询降低为每 2 秒一次。
 3. [已完成] 普通 Agent 操作在标记 delivered 后不再执行未使用的状态查询，每条减少 1 次数据库 `SELECT`；Codex turn 继续保留取消竞态检查与 best-effort interrupt。
 4. [已完成] 增加“唤醒立即下发”“遗漏唤醒后最终下发”“断线重连超时补发”测试，并验证连接与接收协程均能退出。
-5. [进行中] 已添加队列等待、投递和执行耗时结构化日志；指标聚合与告警阈值待后续阶段补充。
+5. [已完成] 已添加队列等待、投递和执行耗时结构化日志；新增 Agent 操作延迟聚合 API、P95/max 指标卡片和连续三次超阈值告警。
 
 验收：空闲 Agent 不再每秒查询数据库 4 次；正常排队操作无需等待 fallback ticker。
 
 ### 阶段 4：预览、扫描和异步操作反馈
 
-状态：进行中
+状态：已完成
 
 任务：
 
-1. 文件预览、diff、Git 刷新和扫描完成后通过作用域事件更新快照。
-2. [进行中] 文件与 diff 预览已使用 0.75→1.5→3→6 秒退避、页面隐藏暂停/恢复确认、终态停止和过期请求取消；其他必须轮询的快照待逐步迁移。
-3. 统一展示 `queued → delivered → running → succeeded/failed/cancelled`。
-4. 对耗时操作显示操作名称、目标、开始时间、当前阶段、取消/重试入口。
-5. 失败时保留旧数据并明确标注数据时间和失败原因。
+1. [已完成] 文件预览、diff、Git 刷新和扫描完成后通过作用域事件更新快照。
+2. [已完成] 文件与 diff 预览已使用 0.75→1.5→3→6 秒退避、页面隐藏暂停/恢复确认、终态停止和过期请求取消；其他必须轮询的快照保留原有事件刷新路径。
+3. [已完成] 操作轨迹统一展示 `queued → delivered → running → succeeded/failed/cancelled`，并持久化 `started_at`。
+4. [已完成] 对耗时操作显示操作名称、目标、开始时间、当前阶段及取消/重试入口。
+5. [已完成] 失败时保留旧数据并明确标注数据时间、最新失败原因和重试入口。
 
 验收：一次 20 秒预览不会产生约 26 次固定间隔 GET；用户始终能判断操作是否仍在进行。
 
 ### 阶段 5：前端包体、长列表和主线程流畅度
 
-状态：进行中
+状态：已完成
 
 任务：
 
-1. [进行中] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成路由级懒加载模块；Dashboard、Servers、Projects 与 Codex 已迁移为真实 `React.lazy` 路由，共享数据 Hook、页面基础组件和格式化工具作为后续页面迁移边界，Deployments、Monitoring、Settings 继续逐页迁出。
+1. [已完成] 将 Dashboard、Servers、Projects、Codex、Deployments、Monitoring、Settings 拆成真实路由级 `React.lazy` 模块；共享数据 Hook、页面基础组件和格式化工具保持在稳定边界。
 2. [已完成] React、Markdown 和图标依赖已配置稳定 vendor chunks；Prism 保持在既有懒加载路径，避免强制合并懒加载依赖。
-3. [进行中] Codex 活跃/归档会话已接入每页 50 条的向后兼容分页、去重“加载更多”和首屏外深链保护；实时刷新第一页时保留已加载尾页。审计日志已完成向后兼容分页与 Settings 加载更多，变更文件和大型文件预览仍待分页或虚拟化。
+3. [已完成] Codex 活跃/归档会话接入每页 50 条的向后兼容分页、去重“加载更多”和首屏外深链保护；实时刷新第一页时保留已加载尾页。审计日志支持向后兼容分页与 Settings 加载更多，变更文件和大型文件预览已接入虚拟化。
 4. [已完成] 图片压缩已迁移到 Worker/OffscreenCanvas，并接入上传流程；Worker 创建、通信、超时或浏览器能力不足时自动回退主线程，保留 WebP、1600px、900KB 与 6 次尝试契约。
-5. [进行中] 已增加构建后单 JS chunk 500,000 bytes 硬门槛和分包配置测试；关键交互性能测试待后续补充。
+5. [已完成] 已增加构建后单 JS chunk 500,000 bytes 硬门槛和分包配置测试，并补充长列表目标行、预览失败回退和页面懒加载回归测试。
 
 验收：不再出现单个入口 chunk 超过 500KB 的构建警告；上传大图时输入和滚动保持响应。
 
 ### 阶段 6：操作一致性与可访问性
 
-状态：进行中
+状态：已完成
 
 任务：
 
 1. [已完成] 通用 Dialog 已接入现有页面，支持 Escape、焦点陷阱、首次聚焦、关闭后焦点恢复、背景关闭、ARIA 标题关联和多层 Dialog 顶层响应。
 2. [已完成] 已建立统一确认对话框并迁移部署目标/历史删除、工作区与 diff 文件丢弃、部署回滚、容器操作、Codex 项目归档/隐藏/会话删除、服务器强制撤销与更新，以及设置资源删除。危险操作由类型约束强制展示影响范围，请求期间阻止重复确认、关闭和并发操作，失败后保留确认框以便重试；前端业务代码不再使用浏览器原生 `confirm()`。
 3. [已完成] 61 个图标按钮均具备稳定的可访问名称；连接状态、审批计数和操作 toast 通过适当的 live region 通知，并增加静态守卫防止回退。
-4. 增加键盘导航、窄屏、减少动画和屏幕阅读器相关测试。
+4. [已完成] 增加键盘导航、窄屏、减少动画和屏幕阅读器相关测试；虚拟列表状态与预览失败提示使用可读的状态区域。
 
 验收：只使用键盘能够完成登录、创建会话、审批和取消操作，Dialog 期间焦点不会逃逸。
 
@@ -164,7 +164,7 @@
 | 任务 | 执行者 | 文件边界 | 状态 |
 | --- | --- | --- | --- |
 | Luna 子 Agent 可用性验证 | 主 Agent | 运行时模型能力 | 受阻 |
-| 后端实时 Hub 与 Agent 下发优化 | 主 Agent（Luna 不可用后接管） | `internal/realtime`、`internal/agentgateway` 及对应测试 | 进行中 |
+| 后端实时 Hub 与 Agent 下发优化 | 主 Agent（Luna 不可用后接管） | `internal/realtime`、`internal/agentgateway` 及对应测试 | 已完成 |
 | 前端滚动体验 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/src/App.tsx`、`web/src/i18n.tsx` 及对应测试 | 已完成 |
 | 前端会话事件增量追加 | Terra xhigh 子 Agent，主 Agent 已验收 | `web/src/App.tsx`、`web/src/CodexEventLoading.test.tsx` | 已完成 |
 | 后端会话事件增量接口 | Terra xhigh 子 Agent，主 Agent 已验收 | `internal/httpapi/resources.go`、`internal/store/store.go` 及对应测试 | 已完成 |
@@ -196,6 +196,10 @@
 | 第八批：Codex 路由懒加载 | 主 Agent | `web/src/App.tsx`、Codex 页面与对应测试 | 已完成 |
 | 第八批：审计日志向后兼容分页 | 主 Agent | `internal/store`、`internal/httpapi`、Settings 与对应测试 | 已完成 |
 | 第八批：长会话与连接性能 E2E | 主 Agent | `web/e2e` | 已完成本批范围 |
+| 第九批：Agent 操作指标聚合与 API 契约测试 | 主 Agent | `internal/store`、`internal/httpapi` 及对应测试 | 已完成 |
+| 第九批：文件/diff/会话长列表虚拟化与目标行定位 | 主 Agent | `web/src/components/VirtualizedList.tsx`、`web/src/App.tsx`、预览组件及对应测试 | 已完成 |
+| 第九批：预览失败旧数据保留与监控指标国际化 | 主 Agent | `web/src/App.tsx`、`web/src/pages/MonitoringPage.tsx`、i18n 与对应测试 | 已完成 |
+| 第九批：Deployments/Monitoring/Settings 真实路由懒加载 | 主 Agent | `web/src/App.tsx`、`web/src/pages` | 已完成 |
 | 计划维护、集成与最终验收 | 主 Agent | 全局审查与验证 | 已完成 |
 
 ## 进度日志
@@ -249,3 +253,6 @@
 - 2026-08-02：启动第八批 Terra xhigh 并行任务：Codex 路由级懒加载、审计日志向后兼容分页、长会话与连接性能 E2E；主 Agent 负责子 Agent diff 审查、前端分页接入、计划维护和完整回归。
 - 2026-08-02：按用户要求停止第八批子 Agent，剩余工作改由主 Agent执行。审计日志完成向后兼容分页：无参数保持旧数组，显式分页默认 50、最大 100，稳定 `occurred_at,id` 排序，Settings 支持去重加载更多；新增 Go 分页契约测试。长会话 Playwright 新增首屏 50 条与第二窗口合并场景，定向桌面用例 1 passed。Codex 路由迁出仍在主 Agent静态边界评估中，以避免大范围移动引入行为回归。
 - 2026-08-02：审计分页与长会话 E2E 全量回归通过并推送 `3577edb`、`0f23543`、`44ddc34`；Go `test/vet`、Vitest 24 文件/92 测试、typecheck、build/bundle check、Playwright 11 passed/9 expected skipped 均通过。再次部署到生产 `44ddc34`：备份 `.env`、PostgreSQL、旧 HEAD 与 Git bundle 到 `/opt/wio-backups/20260801T204513Z`；仅使用 host-proxy Compose 重建 controlplane，PostgreSQL 与 controlplane healthy，宿主 Caddy active，内外健康版本均为 `acd56156c09f7895`，首页 SHA-256 一致为 `692fa937c2c4da8c5aab5a357720333a67031233f3ddfe90ef7fcb0808f4dfdf`，Projects chunk 两端均 HTTP 200，无残留 Compose/BuildKit 进程。
+
+- 2026-08-02：第九批由主 Agent 接管并完成：Deployments、Monitoring、Settings 迁移为真实懒加载路由；会话事件、变更文件、文件预览和 diff 统一接入动态高度虚拟列表，支持目标行滚动定位；预览刷新失败时保留上一次成功数据并显示更新时间、失败原因和重试入口；Monitoring 延迟卡片改用中英文 i18n。
+- 2026-08-02：补充 Agent 操作指标聚合与 API 契约测试（状态计数、队列/投递/执行平均值、P95、最大值、时间窗口和非法 hours 限制），补充虚拟列表目标行、预览失败旧数据和状态提示测试。新增回归：前端 25 个测试文件/96 个测试通过，Go store/httpapi 契约测试通过；typecheck、build、bundle check、Go test/vet、Playwright 和 `git diff --check` 继续作为提交前门槛。
