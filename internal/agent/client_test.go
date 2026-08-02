@@ -38,9 +38,10 @@ func TestRedeliveredOperationReplaysCachedResult(t *testing.T) {
 	}
 	operation := &protocol.ControlEnvelope{OperationID: "operation-1", Kind: "unsupported"}
 	client.handleOperation(context.Background(), operation)
-	first := <-client.outbound
+	receiveOperationStarted(t, client.outbound, operation.OperationID)
+	first := receiveAgentEnvelope(t, client.outbound)
 	client.handleOperation(context.Background(), operation)
-	second := <-client.outbound
+	second := receiveAgentEnvelope(t, client.outbound)
 	for index, envelope := range []*protocol.AgentEnvelope{first, second} {
 		var result protocol.OperationResult
 		if envelope.Kind != "operation_result" || json.Unmarshal(envelope.PayloadJSON, &result) != nil || result.OperationID != operation.OperationID || result.Status != "failed" {
@@ -115,9 +116,10 @@ func TestGitProjectCreateReturnsStructuredResultAndRefreshesInventory(t *testing
 	}
 	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "create-1", Kind: "git.project.create", PayloadJSON: payload})
 
+	receiveOperationStarted(t, client.outbound, "create-1")
 	operationEnvelope := receiveAgentEnvelope(t, client.outbound)
 	if operationEnvelope.Kind != "operation_result" {
-		t.Fatalf("expected operation result first, got %q", operationEnvelope.Kind)
+		t.Fatalf("expected operation result after start, got %q", operationEnvelope.Kind)
 	}
 	var operation protocol.OperationResult
 	if err := json.Unmarshal(operationEnvelope.PayloadJSON, &operation); err != nil {
@@ -200,6 +202,7 @@ func TestGitProjectDeleteReturnsStructuredResult(t *testing.T) {
 	}
 	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "delete-1", Kind: "git.project.delete", PayloadJSON: payload})
 
+	receiveOperationStarted(t, client.outbound, "delete-1")
 	envelope := receiveAgentEnvelope(t, client.outbound)
 	var operation protocol.OperationResult
 	if err := json.Unmarshal(envelope.PayloadJSON, &operation); err != nil {
@@ -259,6 +262,7 @@ func TestWorkspaceGitInspectReturnsStatusBranchesRemotesAndCommits(t *testing.T)
 	client := &Client{config: Config{ScanRoots: []string{root}, CloneRoot: filepath.Join(root, "clone")}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), outbound: make(chan *protocol.AgentEnvelope, 2), seen: make(map[string]*operationExecution)}
 	payload, _ := json.Marshal(protocol.GitWorkspaceInspectCommand{WorkspaceID: "workspace-1", Path: repository, CommitLimit: 10})
 	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "inspect-1", Kind: "git.workspace.inspect", PayloadJSON: payload})
+	receiveOperationStarted(t, client.outbound, "inspect-1")
 	envelope := receiveAgentEnvelope(t, client.outbound)
 	var operation protocol.OperationResult
 	if err := json.Unmarshal(envelope.PayloadJSON, &operation); err != nil || operation.Status != "succeeded" {
@@ -281,6 +285,15 @@ func receiveAgentEnvelope(t *testing.T, outbound <-chan *protocol.AgentEnvelope)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for Agent envelope")
 		return nil
+	}
+}
+
+func receiveOperationStarted(t *testing.T, outbound <-chan *protocol.AgentEnvelope, operationID string) {
+	t.Helper()
+	envelope := receiveAgentEnvelope(t, outbound)
+	var started protocol.OperationStarted
+	if envelope.Kind != "operation_started" || json.Unmarshal(envelope.PayloadJSON, &started) != nil || started.OperationID != operationID {
+		t.Fatalf("unexpected operation start: kind=%q payload=%s", envelope.Kind, envelope.PayloadJSON)
 	}
 }
 

@@ -28,3 +28,33 @@ test("renders legacy null project collections as empty states", async () => {
   await user.click(screen.getByRole("tab", { name: "History" }));
   expect(screen.getByText("No operations")).toBeInTheDocument();
 });
+
+test("renders one current lifecycle step for running and legacy operation states", async () => {
+  const user = userEvent.setup();
+  const statuses = ["running", "waiting", "canceled", "superseded"];
+  const detail: ProjectDetail = {
+    ...legacyDetail,
+    operations: statuses.map((status, index) => ({
+      id: `operation-${index}`,
+      server_id: "server-1",
+      project_id: "project-1",
+      workspace_id: "workspace-1",
+      kind: "test.operation",
+      status,
+      result: "",
+      result_data: "{}",
+      created_at: "2026-07-20T00:00:00Z",
+      delivered_at: null,
+      started_at: null,
+      completed_at: null
+    }))
+  };
+  render(<ProjectDetailsDialog open detail={detail} loading={false} busy={false} error="" labels={labels} slots={{ Dialog, Field, DialogActions }} onClose={vi.fn()} onSubmit={vi.fn()} />);
+
+  await user.click(screen.getByRole("tab", { name: "History" }));
+  for (const status of statuses) {
+    expect(screen.getByLabelText(status).querySelectorAll(".current")).toHaveLength(1);
+  }
+  expect(Array.from(screen.getByLabelText("running").querySelectorAll("i")).map(step => step.title)).toEqual(["queued", "delivered", "running"]);
+  expect(screen.getByText("canceled")).toHaveClass("failed");
+});

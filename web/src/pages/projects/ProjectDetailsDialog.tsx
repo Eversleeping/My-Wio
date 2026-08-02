@@ -35,6 +35,18 @@ export interface ProjectDetailsLabels {
   loading: string;
 }
 
+const operationLifecycle = ["queued", "delivered", "running"];
+const terminalOperationStatuses = new Set(["succeeded", "failed", "partial", "cancelled", "canceled", "superseded"]);
+const failedOperationStatuses = new Set(["failed", "partial", "cancelled", "canceled"]);
+
+export function operationStatusTrail(status: string) {
+  if (status === "waiting") return { steps: ["waiting", ...operationLifecycle], currentIndex: 0 };
+  if (terminalOperationStatuses.has(status)) return { steps: [...operationLifecycle, status], currentIndex: operationLifecycle.length };
+  const currentIndex = operationLifecycle.indexOf(status);
+  if (currentIndex >= 0) return { steps: operationLifecycle, currentIndex };
+  return { steps: [status], currentIndex: 0 };
+}
+
 export function ProjectDetailsDialog({ open, detail, loading, busy, error, labels, slots, onClose, onSubmit }: {
   open: boolean;
   detail: ProjectDetail | null;
@@ -84,13 +96,11 @@ export function ProjectDetailsDialog({ open, detail, loading, busy, error, label
       </> : <div className="project-operation-list">
         <div className="project-operation-header"><span>{labels.operation}</span><span>{labels.state}</span><span></span><span>{labels.time}</span><span>{labels.result}</span></div>
         {operations.length === 0 ? <div className="empty-state">{labels.noOperations}</div> : operations.map(operation => {
-          const terminal = ["succeeded", "failed", "cancelled", "partial"].includes(operation.status) ? operation.status : "";
-          const steps = ["queued", "delivered", "running", terminal || "running"];
-          const currentIndex = Math.max(0, steps.indexOf(operation.status));
+          const { steps, currentIndex } = operationStatusTrail(operation.status);
           return <div className="project-operation-row" key={operation.id}>
             <code title={operation.id}>{operation.kind}</code>
-            <span className="operation-status-trail" aria-label={operation.status}>{steps.map((step, index) => <i key={`${step}-${index}`} className={`${index <= currentIndex ? "complete" : ""} ${step === operation.status ? "current" : ""} ${["failed", "partial", "cancelled"].includes(step) ? "terminal" : ""}`} title={step} />)}</span>
-            <span className={`status-tag ${["failed", "partial", "cancelled"].includes(operation.status) ? "failed" : "neutral"}`}>{operation.status}</span>
+            <span className="operation-status-trail" aria-label={operation.status}>{steps.map((step, index) => <i key={`${step}-${index}`} className={`${index <= currentIndex ? "complete" : ""} ${index === currentIndex ? "current" : ""} ${failedOperationStatuses.has(step) ? "terminal" : ""}`} title={step} />)}</span>
+            <span className={`status-tag ${failedOperationStatuses.has(operation.status) ? "failed" : "neutral"}`}>{operation.status}</span>
             <span>{new Date(operation.created_at).toLocaleString()}</span>
             <span className="truncate-text" title={operation.result}>{operation.result || "-"}</span>
           </div>;

@@ -1702,7 +1702,7 @@ func (s *Store) MarkDelivered(ctx context.Context, id string) error {
 
 func (s *Store) MarkRunning(ctx context.Context, id string) error {
 	now := time.Now().UTC()
-	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='running',started_at=COALESCE(started_at,delivered_at,?) WHERE id=? AND status IN ('queued','delivered','running')"), now, id)
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='running',delivered_at=COALESCE(delivered_at,?),started_at=COALESCE(started_at,?) WHERE id=? AND status IN ('queued','delivered','running')"), now, now, id)
 	return err
 }
 func (s *Store) CompleteOperation(ctx context.Context, r protocol.OperationResult) error {
@@ -1765,7 +1765,7 @@ func (s *Store) OperationMetrics(ctx context.Context, serverID string, since tim
 			result.Succeeded++
 		case "failed", "partial":
 			result.Failed++
-		case "cancelled":
+		case "cancelled", "canceled":
 			result.Cancelled++
 		}
 		if row.DeliveredAt != nil {

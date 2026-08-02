@@ -256,6 +256,9 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	if err := c.queue("operation_started", protocol.OperationStarted{OperationID: envelope.OperationID}, true); err != nil {
+		c.log.Warn("could not queue operation start", "operation_id", envelope.OperationID, "error", err)
+	}
 	var restartPath string
 	var resultData json.RawMessage
 	refreshInventory := false

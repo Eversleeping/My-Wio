@@ -58,6 +58,7 @@ func TestCrossServerCloneOperationReturnsVerifiedWorkspace(t *testing.T) {
 	command := protocol.GitWorkspaceCloneCommand{WorkspaceID: "target-workspace", ProjectID: "project-1", Name: "project", Destination: target, RemoteURL: server.URL + "/project.git", Branch: "main", ExpectedHead: head}
 	payload, _ := json.Marshal(command)
 	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "clone-1", Kind: "git.workspace.clone", PayloadJSON: payload})
+	receiveOperationStarted(t, client.outbound, "clone-1")
 	envelope := receiveAgentEnvelope(t, client.outbound)
 	var operation protocol.OperationResult
 	if err := json.Unmarshal(envelope.PayloadJSON, &operation); err != nil {
@@ -89,6 +90,7 @@ func TestWorkspaceLifecycleOperationReturnsStructuredMoveResult(t *testing.T) {
 	command := protocol.GitWorkspaceLifecycleCommand{WorkspaceID: "workspace-1", ProjectID: "project-1", Action: "move", SourcePath: source, TargetPath: target}
 	payload, _ := json.Marshal(command)
 	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "move-1", Kind: "git.workspace.lifecycle", PayloadJSON: payload})
+	receiveOperationStarted(t, client.outbound, "move-1")
 	envelope := receiveAgentEnvelope(t, client.outbound)
 	var operation protocol.OperationResult
 	if err := json.Unmarshal(envelope.PayloadJSON, &operation); err != nil {

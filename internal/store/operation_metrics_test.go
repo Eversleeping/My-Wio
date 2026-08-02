@@ -31,6 +31,7 @@ func TestOperationMetricsAggregatesLatencyAndStatuses(t *testing.T) {
 		{id: "metrics-running", status: "running", created: now.Add(-40 * time.Second), delivered: makeTime(-35 * time.Second), started: makeTime(-34 * time.Second)},
 		{id: "metrics-queued", status: "queued", created: now.Add(-30 * time.Second)},
 		{id: "metrics-cancelled", status: "cancelled", created: now.Add(-20 * time.Second)},
+		{id: "metrics-canceled", status: "canceled", created: now.Add(-10 * time.Second)},
 		{id: "metrics-old", status: "succeeded", created: now.Add(-3 * time.Hour), delivered: makeTime(-3*time.Hour + 10*time.Second), started: makeTime(-3*time.Hour + 20*time.Second), complete: makeTime(-3*time.Hour + 30*time.Second)},
 	}
 	for _, fixture := range fixtures {
@@ -43,7 +44,7 @@ func TestOperationMetricsAggregatesLatencyAndStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metrics.Total != 5 || metrics.Queued != 1 || metrics.Delivered != 0 || metrics.Running != 1 || metrics.Succeeded != 1 || metrics.Failed != 1 || metrics.Cancelled != 1 {
+	if metrics.Total != 6 || metrics.Queued != 1 || metrics.Delivered != 0 || metrics.Running != 1 || metrics.Succeeded != 1 || metrics.Failed != 1 || metrics.Cancelled != 2 {
 		t.Fatalf("unexpected status totals: %#v", metrics)
 	}
 	if metrics.QueueWait.Count != 3 || math.Abs(metrics.QueueWait.Average-6666.666666666667) > 0.001 || metrics.QueueWait.P95 != 10000 || metrics.QueueWait.Max != 10000 {
@@ -68,11 +69,16 @@ func TestMarkRunningRecordsStartOnce(t *testing.T) {
 	if err := database.MarkDelivered(ctx, operationID); err != nil {
 		t.Fatal(err)
 	}
+	delivered, err := database.Operation(ctx, operationID)
+	if err != nil || delivered.DeliveredAt == nil {
+		t.Fatalf("operation was not marked delivered: %#v %v", delivered, err)
+	}
+	time.Sleep(time.Millisecond)
 	if err := database.MarkRunning(ctx, operationID); err != nil {
 		t.Fatal(err)
 	}
 	first, err := database.Operation(ctx, operationID)
-	if err != nil || first.Status != "running" || first.StartedAt == nil {
+	if err != nil || first.Status != "running" || first.StartedAt == nil || !first.StartedAt.After(*delivered.DeliveredAt) {
 		t.Fatalf("operation was not marked running: %#v %v", first, err)
 	}
 	startedAt := *first.StartedAt
@@ -82,5 +88,22 @@ func TestMarkRunningRecordsStartOnce(t *testing.T) {
 	second, err := database.Operation(ctx, operationID)
 	if err != nil || second.StartedAt == nil || !second.StartedAt.Equal(startedAt) {
 		t.Fatalf("operation start timestamp changed on retry: %#v %v", second, err)
+	}
+}
+
+func TestMarkRunningBackfillsDeliveryWhenStartWinsTheDeliveryRace(t *testing.T) {
+	database := testStore(t)
+	ctx := context.Background()
+	server := enrollProjectImportTestServer(t, database, "running-race-server")
+	operationID, err := database.QueueOperation(ctx, server.ID, "metrics.test", map[string]any{}, "running-race-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.MarkRunning(ctx, operationID); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := database.Operation(ctx, operationID)
+	if err != nil || operation.Status != "running" || operation.DeliveredAt == nil || operation.StartedAt == nil {
+		t.Fatalf("running operation did not preserve lifecycle timestamps: %#v %v", operation, err)
 	}
 }

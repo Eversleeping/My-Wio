@@ -218,6 +218,22 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
 		return g.publish(ctx, event)
+	case "operation_started":
+		var started protocol.OperationStarted
+		if err := json.Unmarshal(msg.PayloadJSON, &started); err != nil {
+			return err
+		}
+		operation, err := g.store.Operation(ctx, started.OperationID)
+		if err != nil {
+			return err
+		}
+		if operation.ServerID != serverID {
+			return errors.New("operation start server mismatch")
+		}
+		if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
+			return nil
+		}
+		return g.store.MarkRunning(ctx, operation.ID)
 	case "operation_result":
 		var result protocol.OperationResult
 		if err := json.Unmarshal(msg.PayloadJSON, &result); err != nil {
@@ -235,13 +251,6 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		// its snapshot with stale data.
 		if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
 			return nil
-		}
-		if err := g.store.MarkRunning(ctx, operation.ID); err != nil {
-			return err
-		}
-		operation, err = g.store.Operation(ctx, operation.ID)
-		if err != nil {
-			return err
 		}
 		resultLogFields := []any{
 			"server_id", serverID,

@@ -282,6 +282,35 @@ func TestConnectRedeliversTimedOutDeliveredOperationAfterReconnect(t *testing.T)
 	}
 }
 
+func TestOperationStartedRecordsRunningLifecycle(t *testing.T) {
+	database, server := gatewayTestServer(t, "operation-started-agent-token")
+	ctx := context.Background()
+	operationID, err := database.QueueOperation(ctx, server.ID, "inventory.scan", map[string]any{}, "operation-started")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.MarkDelivered(ctx, operationID); err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := database.Operation(ctx, operationID)
+	if err != nil || delivered.DeliveredAt == nil {
+		t.Fatalf("operation was not delivered: %#v %v", delivered, err)
+	}
+	time.Sleep(time.Millisecond)
+	payload, err := json.Marshal(protocol.OperationStarted{OperationID: operationID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_started", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := database.Operation(ctx, operationID)
+	if err != nil || operation.Status != "running" || operation.StartedAt == nil || !operation.StartedAt.After(*delivered.DeliveredAt) {
+		t.Fatalf("operation start was not recorded: %#v %v", operation, err)
+	}
+}
+
 func TestFlushRetainsPostDeliveryCancellationProtectionForCodexTurns(t *testing.T) {
 	database, server := gatewayTestServer(t, "flush-cancel-agent-token")
 	ctx := context.Background()
