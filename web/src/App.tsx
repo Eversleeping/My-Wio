@@ -75,8 +75,6 @@ import {
   WifiOff,
   X
 } from "lucide-react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { api, APIError, patch, post, put, remove, setSession, socketURL } from "./api";
 import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
@@ -86,6 +84,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
 import { VirtualizedItems, VirtualizedList } from "./components/VirtualizedList";
 import { clearCodexComposerPreferences, defaultCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
+import { safeImageSource, type FilePreviewSelection } from "./codexContent";
 import { formatDate, formatTime, relative, shortSHA } from "./format";
 import { currentLocale, useI18n } from "./i18n";
 import { compressImage } from "./imageCompression";
@@ -129,7 +128,7 @@ type RealtimeRevisions = Record<RealtimeScope, number>;
 type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 type ComposerImage = { id: string; dataURL: string };
-export type FilePreviewSelection = { path: string; line?: number; mode?: "file" | "diff" };
+export type { FilePreviewSelection } from "./codexContent";
 type SubagentActivity = { threadID: string; path: string; status: string; message: string; prompt: string; model: string; reasoningEffort: string; updatedAt: string };
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ServersPageRoute = lazy(() => import("./pages/ServersPage"));
@@ -138,6 +137,7 @@ const CodexPageRoute = lazy(() => import("./pages/CodexPage"));
 const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
 const MonitoringPageRoute = lazy(() => import("./pages/MonitoringPage"));
 const SettingsPageRoute = lazy(() => import("./pages/SettingsPage"));
+const MarkdownContentRenderer = lazy(() => import("./MarkdownContent"));
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevision = { revision: number; minimumSequence: number | null };
@@ -1361,11 +1361,7 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
 }
 
 function MarkdownContent({ text, workspaceRoot, onOpenFile }: { text: string; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void }) {
-  const { t } = useI18n();
-  return <div className="message-content markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={(url, key) => key === "src" ? safeImageSource(url) : defaultUrlTransform(url)} components={{
-    a: ({ href, children, node: _node, ...props }) => { const selection = workspaceFileLink(href, workspaceRoot); if (selection) return <a {...props} href={href} onClick={event => { event.preventDefault(); onOpenFile(selection); }}>{children}</a>; if (isExternalLink(href)) return <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>; if (href?.startsWith("#")) return <a {...props} href={href}>{children}</a>; return <a {...props} className="unavailable-link" href={href} aria-disabled="true" title={t("codex.linkUnavailable")} onClick={event => event.preventDefault()}>{children}</a>; },
-    img: ({ src, alt }) => { const source = safeImageSource(src); return source ? <a className="markdown-image" href={source} target="_blank" rel="noreferrer" title={t("codex.openImage")}><img src={source} alt={alt || t("codex.messageImage")} loading="lazy" referrerPolicy="no-referrer" /></a> : null; }
-  }}>{text}</ReactMarkdown></div>;
+  return <Suspense fallback={<div className="message-content">{text}</div>}><MarkdownContentRenderer text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} /></Suspense>;
 }
 
 function MessageImages({ sources }: { sources: string[] }) {
@@ -1445,46 +1441,6 @@ function SubagentEvent({ event, item }: { event: StreamEvent; item: Record<strin
   const states = asRecord(item.agentsStates) ?? {};
   const summary = activity ? String(item.agentPath ?? item.agentThreadId ?? "") : `${String(item.tool ?? "spawnAgent")} · ${receiverIDs.length || Object.keys(states).length} ${t("codex.subagentThreads")}`;
   return <article className="subagent-event"><header><Users size={15} /><strong>{t(activity ? "codex.subagentActivity" : "codex.subagentToolCall")}</strong><Status value={status} /><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{summary}</div>{typeof item.prompt === "string" && item.prompt && <p>{item.prompt}</p>}{receiverIDs.length > 0 && <code>{receiverIDs.join(", ")}</code>}</article>;
-}
-
-function workspaceFileLink(href: string | undefined, workspaceRoot: string): FilePreviewSelection | null {
-  if (!href || href.startsWith("#") || isExternalLink(href)) return null;
-  let value = href;
-  try { value = decodeURIComponent(value); } catch { return null; }
-  value = value.replace(/^file:\/\//i, "");
-  let line: number | undefined;
-  const hashIndex = value.indexOf("#");
-  if (hashIndex >= 0) {
-    const match = value.slice(hashIndex).match(/^#L?(\d+)/i);
-    if (match) line = Number(match[1]);
-    value = value.slice(0, hashIndex);
-  }
-  value = value.split("?", 1)[0];
-  const lineMatch = value.match(/:(\d+)(?::\d+)?$/);
-  if (lineMatch) {
-    line = Number(lineMatch[1]);
-    value = value.slice(0, lineMatch.index);
-  }
-  const root = workspaceRoot.replaceAll("\\", "/").replace(/\/$/, "");
-  value = value.replaceAll("\\", "/");
-  if (value.startsWith(root + "/")) value = value.slice(root.length + 1);
-  else if (value.startsWith("/")) return null;
-  const parts: string[] = [];
-  for (const part of value.split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      if (parts.length === 0) return null;
-      parts.pop();
-    } else parts.push(part);
-  }
-  return parts.length > 0 ? { path: parts.join("/"), line } : null;
-}
-
-function isExternalLink(href: string | undefined) {
-  if (!href) return false;
-  if (href.startsWith("//")) return true;
-  const scheme = href.match(/^([a-z][a-z0-9+.-]*):/i)?.[1]?.toLowerCase();
-  return Boolean(scheme && scheme !== "file");
 }
 
 function previewLanguage(path: string) {
@@ -1871,17 +1827,6 @@ function isCommandEvent(event: StreamEvent) {
   return asRecord(payload?.item)?.type === "commandExecution";
 }
 function asRecord(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
-function safeImageSource(value: unknown): string {
-  if (typeof value !== "string") return "";
-  const source = value.trim();
-  if (/^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(source)) return source;
-  try {
-    const url = new URL(source);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
-  } catch {
-    return "";
-  }
-}
 function extractImageSources(payload: unknown): string[] {
   const sources: string[] = [];
   const seenSources = new Set<string>();

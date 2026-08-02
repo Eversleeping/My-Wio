@@ -4,6 +4,7 @@ import { gzipSync } from "node:zlib";
 
 const MAX_JAVASCRIPT_CHUNK_BYTES = 500_000;
 const distDirectory = resolve(process.cwd(), "dist");
+const indexPath = join(distDirectory, "index.html");
 
 function collectJavaScriptFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -50,6 +51,12 @@ if (!existsSync(distDirectory)) {
       for (const chunk of oversizedChunks) {
         console.error(`- ${chunk.file} (${formatKilobytes(chunk.rawBytes)} raw)`);
       }
+      process.exitCode = 1;
+    }
+
+    const indexHTML = existsSync(indexPath) ? readFileSync(indexPath, "utf8") : "";
+    if (indexHTML.includes("vendor-markdown")) {
+      console.error("Codex-only Markdown dependencies must not be preloaded by the application entry point.");
       process.exitCode = 1;
     }
   }
