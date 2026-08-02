@@ -2,6 +2,18 @@
 
 本文是可复用的部署模板，不记录任何实际公网 IP、域名、SSH 用户、主机目录或既有基础设施状态。请在受控的密码管理工具或部署平台中保存本次部署的真实值；不要把 `.env`、私钥、Token 或机器清单提交到 Git。
 
+## 本地部署档案
+
+每个实际部署环境都应在仓库根目录维护一份 `.deployment.local.md`。该文件已被 `.gitignore` 排除，只用于记录当前生产主机的 SSH 地址、账号、私钥相对路径、已核验的主机指纹、部署目录、Compose 项目名、Compose 文件组合和验收地址。实际值变化时必须同步更新该档案，禁止把真实值补进本文或提交到 Git。
+
+部署前必须先执行以下检查：
+
+```bash
+git check-ignore .deployment.local.md '*.pem' .env
+```
+
+随后按本地档案中的 **IP、账号和私钥** 显式建立 SSH 连接，不要仅依赖可能过期的 `~/.ssh/config` 别名。若 SSH 报告主机密钥变化，应停止部署并重新从可信渠道核对指纹；不要使用 `StrictHostKeyChecking=no` 绕过校验。连接成功后，还应在远端核对部署目录、Git remote、当前分支、Compose 容器和宿主反向代理状态，再执行任何写操作。
+
 ## 部署前条件
 
 - Linux Docker 主机已安装 Docker Engine 和 Docker Compose v2。
@@ -151,7 +163,10 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 ## 更新、回滚与备份
 
 - 更新前先备份 PostgreSQL 数据卷、`.env` 中的 `WIO_MASTER_KEY`，以及需要保留的 Agent 状态；这些内容应加密保存到 Docker 主机之外。
+- 更新前核对远端工作树干净、Git remote 与预期仓库一致，并记录旧 HEAD；不要在存在未知改动时直接拉取或切换版本。
+- 备份至少应包含 `.env`、PostgreSQL 自定义格式 dump 和旧 HEAD 的 Git bundle，并将备份目录和各文件大小写入部署记录。
 - 使用与首次部署完全相同的 Compose 项目名和文件组合执行 `up -d --build`，避免创建重复的网络、卷或容器。
+- 使用宿主机代理时，只重建 `postgres` 与 `controlplane`；不要启动基础 Compose 中的仓库 Caddy，也不要修改正在工作的宿主 Caddy 配置。
 - 发布失败时先保留容器日志和当前镜像摘要，再选择已验证的上一版制品恢复；不要在未备份的情况下删除 PostgreSQL 数据卷。
 - 丢失 `WIO_MASTER_KEY` 将使 Vault 中加密的 TOTP 密钥、凭据预设和部分 Agent 状态无法恢复，不能用新的随机值无损替换。
 

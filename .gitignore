@@ -1,5 +1,6 @@
 .env
 .env.local
+.deployment.local.md
 *.pem
 *.db
 *.db-shm
