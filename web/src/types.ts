@@ -6,7 +6,7 @@ export interface SSHBootstrapResult { server_id: string; hostname: string; archi
 export interface SSHBootstrapStreamEvent { type: "progress" | "heartbeat" | "complete" | "error"; step?: string; current?: number; total?: number; code?: string; error?: string; detail?: string; result?: SSHBootstrapResult }
 export interface Project { id: string; name: string; description: string; remote_url: string; default_branch: string; status: string; provision_error: string; updated_at: string; workspace_count: number; import_status: string; import_message: string; import_server_id: string; import_server_name: string; import_operation_id: string; pinned_at: string | null; hidden_at: string | null; archived_at: string | null }
 export interface ProjectRemote { id: string; project_id: string; name: string; mode: string; provider: string; namespace: string; repository: string; visibility: string; fetch_url: string; push_url: string; web_url: string; status: string; error: string; updated_at: string }
-export interface Operation { id: string; server_id: string; project_id: string; workspace_id: string; kind: string; status: string; result: string; result_data: string; created_at: string; delivered_at: string | null; completed_at: string | null }
+export interface Operation { id: string; server_id: string; project_id: string; workspace_id: string; kind: string; status: string; result: string; result_data: string; created_at: string; delivered_at: string | null; started_at: string | null; completed_at: string | null }
 export interface ProjectDetail { project: Project; remotes: ProjectRemote[] | null; operations: Operation[] | null }
 export interface ProjectDeletionWorkspace { id: string; server_id: string; server_name: string; server_status: string; path: string; management_mode: string; kind: string; branch: string; commit_sha: string; dirty: number }
 export interface ProjectDeletionBlocker { code: string; message: string; count: number; modes: Array<"metadata-only" | "managed-files"> }
@@ -69,5 +69,7 @@ export interface DeploymentEvent { id: string; deployment_id: string; status: st
 export interface DeploymentDetail { deployment: Deployment; events: DeploymentEvent[] | null }
 export interface Alert { id: string; server_id: string; kind: string; severity: string; title: string; detail: string; status: string; server_name: string; opened_at: string; resolved_at: string | null; acknowledged_at: string | null }
 export interface Metric { server_id: string; bucket_at: string; cpu_percent: number; memory_percent: number; disk_percent: number; load_1: number; net_rx_bytes: number; net_tx_bytes: number }
+export interface OperationMetricAggregate { count: number; average_ms: number; p95_ms: number; max_ms: number }
+export interface OperationMetrics { server_id: string; since: string; updated_at: string; total: number; queued: number; delivered: number; running: number; succeeded: number; failed: number; cancelled: number; queue_wait: OperationMetricAggregate; delivery: OperationMetricAggregate; execution: OperationMetricAggregate }
 export interface AuditEntry { id: string; action: string; resource_type: string; resource_id: string; detail: unknown; ip_address: string; occurred_at: string }
 export interface Summary { counts: Record<string, number>; deployments: Deployment[]; alerts: Alert[] }

@@ -54,7 +54,6 @@ import {
   locationFor,
   mergeThreads,
   message,
-  ScheduledTaskDialog,
   SessionView,
   useThreadList,
   waitForThread,
@@ -64,6 +63,7 @@ import {
   type FilePreviewSelection,
   type ThreadGroup
 } from "../App";
+import { ScheduledTaskDialog } from "./ScheduledTaskDialog";
 
 function pretty(value: unknown) {
   try {

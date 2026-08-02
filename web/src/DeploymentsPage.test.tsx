@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import { DeploymentsPage } from "./App";
+import { DeploymentsPage } from "./pages/DeploymentsPage";
 import { I18nProvider } from "./i18n";
 
 const target = {

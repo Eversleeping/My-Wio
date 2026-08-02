@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { FileDiffPane, FilePreviewPane } from "./App";
 import { I18nProvider } from "./i18n";
@@ -116,6 +116,27 @@ test("stops diff confirmation after a terminal result", async () => {
 
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
   expect(requests("GET", "/diff-preview")).toHaveLength(1);
+});
+
+test("keeps the last successful file preview visible when a refresh fails", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  let getCount = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST") return response({ operation_id: `preview-${getCount + 1}` });
+    getCount += 1;
+    if (getCount === 1) return response({ ...fileSnapshot("notes.txt", "succeeded", "old-value"), updated_at: "2026-07-22T12:00:00Z" });
+    return response({ ...fileSnapshot("notes.txt", "failed"), error: "agent unavailable", updated_at: "2026-07-22T12:01:00Z" });
+  }));
+
+  render(filePreview());
+  await settle();
+  expect(await screen.findByText("old-value")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh file preview" }));
+  await settle();
+  expect(screen.getByText("old-value")).toBeInTheDocument();
+  expect(screen.getByText(/Latest request failed: agent unavailable/)).toBeInTheDocument();
+  expect(screen.getByText(/Showing data from/)).toBeInTheDocument();
 });
 
 test("ignores a cancelled file request after the selection changes", async () => {

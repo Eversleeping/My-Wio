@@ -84,6 +84,7 @@ import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "./components/Dialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
+import { VirtualizedItems, VirtualizedList } from "./components/VirtualizedList";
 import { clearCodexComposerPreferences, defaultCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
 import { formatDate, formatTime, relative, shortSHA } from "./format";
 import { currentLocale, useI18n } from "./i18n";
@@ -104,6 +105,7 @@ import type {
   DeploymentDetail,
   DeploymentTarget,
   Metric,
+  OperationMetrics,
   Project,
   SecretSet,
   Server,
@@ -133,6 +135,9 @@ const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ServersPageRoute = lazy(() => import("./pages/ServersPage"));
 const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
 const CodexPageRoute = lazy(() => import("./pages/CodexPage"));
+const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
+const MonitoringPageRoute = lazy(() => import("./pages/MonitoringPage"));
+const SettingsPageRoute = lazy(() => import("./pages/SettingsPage"));
 const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevision = { revision: number; minimumSequence: number | null };
@@ -377,9 +382,9 @@ export default function App() {
     servers: <ServersPage realtime={realtimeRevisions.servers} notify={setToast} />,
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute realtime={realtimeRevisions.projects} notify={setToast} /></Suspense>,
     codex: <Suspense fallback={<PageLoading />}><CodexPageRoute realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} /></Suspense>,
-    deployments: <DeploymentsPage realtime={realtimeRevisions.deployments} notify={setToast} />,
-    monitoring: <MonitoringPage realtime={realtimeRevisions.monitoring} />,
-    settings: <SettingsPage realtime={realtimeRevisions.settings} notify={setToast} />
+    deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute realtime={realtimeRevisions.deployments} notify={setToast} /></Suspense>,
+    monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute realtime={realtimeRevisions.monitoring} /></Suspense>,
+    settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute realtime={realtimeRevisions.settings} notify={setToast} /></Suspense>
   }[view];
 
   return (
@@ -753,7 +758,16 @@ export function ChangedFilesView({ workspaceID, snapshot, loading, activePath, o
   if (snapshot.status === "failed") return <div className="file-tree-error"><AlertTriangle size={16} /><span>{snapshot.error || t("codex.changeScanFailed")}</span></div>;
   if (snapshot.status === "scanning" && snapshot.changes.length === 0) return <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningChanges")}</div>;
   if (snapshot.changes.length === 0) return <Empty icon={<FileDiff size={22} />} text={t("codex.noChanges")} />;
-  return <div className="change-file-list">{snapshot.changes.map(change => { const name = change.path.split("/").pop() || change.path; return <button type="button" className={`change-file-row ${activePath === change.path ? "active" : ""}`} title={change.path} onClick={() => onOpenFile(change.path)} key={change.path}><span className={`change-file-status ${change.status}`}>{changeStatusCodes[change.status] ?? "M"}</span><span className="change-file-name"><strong>{name}</strong><small>{change.path}</small></span><span className="change-file-label">{t(changeStatusKeys[change.status] ?? "codex.changeModified")}</span></button>; })}</div>;
+  return <VirtualizedList
+    className="change-file-list"
+    items={snapshot.changes}
+    getKey={change => change.path}
+    estimateSize={42}
+    renderItem={change => {
+      const name = change.path.split("/").pop() || change.path;
+      return <button type="button" className={`change-file-row ${activePath === change.path ? "active" : ""}`} title={change.path} onClick={() => onOpenFile(change.path)}><span className={`change-file-status ${change.status}`}>{changeStatusCodes[change.status] ?? "M"}</span><span className="change-file-name"><strong>{name}</strong><small>{change.path}</small></span><span className="change-file-label">{t(changeStatusKeys[change.status] ?? "codex.changeModified")}</span></button>;
+    }}
+  />;
 }
 
 function FileTreeItem({ node, depth, expanded, onToggle, activePath, onOpenFile }: { node: FileTreeNode; depth: number; expanded: Set<string>; onToggle: (path: string) => void; activePath: string; onOpenFile: (path: string) => void }) {
@@ -866,7 +880,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
       let next = await api<CodexSnapshot<unknown>>(path);
       const shouldRefresh = refresh || next.status === "idle";
       if (shouldRefresh) { await post(`${path}/refresh`, {}); next = await api<CodexSnapshot<unknown>>(path); }
-      for (let attempt = 0; shouldRefresh && next.status === "loading" && attempt < 20; attempt++) { await new Promise(resolve => window.setTimeout(resolve, 500)); next = await api<CodexSnapshot<unknown>>(path); }
+      for (let attempt = 0; shouldRefresh && next.status === "loading" && attempt < 20; attempt++) { await waitForBackoff(attempt); next = await api<CodexSnapshot<unknown>>(path); }
       const normalized = { ...next, data: kind === "skills" ? normalizeSkills(next.data) : kind === "mcp" ? normalizeMCP(next.data) : normalizeStatus(next.data) } as CodexSnapshot<T>;
       setter(normalized as never);
     }
@@ -1134,9 +1148,24 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
       setInterrupting(false);
     }
   };
+  const renderDisplayItem = (item: ConversationDisplayItem) => item.type === "commandGroup"
+    ? <CommandEventGroup events={item.events} />
+    : <ConversationEventItem event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />;
   return <>
     <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} />{(thread.status === "queued" || thread.status === "running") && <button className="icon-button danger" disabled={interrupting} title={t("codex.interrupt")} onClick={() => void interrupt()}>{interrupting ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}</button>}</div></div>
-    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { const stream = event.currentTarget; autoFollowStreamRef.current = isNearCodexStreamBottom(stream); if (autoFollowStreamRef.current) setHasNewEventsBelow(false); if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); }}>{events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : <>{events.hasEarlier && <div className="history-loader"><button type="button" className="secondary-button small" disabled={events.loadingEarlier} onClick={() => void loadEarlierEvents()}>{events.loadingEarlier ? <LoaderCircle className="spin" size={15} /> : <ArrowUpFromLine size={15} />}{t(events.loadingEarlier ? "codex.loadingEarlier" : "codex.loadEarlier")}</button></div>}{events.error && events.data && <div className="snapshot-notice warning"><AlertTriangle size={15} />{events.error}</div>}{rawEvents ? sourceEvents.map(event => <RawEventItem key={event.event_id} event={event} />) : chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>{displayItems.map(item => item.type === "commandGroup" ? <CommandEventGroup key={`commands:${item.events[0].event_id}`} events={item.events} /> : <ConversationEventItem key={item.event.event_id} event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />)}{approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}{thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}</>}</>}</div>
+    <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { const stream = event.currentTarget; autoFollowStreamRef.current = isNearCodexStreamBottom(stream); if (autoFollowStreamRef.current) setHasNewEventsBelow(false); if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); }}>
+      {events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : <>
+        {events.hasEarlier && <div className="history-loader"><button type="button" className="secondary-button small" disabled={events.loadingEarlier} onClick={() => void loadEarlierEvents()}>{events.loadingEarlier ? <LoaderCircle className="spin" size={15} /> : <ArrowUpFromLine size={15} />}{t(events.loadingEarlier ? "codex.loadingEarlier" : "codex.loadEarlier")}</button></div>}
+        {events.error && events.data && <div className="snapshot-notice warning"><AlertTriangle size={15} />{events.error}</div>}
+        {chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>
+          {rawEvents
+            ? sourceEvents.length > 0 && <VirtualizedItems<StreamEvent> items={sourceEvents} scrollRef={streamRef} getKey={event => event.event_id} estimateSize={116} renderItem={event => <RawEventItem event={event} />} />
+            : displayItems.length > 0 && <VirtualizedItems<ConversationDisplayItem> items={displayItems} scrollRef={streamRef} getKey={item => item.type === "commandGroup" ? `commands:${item.events[0].event_id}` : item.event.event_id} estimateSize={item => item.type === "commandGroup" ? 112 : 156} renderItem={renderDisplayItem} />}
+          {approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}
+          {thread.status === "running" && approvals.length === 0 && <WorkingIndicator />}
+        </>}</>
+      }
+    </div>
     {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <form className="composer" onSubmit={send}>
       {hasNewEventsBelow && <button type="button" className="secondary-button" aria-label={t("codex.jumpToLatestMessages")} onClick={scrollToLatestEvent}><ChevronDown size={16} />{t("codex.newMessages")}</button>}
       {subagents.length > 0 && <button type="button" className="subagent-progress-row" onClick={() => setSubagentsOpen(true)}><Users size={16} /><span><strong>{t("codex.subagentActivity")}</strong><small>{activeSubagents.length > 0 ? t("codex.subagentsRunning", { count: activeSubagents.length }) : t("codex.subagentsRecorded", { count: subagents.length })}</small></span><ChevronRight size={15} /></button>}
@@ -1176,7 +1205,7 @@ async function waitForGoalSnapshot(threadID: string, expected?: { objective?: st
       const goal = normalizeGoal(latest.data);
       if (expected.cleared ? !goal : Boolean(goal && goal.objective === expected.objective && (!expected.status || goal.status === expected.status))) return latest;
     }
-    await new Promise(resolve => window.setTimeout(resolve, 500));
+    await waitForBackoff(attempt);
   }
   return latest;
 }
@@ -1186,7 +1215,7 @@ export async function waitForThread(threadID: string, timeoutMessage: string) {
     const threads = await api<Thread[]>("/threads");
     const thread = threads.find(item => item.id === threadID);
     if (thread) return thread;
-    await new Promise(resolve => window.setTimeout(resolve, 500));
+    await waitForBackoff(attempt);
   }
   throw new Error(timeoutMessage);
 }
@@ -1200,9 +1229,14 @@ export async function waitForWorkspace(workspaceID: string, timeoutMessage: stri
     } catch (error) {
       if (error instanceof APIError && error.status >= 400 && error.status < 500) throw error;
     }
-    await new Promise(resolve => window.setTimeout(resolve, 750));
+    await waitForBackoff(attempt, 600, 3_000);
   }
   throw new Error(timeoutMessage);
+}
+
+function waitForBackoff(attempt: number, base = 400, maximum = 2_500) {
+  const delay = Math.min(maximum, Math.round(base * Math.pow(1.55, Math.min(attempt, 6))));
+  return new Promise<void>(resolve => window.setTimeout(resolve, delay));
 }
 
 function normalizeGoal(value: unknown): CodexGoal | null {
@@ -1352,19 +1386,30 @@ export function FilePreviewPane({ workspaceID, selection, realtime, onClose }: {
   const data = preview.data;
   const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
   const error = preview.error || data?.error || "";
+  const showData = data?.status === "succeeded";
+  const updatedText = data?.updated_at ? t("codex.previewUpdated", { time: formatDate(data.updated_at) }) : "";
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
-  return <section className="file-preview-panel"><header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={preview.requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}</div></section>;
+  return <section className="file-preview-panel">
+    <header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={preview.requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header>
+    <div className="file-preview-body">
+      {showData && (error || preview.loading) && <PreviewStatusNote messageText={error ? t("codex.previewStale", { error }) : t("codex.previewRefreshing")} updatedText={updatedText} loading={preview.loading} retry={preview.retry} retryLabel={t("common.retry")} />}
+      {error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}
+    </div>
+  </section>;
 }
 
 export function FileDiffPane({ workspaceID, selection, realtime, writable, notify, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable: boolean; notify: (text: string) => void; onClose: () => void }) {
   const { t } = useI18n();
   const [discarding, setDiscarding] = useState(false);
   const [discardConfirmation, setDiscardConfirmation] = useState(false);
+  const previewBodyRef = useRef<HTMLDivElement>(null);
   const preview = useWorkspacePreview<WorkspaceDiffPreview>(workspaceID, selection.path, "diff-preview", realtime, t("codex.diffTimedOut"));
   const data = preview.data;
   const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
   const error = preview.error || data?.error || "";
+  const showData = data?.status === "succeeded";
+  const updatedText = data?.updated_at ? t("codex.diffUpdated", { time: formatDate(data.updated_at) }) : "";
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
   const retry = preview.retry;
@@ -1382,7 +1427,13 @@ export function FileDiffPane({ workspaceID, selection, realtime, writable, notif
       setDiscarding(false);
     }
   };
-  return <><section className="file-preview-panel file-diff-panel"><header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{data?.status === "succeeded" && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button danger" disabled={!writable || discarding} title={t(writable ? "codex.discardFile" : "project.gitReadOnly")} aria-label={t("codex.discardFile")} onClick={() => setDiscardConfirmation(true)}>{discarding ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}</button><button type="button" className="icon-button" disabled={preview.requesting || discarding} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header><div className="file-preview-body">{error ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}><RefreshCw size={15} />{t("common.retry")}</button></div> : loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : data?.status === "succeeded" ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} /></Suspense>}</> : null}</div></section><ConfirmDialog open={discardConfirmation} danger title={t("codex.discardFile")} impact={t("codex.discardFileConfirm", { path: selection.path })} confirmLabel={t("codex.discardFile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={discarding} onClose={() => setDiscardConfirmation(false)} onConfirm={discard} /></>;
+  return <><section className="file-preview-panel file-diff-panel">
+    <header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}<button type="button" className="icon-button danger" disabled={!writable || discarding} title={t(writable ? "codex.discardFile" : "project.gitReadOnly")} aria-label={t("codex.discardFile")} onClick={() => setDiscardConfirmation(true)}>{discarding ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}</button><button type="button" className="icon-button" disabled={preview.requesting || discarding} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header>
+    <div className="file-preview-body" ref={previewBodyRef}>
+      {showData && (error || preview.loading) && <PreviewStatusNote messageText={error ? t("codex.diffStale", { error }) : t("codex.diffRefreshing")} updatedText={updatedText} loading={preview.loading} retry={retry} retryLabel={t("common.retry")} />}
+      {error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} scrollRef={previewBodyRef} /></Suspense>}</> : null}
+    </div>
+  </section><ConfirmDialog open={discardConfirmation} danger title={t("codex.discardFile")} impact={t("codex.discardFileConfirm", { path: selection.path })} confirmLabel={t("codex.discardFile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={discarding} onClose={() => setDiscardConfirmation(false)} onConfirm={discard} /></>;
 }
 
 function SubagentEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> }) {
@@ -1484,435 +1535,12 @@ function WorkingIndicator() {
   return <div className="working-indicator"><Bot size={15} /><span>{t("codex.working")}</span><i /><i /><i /></div>;
 }
 
-type DeploymentContainerAction = "start" | "stop" | "restart" | "remove";
 
-export function DeploymentsPage({ realtime, notify }: PageProps) {
-  const { t } = useI18n();
-  const targets = useData<DeploymentTarget[]>("/deployment-targets", realtime);
-  const deployments = useData<Deployment[]>("/deployments", realtime);
-  const workspaces = useData<Workspace[]>("/workspaces", realtime);
-  const servers = useData<Server[]>("/servers", realtime);
-  const secrets = useData<SecretSet[]>("/secret-sets", realtime);
-  const emptyForm = { source_type: "workspace" as "workspace" | "remote", workspace_id: "", server_id: "", secret_set_id: "", environment: "production", repository: "", git_ref: "", compose_file: "compose.yaml", build_mode: "build", public_url: "", health: "" };
-  const [targetDialog, setTargetDialog] = useState(false);
-  const [editingTarget, setEditingTarget] = useState<DeploymentTarget | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [busy, setBusy] = useState("");
-  const [detailID, setDetailID] = useState("");
-  const [deploymentConfirmation, setDeploymentConfirmation] = useState<
-    | { type: "target"; target: DeploymentTarget }
-    | { type: "history"; deployment: Deployment }
-    | { type: "rollback"; target: DeploymentTarget }
-    | { type: "container"; target: DeploymentTarget; action: Exclude<DeploymentContainerAction, "start"> }
-    | null
-  >(null);
-  const detail = useData<DeploymentDetail>(detailID ? `/deployments/${detailID}` : null, realtime);
-  const active = (status: string) => ["queued", "preparing", "running"].includes(status);
-  const openCreate = () => { setEditingTarget(null); setForm(emptyForm); setTargetDialog(true); };
-  const openEdit = (target: DeploymentTarget) => {
-    let health = "";
-    try { health = (JSON.parse(target.health_checks) as Array<{ address?: string }>).map(check => check.address ?? "").filter(Boolean).join("\n"); } catch { health = ""; }
-    setEditingTarget(target);
-    setForm({ source_type: target.source_type || "remote", workspace_id: target.workspace_id || "", server_id: target.server_id, secret_set_id: target.secret_set_id, environment: target.environment, repository: target.repository, git_ref: target.git_ref, compose_file: target.compose_file, build_mode: target.build_mode, public_url: target.configured_public_url || "", health });
-    setTargetDialog(true);
-  };
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const { health, ...target } = form;
-    const health_checks = health.split(/\r?\n/).map(address => address.trim()).filter(Boolean).map(address => ({ type: address.startsWith("http") ? "http" : "tcp", address, timeout_seconds: 60 }));
-    setBusy(editingTarget ? `edit:${editingTarget.id}` : "create");
-    try {
-      if (editingTarget) await put(`/deployment-targets/${editingTarget.id}`, { ...target, health_checks });
-      else await post("/deployment-targets", { ...target, health_checks });
-      setTargetDialog(false);
-      targets.reload();
-      notify(t(editingTarget ? "deployment.targetUpdated" : "deployment.targetCreated"));
-    } catch (err) { notify(message(err)); } finally { setBusy(""); }
-  };
-  const run = async (target: DeploymentTarget) => { setBusy(`deploy:${target.id}`); try { const response = await post<{ deployment: Deployment }>(`/deployment-targets/${target.id}/deploy`, { commit_ref: target.git_ref }); targets.reload(); deployments.reload(); setDetailID(response.deployment.id); notify(t("deployment.queued")); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
-  const rollback = async (target: DeploymentTarget) => { setBusy(`rollback:${target.id}`); try { const response = await post<{ deployment: Deployment }>(`/deployment-targets/${target.id}/rollback`, {}); targets.reload(); deployments.reload(); setDetailID(response.deployment.id); notify(t("deployment.rollbackQueued")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
-  const manageContainer = async (target: DeploymentTarget, action: DeploymentContainerAction) => {
-    setBusy(`container:${action}:${target.id}`);
-    try {
-      await post(`/deployment-targets/${target.id}/container`, { action });
-      targets.reload();
-      notify(t(`deployment.container${action[0].toUpperCase()}${action.slice(1)}Queued`));
-      if (action !== "start") setDeploymentConfirmation(null);
-    } catch (err) { notify(message(err)); } finally { setBusy(""); }
-  };
-  const requestContainerAction = (target: DeploymentTarget, action: DeploymentContainerAction) => {
-    if (action === "start") void manageContainer(target, action);
-    else setDeploymentConfirmation({ type: "container", target, action });
-  };
-  const deleteTarget = async (target: DeploymentTarget) => { setBusy(`delete-target:${target.id}`); try { await remove(`/deployment-targets/${target.id}`); targets.reload(); deployments.reload(); notify(t("deployment.targetDeleteQueued")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
-  const deleteHistory = async (item: Deployment) => { setBusy(`delete-deployment:${item.id}`); try { await remove(`/deployments/${item.id}`); if (detailID === item.id) setDetailID(""); deployments.reload(); notify(t("deployment.historyDeleted")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
-  const availableWorkspaces = (workspaces.data ?? []).filter(item => item.server_id === form.server_id && item.status === "ready");
-  return <div className="page-stack deployment-page"><Section title={t("deployment.targets")} icon={<Rocket size={18} />} action={<button className="primary-button" onClick={openCreate}><Plus size={17} />{t("deployment.newTarget")}</button>}><DataTable headers={[t("column.project"), t("column.environment"), t("column.server"), t("deployment.containerState"), t("column.gitRef"), t("column.compose"), t("deployment.publicAccess"), t("common.actions")]} empty={t("deployment.noTargets")}>{(targets.data ?? []).map(target => {
-    const sourcePath = target.source_type === "workspace" ? target.workspace_path : target.repository;
-    const containerStatus = target.container_status || "unknown";
-    const serverOnline = (servers.data ?? []).some(server => server.id === target.server_id && server.status === "online");
-    const locked = busy !== "" || deploymentConfirmation !== null || containerStatus === "pending" || !serverOnline;
-    const primaryContainerAction: DeploymentContainerAction = containerStatus === "running" ? "stop" : "start";
-    const primaryContainerLabel = t(primaryContainerAction === "stop" ? "deployment.containerStop" : "deployment.containerStart");
-    const actions: ContextMenuAction[] = [
-      { id: "rollback", label: t("deployment.rollback"), icon: Undo2, disabled: locked, onSelect: () => setDeploymentConfirmation({ type: "rollback", target }) },
-      { id: "edit", label: t("deployment.editTarget"), icon: Pencil, disabled: busy !== "", onSelect: () => openEdit(target) },
-      { id: "delete-target", label: t("deployment.deleteTarget"), icon: Trash2, danger: true, separatorBefore: true, disabled: busy !== "" || containerStatus === "pending", onSelect: () => setDeploymentConfirmation({ type: "target", target }) }
-    ];
-    return <tr key={target.id}><td><div className="cell-main"><strong>{target.project_name}</strong><small title={sourcePath}>{sourcePath}</small></div></td><td><Status value={target.environment} /></td><td>{target.server_name}</td><td><div className="cell-main container-state-cell"><Status value={containerStatus} />{target.container_message && <small title={target.container_message}>{target.container_message}</small>}</div></td><td><code>{target.git_ref}</code></td><td><code>{target.compose_file}</code></td><td><DeploymentPublicLink url={target.public_url} /></td><td><div className="row-actions deployment-target-actions"><button type="button" className="primary-button small" disabled={locked} onClick={() => void run(target)}>{busy === `deploy:${target.id}` ? <LoaderCircle className="spin" size={14} /> : <Rocket size={14} />}{t("deployment.deploy")}</button><button type="button" className="secondary-button small deployment-lifecycle-button" disabled={locked} title={primaryContainerLabel} onClick={() => requestContainerAction(target, primaryContainerAction)}>{busy === `container:${primaryContainerAction}:${target.id}` ? <LoaderCircle className="spin" size={14} /> : primaryContainerAction === "stop" ? <Square size={14} /> : <Play size={14} />}{primaryContainerLabel}</button><button type="button" className="icon-button" disabled={locked || containerStatus === "stopped" || containerStatus === "removed"} title={t("deployment.containerRestart")} aria-label={t("deployment.containerRestart")} onClick={() => requestContainerAction(target, "restart")}>{busy === `container:restart:${target.id}` ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}</button><button type="button" className="icon-button danger" disabled={locked || containerStatus === "removed"} title={t("deployment.containerRemove")} aria-label={t("deployment.containerRemove")} onClick={() => requestContainerAction(target, "remove")}>{busy === `container:remove:${target.id}` ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button><ContextMenu label={t("deployment.actions")} actions={actions}>{null}</ContextMenu></div></td></tr>;
-  })}</DataTable></Section><Section title={t("deployment.history")} icon={<History size={18} />} action={<button className="icon-button" title={t("common.refresh")} onClick={deployments.reload}><RefreshCw size={16} /></button>}><DataTable headers={[t("column.project"), t("column.environment"), t("column.commit"), t("column.status"), t("deployment.duration"), t("column.message"), t("column.created"), t("deployment.publicAccess"), t("common.actions")]} empty={t("deployment.noHistory")}>{(deployments.data ?? []).map(item => <tr key={item.id}><td><strong>{item.project_name}</strong></td><td>{item.environment}</td><td><code>{shortSHA(item.resolved_commit || item.commit_ref)}</code></td><td><Status value={item.status} /></td><td className="deployment-duration">{deploymentDuration(item)}</td><td className="message-cell" title={item.message}>{item.message || "-"}</td><td>{relative(item.created_at)}</td><td>{item.status === "succeeded" ? <DeploymentPublicLink url={item.public_url} /> : <span className="muted">-</span>}</td><td><div className="row-actions"><button className="icon-button" title={t("deployment.viewLogs")} onClick={() => setDetailID(item.id)}><SquareTerminal size={15} /></button><button className="icon-button danger" disabled={active(item.status) || busy !== ""} title={active(item.status) ? t("deployment.activeCannotDelete") : t("deployment.deleteHistory")} onClick={() => setDeploymentConfirmation({ type: "history", deployment: item })}><Trash2 size={15} /></button></div></td></tr>)}</DataTable></Section>
-  {deploymentConfirmation?.type === "target" ? <ConfirmDialog open danger title={t("deployment.deleteTarget")} impact={t("deployment.confirmDeleteTarget", { project: deploymentConfirmation.target.project_name, environment: deploymentConfirmation.target.environment })} confirmLabel={t("deployment.deleteTarget")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy !== ""} onClose={() => setDeploymentConfirmation(null)} onConfirm={() => deleteTarget(deploymentConfirmation.target)} /> : deploymentConfirmation?.type === "history" ? <ConfirmDialog open danger title={t("deployment.deleteHistory")} impact={t("deployment.confirmDeleteHistory")} confirmLabel={t("deployment.deleteHistory")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy !== ""} onClose={() => setDeploymentConfirmation(null)} onConfirm={() => deleteHistory(deploymentConfirmation.deployment)} /> : deploymentConfirmation?.type === "rollback" ? <ConfirmDialog open danger title={t("deployment.rollback")} impact={t("deployment.confirmRollback", { project: deploymentConfirmation.target.project_name, environment: deploymentConfirmation.target.environment })} confirmLabel={t("deployment.rollback")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy !== ""} onClose={() => setDeploymentConfirmation(null)} onConfirm={() => rollback(deploymentConfirmation.target)} /> : deploymentConfirmation?.type === "container" ? <ConfirmDialog open danger title={t(deploymentConfirmation.action === "stop" ? "deployment.containerStop" : deploymentConfirmation.action === "restart" ? "deployment.containerRestart" : "deployment.containerRemove")} impact={t(deploymentConfirmation.action === "stop" ? "deployment.confirmContainerStop" : deploymentConfirmation.action === "restart" ? "deployment.confirmContainerRestart" : "deployment.confirmContainerRemove", { project: deploymentConfirmation.target.project_name, environment: deploymentConfirmation.target.environment })} confirmLabel={t(deploymentConfirmation.action === "stop" ? "deployment.containerStop" : deploymentConfirmation.action === "restart" ? "deployment.containerRestart" : "deployment.containerRemove")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy !== ""} onClose={() => setDeploymentConfirmation(null)} onConfirm={() => manageContainer(deploymentConfirmation.target, deploymentConfirmation.action)} /> : null}
-  <Dialog open={targetDialog} title={t(editingTarget ? "deployment.editTargetTitle" : "deployment.targetTitle")} onClose={() => setTargetDialog(false)} wide><form onSubmit={submit}><div className="segmented-control deployment-source-control" role="group" aria-label={t("deployment.sourceType")}><button type="button" className={form.source_type === "workspace" ? "active" : ""} onClick={() => setForm({ ...form, source_type: "workspace", repository: "", git_ref: "", workspace_id: "" })}><ServerIcon size={15} />{t("deployment.sourceWorkspace")}</button><button type="button" className={form.source_type === "remote" ? "active" : ""} onClick={() => setForm({ ...form, source_type: "remote", workspace_id: "", git_ref: form.git_ref || "main" })}><GitBranch size={15} />{t("deployment.sourceRemote")}</button></div><div className="form-grid"><Field label={t("column.server")}><select value={form.server_id} onChange={e => setForm({ ...form, server_id: e.target.value, workspace_id: "" })} required><option value="">{t("deployment.selectServer")}</option>{(servers.data ?? []).filter(item => item.status === "online").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>{form.source_type === "workspace" ? <Field label={t("deployment.workspace")}><select value={form.workspace_id} onChange={e => { const workspace = availableWorkspaces.find(item => item.id === e.target.value); setForm({ ...form, workspace_id: e.target.value, git_ref: workspace?.branch || "" }); }} required><option value="">{t("deployment.selectWorkspace")}</option>{availableWorkspaces.map(item => <option key={item.id} value={item.id}>{item.project_name} · {item.display_name || item.path}</option>)}</select></Field> : <Field label={t("deployment.repository")}><input value={form.repository} onChange={e => setForm({ ...form, repository: e.target.value })} placeholder="https://example.com/team/project.git" required /></Field>}<Field label={t("column.environment")}><input value={form.environment} onChange={e => setForm({ ...form, environment: e.target.value })} required /></Field><Field label={t("deployment.secretSet")}><select value={form.secret_set_id} onChange={e => setForm({ ...form, secret_set_id: e.target.value })}><option value="">{t("common.none")}</option>{(secrets.data ?? []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field></div><div className="form-grid thirds"><Field label={t("column.gitRef")}><input value={form.git_ref} onChange={e => setForm({ ...form, git_ref: e.target.value })} placeholder={form.source_type === "workspace" ? t("deployment.currentBranch") : "main"} /></Field><Field label={t("deployment.composeFile")}><input value={form.compose_file} onChange={e => setForm({ ...form, compose_file: e.target.value })} /></Field><Field label={t("deployment.buildMode")}><select value={form.build_mode} onChange={e => setForm({ ...form, build_mode: e.target.value })}><option value="build">{t("deployment.build")}</option><option value="pull">{t("deployment.pull")}</option></select></Field></div><Field label={t("deployment.publicURL")}><input type="text" inputMode="url" autoComplete="url" value={form.public_url} onChange={e => setForm({ ...form, public_url: e.target.value })} placeholder={t("deployment.publicURLPlaceholder")} /></Field><Field label={t("deployment.healthCheck")}><textarea rows={2} value={form.health} onChange={e => setForm({ ...form, health: e.target.value })} placeholder={t("deployment.healthPlaceholder")} /></Field><div className="deployment-preflight-note"><ShieldCheck size={17} /><span>{t("deployment.preflightNote")}</span></div><DialogActions><button type="button" className="secondary-button" onClick={() => setTargetDialog(false)}>{t("common.cancel")}</button><button className="primary-button" disabled={busy !== ""}>{busy ? <LoaderCircle className="spin" size={16} /> : editingTarget ? <Check size={16} /> : <Rocket size={16} />}{t(editingTarget ? "deployment.saveTarget" : "deployment.createTarget")}</button></DialogActions></form></Dialog>
-  <Dialog open={Boolean(detailID)} title={t("deployment.logTitle")} onClose={() => setDetailID("")} wide className="deployment-log-dialog"><div className="deployment-log-content">{detail.loading && <div className="deployment-log-loading"><LoaderCircle className="spin" size={20} />{t("common.loading")}</div>}{detail.error && <ErrorBanner text={detail.error} />}{detail.data && <><div className="deployment-log-summary"><div><small>{t("column.project")}</small><strong>{detail.data.deployment.project_name}</strong></div><div><small>{t("column.environment")}</small><Status value={detail.data.deployment.environment} /></div><div><small>{t("column.commit")}</small><code>{shortSHA(detail.data.deployment.resolved_commit || detail.data.deployment.commit_ref)}</code></div><div><small>{t("deployment.duration")}</small><strong>{deploymentDuration(detail.data.deployment)}</strong></div>{detail.data.deployment.status === "succeeded" && detail.data.deployment.public_url && <div className="deployment-log-public"><small>{t("deployment.publicAccess")}</small><DeploymentPublicLink url={detail.data.deployment.public_url} /></div>}</div><div className="deployment-event-list">{(detail.data.events ?? []).length ? (detail.data.events ?? []).map(event => <article className={`deployment-event ${event.status}`} key={event.id}><span className="deployment-event-marker" /><header><Status value={event.status} /><strong>{event.message || t("deployment.processStep")}</strong><time>{formatTime(event.occurred_at)}</time></header>{event.content && <pre>{event.content}</pre>}</article>) : <Empty icon={<SquareTerminal size={22} />} text={t("deployment.noLogs")} />}</div></>}</div></Dialog></div>;
-}
 
-function DeploymentPublicLink({ url }: { url: string }) {
-  const value = url.trim();
-  if (!value) return <span className="muted">-</span>;
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return <span className="muted">-</span>;
-    const path = parsed.pathname === "/" ? "" : parsed.pathname;
-    return <a className="deployment-public-link" href={value} target="_blank" rel="noreferrer" title={value}><ExternalLink size={13} /><span>{parsed.host}{path}</span></a>;
-  } catch {
-    return <span className="muted">-</span>;
-  }
-}
 
-function deploymentDuration(deployment: Deployment) {
-  const start = deployment.started_at || deployment.created_at;
-  const finish = deployment.finished_at || (deployment.status === "running" || deployment.status === "preparing" ? new Date().toISOString() : null);
-  if (!finish) return "-";
-  const seconds = Math.max(0, Math.round((new Date(finish).getTime() - new Date(start).getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return seconds < 3600 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
 
-function MonitoringPage({ realtime }: { realtime: number }) {
-  const { t } = useI18n();
-  const servers = useData<Server[]>("/servers", realtime);
-  const alerts = useData<Alert[]>("/alerts", realtime);
-  const [serverID, setServerID] = useState("");
-  const [rangeHours, setRangeHours] = useState(24);
-  useEffect(() => { if (!serverID && servers.data?.[0]) setServerID(servers.data[0].id); }, [servers.data, serverID]);
-  const metrics = useData<Metric[]>(serverID ? `/servers/${serverID}/metrics?hours=${rangeHours}` : null, `${realtime}:${serverID}:${rangeHours}`);
-  const activeServer = servers.data?.find(server => server.id === serverID);
-  const sampled = useMemo(() => downsampleMetrics(metrics.data ?? [], 420), [metrics.data]);
-  const network = useMemo(() => networkRates(sampled), [sampled]);
-  const rawNetwork = useMemo(() => networkRates(metrics.data ?? []), [metrics.data]);
-  const latest = metrics.data?.at(-1);
-  const latestNetwork = rawNetwork.at(-1);
-  const resourcePoints = sampled.map(point => ({ time: point.bucket_at, values: [point.cpu_percent, point.memory_percent, point.disk_percent] }));
-  const loadPoints = sampled.map(point => ({ time: point.bucket_at, values: [point.load_1] }));
-  const networkPoints = network.map(point => ({ time: point.time, values: [point.rx, point.tx] }));
-  const ranges = [1, 6, 24, 168];
-  const metricAction = <div className="monitor-actions"><select className="compact-select" aria-label={t("monitor.selectServer")} value={serverID} onChange={event => setServerID(event.target.value)}>{(servers.data ?? []).map(server => <option key={server.id} value={server.id}>{server.name}</option>)}</select><div className="range-control" role="group" aria-label={t("monitor.timeRange")}>{ranges.map(hours => <button type="button" aria-pressed={rangeHours === hours} className={rangeHours === hours ? "active" : ""} key={hours} onClick={() => setRangeHours(hours)}>{t(`monitor.range.${hours}`)}</button>)}</div></div>;
-  return <div className="page-stack">
-    <Section title={t("monitor.serverMetrics")} icon={<MonitorDot size={18} />} action={metricAction}>
-      <div className="monitor-header"><div><strong>{activeServer?.name ?? t("server.none")}</strong><ServerInformation server={activeServer} className="monitor-server-information" /><small>{latest ? t("monitor.lastSample", { time: formatDate(latest.bucket_at) }) : t("monitor.awaitingData")}</small></div><div className="monitor-header-meta"><span>{t("monitor.samples", { count: String(metrics.data?.length ?? 0) })}</span><Status value={activeServer?.status ?? "offline"} /></div></div>
-      <div className="metric-summary-grid">
-        <MetricStat icon={<Cpu size={17} />} label={t("monitor.cpu")} value={formatPercent(latest?.cpu_percent)} detail={t("monitor.peak", { value: formatPercent(metricPeak(metrics.data, point => point.cpu_percent)) })} tone="green" />
-        <MetricStat icon={<MemoryStick size={17} />} label={t("monitor.memory")} value={formatPercent(latest?.memory_percent)} detail={t("monitor.peak", { value: formatPercent(metricPeak(metrics.data, point => point.memory_percent)) })} tone="cyan" />
-        <MetricStat icon={<HardDrive size={17} />} label={t("monitor.disk")} value={formatPercent(latest?.disk_percent)} detail={t("monitor.peak", { value: formatPercent(metricPeak(metrics.data, point => point.disk_percent)) })} tone="amber" />
-        <MetricStat icon={<Gauge size={17} />} label={t("monitor.load1")} value={formatDecimal(latest?.load_1)} detail={t("monitor.peak", { value: formatDecimal(metricPeak(metrics.data, point => point.load_1)) })} tone="violet" />
-        <MetricStat icon={<ArrowDownToLine size={17} />} label={t("monitor.networkIn")} value={formatByteRate(latestNetwork?.rx)} detail={t("monitor.peak", { value: formatByteRate(metricPeak(rawNetwork, point => point.rx)) })} tone="blue" />
-        <MetricStat icon={<ArrowUpFromLine size={17} />} label={t("monitor.networkOut")} value={formatByteRate(latestNetwork?.tx)} detail={t("monitor.peak", { value: formatByteRate(metricPeak(rawNetwork, point => point.tx)) })} tone="red" />
-      </div>
-      <div className="monitor-chart-layout">
-        <TimeSeriesChart className="resource-chart" title={t("monitor.resourceTrend")} data={resourcePoints} fixedMax={100} axisFormat={value => `${Math.round(value ?? 0)}%`} empty={t("monitor.noMetrics")} series={[{ label: t("monitor.cpu"), color: "#168f68", format: formatPercent }, { label: t("monitor.memory"), color: "#1684a3", format: formatPercent }, { label: t("monitor.disk"), color: "#d28a1d", format: formatPercent }]} />
-        <TimeSeriesChart title={t("monitor.loadTrend")} data={loadPoints} axisFormat={formatDecimal} empty={t("monitor.noMetrics")} series={[{ label: t("monitor.load1"), color: "#7b61a8", format: formatDecimal }]} />
-        <TimeSeriesChart title={t("monitor.networkTrend")} data={networkPoints} axisFormat={formatByteRate} empty={t("monitor.noMetrics")} series={[{ label: t("monitor.networkIn"), color: "#267aa3", format: formatByteRate }, { label: t("monitor.networkOut"), color: "#b65555", format: formatByteRate }]} />
-      </div>
-    </Section>
-    <Section title={t("monitor.alerts")} icon={<BellRing size={18} />}><DataTable headers={[t("column.severity"), t("column.alert"), t("column.server"), t("column.state"), t("column.started"), ""]} empty={t("monitor.noAlerts")}>{(alerts.data ?? []).map(alert => <tr key={alert.id}><td><Status value={alert.severity} /></td><td><div className="cell-main"><strong>{alert.title}</strong><small>{alert.detail}</small></div></td><td>{alert.server_name}</td><td><Status value={alert.status} /></td><td>{relative(alert.opened_at)}</td><td>{!alert.acknowledged_at && <button className="icon-button" title={t("monitor.acknowledge")} onClick={async () => { await post(`/alerts/${alert.id}/acknowledge`, {}); alerts.reload(); }}><Check size={16} /></button>}</td></tr>)}</DataTable></Section>
-  </div>;
-}
 
-type ScheduledTaskFrequency = "daily" | "weekdays" | "weekly" | "monthly" | "interval" | "custom";
-type ScheduledTaskIntervalUnit = "m" | "h" | "d";
 
-type ScheduledTaskFormValue = {
-  id: string;
-  thread_id: string;
-  name: string;
-  prompt: string;
-  schedule: string;
-  frequency: ScheduledTaskFrequency;
-  hour: string;
-  minute: string;
-  weekday: string;
-  monthDay: string;
-  intervalValue: string;
-  intervalUnit: ScheduledTaskIntervalUnit;
-  timezone: string;
-  enabled: boolean;
-  model: string;
-  reasoning_effort: string;
-  approval_mode: string;
-};
-
-const scheduledHours = Array.from({ length: 24 }, (_, value) => String(value).padStart(2, "0"));
-const scheduledMinutes = Array.from({ length: 60 }, (_, value) => String(value).padStart(2, "0"));
-const scheduledMonthDays = Array.from({ length: 31 }, (_, value) => String(value + 1));
-const scheduledIntervalValues = ["1", "2", "3", "4", "6", "8", "12", "24"];
-
-function defaultScheduledTaskForm(): ScheduledTaskFormValue {
-  let timezone = "UTC";
-  try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || timezone; } catch { /* browser may not expose an IANA timezone */ }
-  return { id: "", thread_id: "", name: "", prompt: "", schedule: "0 9 * * *", frequency: "daily", hour: "09", minute: "00", weekday: "1", monthDay: "1", intervalValue: "1", intervalUnit: "h", timezone, enabled: true, model: "", reasoning_effort: "", approval_mode: "on-request" };
-}
-
-function scheduledScheduleFields(expression: string): Pick<ScheduledTaskFormValue, "schedule" | "frequency" | "hour" | "minute" | "weekday" | "monthDay" | "intervalValue" | "intervalUnit"> {
-  const schedule = expression.trim();
-  const lower = schedule.toLowerCase();
-  if (lower === "@hourly") return { schedule, frequency: "interval", hour: "09", minute: "00", weekday: "1", monthDay: "1", intervalValue: "1", intervalUnit: "h" };
-  if (lower === "@daily") return { schedule, frequency: "daily", hour: "00", minute: "00", weekday: "1", monthDay: "1", intervalValue: "1", intervalUnit: "h" };
-  if (lower === "@weekly") return { schedule, frequency: "weekly", hour: "00", minute: "00", weekday: "0", monthDay: "1", intervalValue: "1", intervalUnit: "h" };
-  if (lower === "@monthly") return { schedule, frequency: "monthly", hour: "00", minute: "00", weekday: "1", monthDay: "1", intervalValue: "1", intervalUnit: "h" };
-  const every = /^@every\s+(\d+)(m|h|d)$/i.exec(schedule);
-  if (every) return { schedule, frequency: "interval", hour: "09", minute: "00", weekday: "1", monthDay: "1", intervalValue: every[1], intervalUnit: every[2].toLowerCase() as ScheduledTaskIntervalUnit };
-  const parts = schedule.split(/\s+/);
-  if (parts.length === 5 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])) {
-    const common = { schedule, hour: parts[1].padStart(2, "0"), minute: parts[0].padStart(2, "0"), weekday: "1", monthDay: "1", intervalValue: "1", intervalUnit: "h" as ScheduledTaskIntervalUnit };
-    if (parts[2] === "*" && parts[3] === "*" && parts[4] === "*") return { ...common, frequency: "daily" };
-    if (parts[2] === "*" && parts[3] === "*" && parts[4] === "1-5") return { ...common, frequency: "weekdays" };
-    if (parts[2] === "*" && parts[3] === "*" && /^\d$/.test(parts[4])) return { ...common, frequency: "weekly", weekday: parts[4] };
-    if (/^\d{1,2}$/.test(parts[2]) && parts[3] === "*" && parts[4] === "*") return { ...common, frequency: "monthly", monthDay: parts[2] };
-  }
-  return { schedule, frequency: "custom", hour: "09", minute: "00", weekday: "1", monthDay: "1", intervalValue: "1", intervalUnit: "h" };
-}
-
-function scheduledScheduleExpression(form: ScheduledTaskFormValue): string {
-  if (form.frequency === "custom") return form.schedule.trim();
-  if (form.frequency === "interval") return `@every ${form.intervalValue}${form.intervalUnit}`;
-  const time = `${Number(form.minute)} ${Number(form.hour)}`;
-  if (form.frequency === "weekdays") return `${time} * * 1-5`;
-  if (form.frequency === "weekly") return `${time} * * ${Number(form.weekday)}`;
-  if (form.frequency === "monthly") return `${time} ${Number(form.monthDay)} * *`;
-  return `${time} * * *`;
-}
-
-function scheduledTaskFormValue(task?: ScheduledTask, initialThreadID = ""): ScheduledTaskFormValue {
-  const base = defaultScheduledTaskForm();
-  if (!task) return { ...base, thread_id: initialThreadID };
-  return { ...base, ...scheduledScheduleFields(task.schedule), id: task.id, thread_id: task.thread_id, name: task.name, prompt: task.prompt, timezone: task.timezone, enabled: task.enabled, model: task.model, reasoning_effort: task.reasoning_effort, approval_mode: task.approval_mode };
-}
-
-export function ScheduledTaskDialog({ open, task, initialThreadID, lockThread = false, threads, notify, onClose, onSaved }: { open: boolean; task?: ScheduledTask; initialThreadID?: string; lockThread?: boolean; threads: Thread[]; notify: (text: string) => void; onClose: () => void; onSaved: () => void }) {
-  const { t } = useI18n();
-  const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState<ScheduledTaskFormValue>(() => scheduledTaskFormValue(task, initialThreadID));
-  useEffect(() => { if (open) setForm(scheduledTaskFormValue(task, initialThreadID)); }, [initialThreadID, open, task?.id]);
-  const update = (changes: Partial<ScheduledTaskFormValue>) => setForm(current => ({ ...current, ...changes }));
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    if (busy) return;
-    const schedule = scheduledScheduleExpression(form);
-    if (!schedule) return;
-    setBusy(true);
-    try {
-      const payload = { thread_id: form.thread_id, name: form.name, prompt: form.prompt, schedule, timezone: form.timezone, enabled: form.enabled, model: form.model, reasoning_effort: form.reasoning_effort, approval_mode: form.approval_mode };
-      if (form.id) await put(`/scheduled-tasks/${form.id}`, payload);
-      else await post("/scheduled-tasks", payload);
-      onClose();
-      onSaved();
-      notify(t("settings.scheduledTaskSaved"));
-    } catch (error) { notify(message(error)); } finally { setBusy(false); }
-  };
-  const threadAvailable = threads.some(thread => thread.id === form.thread_id);
-  return <Dialog open={open} title={t(form.id ? "settings.editScheduledTask" : "settings.newScheduledTask")} onClose={() => { if (!busy) onClose(); }} wide><form onSubmit={save}>
-    <div className="form-grid"><Field label={t("settings.name")}><input value={form.name} onChange={event => update({ name: event.target.value })} maxLength={180} required /></Field><Field label={t("settings.scheduledThread")}><select value={form.thread_id} disabled={lockThread || busy} onChange={event => update({ thread_id: event.target.value })} required><option value="">{t("settings.selectScheduledThread")}</option>{form.thread_id && !threadAvailable && <option value={form.thread_id}>{task?.thread_title || form.thread_id}</option>}{threads.map(thread => <option value={thread.id} key={thread.id}>{thread.title} / {thread.project_name} / {thread.server_name}</option>)}</select></Field></div>
-    <Field label={t("settings.prompt")}><textarea rows={5} value={form.prompt} onChange={event => update({ prompt: event.target.value })} maxLength={20000} required /></Field>
-    <div className="form-grid"><Field label={t("settings.scheduleFrequency")}><select value={form.frequency} disabled={busy} onChange={event => update({ frequency: event.target.value as ScheduledTaskFrequency })}><option value="daily">{t("settings.scheduleDaily")}</option><option value="weekdays">{t("settings.scheduleWeekdays")}</option><option value="weekly">{t("settings.scheduleWeekly")}</option><option value="monthly">{t("settings.scheduleMonthly")}</option><option value="interval">{t("settings.scheduleInterval")}</option><option value="custom">{t("settings.scheduleCustom")}</option></select></Field><Field label={t("settings.timezone")}><input value={form.timezone} disabled={busy} onChange={event => update({ timezone: event.target.value })} placeholder="Asia/Shanghai" required /></Field></div>
-    {(form.frequency === "daily" || form.frequency === "weekdays" || form.frequency === "weekly" || form.frequency === "monthly") && <div className="form-grid"><Field label={t("settings.scheduleHour")}><select value={form.hour} disabled={busy} onChange={event => update({ hour: event.target.value })}>{scheduledHours.map(value => <option value={value} key={value}>{value}</option>)}</select></Field><Field label={t("settings.scheduleMinute")}><select value={form.minute} disabled={busy} onChange={event => update({ minute: event.target.value })}>{scheduledMinutes.map(value => <option value={value} key={value}>{value}</option>)}</select></Field></div>}
-    {form.frequency === "weekly" && <Field label={t("settings.scheduleWeekday")}><select value={form.weekday} disabled={busy} onChange={event => update({ weekday: event.target.value })}><option value="1">{t("settings.weekdayMonday")}</option><option value="2">{t("settings.weekdayTuesday")}</option><option value="3">{t("settings.weekdayWednesday")}</option><option value="4">{t("settings.weekdayThursday")}</option><option value="5">{t("settings.weekdayFriday")}</option><option value="6">{t("settings.weekdaySaturday")}</option><option value="0">{t("settings.weekdaySunday")}</option></select></Field>}
-    {form.frequency === "monthly" && <Field label={t("settings.scheduleMonthDay")}><select value={form.monthDay} disabled={busy} onChange={event => update({ monthDay: event.target.value })}>{scheduledMonthDays.map(value => <option value={value} key={value}>{value}</option>)}</select></Field>}
-    {form.frequency === "interval" && <div className="form-grid"><Field label={t("settings.scheduleIntervalValue")}><select value={form.intervalValue} disabled={busy} onChange={event => update({ intervalValue: event.target.value })}>{!scheduledIntervalValues.includes(form.intervalValue) && <option value={form.intervalValue}>{form.intervalValue}</option>}{scheduledIntervalValues.map(value => <option value={value} key={value}>{value}</option>)}</select></Field><Field label={t("settings.scheduleIntervalUnit")}><select value={form.intervalUnit} disabled={busy} onChange={event => update({ intervalUnit: event.target.value as ScheduledTaskIntervalUnit })}><option value="m">{t("settings.scheduleMinutes")}</option><option value="h">{t("settings.scheduleHours")}</option><option value="d">{t("settings.scheduleDays")}</option></select></Field></div>}
-    {form.frequency === "custom" && <Field label={t("settings.scheduleExpression")}><input value={form.schedule} disabled={busy} onChange={event => update({ schedule: event.target.value })} placeholder={t("settings.schedulePlaceholder")} maxLength={100} required /></Field>}
-    <div className="form-grid"><Field label={t("codex.modelOverride")}><CodexModelPicker value={form.model} onChange={model => update({ model })} allowServerDefault /></Field><Field label={t("codex.reasoningEffort")}><select value={form.reasoning_effort} disabled={busy} onChange={event => update({ reasoning_effort: event.target.value })}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></Field></div>
-    <div className="form-grid"><Field label={t("codex.approveOnRequest")}><select value={form.approval_mode} disabled={busy} onChange={event => update({ approval_mode: event.target.value })}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select></Field><label className="toggle-row"><input type="checkbox" checked={form.enabled} disabled={busy} onChange={event => update({ enabled: event.target.checked })} /><span>{t("settings.scheduleEnabled")}</span></label></div>
-    <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={busy || !form.thread_id || !form.name.trim() || !form.prompt.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions>
-  </form></Dialog>;
-}
-
-type SettingsConfirmation =
-  | { type: "scheduled-task"; task: ScheduledTask }
-  | { type: "credential-profile"; profile: CredentialProfile }
-  | { type: "secret-set"; secret: SecretSet };
-
-export function SettingsPage({ realtime, notify }: PageProps) {
-  const { t } = useI18n();
-  const codexSettings = useData<CodexCLISettings>("/settings/codex-cli", realtime);
-  const profiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
-  const secrets = useData<SecretSet[]>("/secret-sets", realtime);
-  const audit = useAuditList(realtime);
-  const scheduledTasks = useData<ScheduledTask[]>("/scheduled-tasks", realtime);
-  const threads = useData<Thread[]>("/threads", realtime);
-  const [profileDialog, setProfileDialog] = useState(false);
-  const [profileBusy, setProfileBusy] = useState(false);
-  const [profileForm, setProfileForm] = useState({ id: "", kind: "codex" as "codex" | "git", name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, commit_name: "", commit_email: "", secret: "" });
-  const [secretDialog, setSecretDialog] = useState(false);
-  const [name, setName] = useState("");
-  const [lines, setLines] = useState("");
-  const [codexTargetBusy, setCodexTargetBusy] = useState(false);
-  const [codexVersions, setCodexVersions] = useState<string[]>([]);
-  const [selectedCodexVersion, setSelectedCodexVersion] = useState("");
-  const [scheduledTarget, setScheduledTarget] = useState<{ task?: ScheduledTask; threadID?: string } | null>(null);
-  const [scheduledBusy, setScheduledBusy] = useState("");
-  const [settingsConfirmation, setSettingsConfirmation] = useState<SettingsConfirmation | null>(null);
-  const [settingsDeleteBusy, setSettingsDeleteBusy] = useState("");
-  const settingsDeleteBusyRef = useRef("");
-  useEffect(() => {
-    if (!codexSettings.data) return;
-    setCodexVersions(codexSettings.data.versions?.length ? codexSettings.data.versions : [codexSettings.data.target_version]);
-    setSelectedCodexVersion(codexSettings.data.target_version);
-  }, [codexSettings.data]);
-  const openProfile = (profile?: CredentialProfile) => {
-    setProfileForm(profile ? { id: profile.id, kind: profile.kind, name: profile.name, endpoint: profile.endpoint, username: profile.username, model: profile.kind === "codex" ? profile.model || defaultCodexModel : "", commit_name: profile.commit_name, commit_email: profile.commit_email, secret: "" } : { id: "", kind: "codex", name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, commit_name: "", commit_email: "", secret: "" });
-    setProfileDialog(true);
-  };
-  const changeProfileKind = (kind: "codex" | "git") => setProfileForm(current => current.id ? current : { ...current, kind, endpoint: kind === "codex" ? "https://api.openai.com/v1" : "https://github.com", username: "", model: kind === "codex" ? defaultCodexModel : "", commit_name: "", commit_email: "", secret: "" });
-  const saveProfile = async (event: FormEvent) => {
-    event.preventDefault(); setProfileBusy(true);
-    try {
-      await post("/credential-profiles", profileForm);
-      setProfileDialog(false); profiles.reload(); notify(t("settings.profileSaved"));
-    } catch (err) { notify(message(err)); } finally { setProfileBusy(false); }
-  };
-  const submitSecretSet = async (event: FormEvent) => { event.preventDefault(); const values: Record<string, string> = {}; for (const line of lines.split("\n")) { const index = line.indexOf("="); if (index > 0) values[line.slice(0, index).trim()] = line.slice(index + 1); } try { await post("/secret-sets", { name, values }); setSecretDialog(false); secrets.reload(); setLines(""); notify(t("settings.secretSaved")); } catch (err) { notify(message(err)); } };
-  const checkCodexUpdates = async () => { setCodexTargetBusy(true); try { const result = await post<CodexCLISettings>("/settings/codex-cli/check-updates", {}); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); codexSettings.reload(); notify(t(result.updated ? "settings.codexUpdateFound" : "settings.codexAlreadyLatest", { version: result.latest_version ?? result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
-  const applyCodexVersion = async () => { if (!selectedCodexVersion) return; setCodexTargetBusy(true); try { const result = await post<CodexCLISettings>("/settings/codex-cli/select-version", { version: selectedCodexVersion }); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); codexSettings.reload(); notify(t("settings.codexVersionApplied", { version: result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
-  const openScheduledTask = (task?: ScheduledTask) => setScheduledTarget(task ? { task } : {});
-  const toggleScheduledTask = async (task: ScheduledTask) => {
-    if (scheduledBusy) return;
-    setScheduledBusy(task.id);
-    try { await put(`/scheduled-tasks/${task.id}`, { enabled: !task.enabled }); scheduledTasks.reload(); } catch (err) { notify(message(err)); } finally { setScheduledBusy(""); }
-  };
-  const deleteScheduledTask = async (task: ScheduledTask) => {
-    if (scheduledBusy || settingsDeleteBusyRef.current) return;
-    const busyKey = `scheduled-task:${task.id}`;
-    settingsDeleteBusyRef.current = busyKey;
-    setSettingsDeleteBusy(busyKey);
-    try { await remove(`/scheduled-tasks/${task.id}`); scheduledTasks.reload(); notify(t("settings.scheduledTaskDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
-  };
-  const deleteProfile = async (profile: CredentialProfile) => {
-    if (settingsDeleteBusyRef.current) return;
-    const busyKey = `credential-profile:${profile.id}`;
-    settingsDeleteBusyRef.current = busyKey;
-    setSettingsDeleteBusy(busyKey);
-    try { await remove(`/credential-profiles/${profile.id}`); profiles.reload(); notify(t("settings.profileDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
-  };
-  const deleteSecretSet = async (secret: SecretSet) => {
-    if (settingsDeleteBusyRef.current) return;
-    const busyKey = `secret-set:${secret.id}`;
-    settingsDeleteBusyRef.current = busyKey;
-    setSettingsDeleteBusy(busyKey);
-    try { await remove(`/secret-sets/${secret.id}`); secrets.reload(); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
-  };
-  return <div className="page-stack">
-    <Section title={t("settings.codexCLIManagement")} icon={<SquareTerminal size={18} />}>
-      <div className="codex-version-control"><div className="codex-version-summary"><small>{t("settings.codexTargetVersion")}</small><strong>{codexSettings.data?.target_version ?? "-"}</strong><span><ShieldCheck size={14} />{t("settings.codexStableRelease")}</span></div><div className="codex-version-actions"><select aria-label={t("settings.selectCodexVersion")} value={selectedCodexVersion} disabled={codexTargetBusy || !codexVersions.length} onChange={event => setSelectedCodexVersion(event.target.value)}>{codexVersions.map((version, index) => <option key={version} value={version}>{index === 0 ? t("settings.latestCodexVersion", { version }) : version}</option>)}</select><button className="secondary-button" disabled={codexTargetBusy || !selectedCodexVersion || selectedCodexVersion === codexSettings.data?.target_version} onClick={() => void applyCodexVersion()}><Check size={16} />{t("settings.applyCodexVersion")}</button><button className="primary-button" disabled={codexTargetBusy || !codexSettings.data} onClick={() => void checkCodexUpdates()}>{codexTargetBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{t(codexTargetBusy ? "settings.checkingCodexUpdates" : "settings.checkCodexUpdates")}</button></div></div>
-    </Section>
-    <Section title={t("settings.scheduledTasks")} icon={<CalendarClock size={18} />} action={<button className="primary-button" onClick={() => openScheduledTask()}><Plus size={17} />{t("settings.newScheduledTask")}</button>}>
-      <DataTable headers={[t("settings.name"), t("settings.scheduledThread"), t("settings.schedule"), t("settings.nextRun"), t("column.state"), ""]} empty={t("settings.noScheduledTasks")}>
-        {(scheduledTasks.data ?? []).map(task => <tr key={task.id}><td><div className="cell-main"><strong>{task.name}</strong><small title={task.prompt}>{task.prompt}</small></div></td><td><div className="cell-main"><strong>{task.thread_title}</strong><small>{task.project_name} / {task.server_name}</small></div></td><td><code title={task.timezone}>{task.schedule}</code></td><td>{task.enabled ? formatDate(task.next_run_at) : t("settings.scheduleDisabled")}</td><td><div className="cell-main"><Status value={task.enabled ? "enabled" : "disabled"} />{task.last_run_status && <small title={task.last_run_message || undefined}>{t("settings.lastRun", { status: task.last_run_status })}</small>}</div></td><td><div className="row-actions"><button className="icon-button" title={t("common.edit")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => openScheduledTask(task)}><Pencil size={15} /></button><button className="icon-button" title={t(task.enabled ? "settings.disableScheduledTask" : "settings.enableScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => void toggleScheduledTask(task)}>{scheduledBusy === task.id ? <LoaderCircle className="spin" size={15} /> : task.enabled ? <Pause size={15} /> : <Play size={15} />}</button><button className="icon-button danger" title={t("settings.deleteScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "scheduled-task", task })}><Trash2 size={15} /></button></div></td></tr>)}
-      </DataTable>
-    </Section>
-    <Section title={t("settings.credentialProfiles")} icon={<KeyRound size={18} />} action={<button className="primary-button" onClick={() => openProfile()}><Plus size={17} />{t("settings.newProfile")}</button>}>
-      <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code" title={profile.endpoint}>{profile.endpoint}</code></td><td>{profile.kind === "codex" ? <code>{profile.model}</code> : <div className="cell-main"><span className="inline"><UserRound size={14} />{profile.username}</span><small>{profile.commit_name && profile.commit_email ? `${profile.commit_name} · ${profile.commit_email}` : t("settings.gitIdentityMissing")}</small></div>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "credential-profile", profile })}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
-    </Section>
-    <Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setSecretDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "secret-set", secret: item })}><X size={16} /></button></td></tr>)}</DataTable></Section>
-    <Section title={t("settings.auditLog")} icon={<Clipboard size={18} />}><DataTable headers={[t("column.action"), t("column.resource"), t("column.address"), t("column.time")]} empty={t("settings.noAudit")}>{(audit.data ?? []).map(item => <tr key={item.id}><td><code>{item.action}</code></td><td>{item.resource_type}{item.resource_id ? ` · ${shortSHA(item.resource_id)}` : ""}</td><td><code>{item.ip_address}</code></td><td>{formatDate(item.occurred_at)}</td></tr>)}</DataTable>{audit.loadError && <div className="snapshot-notice warning"><AlertTriangle size={15} />{audit.loadError}</div>}{audit.hasMore && <div className="history-loader"><button type="button" className="secondary-button small" disabled={audit.loadingMore} onClick={() => void audit.loadMore()}>{audit.loadingMore ? <LoaderCircle className="spin" size={15} /> : <ArrowDownToLine size={15} />}{t(audit.loadingMore ? "settings.loadingMoreAudit" : "settings.loadMoreAudit")}</button></div>}</Section>
-    <Dialog open={profileDialog} title={t(profileForm.id ? "settings.editProfile" : "settings.newProfile")} onClose={() => { if (!profileBusy) setProfileDialog(false); }} wide><form onSubmit={saveProfile}>
-      <div className="segmented-control" role="tablist" aria-label={t("settings.type")}><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "codex"} aria-selected={profileForm.kind === "codex"} className={profileForm.kind === "codex" ? "active" : ""} onClick={() => changeProfileKind("codex")}><Code2 size={15} />{t("settings.codexType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "git"} aria-selected={profileForm.kind === "git"} className={profileForm.kind === "git" ? "active" : ""} onClick={() => changeProfileKind("git")}><GitBranch size={15} />{t("settings.gitType")}</button></div>
-      <div className="form-grid"><Field label={t("settings.name")}><input value={profileForm.name} onChange={e => setProfileForm({ ...profileForm, name: e.target.value })} required /></Field><Field label={t("settings.endpoint")}><input type="url" value={profileForm.endpoint} onChange={e => setProfileForm({ ...profileForm, endpoint: e.target.value })} required /></Field></div>
-      {profileForm.kind === "codex" ? <Field label={t("server.codexModel")}><CodexModelPicker value={profileForm.model} onChange={model => setProfileForm({ ...profileForm, model })} required /></Field> : <><Field label={t("settings.gitUsername")}><input value={profileForm.username} onChange={e => setProfileForm({ ...profileForm, username: e.target.value })} autoComplete="username" required /></Field><div className="form-divider"><span>{t("settings.gitCommitIdentity")}</span></div><div className="form-grid"><Field label={t("settings.gitCommitName")}><input value={profileForm.commit_name} onChange={e => setProfileForm({ ...profileForm, commit_name: e.target.value })} autoComplete="name" required /></Field><Field label={t("settings.gitCommitEmail")}><input type="email" value={profileForm.commit_email} onChange={e => setProfileForm({ ...profileForm, commit_email: e.target.value })} autoComplete="email" placeholder={t("settings.gitCommitEmailPlaceholder")} required /></Field></div></>}
-      <Field label={t(profileForm.kind === "codex" ? "server.codexAPIKey" : "settings.gitToken")}><input type="password" autoComplete="new-password" value={profileForm.secret} onChange={e => setProfileForm({ ...profileForm, secret: e.target.value })} placeholder={profileForm.id ? t("settings.keepExistingSecret") : ""} required={!profileForm.id} /></Field>
-      <DialogActions><button type="button" className="secondary-button" disabled={profileBusy} onClick={() => setProfileDialog(false)}>{t("common.cancel")}</button><button className="primary-button" disabled={profileBusy}>{profileBusy ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />}{t("settings.encryptSave")}</button></DialogActions>
-    </form></Dialog>
-    <Dialog open={secretDialog} title={t("settings.secretSetTitle")} onClose={() => setSecretDialog(false)}><form onSubmit={submitSecretSet}><Field label={t("settings.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("settings.environmentValues")}><textarea value={lines} onChange={e => setLines(e.target.value)} rows={8} placeholder={"DATABASE_URL=...\nAPI_TOKEN=..."} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setSecretDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("settings.encryptSave")}</button></DialogActions></form></Dialog>
-    <ScheduledTaskDialog open={scheduledTarget !== null} task={scheduledTarget?.task} threads={threads.data ?? []} notify={notify} onClose={() => setScheduledTarget(null)} onSaved={scheduledTasks.reload} />
-    {settingsConfirmation?.type === "scheduled-task" ? <ConfirmDialog open danger title={t("settings.deleteScheduledTask")} impact={t("settings.confirmDeleteScheduledTask", { name: settingsConfirmation.task.name })} confirmLabel={t("settings.deleteScheduledTask")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteScheduledTask(settingsConfirmation.task)} /> : settingsConfirmation?.type === "credential-profile" ? <ConfirmDialog open danger title={t("settings.deleteProfile")} impact={t("settings.confirmDeleteProfile", { name: settingsConfirmation.profile.name })} confirmLabel={t("settings.deleteProfile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteProfile(settingsConfirmation.profile)} /> : settingsConfirmation?.type === "secret-set" ? <ConfirmDialog open danger title={t("settings.deleteSecretSet")} impact={t("settings.confirmDelete", { name: settingsConfirmation.secret.name })} confirmLabel={t("settings.deleteSecretSet")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteSecretSet(settingsConfirmation.secret)} /> : null}
-  </div>;
-}
-
-type ChartPoint = { time: string; values: number[] };
-type ChartSeries = { label: string; color: string; format: (value?: number) => string };
-type NetworkRate = { time: string; rx: number; tx: number };
-
-function MetricStat({ icon, label, value, detail, tone }: { icon: ReactNode; label: string; value: string; detail: string; tone: string }) {
-  return <div className={`metric-stat ${tone}`}><span className="metric-stat-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span>{detail}</span></div></div>;
-}
-
-function TimeSeriesChart({ title, data, series, axisFormat, empty, fixedMax, className = "" }: { title: string; data: ChartPoint[]; series: ChartSeries[]; axisFormat: (value?: number) => string; empty: string; fixedMax?: number; className?: string }) {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const width = 640; const left = 48; const right = 626; const top = 12; const bottom = 164;
-  const observedMax = Math.max(0, ...data.flatMap(point => point.values).filter(Number.isFinite));
-  const maximum = fixedMax ?? niceMaximum(observedMax);
-  const x = (index: number) => data.length <= 1 ? (left + right) / 2 : left + (index / (data.length - 1)) * (right - left);
-  const y = (value: number) => bottom - (Math.max(0, Math.min(maximum, Number.isFinite(value) ? value : 0)) / maximum) * (bottom - top);
-  const hovered = hoverIndex === null ? null : data[hoverIndex];
-  const span = data.length > 1 ? new Date(data.at(-1)!.time).getTime() - new Date(data[0].time).getTime() : 0;
-  const timeIndexes = data.length ? Array.from(new Set([0, Math.floor((data.length - 1) / 2), data.length - 1])) : [];
-  const move = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!data.length) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const viewX = ((event.clientX - bounds.left) / bounds.width) * width;
-    const ratio = Math.max(0, Math.min(1, (viewX - left) / (right - left)));
-    setHoverIndex(Math.round(ratio * (data.length - 1)));
-  };
-  return <div className={`timeseries-chart ${className}`}>
-    <div className="timeseries-heading"><strong>{title}</strong><div className="chart-legend">{series.map(item => <span key={item.label}><i style={{ background: item.color }} />{item.label}</span>)}</div></div>
-    {data.length === 0 ? <div className="chart-empty">{empty}</div> : <div className="chart-canvas">
-      <svg viewBox={`0 0 ${width} 190`} preserveAspectRatio="none" role="img" aria-label={title} onPointerMove={move} onPointerLeave={() => setHoverIndex(null)}>
-        {[maximum, maximum / 2, 0].map((tick, index) => { const py = top + index * ((bottom - top) / 2); return <g key={tick}><line x1={left} y1={py} x2={right} y2={py} className="chart-gridline" /><text x={left - 8} y={py + 3} textAnchor="end" className="chart-axis-label">{axisFormat(tick)}</text></g>; })}
-        {timeIndexes.map(index => <text x={x(index)} y="184" textAnchor={index === 0 ? "start" : index === data.length - 1 ? "end" : "middle"} className="chart-axis-label" key={index}>{formatAxisTime(data[index].time, span)}</text>)}
-        {series.map((item, seriesIndex) => <polyline key={item.label} points={data.map((point, index) => `${x(index)},${y(point.values[seriesIndex] ?? 0)}`).join(" ")} fill="none" stroke={item.color} strokeWidth="2" vectorEffect="non-scaling-stroke" />)}
-        {hovered && <g><line x1={x(hoverIndex!)} y1={top} x2={x(hoverIndex!)} y2={bottom} className="chart-cursor" />{series.map((item, seriesIndex) => <circle key={item.label} cx={x(hoverIndex!)} cy={y(hovered.values[seriesIndex] ?? 0)} r="4" fill={item.color} stroke="#fff" strokeWidth="2" vectorEffect="non-scaling-stroke" />)}</g>}
-      </svg>
-      {hovered && <div className="chart-tooltip" style={{ left: `${(x(hoverIndex!) / width) * 100}%`, transform: hoverIndex! > data.length * .7 ? "translateX(-100%)" : "translateX(0)" }}><strong>{formatDate(hovered.time)}</strong>{series.map((item, index) => <span key={item.label}><i style={{ background: item.color }} />{item.label}<b>{item.format(hovered.values[index])}</b></span>)}</div>}
-    </div>}
-  </div>;
-}
-
-function downsampleMetrics(points: Metric[], maximumPoints: number): Metric[] {
-  if (points.length <= maximumPoints) return points;
-  const size = Math.ceil(points.length / maximumPoints);
-  const output: Metric[] = [];
-  for (let start = 0; start < points.length; start += size) {
-    const bucket = points.slice(start, start + size);
-    const last = bucket[bucket.length - 1];
-    const average = (read: (point: Metric) => number) => bucket.reduce((sum, point) => sum + read(point), 0) / bucket.length;
-    output.push({ ...last, cpu_percent: average(point => point.cpu_percent), memory_percent: average(point => point.memory_percent), disk_percent: average(point => point.disk_percent), load_1: average(point => point.load_1) });
-  }
-  return output;
-}
-
-function networkRates(points: Metric[]): NetworkRate[] {
-  return points.map((point, index) => {
-    if (index === 0) return { time: point.bucket_at, rx: 0, tx: 0 };
-    const previous = points[index - 1];
-    const seconds = Math.max(1, (new Date(point.bucket_at).getTime() - new Date(previous.bucket_at).getTime()) / 1000);
-    return { time: point.bucket_at, rx: point.net_rx_bytes >= previous.net_rx_bytes ? (point.net_rx_bytes - previous.net_rx_bytes) / seconds : 0, tx: point.net_tx_bytes >= previous.net_tx_bytes ? (point.net_tx_bytes - previous.net_tx_bytes) / seconds : 0 };
-  });
-}
-
-function metricPeak<T>(values: T[] | null | undefined, read: (value: T) => number): number | undefined {
-  return values?.length ? Math.max(...values.map(read).filter(Number.isFinite)) : undefined;
-}
-
-function niceMaximum(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return 1;
-  const padded = value * 1.1;
-  const magnitude = 10 ** Math.floor(Math.log10(padded));
-  return Math.max(1, Math.ceil((padded / magnitude) * 2) / 2 * magnitude);
-}
-
-function formatPercent(value?: number) { return Number.isFinite(value) ? `${value!.toFixed(1)}%` : "-"; }
-function formatDecimal(value?: number) { return Number.isFinite(value) ? value!.toFixed(value! >= 10 ? 1 : 2) : "-"; }
-function formatByteRate(value?: number) { if (!Number.isFinite(value)) return "-"; const units = ["B/s", "KB/s", "MB/s", "GB/s"]; let scaled = Math.max(0, value!); let unit = 0; while (scaled >= 1024 && unit < units.length - 1) { scaled /= 1024; unit++; } return `${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)} ${units[unit]}`; }
-function formatAxisTime(value: string, span: number) { return new Intl.DateTimeFormat(currentLocale(), span > 24 * 60 * 60 * 1000 ? { month: "short", day: "numeric", hour: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
 
 function LanguageSwitch() {
   const { language, setLanguage, t } = useI18n();
@@ -1930,13 +1558,12 @@ function CodexModelPicker({ value, onChange, allowServerDefault = false, require
   const selectValue = customMode ? "__custom__" : value;
   return <div className="codex-model-picker"><select aria-label={t("codex.modelOverride")} value={selectValue} required={required} onChange={event => { if (event.target.value === "__custom__") { setCustomMode(true); setCustomValue(""); onChange(""); } else { setCustomMode(false); onChange(event.target.value); } }}>{allowServerDefault && <option value="">{t("codex.modelServerDefault")}</option>}{codexModelOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}<option value="__custom__">{t("codex.modelCustom")}</option></select>{customMode && <input aria-label={t("codex.customModelName")} value={customValue} onChange={event => { setCustomValue(event.target.value); onChange(event.target.value); }} placeholder={t("codex.customModelPlaceholder")} required={required} />}</div>;
 }
-function ServerInformation({ server, className = "" }: { server?: Server; className?: string }) {
-  const { t } = useI18n();
-  if (!server || (!server.address && !server.configuration && !server.notes)) return <span className="muted">{t("server.noInformation")}</span>;
-  return <div className={`server-information ${className}`}>{server.address && <span className="server-information-line" title={`${t("server.address")}: ${server.address}`}><MapPin size={13} /><code>{server.address}</code></span>}{server.configuration && <span className="server-information-line" title={`${t("server.configuration")}: ${server.configuration}`}><Settings size={13} /><span>{server.configuration}</span></span>}{server.notes && <span className="server-information-line" title={`${t("server.notes")}: ${server.notes}`}><StickyNote size={13} /><span>{server.notes}</span></span>}</div>;
-}
 export function Dialog(props: Omit<DialogProps, "closeLabel">) { const { t } = useI18n(); return <AccessibleDialog {...props} closeLabel={t("common.close")} />; }
 export function ErrorBanner({ text }: { text: string }) { return <div className="error-banner"><AlertTriangle size={16} />{text}</div>; }
+
+function PreviewStatusNote({ messageText, updatedText, loading, retry, retryLabel }: { messageText: string; updatedText: string; loading: boolean; retry: () => void; retryLabel: string }) {
+  return <div className={`file-preview-note preview-status-note ${loading ? "loading" : "warning"}`} role="status"><span className="preview-status-message">{loading ? <LoaderCircle className="spin" size={14} /> : <AlertTriangle size={14} />}<strong>{messageText}</strong></span>{updatedText && <small>{updatedText}</small>}<button type="button" className="text-button" disabled={loading} onClick={retry}>{retryLabel}</button></div>;
+}
 
 export interface PageProps { realtime: number; notify: (text: string) => void }
 const previewPollDelays = [750, 1_500, 3_000, 6_000];
@@ -1948,6 +1575,7 @@ function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: st
   const endpoint = `/workspaces/${workspaceID}/${kind}?path=${encodeURIComponent(path)}`;
   const [requestNonce, setRequestNonce] = useState(0);
   const [state, setState] = useState<{ key: string; data: T | null; error: string; loading: boolean; requesting: boolean }>({ key: "", data: null, error: "", loading: false, requesting: false });
+  const dataRef = useRef<T | null>(null);
   const confirmRef = useRef<(() => void) | null>(null);
   const lastRealtimeRef = useRef(realtime);
   const retry = useCallback(() => setRequestNonce(value => value + 1), []);
@@ -1993,7 +1621,9 @@ function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: st
           waitingForTerminalState = false;
           clearTimer();
         }
-        setState({ key, data: snapshot, error: snapshot.status === "failed" ? snapshot.error : "", loading: !terminal, requesting: false });
+        if (snapshot.status === "succeeded") dataRef.current = snapshot;
+        const displayData = snapshot.status === "succeeded" ? snapshot : dataRef.current ?? snapshot;
+        setState({ key, data: displayData, error: snapshot.status === "failed" ? snapshot.error : "", loading: !terminal, requesting: false });
         if (!terminal) scheduleConfirmation();
       } catch (error) {
         if (!active || controller.signal.aborted) return;
@@ -2005,8 +1635,9 @@ function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: st
     const start = async () => {
       if (!active || started || document.hidden) return;
       started = true;
+      if (dataRef.current?.path !== path) dataRef.current = state.key === key ? state.data : null;
       startedAt = Date.now();
-      setState({ key, data: null, error: "", loading: true, requesting: true });
+      setState(current => current.key === key ? { ...current, error: "", loading: true, requesting: true } : { key, data: null, error: "", loading: true, requesting: true });
       try {
         await api(`/workspaces/${workspaceID}/${kind}`, { method: "POST", body: JSON.stringify({ path }), signal: controller.signal });
         if (!active) return;
@@ -2031,7 +1662,7 @@ function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: st
     };
     document.addEventListener("visibilitychange", visibilityChanged);
     if (!document.hidden) void start();
-    else setState({ key, data: null, error: "", loading: true, requesting: false });
+    else setState(current => current.key === key ? { ...current, error: "", loading: true, requesting: false } : { key, data: null, error: "", loading: true, requesting: false });
     return () => {
       active = false;
       clearTimer();

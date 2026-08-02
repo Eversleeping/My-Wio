@@ -82,8 +82,19 @@ export function ProjectDetailsDialog({ open, detail, loading, busy, error, label
         </div>
         <div className="project-remote-list"><strong>{labels.remote}</strong>{remotes.length === 0 ? <span className="muted">{labels.noRemote}</span> : remotes.map(remote => <div className="project-remote-row" key={remote.id}><span>{remote.name}</span><code className="truncate-code" title={remote.fetch_url}>{remote.fetch_url}</code><span className="status-tag neutral">{remote.provider || remote.mode}</span></div>)}</div>
       </> : <div className="project-operation-list">
-        <div className="project-operation-header"><span>{labels.operation}</span><span>{labels.state}</span><span>{labels.time}</span><span>{labels.result}</span></div>
-        {operations.length === 0 ? <div className="empty-state">{labels.noOperations}</div> : operations.map(operation => <div className="project-operation-row" key={operation.id}><code>{operation.kind}</code><span className={`status-tag ${operation.status === "failed" ? "failed" : "neutral"}`}>{operation.status}</span><span>{new Date(operation.created_at).toLocaleString()}</span><span className="truncate-text" title={operation.result}>{operation.result || "-"}</span></div>)}
+        <div className="project-operation-header"><span>{labels.operation}</span><span>{labels.state}</span><span></span><span>{labels.time}</span><span>{labels.result}</span></div>
+        {operations.length === 0 ? <div className="empty-state">{labels.noOperations}</div> : operations.map(operation => {
+          const terminal = ["succeeded", "failed", "cancelled", "partial"].includes(operation.status) ? operation.status : "";
+          const steps = ["queued", "delivered", "running", terminal || "running"];
+          const currentIndex = Math.max(0, steps.indexOf(operation.status));
+          return <div className="project-operation-row" key={operation.id}>
+            <code title={operation.id}>{operation.kind}</code>
+            <span className="operation-status-trail" aria-label={operation.status}>{steps.map((step, index) => <i key={`${step}-${index}`} className={`${index <= currentIndex ? "complete" : ""} ${step === operation.status ? "current" : ""} ${["failed", "partial", "cancelled"].includes(step) ? "terminal" : ""}`} title={step} />)}</span>
+            <span className={`status-tag ${["failed", "partial", "cancelled"].includes(operation.status) ? "failed" : "neutral"}`}>{operation.status}</span>
+            <span>{new Date(operation.created_at).toLocaleString()}</span>
+            <span className="truncate-text" title={operation.result}>{operation.result || "-"}</span>
+          </div>;
+        })}
       </div>}
       <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{labels.cancel}</button>{tab === "overview" && <button className="primary-button" disabled={busy || !value.name.trim() || !value.defaultBranch.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{busy ? labels.saving : labels.save}</button>}</DialogActions>
     </form>}

@@ -216,10 +216,15 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .project-remote-list { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12px; }
 .project-remote-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .project-operation-list { display: grid; gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; }
-.project-operation-header, .project-operation-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1.2fr) auto auto minmax(0, 1.5fr); align-items: center; gap: 10px; padding: 10px 12px; font-size: 11px; }
+.project-operation-header, .project-operation-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(88px, auto) auto auto minmax(0, 1.5fr); align-items: center; gap: 10px; padding: 10px 12px; font-size: 11px; }
 .project-operation-header { color: var(--muted); background: #f7f8f6; border-bottom: 1px solid var(--line); font-weight: 680; text-transform: uppercase; }
 .project-operation-row { min-height: 43px; border-bottom: 1px solid #eceeeb; }
 .project-operation-row:last-child { border-bottom: 0; }
+.operation-status-trail { display: inline-flex; align-items: center; gap: 4px; }
+.operation-status-trail i { width: 7px; height: 7px; display: block; background: #d8ddda; border-radius: 50%; }
+.operation-status-trail i.complete { background: var(--green); }
+.operation-status-trail i.current { width: 9px; height: 9px; box-shadow: 0 0 0 2px #c9e5d4; }
+.operation-status-trail i.terminal { background: var(--red); }
 .truncate-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty-state { min-height: 80px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .git-tab-stack { display: grid; gap: 12px; }
@@ -472,7 +477,9 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-tree-error { align-items: flex-start; color: #8e2d34; }
 .file-tree-error span { overflow-wrap: anywhere; }
 .file-tree-note { margin: 7px 9px 0; padding: 7px 8px; color: #77561b; background: var(--amber-soft); border: 1px solid #ead5ac; border-radius: 5px; font-size: 10px; }
-.change-file-list { padding: 5px 0 12px; }
+.change-file-list { height: 100%; padding: 5px 0 12px; }
+.virtualized-scroll { min-height: 0; }
+[data-virtualized-list] > div > [data-virtual-index] { contain: layout paint style; }
 .change-file-row { width: 100%; min-height: 42px; display: grid; align-items: center; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 7px; padding: 5px 9px; overflow: hidden; color: #465057; background: transparent; border: 0; border-radius: 0; text-align: left; }
 .change-file-row:hover { color: var(--ink); background: #edf1ed; }
 .change-file-row.active { color: #174c3a; background: #e3efe8; box-shadow: inset 3px 0 0 var(--green); }
@@ -519,6 +526,13 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-preview-error span { max-width: 420px; overflow-wrap: anywhere; }
 .file-preview-empty { min-height: 220px; height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; padding: 20px; color: var(--muted); font-size: 11px; text-align: center; }
 .file-preview-note { min-height: 32px; display: flex; align-items: center; gap: 6px; padding: 6px 11px; color: #77561b; background: var(--amber-soft); border-bottom: 1px solid #ead5ac; font-size: 10px; }
+.preview-status-note { justify-content: flex-start; flex-wrap: wrap; }
+.preview-status-note.warning { color: #8e2d34; background: #fbecef; border-bottom-color: #edc7cd; }
+.preview-status-note.loading { color: var(--muted); }
+.preview-status-message { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.preview-status-message strong { overflow-wrap: anywhere; }
+.preview-status-note small { color: inherit; opacity: .82; }
+.preview-status-note .text-button { margin-left: auto; }
 .file-code { width: 100%; min-height: 100%; margin: 0 !important; padding: 9px 0 18px; background: #fbfcfb !important; border-radius: 0; font-size: 11px; line-height: 1.58; tab-size: 2; }
 .file-code > code { display: block; min-width: 0; }
 .file-code-line { min-width: 0; display: flex; align-items: stretch; }
@@ -811,7 +825,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .project-preference-grid { grid-template-columns: minmax(0, 1fr); }
   .project-operation-header { display: none; }
   .project-operation-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .project-operation-row > span:nth-child(3), .project-operation-row > span:nth-child(4) { grid-column: 1 / -1; }
+  .project-operation-row > span:nth-child(3), .project-operation-row > span:nth-child(4), .project-operation-row > span:nth-child(5) { grid-column: 1 / -1; }
   .workspace-git-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workspace-manager-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .git-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
