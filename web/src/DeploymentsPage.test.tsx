@@ -11,6 +11,7 @@ const target = {
   build_mode: "build", health_checks: "[]", release_root: "/var/lib/wio-agent/releases", public_url: "http://203.0.113.10:5000", configured_public_url: "http://203.0.113.10:5000", detected_public_url: "", project_name: "project-management", server_name: "server-1",
   container_operation_id: "", container_action: "deploy", container_status: "running", container_message: "deployment is healthy", container_updated_at: "2026-07-21T10:00:08Z"
 };
+const server = { id: "server-1", name: "server-1", hostname: "server.example.test", address: "203.0.113.10", status: "online" };
 const deployment = {
   id: "deployment-1", target_id: target.id, operation_id: "operation-1", commit_ref: "main", resolved_commit: "abc123456789",
   status: "succeeded", message: "deployment is healthy", project_name: target.project_name, environment: target.environment, public_url: target.public_url,
@@ -39,7 +40,7 @@ test("creates and edits public access settings, manages containers, and exposes 
     else if (url === `/api/deployments/${deployment.id}` && method === "GET") payload = { deployment, events: detailEvents };
     else if (url === `/api/deployments/${deployment.id}` && method === "DELETE") payload = { ok: true };
     else if (url === "/api/workspaces") payload = [{ id: "workspace-1", project_id: "project-1", server_id: "server-1", path: "/srv/project", display_name: "project", status: "ready", branch: "main", project_name: "project-management" }];
-    else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1", status: "online" }];
+    else if (url === "/api/servers") payload = [server];
     else if (url === "/api/secret-sets") payload = [];
     return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
@@ -57,9 +58,9 @@ test("creates and edits public access settings, manages containers, and exposes 
   await user.click(screen.getByRole("button", { name: "Import from remote repository" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "Server" }), "server-1");
   await user.type(screen.getByRole("textbox", { name: "Repository" }), "https://example.com/new-service.git");
-  await user.type(screen.getByRole("textbox", { name: "External access URL" }), "http://198.51.100.20:8080");
+  await user.type(screen.getByRole("spinbutton", { name: "Port" }), "8080");
   await user.click(screen.getByRole("button", { name: "Create target" }));
-  await waitFor(() => expect(requests.some(request => request.url === "/api/deployment-targets" && request.method === "POST" && request.body.includes('"public_url":"http://198.51.100.20:8080"'))).toBe(true));
+  await waitFor(() => expect(requests.some(request => request.url === "/api/deployment-targets" && request.method === "POST" && request.body.includes('"public_url":"http://203.0.113.10:8080"'))).toBe(true));
 
   await user.click(screen.getByRole("button", { name: "Stop containers" }));
   const stopConfirmation = await screen.findByRole("dialog", { name: "Stop containers" });
@@ -74,10 +75,11 @@ test("creates and edits public access settings, manages containers, and exposes 
   expect(screen.queryByRole("textbox", { name: "Working directory" })).not.toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Release root" })).not.toBeInTheDocument();
   expect(screen.getByText(/Before deployment, Wio checks Linux/)).toBeInTheDocument();
-  const publicURL = screen.getByRole("textbox", { name: "External access URL" });
-  expect(publicURL).toHaveValue(target.public_url);
-  await user.clear(publicURL);
-  await user.type(publicURL, "https://app.example.com");
+  const accessMode = screen.getByRole("combobox", { name: "Access type" });
+  expect(accessMode).toHaveValue("port");
+  expect(screen.getByRole("spinbutton", { name: "Port" })).toHaveValue(5000);
+  await user.selectOptions(accessMode, "domain");
+  await user.type(screen.getByRole("textbox", { name: "Domain" }), "https://app.example.com");
   const environment = screen.getByRole("textbox", { name: "Environment" });
   await user.clear(environment);
   await user.type(environment, "staging");
@@ -112,7 +114,7 @@ test("queues destructive target cleanup with an explicit confirmation", async ()
     let payload: unknown = [];
     if (url === "/api/deployment-targets" && method === "GET") payload = [target];
     else if (url === `/api/deployment-targets/${target.id}` && method === "DELETE") payload = { operation_id: "delete-operation-1", action: "delete" };
-    else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1", status: "online" }];
+    else if (url === "/api/servers") payload = [server];
     return new Response(JSON.stringify(payload), { status: method === "DELETE" ? 202 : 200, headers: { "Content-Type": "application/json" } });
   }));
 
@@ -138,7 +140,7 @@ test("shows a detected public URL without treating it as a configured override",
     let payload: unknown = [];
     if (url === "/api/deployment-targets") payload = [detectedTarget];
     else if (url === "/api/deployments") payload = [];
-    else if (url === "/api/servers") payload = [{ id: "server-1", name: "server-1", status: "online" }];
+    else if (url === "/api/servers") payload = [server];
     return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
 
@@ -147,5 +149,6 @@ test("shows a detected public URL without treating it as a configured override",
   expect(await screen.findByRole("link", { name: "203.0.113.10:5010" })).toHaveAttribute("href", detectedTarget.public_url);
   await user.click(screen.getByRole("button", { name: "More deployment actions" }));
   await user.click(screen.getByRole("menuitem", { name: "Edit deployment target" }));
-  expect(screen.getByRole("textbox", { name: "External access URL" })).toHaveValue("");
+  expect(screen.getByRole("combobox", { name: "Access type" })).toHaveValue("port");
+  expect((screen.getByRole("spinbutton", { name: "Port" }) as HTMLInputElement).value).toBe("");
 });

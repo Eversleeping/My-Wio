@@ -209,6 +209,7 @@ textarea { resize: vertical; line-height: 1.5; }
 input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0 0 0 3px rgba(43, 144, 108, .12); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid.thirds { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.deployment-public-access-preview { min-width: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .project-detail-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .project-preference-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 5px 0 17px; }
 .toggle-row { min-height: 38px; display: flex; align-items: center; gap: 7px; padding: 8px 10px; color: #4f575e; background: #f7f8f6; border: 1px solid var(--line); border-radius: 5px; font-size: 12px; }
