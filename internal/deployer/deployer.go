@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wio-platform/wio/internal/deploymenttemplate"
 	"github.com/wio-platform/wio/internal/prerequisite"
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -140,7 +141,22 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		return err
 	}
 	if _, err := os.Stat(composePath); err != nil {
-		return fmt.Errorf("compose file: %w", err)
+		if !allowsTemplateGeneration(command) {
+			return fmt.Errorf("compose file: %w", err)
+		}
+		generated, generateErr := deploymenttemplate.Generate(deploymenttemplate.GenerateOptions{
+			Root:        workDir,
+			ComposeFile: command.ComposeFile,
+			TemplateID:  command.TemplateID,
+			BuildMode:   command.BuildMode,
+			PublicPort:  publicPort(command.PublicURL),
+		})
+		if generateErr != nil {
+			status("preparing", "deployment template generation failed", resolved, "", generateErr.Error())
+			return fmt.Errorf("generate deployment files: %w", generateErr)
+		}
+		composePath = generated.ComposePath
+		status("preparing", "deployment files generated", resolved, "", fmt.Sprintf("Template %s v%s generated: %s", generated.Template.ID, generated.Template.Version, strings.Join(generated.Files, ", ")))
 	}
 	environment, err := composeEnvironment(command.Environment, command.PublicURL)
 	if err != nil {
@@ -199,6 +215,10 @@ func missingAutomaticPrerequisite(checks []PreflightCheck) bool {
 	return false
 }
 
+func allowsTemplateGeneration(command protocol.DeployCommand) bool {
+	return strings.EqualFold(strings.TrimSpace(command.DeploymentMode), deploymenttemplate.ModeAuto) || strings.EqualFold(strings.TrimSpace(command.DeploymentMode), "template")
+}
+
 func (d *Deployer) Preflight(ctx context.Context, command protocol.DeployCommand) []PreflightCheck {
 	checks := make([]PreflightCheck, 0, 6)
 	addCommand := func(name, executable string, args ...string) {
@@ -241,15 +261,27 @@ func (d *Deployer) Preflight(ctx context.Context, command protocol.DeployCommand
 		} else {
 			checks = append(checks, PreflightCheck{Name: "project workspace", OK: true, Message: command.SourcePath})
 		}
-		_, composePath, err := composePaths(command.SourcePath, command.WorkingDir, command.ComposeFile)
+		workDir, composePath, err := composePaths(command.SourcePath, command.WorkingDir, command.ComposeFile)
 		if err != nil {
 			checks = append(checks, PreflightCheck{Name: "Compose file", OK: false, Message: err.Error()})
 		} else if info, statErr := os.Stat(composePath); statErr != nil || info.IsDir() {
-			message := "Compose file is unavailable"
-			if statErr != nil {
-				message = statErr.Error()
+			if allowsTemplateGeneration(command) {
+				if template, templateErr := deploymenttemplate.Detect(workDir); templateErr == nil {
+					checks = append(checks, PreflightCheck{Name: "Compose template", OK: true, Message: fmt.Sprintf("%s v%s will generate deployment files", template.ID, template.Version)})
+				} else {
+					message := "Compose file is unavailable"
+					if statErr != nil {
+						message = statErr.Error() + "; " + templateErr.Error()
+					}
+					checks = append(checks, PreflightCheck{Name: "Compose file", OK: false, Message: message})
+				}
+			} else {
+				message := "Compose file is unavailable"
+				if statErr != nil {
+					message = statErr.Error()
+				}
+				checks = append(checks, PreflightCheck{Name: "Compose file", OK: false, Message: message})
 			}
-			checks = append(checks, PreflightCheck{Name: "Compose file", OK: false, Message: message})
 		} else {
 			checks = append(checks, PreflightCheck{Name: "Compose file", OK: true, Message: composePath})
 		}

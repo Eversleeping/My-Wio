@@ -487,20 +487,22 @@ type ConfigureCredentialsCommand struct {
 }
 
 type DeployCommand struct {
-	DeploymentID  string            `json:"deployment_id"`
-	TargetID      string            `json:"target_id"`
-	ServerAddress string            `json:"server_address,omitempty"`
-	PublicURL     string            `json:"public_url,omitempty"`
-	SourceType    string            `json:"source_type"`
-	SourcePath    string            `json:"source_path,omitempty"`
-	Repository    string            `json:"repository"`
-	CommitRef     string            `json:"commit_ref"`
-	ComposeFile   string            `json:"compose_file"`
-	WorkingDir    string            `json:"working_dir,omitempty"`
-	BuildMode     string            `json:"build_mode"`
-	ReleaseRoot   string            `json:"release_root"`
-	Environment   map[string]string `json:"environment,omitempty"`
-	HealthChecks  []HealthCheck     `json:"health_checks,omitempty"`
+	DeploymentID   string            `json:"deployment_id"`
+	TargetID       string            `json:"target_id"`
+	DeploymentMode string            `json:"deployment_mode,omitempty"`
+	TemplateID     string            `json:"template_id,omitempty"`
+	ServerAddress  string            `json:"server_address,omitempty"`
+	PublicURL      string            `json:"public_url,omitempty"`
+	SourceType     string            `json:"source_type"`
+	SourcePath     string            `json:"source_path,omitempty"`
+	Repository     string            `json:"repository"`
+	CommitRef      string            `json:"commit_ref"`
+	ComposeFile    string            `json:"compose_file"`
+	WorkingDir     string            `json:"working_dir,omitempty"`
+	BuildMode      string            `json:"build_mode"`
+	ReleaseRoot    string            `json:"release_root"`
+	Environment    map[string]string `json:"environment,omitempty"`
+	HealthChecks   []HealthCheck     `json:"health_checks,omitempty"`
 }
 
 type RollbackCommand struct {

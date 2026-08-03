@@ -273,14 +273,14 @@ Codex 会话绑定到工作区。Wio 保存自己的会话 ID、Codex 线程 ID�
 1. 创建包含 `KEY=value` 环境变量的 Vault 密钥集。
 2. 为项目、服务器和环境创建部署目标。
 3. 部署目标可选择目标服务器上的已有项目工作区，或直接填写远程 Git 仓库；内部发布目录由 Wio 管理，无需手动配置。
-4. Agent 会在创建 release 前检查 Linux、Git、Docker daemon、Docker Compose、发布目录权限，并在已有项目模式下验证工作区与 Compose 文件。缺失 Git、Docker、Compose 或 Docker 服务未启动时，会在支持 `apt-get`、`dnf` 或 `yum` 的服务器上自动执行固定的安装和启动步骤，完整输出保存在部署日志中，随后重新检查环境。首次使用此功能的既有 Agent 需要在“服务器”页重新注册一次，以安装仅限部署依赖的受限 root 助手；之后无需授予 Agent 或 Codex sudo 权限。
+4. Agent 会在创建 release 前检查 Linux、Git、Docker daemon、Docker Compose、发布目录权限，并在已有项目模式下验证工作区与 Compose 文件。缺少 Compose 文件时，`auto` 部署模式会根据项目文件匹配受支持的版本化模板，并在隔离 release 中生成 Dockerfile、Compose 和反向代理配置后继续部署；无法确定项目类型时会明确失败，不会猜测启动命令。缺失 Git、Docker、Compose 或 Docker 服务未启动时，会在支持 `apt-get`、`dnf` 或 `yum` 的服务器上自动执行固定的安装和启动步骤，完整输出保存在部署日志中，随后重新检查环境。首次使用此功能的既有 Agent 需要在“服务器”页重新注册一次，以安装仅限部署依赖的受限 root 助手；之后无需授予 Agent 或 Codex sudo 权限。
 5. 选择 `build` 执行 `docker compose up -d --build`，或选择 `pull` 在启动服务前拉取镜像。
 6. 添加 HTTP(S) URL 或 TCP `host:port` 健康检查。HTTP 2xx/3xx 或成功建立 TCP 连接视为健康，默认在 60 秒内每 2 秒重试。
 7. 部署配置的 Git 引用。Wio 会解析并记录准确的提交哈希。
 8. 部署完成后可在目标操作菜单中启动、停止、重启或删除 Compose 容器。删除操作执行 `docker compose down --remove-orphans`，保留命名卷、发布目录和部署历史，之后仍可从当前发布重新启动。
 9. 在部署目标的操作菜单中回滚到上一个成功版本。
 
-部署目标设置“外部访问 URL”后，目标和成功部署记录会优先显示该可点击链接。未设置时，Agent 会在部署成功后读取 Compose 的第一个非回环 TCP 发布端口，并结合服务器的 IP / 地址生成默认链接。Wio 不会据此创建反向代理、开放防火墙或修改 Compose 端口；相关网络和 DNS 仍须由 Compose、主机或外部代理配置。
+部署目标设置“外部访问 URL”后，目标和成功部署记录会优先显示该可点击链接。未设置时，Agent 会在部署成功后读取 Compose 的第一个非回环 TCP 发布端口，并结合服务器的 IP / 地址生成默认链接。自动生成的模板只在配置了端口模式时写入宿主机端口映射；域名模式仍需要主机或外部代理提供路由。Wio 不会据此创建反向代理、开放防火墙或修改现有项目 Compose 的端口；相关网络和 DNS 仍须由 Compose、主机或外部代理配置。
 
 包含环境密钥的部署和容器操作载荷会作为 Vault 密文存储在 `agent_operations` 中，仅在通过已认证的 gRPC 连接发送时解密。事件和部署输出会在持久化与广播前进行脱敏。部署日志单条命令输出最多保留 1 MiB，同一目标不会并发执行部署或容器生命周期操作。
 
