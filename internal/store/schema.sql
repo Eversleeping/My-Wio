@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS agent_operations (
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  thread_id TEXT REFERENCES codex_threads(id) ON DELETE SET NULL,
   kind TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'queued',
@@ -289,6 +290,14 @@ CREATE TABLE IF NOT EXISTS secret_sets (
   key_version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS secret_set_versions (
+  secret_set_id TEXT NOT NULL REFERENCES secret_sets(id) ON DELETE CASCADE,
+  key_version INTEGER NOT NULL,
+  ciphertext TEXT NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  PRIMARY KEY(secret_set_id, key_version)
 );
 
 CREATE TABLE IF NOT EXISTS credential_profiles (
@@ -365,6 +374,40 @@ CREATE TABLE IF NOT EXISTS deployments (
 );
 
 CREATE INDEX IF NOT EXISTS deployments_target_idx ON deployments(target_id, created_at);
+
+-- A deployment snapshot is immutable evidence of the configuration used by a
+-- release. It intentionally stores Vault metadata only, never decrypted values.
+CREATE TABLE IF NOT EXISTS deployment_config_snapshots (
+  deployment_id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  project_name TEXT NOT NULL DEFAULT '',
+  source_type TEXT NOT NULL DEFAULT 'remote',
+  environment TEXT NOT NULL DEFAULT '',
+  server_id TEXT NOT NULL DEFAULT '',
+  server_name TEXT NOT NULL DEFAULT '',
+  workspace_id TEXT NOT NULL DEFAULT '',
+  workspace_path TEXT NOT NULL DEFAULT '',
+  workspace_name TEXT NOT NULL DEFAULT '',
+  repository TEXT NOT NULL DEFAULT '',
+  git_ref TEXT NOT NULL DEFAULT '',
+  resolved_commit TEXT NOT NULL DEFAULT '',
+  compose_file TEXT NOT NULL DEFAULT '',
+  working_dir TEXT NOT NULL DEFAULT '',
+  build_mode TEXT NOT NULL DEFAULT '',
+  release_root TEXT NOT NULL DEFAULT '',
+  configured_public_url TEXT NOT NULL DEFAULT '',
+  detected_public_url TEXT NOT NULL DEFAULT '',
+  health_checks TEXT NOT NULL DEFAULT '[]',
+  secret_set_id TEXT NOT NULL DEFAULT '',
+  secret_set_name TEXT NOT NULL DEFAULT '',
+  secret_set_key_version INTEGER NOT NULL DEFAULT 0,
+  secret_set_updated_at TIMESTAMP,
+  rollback_of_deployment_id TEXT REFERENCES deployments(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS deployment_snapshots_target_idx ON deployment_config_snapshots(target_id, created_at);
 
 CREATE TABLE IF NOT EXISTS deployment_events (
   id TEXT PRIMARY KEY,

@@ -781,11 +781,11 @@ func pathWithinRoots(path string, roots []string) bool {
 
 func (c *Client) runRollback(ctx context.Context, command protocol.RollbackCommand) error {
 	status := func(state, message, resolved, _ string, content string) {
-		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: message, ResolvedCommit: resolved, Content: content}, true)
+		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, ""), ResolvedCommit: resolved, Content: redactDeploymentText(content, command.Environment, "")}, true)
 	}
 	err := c.deployer.Rollback(ctx, command, status)
 	if err != nil {
-		status("failed", truncate(err.Error(), 8192), "", "", "")
+		status("failed", truncate(redactDeploymentText(err.Error(), command.Environment, ""), 8192), "", "", "")
 	}
 	return err
 }

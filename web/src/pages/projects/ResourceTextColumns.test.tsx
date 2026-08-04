@@ -60,3 +60,10 @@ test("keeps an existing project ready when another server import fails", () => {
   expect(screen.queryByText("clone failed")).not.toBeInTheDocument();
   expect(screen.queryByText("server-2")).not.toBeInTheDocument();
 });
+
+test("shows a Git refresh error instead of reporting the workspace as clean", () => {
+  render(<WorkspaceTable workspaces={[{ ...workspace, git_error: "refresh failed" }]} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={value => value} />);
+
+  expect(screen.getByText("failed")).toBeInTheDocument();
+  expect(screen.queryByText("clean")).not.toBeInTheDocument();
+});

@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Boxes, GitBranch, LoaderCircle, Pencil, Plus, RefreshCw, RotateCcw, Settings, Trash2 } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
@@ -31,10 +31,29 @@ export interface ProjectsPageProps {
   notify: (text: string) => void;
 }
 
+function readResourceFilters() {
+  const params = new URLSearchParams(window.location.search);
+  return { projectName: params.get("project_name") ?? "", projectServerID: params.get("project_server_id") ?? "", projectStatus: params.get("project_status") ?? "", workspacePath: params.get("workspace_path") ?? "", workspaceServerID: params.get("workspace_server_id") ?? "", workspaceGitStatus: params.get("workspace_git_status") ?? "" };
+}
+
+function resourcePath(path: string, values: Record<string, string>) {
+  const params = new URLSearchParams();
+  Object.entries(values).forEach(([key, value]) => { if (value) params.set(key, value); });
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+}
+
 export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const { t } = useI18n();
-  const projects = useData<Project[]>("/projects", realtime);
-  const workspaces = useData<Workspace[]>("/workspaces", realtime);
+  const initialFilters = readResourceFilters();
+  const [projectName, setProjectName] = useState(initialFilters.projectName);
+  const [projectServerID, setProjectServerID] = useState(initialFilters.projectServerID);
+  const [projectStatus, setProjectStatus] = useState(initialFilters.projectStatus);
+  const [workspacePath, setWorkspacePath] = useState(initialFilters.workspacePath);
+  const [workspaceServerID, setWorkspaceServerID] = useState(initialFilters.workspaceServerID);
+  const [workspaceGitStatus, setWorkspaceGitStatus] = useState(initialFilters.workspaceGitStatus);
+  const projects = useData<Project[]>(resourcePath("/projects", { name: projectName, server_id: projectServerID, status: projectStatus }), realtime);
+  const workspaces = useData<Workspace[]>(resourcePath("/workspaces", { path: workspacePath, server_id: workspaceServerID, git_status: workspaceGitStatus }), realtime);
   const servers = useData<Server[]>("/servers", realtime);
   const [dialog, setDialog] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -54,6 +73,19 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const [workspaceManagerBusy, setWorkspaceManagerBusy] = useState(false);
   const [workspacePlanLoading, setWorkspacePlanLoading] = useState(false);
   const [workspaceManagerError, setWorkspaceManagerError] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const values: Record<string, string> = { project_name: projectName, project_server_id: projectServerID, project_status: projectStatus, workspace_path: workspacePath, workspace_server_id: workspaceServerID, workspace_git_status: workspaceGitStatus };
+    Object.entries(values).forEach(([key, value]) => { if (value) params.set(key, value); else params.delete(key); });
+    const query = params.toString();
+    const next = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (next !== current) window.history.replaceState(null, "", next);
+  }, [projectName, projectServerID, projectStatus, workspacePath, workspaceServerID, workspaceGitStatus]);
+
+  const clearFilters = () => { setProjectName(""); setProjectServerID(""); setProjectStatus(""); setWorkspacePath(""); setWorkspaceServerID(""); setWorkspaceGitStatus(""); };
+  const filtered = Boolean(projectName || projectServerID || projectStatus || workspacePath || workspaceServerID || workspaceGitStatus);
 
   const openDialog = () => {
     setForm(newCreateProjectFormValue());
@@ -244,7 +276,8 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const managedWorkspace = (workspaces.data ?? []).find(workspace => workspace.id === manageWorkspaceID) ?? null;
   const deletingProject = (projects.data ?? []).find(project => project.id === deleteProjectID) ?? null;
   return <div className="page-stack project-page">
-    <Section title={t("project.title")} icon={<GitBranch size={18} />} action={<button className="primary-button" onClick={openDialog}><Plus size={17} />{t("project.createEntry")}</button>}>
+    <Section title={t("project.title")} icon={<GitBranch size={18} />} action={<div className="section-actions"><button className="secondary-button small" disabled={!filtered} onClick={clearFilters}>{t("project.clearFilters")}</button><button className="primary-button" onClick={openDialog}><Plus size={17} />{t("project.createEntry")}</button></div>}>
+      <div className="resource-filter-bar"><label><span>{t("project.filterName")}</span><input value={projectName} onChange={event => setProjectName(event.target.value)} placeholder={t("project.filterNamePlaceholder")} /></label><label><span>{t("project.filterServer")}</span><select value={projectServerID} onChange={event => setProjectServerID(event.target.value)}><option value="">{t("project.filterAllServers")}</option>{(servers.data ?? []).map(server => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label><label><span>{t("project.filterStatus")}</span><select value={projectStatus} onChange={event => setProjectStatus(event.target.value)}><option value="">{t("project.filterAllStatuses")}</option><option value="ready">{t("status.ready")}</option><option value="provisioning">{t("status.provisioning")}</option><option value="failed">{t("status.failed")}</option><option value="partial">{t("status.partial")}</option></select></label></div>
       <ProjectTable projects={projects.data ?? []} labels={projectLabels} slots={{ DataTable, Status }} formatTime={relative} formatImportMessage={importMessage} onSelect={project => { setDetailError(""); setDetailProjectID(project.id); }} renderActions={(project, state: ProjectLifecycleState) => {
         const failed = (state === "failed" || state === "partial") && project.workspace_count === 0;
         const action = projectAction?.id === project.id ? projectAction.kind : null;
@@ -255,6 +288,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
       }} />
     </Section>
     <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
+      <div className="resource-filter-bar"><label><span>{t("project.filterPath")}</span><input value={workspacePath} onChange={event => setWorkspacePath(event.target.value)} placeholder={t("project.filterPathPlaceholder")} /></label><label><span>{t("project.filterServer")}</span><select value={workspaceServerID} onChange={event => setWorkspaceServerID(event.target.value)}><option value="">{t("project.filterAllServers")}</option>{(servers.data ?? []).map(server => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label><label><span>{t("project.filterGitStatus")}</span><select value={workspaceGitStatus} onChange={event => setWorkspaceGitStatus(event.target.value)}><option value="">{t("project.filterAllStatuses")}</option><option value="clean">{t("project.gitClean")}</option><option value="dirty">{t("project.gitDirty")}</option><option value="error">{t("project.gitStatusError")}</option></select></label></div>
       <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <><button className="icon-button" title={t("project.viewGit")} onClick={() => openWorkspaceGit(workspace.id)}><GitBranch size={15} /></button><button className="icon-button" title={t("project.workspaceManage")} onClick={() => openWorkspaceManager(workspace)}><Settings size={15} /></button></>} />
     </Section>
     <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />

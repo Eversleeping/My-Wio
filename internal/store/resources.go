@@ -350,7 +350,7 @@ func (s *Store) ResolveApprovalAndQueue(ctx context.Context, approvalID, serverI
 		return "", ErrApprovalResolved
 	}
 	operationID := NewID()
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, serverID, "codex.approval", string(payload), "approval:"+approvalID, now); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,thread_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)"), operationID, serverID, command.ThreadID, "codex.approval", string(payload), "approval:"+approvalID, now); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -460,26 +460,57 @@ func (s *Store) QueueProjectImport(ctx context.Context, serverID, name, remoteUR
 }
 
 type SecretSet struct {
-	ID        string    `db:"id" json:"id"`
-	Name      string    `db:"name" json:"name"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+	ID         string    `db:"id" json:"id"`
+	Name       string    `db:"name" json:"name"`
+	KeyVersion int       `db:"key_version" json:"key_version"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
 }
 
 func (s *Store) ListSecretSets(ctx context.Context) ([]SecretSet, error) {
 	var out []SecretSet
-	err := s.DB.SelectContext(ctx, &out, "SELECT id,name,updated_at FROM secret_sets ORDER BY name")
+	err := s.DB.SelectContext(ctx, &out, "SELECT id,name,key_version,updated_at FROM secret_sets ORDER BY name")
 	return out, err
 }
 
 func (s *Store) UpsertSecretSet(ctx context.Context, id, name, ciphertext string) (string, error) {
-	if id == "" {
-		id = NewID()
-	}
-	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO secret_sets(id,name,ciphertext) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=?`), id, name, ciphertext, time.Now().UTC())
+	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return "", err
 	}
-	if err := s.DB.GetContext(ctx, &id, s.Q("SELECT id FROM secret_sets WHERE name=?"), name); err != nil {
+	defer tx.Rollback()
+	var current struct {
+		ID         string `db:"id"`
+		KeyVersion int    `db:"key_version"`
+	}
+	lookup := "SELECT id,key_version FROM secret_sets WHERE name=?"
+	args := []any{name}
+	if strings.TrimSpace(id) != "" {
+		lookup = "SELECT id,key_version FROM secret_sets WHERE id=? OR name=? ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1"
+		args = []any{id, name, id}
+	}
+	err = tx.GetContext(ctx, &current, s.Q(lookup), args...)
+	now := time.Now().UTC()
+	version := 1
+	if errors.Is(err, sql.ErrNoRows) {
+		if id == "" {
+			id = NewID()
+		}
+		if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO secret_sets(id,name,ciphertext,key_version,created_at,updated_at) VALUES(?,?,?,?,?,?)"), id, name, ciphertext, version, now, now); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	} else {
+		id = current.ID
+		version = current.KeyVersion + 1
+		if _, err = tx.ExecContext(ctx, s.Q("UPDATE secret_sets SET name=?,ciphertext=?,key_version=?,updated_at=? WHERE id=?"), name, ciphertext, version, now, id); err != nil {
+			return "", err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO secret_set_versions(secret_set_id,key_version,ciphertext,updated_at) VALUES(?,?,?,?)"), id, version, ciphertext, now); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -489,6 +520,15 @@ func (s *Store) SecretCiphertext(ctx context.Context, id string) (string, error)
 	var value string
 	err := s.DB.GetContext(ctx, &value, s.Q("SELECT ciphertext FROM secret_sets WHERE id=?"), id)
 	return value, err
+}
+
+func (s *Store) SecretCiphertextVersion(ctx context.Context, id string, version int) (string, time.Time, error) {
+	var value struct {
+		Ciphertext string    `db:"ciphertext"`
+		UpdatedAt  time.Time `db:"updated_at"`
+	}
+	err := s.DB.GetContext(ctx, &value, s.Q("SELECT ciphertext,updated_at FROM secret_set_versions WHERE secret_set_id=? AND key_version=?"), id, version)
+	return value.Ciphertext, value.UpdatedAt, err
 }
 
 type DeploymentTarget struct {
@@ -651,23 +691,75 @@ func (s *Store) DeleteDeploymentTarget(ctx context.Context, id string) error {
 }
 
 type Deployment struct {
-	ID             string     `db:"id" json:"id"`
-	TargetID       string     `db:"target_id" json:"target_id"`
-	OperationID    string     `db:"operation_id" json:"operation_id"`
-	CommitRef      string     `db:"commit_ref" json:"commit_ref"`
-	ResolvedCommit string     `db:"resolved_commit" json:"resolved_commit"`
-	Status         string     `db:"status" json:"status"`
-	Message        string     `db:"message" json:"message"`
-	ProjectName    string     `db:"project_name" json:"project_name"`
-	Environment    string     `db:"environment" json:"environment"`
-	PublicURL      string     `db:"public_url" json:"public_url"`
-	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
-	StartedAt      *time.Time `db:"started_at" json:"started_at"`
-	FinishedAt     *time.Time `db:"finished_at" json:"finished_at"`
+	ID                string              `db:"id" json:"id"`
+	TargetID          string              `db:"target_id" json:"target_id"`
+	OperationID       string              `db:"operation_id" json:"operation_id"`
+	CommitRef         string              `db:"commit_ref" json:"commit_ref"`
+	ResolvedCommit    string              `db:"resolved_commit" json:"resolved_commit"`
+	Status            string              `db:"status" json:"status"`
+	Message           string              `db:"message" json:"message"`
+	ProjectName       string              `db:"project_name" json:"project_name"`
+	Environment       string              `db:"environment" json:"environment"`
+	PublicURL         string              `db:"public_url" json:"public_url"`
+	SnapshotAvailable bool                `db:"snapshot_available" json:"snapshot_available"`
+	SnapshotError     string              `db:"-" json:"snapshot_error,omitempty"`
+	Snapshot          *DeploymentSnapshot `db:"-" json:"snapshot,omitempty"`
+	CreatedAt         time.Time           `db:"created_at" json:"created_at"`
+	StartedAt         *time.Time          `db:"started_at" json:"started_at"`
+	FinishedAt        *time.Time          `db:"finished_at" json:"finished_at"`
 }
 
 var ErrDeploymentActive = errors.New("deployment is active")
 var ErrDeploymentContainerActive = errors.New("container operation is active")
+var ErrDeploymentSnapshotUnavailable = errors.New("deployment configuration snapshot is unavailable")
+
+type DeploymentConfig struct {
+	ProjectID           string     `db:"project_id" json:"project_id"`
+	ProjectName         string     `db:"project_name" json:"project_name"`
+	SourceType          string     `db:"source_type" json:"source_type"`
+	Environment         string     `db:"environment" json:"environment"`
+	ServerID            string     `db:"server_id" json:"server_id"`
+	ServerName          string     `db:"server_name" json:"server_name"`
+	WorkspaceID         string     `db:"workspace_id" json:"workspace_id"`
+	WorkspacePath       string     `db:"workspace_path" json:"workspace_path"`
+	WorkspaceName       string     `db:"workspace_name" json:"workspace_name"`
+	Repository          string     `db:"repository" json:"repository"`
+	GitRef              string     `db:"git_ref" json:"git_ref"`
+	ResolvedCommit      string     `db:"resolved_commit" json:"resolved_commit"`
+	ComposeFile         string     `db:"compose_file" json:"compose_file"`
+	WorkingDir          string     `db:"working_dir" json:"working_dir"`
+	BuildMode           string     `db:"build_mode" json:"build_mode"`
+	ReleaseRoot         string     `db:"release_root" json:"release_root"`
+	ConfiguredPublicURL string     `db:"configured_public_url" json:"configured_public_url"`
+	DetectedPublicURL   string     `db:"detected_public_url" json:"detected_public_url"`
+	HealthChecks        string     `db:"health_checks" json:"health_checks"`
+	SecretSetID         string     `db:"secret_set_id" json:"secret_set_id"`
+	SecretSetName       string     `db:"secret_set_name" json:"secret_set_name"`
+	SecretSetKeyVersion int        `db:"secret_set_key_version" json:"secret_set_key_version"`
+	SecretSetUpdatedAt  *time.Time `db:"secret_set_updated_at" json:"secret_set_updated_at"`
+}
+
+type DeploymentSnapshot struct {
+	DeploymentID           string `db:"deployment_id" json:"deployment_id"`
+	TargetID               string `db:"target_id" json:"target_id"`
+	RollbackOfDeploymentID string `db:"rollback_of_deployment_id" json:"rollback_of_deployment_id,omitempty"`
+	DeploymentConfig
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}
+
+type DeploymentConfigChange struct {
+	Field    string `json:"field"`
+	Previous string `json:"previous"`
+	Current  string `json:"current"`
+}
+
+type DeploymentTargetReview struct {
+	TargetID          string                   `json:"target_id"`
+	Current           DeploymentConfig         `json:"current"`
+	LastSuccessful    *DeploymentSnapshot      `json:"last_successful,omitempty"`
+	Changes           []DeploymentConfigChange `json:"changes"`
+	SnapshotAvailable bool                     `json:"snapshot_available"`
+}
 
 type DeploymentEvent struct {
 	ID           string    `db:"id" json:"id"`
@@ -678,9 +770,20 @@ type DeploymentEvent struct {
 	OccurredAt   time.Time `db:"occurred_at" json:"occurred_at"`
 }
 
+const deploymentHistorySelect = `SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,
+	COALESCE(ds.project_name,'') project_name,
+	COALESCE(ds.environment,'') environment,
+	CASE WHEN ds.deployment_id IS NULL THEN '' ELSE COALESCE(NULLIF(ds.configured_public_url,''),ds.detected_public_url) END public_url,
+	CASE WHEN ds.deployment_id IS NULL THEN 0 ELSE 1 END snapshot_available,
+	d.created_at,d.started_at,d.finished_at
+	FROM deployments d
+	JOIN deployment_targets t ON t.id=d.target_id
+	JOIN projects p ON p.id=t.project_id
+	LEFT JOIN deployment_config_snapshots ds ON ds.deployment_id=d.id`
+
 func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {
 	var out []Deployment
-	err := s.DB.SelectContext(ctx, &out, `SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,COALESCE(NULLIF(t.public_url,''),t.detected_public_url) public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id ORDER BY d.created_at DESC LIMIT 200`)
+	err := s.DB.SelectContext(ctx, &out, deploymentHistorySelect+` ORDER BY d.created_at DESC LIMIT 200`)
 	return out, err
 }
 
@@ -708,6 +811,23 @@ func (s *Store) CreateDeployment(ctx context.Context, targetID, commitRef string
 	if err != nil {
 		return Deployment{}, err
 	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_config_snapshots(
+		deployment_id,target_id,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
+		repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
+		health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,created_at)
+		SELECT d.id,d.target_id,t.project_id,p.name,t.source_type,t.environment,t.server_id,s.name,COALESCE(t.workspace_id,''),COALESCE(w.path,''),COALESCE(w.display_name,''),
+			t.repository,?,d.resolved_commit,t.compose_file,t.working_dir,t.build_mode,t.release_root,t.public_url,t.detected_public_url,
+			t.health_checks,COALESCE(t.secret_set_id,''),COALESCE(ss.name,''),COALESCE(ss.key_version,0),ss.updated_at,?
+		FROM deployments d
+		JOIN deployment_targets t ON t.id=d.target_id
+		JOIN projects p ON p.id=t.project_id
+		JOIN servers s ON s.id=t.server_id
+		LEFT JOIN workspaces w ON w.id=t.workspace_id
+		LEFT JOIN secret_sets ss ON ss.id=t.secret_set_id
+		WHERE d.id=?`), commitRef, now, id); err != nil {
+		return Deployment{}, err
+	}
 	action := "deploy"
 	message := "deployment queued"
 	if commitRef == "rollback" {
@@ -716,11 +836,11 @@ func (s *Store) CreateDeployment(ctx context.Context, targetID, commitRef string
 	}
 	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
 		VALUES(?,NULL,?,'pending',?,'',?)
-		ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action=excluded.action,status='pending',message=excluded.message,content='',updated_at=excluded.updated_at`), targetID, action, message, time.Now().UTC()); err != nil {
+		ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action=excluded.action,status='pending',message=excluded.message,content='',updated_at=excluded.updated_at`), targetID, action, message, now); err != nil {
 		return Deployment{}, err
 	}
 	var deployment Deployment
-	err = tx.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,COALESCE(NULLIF(t.public_url,''),t.detected_public_url) public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
+	err = tx.GetContext(ctx, &deployment, s.Q(deploymentHistorySelect+` WHERE d.id=?`), id)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -730,6 +850,61 @@ func (s *Store) CreateDeployment(ctx context.Context, targetID, commitRef string
 	return deployment, nil
 }
 
+func (s *Store) CreateRollbackDeployment(ctx context.Context, targetID, sourceDeploymentID string) (Deployment, error) {
+	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return Deployment{}, err
+	}
+	defer tx.Rollback()
+	var active int
+	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), targetID); err != nil {
+		return Deployment{}, err
+	}
+	if active > 0 {
+		return Deployment{}, ErrDeploymentActive
+	}
+	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), targetID); err != nil {
+		return Deployment{}, err
+	}
+	if active > 0 {
+		return Deployment{}, ErrDeploymentContainerActive
+	}
+	var sourceStatus string
+	if err := tx.GetContext(ctx, &sourceStatus, s.Q(`SELECT d.status FROM deployments d JOIN deployment_config_snapshots ds ON ds.deployment_id=d.id WHERE d.id=? AND d.target_id=?`), sourceDeploymentID, targetID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Deployment{}, ErrDeploymentSnapshotUnavailable
+		}
+		return Deployment{}, err
+	}
+	if sourceStatus != "succeeded" && sourceStatus != "rolled_back" {
+		return Deployment{}, ErrDeploymentSnapshotUnavailable
+	}
+	id := NewID()
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO deployments(id,target_id,commit_ref) VALUES(?,?,?)"), id, targetID, "rollback"); err != nil {
+		return Deployment{}, err
+	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
+		VALUES(?,NULL,'rollback','pending','rollback queued','',?)
+		ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action='rollback',status='pending',message='rollback queued',content='',updated_at=excluded.updated_at`), targetID, now); err != nil {
+		return Deployment{}, err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_config_snapshots(
+		deployment_id,target_id,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
+		repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
+		health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,rollback_of_deployment_id,created_at)
+		SELECT ?,?,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
+			repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
+			health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,?,?
+		FROM deployment_config_snapshots WHERE deployment_id=?`), id, targetID, sourceDeploymentID, now, sourceDeploymentID); err != nil {
+		return Deployment{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Deployment{}, err
+	}
+	return s.Deployment(ctx, id)
+}
+
 func (s *Store) AttachDeploymentOperation(ctx context.Context, deploymentID, operationID string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE deployments SET operation_id=? WHERE id=?"), operationID, deploymentID)
 	return err
@@ -737,8 +912,71 @@ func (s *Store) AttachDeploymentOperation(ctx context.Context, deploymentID, ope
 
 func (s *Store) Deployment(ctx context.Context, id string) (Deployment, error) {
 	var deployment Deployment
-	err := s.DB.GetContext(ctx, &deployment, s.Q(`SELECT d.id,d.target_id,COALESCE(d.operation_id,'') operation_id,d.commit_ref,d.resolved_commit,d.status,d.message,p.name project_name,t.environment,COALESCE(NULLIF(t.public_url,''),t.detected_public_url) public_url,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN deployment_targets t ON t.id=d.target_id JOIN projects p ON p.id=t.project_id WHERE d.id=?`), id)
+	err := s.DB.GetContext(ctx, &deployment, s.Q(deploymentHistorySelect+` WHERE d.id=?`), id)
 	return deployment, err
+}
+
+const deploymentSnapshotSelect = `SELECT deployment_id,target_id,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,COALESCE(rollback_of_deployment_id,'') rollback_of_deployment_id,created_at FROM deployment_config_snapshots ds`
+
+func (s *Store) DeploymentSnapshot(ctx context.Context, deploymentID string) (DeploymentSnapshot, error) {
+	var snapshot DeploymentSnapshot
+	err := s.DB.GetContext(ctx, &snapshot, s.Q(deploymentSnapshotSelect+` WHERE deployment_id=?`), deploymentID)
+	return snapshot, err
+}
+
+func (s *Store) LatestDeploymentSnapshot(ctx context.Context, targetID string) (DeploymentSnapshot, error) {
+	var snapshot DeploymentSnapshot
+	err := s.DB.GetContext(ctx, &snapshot, s.Q(deploymentSnapshotSelect+` WHERE deployment_id IN (SELECT ds2.deployment_id FROM deployment_config_snapshots ds2 JOIN deployments d2 ON d2.id=ds2.deployment_id WHERE ds2.target_id=? AND d2.status IN ('succeeded','rolled_back')) ORDER BY created_at DESC LIMIT 1`), targetID)
+	return snapshot, err
+}
+
+func (s *Store) DeploymentTargetReview(ctx context.Context, targetID string) (DeploymentTargetReview, error) {
+	_, err := s.DeploymentTarget(ctx, targetID)
+	if err != nil {
+		return DeploymentTargetReview{}, err
+	}
+	var current DeploymentConfig
+	err = s.DB.GetContext(ctx, &current, s.Q(`SELECT p.id project_id,p.name project_name,t.source_type,t.environment,t.server_id,s.name server_name,COALESCE(t.workspace_id,'') workspace_id,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,t.repository,t.git_ref,'' resolved_commit,t.compose_file,t.working_dir,t.build_mode,t.release_root,t.public_url configured_public_url,t.detected_public_url,t.health_checks,COALESCE(t.secret_set_id,'') secret_set_id,COALESCE(ss.name,'') secret_set_name,COALESCE(ss.key_version,0) secret_set_key_version,ss.updated_at secret_set_updated_at FROM deployment_targets t JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=t.server_id LEFT JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN secret_sets ss ON ss.id=t.secret_set_id WHERE t.id=?`), targetID)
+	if err != nil {
+		return DeploymentTargetReview{}, err
+	}
+	last, lastErr := s.LatestDeploymentSnapshot(ctx, targetID)
+	if errors.Is(lastErr, sql.ErrNoRows) {
+		return DeploymentTargetReview{TargetID: targetID, Current: current, Changes: []DeploymentConfigChange{}, SnapshotAvailable: false}, nil
+	}
+	if lastErr != nil {
+		return DeploymentTargetReview{}, lastErr
+	}
+	return DeploymentTargetReview{TargetID: targetID, Current: current, LastSuccessful: &last, Changes: deploymentConfigChanges(current, last.DeploymentConfig), SnapshotAvailable: true}, nil
+}
+
+func deploymentConfigChanges(current, previous DeploymentConfig) []DeploymentConfigChange {
+	values := []struct {
+		field, previous, current string
+	}{
+		{"source_type", previous.SourceType, current.SourceType},
+		{"environment", previous.Environment, current.Environment},
+		{"server", previous.ServerName, current.ServerName},
+		{"workspace", previous.WorkspacePath, current.WorkspacePath},
+		{"repository", previous.Repository, current.Repository},
+		{"git_ref", previous.GitRef, current.GitRef},
+		{"compose_file", previous.ComposeFile, current.ComposeFile},
+		{"working_dir", previous.WorkingDir, current.WorkingDir},
+		{"build_mode", previous.BuildMode, current.BuildMode},
+		{"release_root", previous.ReleaseRoot, current.ReleaseRoot},
+		{"configured_public_url", previous.ConfiguredPublicURL, current.ConfiguredPublicURL},
+		{"detected_public_url", previous.DetectedPublicURL, current.DetectedPublicURL},
+		{"health_checks", previous.HealthChecks, current.HealthChecks},
+		{"secret_set", previous.SecretSetName, current.SecretSetName},
+		{"secret_set_key_version", fmt.Sprintf("%d", previous.SecretSetKeyVersion), fmt.Sprintf("%d", current.SecretSetKeyVersion)},
+	}
+	changes := make([]DeploymentConfigChange, 0)
+	for _, value := range values {
+		if value.previous != value.current {
+			changes = append(changes, DeploymentConfigChange{Field: value.field, Previous: value.previous, Current: value.current})
+		}
+	}
+	return changes
 }
 
 func (s *Store) DeploymentEvents(ctx context.Context, deploymentID string) ([]DeploymentEvent, error) {
@@ -796,6 +1034,20 @@ func (s *Store) SaveDeploymentStatus(ctx context.Context, update protocol.Deploy
 	if rows == 0 {
 		return sql.ErrNoRows
 	}
+	if update.Status == "succeeded" && strings.TrimSpace(update.DetectedPublicURL) != "" {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE deployment_targets SET detected_public_url=? WHERE id=?"), strings.TrimSpace(update.DetectedPublicURL), metadata.TargetID); err != nil {
+			return err
+		}
+	}
+	if update.Status == "succeeded" {
+		detectedURL := strings.TrimSpace(update.DetectedPublicURL)
+		if _, err := tx.ExecContext(ctx, s.Q(`UPDATE deployment_config_snapshots SET
+			resolved_commit=CASE WHEN ?='' THEN resolved_commit ELSE ? END,
+			detected_public_url=CASE WHEN ?='' THEN detected_public_url ELSE ? END
+			WHERE deployment_id=?`), update.ResolvedCommit, update.ResolvedCommit, detectedURL, detectedURL, update.DeploymentID); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO deployment_events(id,deployment_id,status,message,content,occurred_at) VALUES(?,?,?,?,?,?)"), NewID(), update.DeploymentID, update.Status, update.Message, update.Content, now); err != nil {
 		return err
 	}
@@ -816,11 +1068,6 @@ func (s *Store) SaveDeploymentStatus(ctx context.Context, update protocol.Deploy
 		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
 			VALUES(?,NULL,?,?,?,?,?)
 			ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action=excluded.action,status=excluded.status,message=excluded.message,content=excluded.content,updated_at=excluded.updated_at`), metadata.TargetID, action, containerStatus, update.Message, update.Content, now); err != nil {
-			return err
-		}
-	}
-	if update.Status == "succeeded" && strings.TrimSpace(update.DetectedPublicURL) != "" {
-		if _, err := tx.ExecContext(ctx, s.Q("UPDATE deployment_targets SET detected_public_url=? WHERE id=?"), strings.TrimSpace(update.DetectedPublicURL), metadata.TargetID); err != nil {
 			return err
 		}
 	}
@@ -880,11 +1127,15 @@ func (s *Store) QueueDeploymentContainerOperation(ctx context.Context, targetID,
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	var targetServer string
-	if err := tx.GetContext(ctx, &targetServer, s.Q("SELECT server_id FROM deployment_targets WHERE id=?"), targetID); err != nil {
+	var targetResource struct {
+		ServerID    string `db:"server_id"`
+		ProjectID   string `db:"project_id"`
+		WorkspaceID string `db:"workspace_id"`
+	}
+	if err := tx.GetContext(ctx, &targetResource, s.Q("SELECT server_id,project_id,COALESCE(workspace_id,'') workspace_id FROM deployment_targets WHERE id=?"), targetID); err != nil {
 		return "", err
 	}
-	if targetServer != serverID {
+	if targetResource.ServerID != serverID {
 		return "", errors.New("deployment target does not belong to the requested server")
 	}
 	var activeDeployments int
@@ -903,7 +1154,7 @@ func (s *Store) QueueDeploymentContainerOperation(ctx context.Context, targetID,
 	}
 	operationID := NewID()
 	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, serverID, "deploy.container", ciphertext, idempotency, now); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,NULLIF(?,''),?,?,?,?)"), operationID, serverID, targetResource.ProjectID, targetResource.WorkspaceID, "deploy.container", ciphertext, idempotency, now); err != nil {
 		if lookupErr := tx.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); lookupErr == nil {
 			_ = tx.Commit()
 			return existing, nil

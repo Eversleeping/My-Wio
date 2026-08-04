@@ -1615,6 +1615,74 @@ func TestStartDeploymentCarriesConfiguredAndFallbackPublicAddressInputs(t *testi
 	}
 }
 
+func TestRollbackUsesEncryptedHistoricalSecretVersionAndRequiresCapableAgent(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "deployment-rollback-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.45", ScanRoots: []string{"/srv"}}); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	firstCiphertext, err := api.vault.Encrypt(map[string]string{"API_TOKEN": "historical-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretID, err := database.UpsertSecretSet(ctx, "", "production", firstCiphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := database.CreateProject(ctx, "rollback-secret", "https://example.com/rollback-secret.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := database.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, SecretSetID: secretID, Environment: "production", Repository: project.RemoteURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := database.CreateDeployment(ctx, target.ID, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: source.ID, Status: "succeeded", ResolvedCommit: "historical-commit"}); err != nil {
+		t.Fatal(err)
+	}
+	secondCiphertext, err := api.vault.Encrypt(map[string]string{"API_TOKEN": "current-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.UpsertSecretSet(ctx, secretID, "production", secondCiphertext); err != nil {
+		t.Fatal(err)
+	}
+	response := deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/"+target.ID+"/rollback", "targetID", target.ID, map[string]string{"deployment_id": source.ID}, api.rollbackDeployment)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("rollback returned %d: %s", response.Code, response.Body.String())
+	}
+	var queued struct {
+		OperationID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &queued); err != nil || queued.OperationID == "" {
+		t.Fatalf("unexpected rollback response: %#v %v", queued, err)
+	}
+	operation, err := database.Operation(ctx, queued.OperationID)
+	if err != nil || operation.Kind != "deploy.rollback" || !strings.HasPrefix(operation.Payload, "v1:") || strings.Contains(operation.Payload, "historical-value") {
+		t.Fatalf("rollback operation was not protected: %#v %v", operation, err)
+	}
+	var command protocol.RollbackCommand
+	if err := api.vault.Decrypt(operation.Payload, &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.ReleaseDeploymentID != source.ID || command.Environment["API_TOKEN"] != "historical-value" {
+		t.Fatalf("rollback did not use the selected historical configuration: %#v", command)
+	}
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.44", ScanRoots: []string{"/srv"}}); err != nil {
+		t.Fatal(err)
+	}
+	unsupported := deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/"+target.ID+"/rollback", "targetID", target.ID, map[string]string{"deployment_id": source.ID}, api.rollbackDeployment)
+	if unsupported.Code != http.StatusConflict || !strings.Contains(unsupported.Body.String(), "must be upgraded") {
+		t.Fatalf("legacy Agent rollback returned %d: %s", unsupported.Code, unsupported.Body.String())
+	}
+}
+
 func TestDeploymentContainerActionsQueueEncryptedOperationsAndExposeState(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-container-token")

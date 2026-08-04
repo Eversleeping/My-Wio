@@ -539,7 +539,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			}
 			if commitErr := g.store.CommitGitWorktree(ctx, command, worktree); commitErr != nil {
 				cleanup := protocol.GitWorktreeCleanupCommand{SourcePath: command.SourcePath, TargetPath: worktree.Path, Branch: worktree.Branch}
-				if _, queueErr := g.store.QueueOperation(ctx, serverID, "git.worktree.cleanup", cleanup, "git-worktree-cleanup:"+command.TargetWorkspaceID); queueErr != nil {
+				if _, queueErr := g.store.QueueResourceOperation(ctx, serverID, "git.worktree.cleanup", cleanup, "git-worktree-cleanup:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: operation.ProjectID, WorkspaceID: operation.WorkspaceID}, false); queueErr != nil {
 					return fmt.Errorf("commit worktree: %v; queue cleanup: %w", commitErr, queueErr)
 				}
 				g.Wake(serverID)
@@ -860,7 +860,7 @@ func (g *Gateway) queueBestEffortInterrupt(ctx context.Context, serverID string,
 	if command.ThreadID == "" {
 		return errors.New("Codex turn operation has no thread id")
 	}
-	if _, err := g.store.QueueOperation(ctx, serverID, "codex.turn.interrupt", command, "codex-cancel:"+operation.ID); err != nil {
+	if _, err := g.store.QueueResourceOperation(ctx, serverID, "codex.turn.interrupt", command, "codex-cancel:"+operation.ID, store.OperationResource{ProjectID: operation.ProjectID, WorkspaceID: operation.WorkspaceID, ThreadID: operation.ThreadID}, false); err != nil {
 		return err
 	}
 	g.Wake(serverID)

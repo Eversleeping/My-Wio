@@ -76,7 +76,7 @@ func TestOpenMigratesLegacyResourceManagementSchemaIdempotently(t *testing.T) {
 		for table, expected := range map[string][]string{
 			"projects":         {"description", "default_branch", "status", "provision_error", "archived_at"},
 			"workspaces":       {"display_name", "management_mode", "status", "last_git_refresh_at", "git_error"},
-			"agent_operations": {"project_id", "workspace_id", "workspace_write", "result_data"},
+			"agent_operations": {"project_id", "workspace_id", "thread_id", "workspace_write", "result_data"},
 		} {
 			var columns []string
 			if err := database.DB.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info(?)", table); err != nil {
@@ -99,6 +99,31 @@ func TestOpenMigratesLegacyResourceManagementSchemaIdempotently(t *testing.T) {
 		if err := database.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestFreshSchemaKeepsThreadOwnershipOnOperations(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "fresh-resources.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	var operationColumns []string
+	if err := database.DB.SelectContext(ctx, &operationColumns, "SELECT name FROM pragma_table_info('agent_operations')"); err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(operationColumns, "thread_id") {
+		t.Fatalf("agent operation schema missing thread ownership: %v", operationColumns)
+	}
+
+	var targetColumns []string
+	if err := database.DB.SelectContext(ctx, &targetColumns, "SELECT name FROM pragma_table_info('deployment_targets')"); err != nil {
+		t.Fatal(err)
+	}
+	if containsString(targetColumns, "thread_id") {
+		t.Fatalf("deployment target schema unexpectedly contains thread ownership: %v", targetColumns)
 	}
 }
 
@@ -324,6 +349,154 @@ func TestResourceOperationsPersistResultsAndSupportQueries(t *testing.T) {
 	workspaceOperations, err := database.ListWorkspaceOperations(ctx, workspace.ID, 0)
 	if err != nil || len(workspaceOperations) != 2 || workspaceOperations[0].ID != readID || workspaceOperations[1].ID != operationID {
 		t.Fatalf("unexpected workspace operations: %#v %v", workspaceOperations, err)
+	}
+}
+
+func TestListOperationsPrioritizesActiveAndIncludesResourceNames(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	server := createOperationTestServer(t, database, "summary-server", "summary-token")
+	project, err := database.CreateProject(ctx, "summary-project", "https://example.com/summary.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedID, err := database.QueueResourceOperation(ctx, server.ID, "git.status", struct{}{}, "summary-completed", OperationResource{ProjectID: project.ID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: completedID, Status: "succeeded", Message: "status refreshed"}); err != nil {
+		t.Fatal(err)
+	}
+	activeID, err := database.QueueResourceOperation(ctx, server.ID, "git.fetch", struct{}{}, "summary-active", OperationResource{ProjectID: project.ID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := database.ListOperations(ctx, "", 20)
+	if err != nil || len(items) != 2 || items[0].ID != activeID || items[1].ID != completedID {
+		t.Fatalf("active operations were not prioritized: %#v %v", items, err)
+	}
+	if items[0].ProjectName != project.Name || items[0].ResourceType != "project" || items[0].ResourceID != project.ID || items[1].Result != "status refreshed" || items[1].UpdatedAt == "" {
+		t.Fatalf("operation summary lost resource metadata: %#v", items)
+	}
+	filtered, err := database.ListOperations(ctx, "succeeded", 20)
+	if err != nil || len(filtered) != 1 || filtered[0].ID != completedID {
+		t.Fatalf("operation status filter failed: %#v %v", filtered, err)
+	}
+	canceledID, err := database.QueueResourceOperation(ctx, server.ID, "git.cancel", struct{}{}, "summary-canceled", OperationResource{ProjectID: project.ID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE agent_operations SET status='canceled',completed_at=CURRENT_TIMESTAMP WHERE id=?"), canceledID); err != nil {
+		t.Fatal(err)
+	}
+	cancelledID, err := database.QueueResourceOperation(ctx, server.ID, "git.cancelled", struct{}{}, "summary-cancelled", OperationResource{ProjectID: project.ID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE agent_operations SET status='cancelled',completed_at=CURRENT_TIMESTAMP WHERE id=?"), cancelledID); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := database.ListOperations(ctx, "canceled", 20)
+	if err != nil || len(canceled) != 2 {
+		t.Fatalf("canceled status aliases were not grouped: %#v %v", canceled, err)
+	}
+	cancelled, err := database.ListOperations(ctx, "cancelled", 20)
+	if err != nil || len(cancelled) != 2 {
+		t.Fatalf("cancelled status aliases were not grouped: %#v %v", cancelled, err)
+	}
+	if _, err := database.ListOperations(ctx, "unknown", 20); !errors.Is(err, ErrInvalidOperationStatus) {
+		t.Fatalf("invalid operation status returned %v", err)
+	}
+}
+
+func TestListOperationsIdentifiesThreadAndServerResources(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	server := createOperationTestServer(t, database, "resource-server", "resource-token")
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/thread-project", Name: "thread-project"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspace fixtures: %#v %v", workspaces, err)
+	}
+	thread, err := database.CreateThread(ctx, workspaces[0].ID, "Deployment investigation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadOperation, err := database.QueueResourceOperation(ctx, server.ID, "codex.turn.start", struct{}{}, "thread-summary", OperationResource{ThreadID: thread.ID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverOperation, err := database.QueueOperation(ctx, server.ID, "inventory.scan", struct{}{}, "server-summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := database.ListOperations(ctx, "", 20)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("unexpected operation summaries: %#v %v", items, err)
+	}
+	byID := map[string]OperationSummary{}
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	if item := byID[threadOperation]; item.ResourceType != "thread" || item.ResourceID != thread.ID || item.ThreadTitle != thread.Title || item.WorkspaceID != thread.WorkspaceID {
+		t.Fatalf("thread operation lost resource metadata: %#v", item)
+	}
+	if item := byID[serverOperation]; item.ResourceType != "server" || item.ResourceID != server.ID {
+		t.Fatalf("server operation lost resource metadata: %#v", item)
+	}
+}
+
+func TestFilteredProjectsAndWorkspacesUseServerAndGitFilters(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	server := createOperationTestServer(t, database, "filter-server", "filter-token")
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{
+		{Path: "/srv/clean-app", Name: "clean-app", Branch: "main", CommitSHA: "clean"},
+		{Path: "/srv/dirty-app", Name: "dirty-app", Branch: "main", CommitSHA: "dirty"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE workspaces SET dirty=1 WHERE path=?"), "/srv/dirty-app"); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := database.ListProjectsFiltered(ctx, "dirty", server.ID, "ready")
+	if err != nil || len(projects) != 1 || projects[0].Name != "dirty-app" {
+		t.Fatalf("project filters failed: %#v %v", projects, err)
+	}
+	workspaces, err := database.ListWorkspacesFiltered(ctx, "dirty", server.ID, "dirty")
+	if err != nil || len(workspaces) != 1 || workspaces[0].Path != "/srv/dirty-app" {
+		t.Fatalf("workspace filters failed: %#v %v", workspaces, err)
+	}
+	clean, err := database.ListWorkspacesFiltered(ctx, "", server.ID, "clean")
+	if err != nil || len(clean) != 1 || clean[0].Path != "/srv/clean-app" {
+		t.Fatalf("clean workspace filter failed: %#v %v", clean, err)
+	}
+	importOnly, err := database.CreateProject(ctx, "import-only", "https://example.com/import-only.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.QueueResourceOperation(ctx, server.ID, "git.import", protocol.GitImportCommand{ProjectID: importOnly.ID}, "filter-import-only", OperationResource{ProjectID: importOnly.ID}, false); err != nil {
+		t.Fatal(err)
+	}
+	importProjects, err := database.ListProjectsFiltered(ctx, "import-only", server.ID, "ready")
+	if err != nil || len(importProjects) != 1 || importProjects[0].ID != importOnly.ID {
+		t.Fatalf("server filter omitted project without workspace: %#v %v", importProjects, err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE workspaces SET git_error='refresh failed' WHERE path=?"), "/srv/clean-app"); err != nil {
+		t.Fatal(err)
+	}
+	dirtyAfterError, err := database.ListWorkspacesFiltered(ctx, "", server.ID, "dirty")
+	if err != nil || len(dirtyAfterError) != 1 || dirtyAfterError[0].Path != "/srv/dirty-app" {
+		t.Fatalf("Git error was incorrectly reported as dirty: %#v %v", dirtyAfterError, err)
+	}
+	errored, err := database.ListWorkspacesFiltered(ctx, "", server.ID, "error")
+	if err != nil || len(errored) != 1 || errored[0].Path != "/srv/clean-app" {
+		t.Fatalf("Git error filter failed: %#v %v", errored, err)
+	}
+	if _, err := database.ListWorkspacesFiltered(ctx, "", "", "unknown"); !errors.Is(err, ErrInvalidWorkspaceGitStatus) {
+		t.Fatalf("invalid workspace git status returned %v", err)
 	}
 }
 

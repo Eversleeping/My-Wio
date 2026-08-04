@@ -321,36 +321,53 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 	if runtime.GOOS != "linux" {
 		return errors.New("Compose rollbacks are supported only on Linux agents")
 	}
-	root := filepath.Join(filepath.Clean(command.ReleaseRoot), command.TargetID)
-	previousLink := filepath.Join(root, "previous")
-	previous, err := filepath.EvalSymlinks(previousLink)
-	if err != nil {
-		return errors.New("no previous release is available")
-	}
-	if !within(root, previous) {
-		return errors.New("previous release points outside the target release root")
-	}
-	workDir, composePath, err := composePaths(previous, command.WorkingDir, command.ComposeFile)
+	root, release, err := releasePath(command.ReleaseRoot, command.TargetID, command.ReleaseDeploymentID)
 	if err != nil {
 		return err
 	}
-	status("running", "restoring previous Compose release", "", "", "Starting Docker Compose from the previous release.")
-	if output, err := d.compose(ctx, workDir, nil, projectName(command.TargetID), composePath, "up", "-d", "--remove-orphans"); err != nil {
+	if info, statErr := os.Stat(release); statErr != nil || !info.IsDir() {
+		if statErr != nil {
+			return fmt.Errorf("rollback release is unavailable: %w", statErr)
+		}
+		return errors.New("rollback release is not a directory")
+	}
+	currentLink := filepath.Join(root, "current")
+	current, currentErr := filepath.EvalSymlinks(currentLink)
+	if currentErr == nil && filepath.Clean(current) == filepath.Clean(release) {
+		return errors.New("rollback release is already current")
+	}
+	if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
+		return fmt.Errorf("resolve current release: %w", currentErr)
+	}
+	if current != "" && !within(root, current) {
+		return errors.New("current release points outside the target release root")
+	}
+	workDir, composePath, err := composePaths(release, command.WorkingDir, command.ComposeFile)
+	if err != nil {
+		return err
+	}
+	environment, err := composeEnvironment(command.Environment, command.PublicURL)
+	if err != nil {
+		return err
+	}
+	status("running", "restoring selected Compose release", "", "", "Starting Docker Compose from the selected historical release.")
+	if output, err := d.compose(ctx, workDir, environment, projectName(command.TargetID), composePath, "up", "-d", "--remove-orphans"); err != nil {
 		status("running", "rollback Compose start failed", "", "", output)
 		return fmt.Errorf("docker compose rollback: %w: %s", err, output)
 	} else {
-		status("running", "previous Compose release started", "", "", output)
+		status("running", "selected Compose release started", "", "", output)
 	}
-	currentLink := filepath.Join(root, "current")
-	current, _ := filepath.EvalSymlinks(currentLink)
-	if err := replaceSymlink(currentLink, previous); err != nil {
+	previousLink := filepath.Join(root, "previous")
+	if current != "" {
+		if err := replaceSymlink(previousLink, current); err != nil {
+			return err
+		}
+	}
+	if err := replaceSymlink(currentLink, release); err != nil {
 		return err
 	}
-	if current != "" && within(root, current) {
-		_ = replaceSymlink(previousLink, current)
-	}
-	resolved, _ := run(ctx, nil, "git", "-C", previous, "rev-parse", "HEAD")
-	status("rolled_back", "previous release restored", strings.TrimSpace(resolved), "", "Previous release promoted and marked as current.")
+	resolved, _ := run(ctx, nil, "git", "-C", release, "rev-parse", "HEAD")
+	status("rolled_back", "selected release restored", strings.TrimSpace(resolved), "", "Selected historical release promoted and marked as current.")
 	return nil
 }
 

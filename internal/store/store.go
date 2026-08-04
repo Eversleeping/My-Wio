@@ -91,6 +91,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateSecretSetVersions(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateManagedWorkspacePaths(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -127,6 +131,15 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	return &Store{DB: db, driver: driver}, nil
+}
+
+func migrateSecretSetVersions(ctx context.Context, db *sqlx.DB) error {
+	if _, err := db.ExecContext(ctx, `INSERT INTO secret_set_versions(secret_set_id,key_version,ciphertext,updated_at)
+		SELECT id,key_version,ciphertext,updated_at FROM secret_sets WHERE 1=1
+		ON CONFLICT(secret_set_id,key_version) DO NOTHING`); err != nil {
+		return fmt.Errorf("backfill secret set versions: %w", err)
+	}
+	return nil
 }
 
 func migrateServerControlPlane(ctx context.Context, db *sqlx.DB, driver string) error {
@@ -302,6 +315,7 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 			`ALTER TABLE agent_operations
 				ADD COLUMN IF NOT EXISTS project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
 				ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+				ADD COLUMN IF NOT EXISTS thread_id TEXT REFERENCES codex_threads(id) ON DELETE SET NULL,
 				ADD COLUMN IF NOT EXISTS workspace_write INTEGER NOT NULL DEFAULT 0,
 				ADD COLUMN IF NOT EXISTS started_at TIMESTAMP,
 				ADD COLUMN IF NOT EXISTS result_data TEXT NOT NULL DEFAULT '{}'`,
@@ -342,6 +356,7 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 			{name: "agent_operations", columns: map[string]string{
 				"project_id":      "TEXT REFERENCES projects(id) ON DELETE SET NULL",
 				"workspace_id":    "TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
+				"thread_id":       "TEXT REFERENCES codex_threads(id) ON DELETE SET NULL",
 				"workspace_write": "INTEGER NOT NULL DEFAULT 0",
 				"started_at":      "TIMESTAMP",
 				"result_data":     "TEXT NOT NULL DEFAULT '{}'",
@@ -390,6 +405,7 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 	for _, statement := range []string{
 		"CREATE INDEX IF NOT EXISTS operations_project_idx ON agent_operations(project_id, created_at)",
 		"CREATE INDEX IF NOT EXISTS operations_workspace_idx ON agent_operations(workspace_id, created_at)",
+		"CREATE INDEX IF NOT EXISTS operations_thread_idx ON agent_operations(thread_id, created_at)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS operations_project_import_active_unique ON agent_operations(server_id,project_id) WHERE project_id IS NOT NULL AND kind='git.import' AND status IN ('queued','delivered')",
 		"CREATE UNIQUE INDEX IF NOT EXISTS operations_workspace_active_write_unique ON agent_operations(workspace_id) WHERE workspace_id IS NOT NULL AND workspace_write=1 AND status IN ('queued','delivered','running')",
 	} {
@@ -627,32 +643,33 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 }
 
 type Server struct {
-	ID                   string              `db:"id" json:"id"`
-	Name                 string              `db:"name" json:"name"`
-	Hostname             string              `db:"hostname" json:"hostname"`
-	IsControlPlane       bool                `db:"is_control_plane" json:"is_control_plane"`
-	Status               string              `db:"status" json:"status"`
-	AgentVersion         string              `db:"agent_version" json:"agent_version"`
-	CodexVersion         string              `db:"codex_version" json:"codex_version"`
-	CodexReady           int                 `db:"codex_ready" json:"codex_ready"`
-	ScanRoots            string              `db:"scan_roots" json:"-"`
-	ManagedRoots         string              `db:"managed_roots" json:"-"`
-	Address              string              `db:"address" json:"address"`
-	Configuration        string              `db:"configuration" json:"configuration"`
-	Notes                string              `db:"notes" json:"notes"`
-	LastSeenAt           *time.Time          `db:"last_seen_at" json:"last_seen_at"`
-	CreatedAt            time.Time           `db:"created_at" json:"created_at"`
-	AgentTargetVersion   string              `db:"-" json:"agent_target_version"`
-	AgentUpdateAvailable bool                `db:"-" json:"agent_update_available"`
-	AgentUpdateSupported bool                `db:"-" json:"agent_update_supported"`
-	CodexTargetVersion   string              `db:"-" json:"codex_target_version"`
-	CodexUpdateAvailable bool                `db:"-" json:"codex_update_available"`
-	CodexUpdateSupported bool                `db:"-" json:"codex_update_supported"`
-	CodexProfileID       string              `db:"codex_profile_id" json:"codex_profile_id"`
-	CodexProfileName     string              `db:"codex_profile_name" json:"codex_profile_name"`
-	GitProfileID         string              `db:"git_profile_id" json:"git_profile_id"`
-	GitProfileName       string              `db:"git_profile_name" json:"git_profile_name"`
-	GitProfiles          []CredentialProfile `db:"-" json:"git_profiles"`
+	ID                     string              `db:"id" json:"id"`
+	Name                   string              `db:"name" json:"name"`
+	Hostname               string              `db:"hostname" json:"hostname"`
+	IsControlPlane         bool                `db:"is_control_plane" json:"is_control_plane"`
+	Status                 string              `db:"status" json:"status"`
+	AgentVersion           string              `db:"agent_version" json:"agent_version"`
+	CodexVersion           string              `db:"codex_version" json:"codex_version"`
+	CodexReady             int                 `db:"codex_ready" json:"codex_ready"`
+	ScanRoots              string              `db:"scan_roots" json:"-"`
+	ManagedRoots           string              `db:"managed_roots" json:"-"`
+	Address                string              `db:"address" json:"address"`
+	Configuration          string              `db:"configuration" json:"configuration"`
+	Notes                  string              `db:"notes" json:"notes"`
+	LastSeenAt             *time.Time          `db:"last_seen_at" json:"last_seen_at"`
+	CreatedAt              time.Time           `db:"created_at" json:"created_at"`
+	AgentTargetVersion     string              `db:"-" json:"agent_target_version"`
+	AgentUpdateAvailable   bool                `db:"-" json:"agent_update_available"`
+	AgentUpdateSupported   bool                `db:"-" json:"agent_update_supported"`
+	CodexTargetVersion     string              `db:"-" json:"codex_target_version"`
+	CodexUpdateAvailable   bool                `db:"-" json:"codex_update_available"`
+	CodexUpdateSupported   bool                `db:"-" json:"codex_update_supported"`
+	ExactRollbackSupported bool                `db:"-" json:"exact_rollback_supported"`
+	CodexProfileID         string              `db:"codex_profile_id" json:"codex_profile_id"`
+	CodexProfileName       string              `db:"codex_profile_name" json:"codex_profile_name"`
+	GitProfileID           string              `db:"git_profile_id" json:"git_profile_id"`
+	GitProfileName         string              `db:"git_profile_name" json:"git_profile_name"`
+	GitProfiles            []CredentialProfile `db:"-" json:"git_profiles"`
 }
 
 type ServerMetadata struct {
@@ -1111,8 +1128,31 @@ type Project struct {
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
+	return s.ListProjectsFiltered(ctx, "", "", "")
+}
+
+func (s *Store) ListProjectsFiltered(ctx context.Context, name, serverID, status string) ([]Project, error) {
+	filters := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if name = strings.TrimSpace(name); name != "" {
+		filters = append(filters, "p.name LIKE ?")
+		args = append(args, "%"+name+"%")
+	}
+	if serverID = strings.TrimSpace(serverID); serverID != "" {
+		filters = append(filters, `(EXISTS (SELECT 1 FROM workspaces sw WHERE sw.project_id=p.id AND sw.server_id=?)
+			OR EXISTS (SELECT 1 FROM agent_operations so WHERE so.project_id=p.id AND so.server_id=? AND so.kind IN ('git.import','git.project.create')))`)
+		args = append(args, serverID, serverID)
+	}
+	if status = strings.TrimSpace(status); status != "" {
+		filters = append(filters, "p.status=?")
+		args = append(args, status)
+	}
+	where := ""
+	if len(filters) > 0 {
+		where = " WHERE " + strings.Join(filters, " AND ")
+	}
 	var out []Project
-	if err := s.DB.SelectContext(ctx, &out, `SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,p.name`); err != nil {
+	if err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT p.id,p.name,p.description,p.remote_url,p.default_branch,p.status,p.provision_error,p.pinned_at,p.hidden_at,p.archived_at,p.updated_at,(SELECT COUNT(*) FROM workspaces w WHERE w.project_id=p.id) workspace_count FROM projects p`+where+` ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,p.name`), args...); err != nil {
 		return nil, err
 	}
 	imports, err := s.listProjectImports(ctx)
@@ -1298,8 +1338,39 @@ type Workspace struct {
 }
 
 func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	return s.ListWorkspacesFiltered(ctx, "", "", "")
+}
+
+var ErrInvalidWorkspaceGitStatus = errors.New("invalid workspace git status")
+
+func (s *Store) ListWorkspacesFiltered(ctx context.Context, path, serverID, gitStatus string) ([]Workspace, error) {
+	filters := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if path = strings.TrimSpace(path); path != "" {
+		filters = append(filters, "w.path LIKE ?")
+		args = append(args, "%"+path+"%")
+	}
+	if serverID = strings.TrimSpace(serverID); serverID != "" {
+		filters = append(filters, "w.server_id=?")
+		args = append(args, serverID)
+	}
+	switch strings.TrimSpace(strings.ToLower(gitStatus)) {
+	case "":
+	case "clean":
+		filters = append(filters, "w.dirty=0 AND w.git_error=''")
+	case "dirty":
+		filters = append(filters, "w.dirty<>0")
+	case "error":
+		filters = append(filters, "w.git_error<>''")
+	default:
+		return nil, ErrInvalidWorkspaceGitStatus
+	}
+	where := ""
+	if len(filters) > 0 {
+		where = " WHERE " + strings.Join(filters, " AND ")
+	}
 	var out []Workspace
-	err := s.DB.SelectContext(ctx, &out, `SELECT w.id,w.project_id,w.server_id,w.path,w.display_name,w.management_mode,w.status,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,w.last_git_refresh_at,w.git_error,w.last_scanned_at,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id ORDER BY p.name,s.name`)
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.display_name,w.management_mode,w.status,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,w.last_git_refresh_at,w.git_error,w.last_scanned_at,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id`+where+` ORDER BY p.name,s.name`), args...)
 	return out, err
 }
 
@@ -1527,6 +1598,7 @@ func (s *Store) QueueOperation(ctx context.Context, serverID, kind string, paylo
 type OperationResource struct {
 	ProjectID   string
 	WorkspaceID string
+	ThreadID    string
 }
 
 func (s *Store) QueueResourceOperation(ctx context.Context, serverID, kind string, payload any, idempotency string, resource OperationResource, write bool) (string, error) {
@@ -1538,10 +1610,14 @@ func (s *Store) QueueResourceOperation(ctx context.Context, serverID, kind strin
 }
 
 func (s *Store) QueueEncryptedOperation(ctx context.Context, serverID, kind, ciphertext, idempotency string) (string, error) {
+	return s.QueueEncryptedResourceOperation(ctx, serverID, kind, ciphertext, idempotency, OperationResource{})
+}
+
+func (s *Store) QueueEncryptedResourceOperation(ctx context.Context, serverID, kind, ciphertext, idempotency string, resource OperationResource) (string, error) {
 	if !strings.HasPrefix(ciphertext, "v1:") {
 		return "", errors.New("encrypted operation payload must use a supported Vault format")
 	}
-	return s.queueOperationPayload(ctx, serverID, kind, ciphertext, idempotency, OperationResource{}, false)
+	return s.queueOperationPayload(ctx, serverID, kind, ciphertext, idempotency, resource, false)
 }
 
 func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, payload, idempotency string, resource OperationResource, write bool) (string, error) {
@@ -1565,7 +1641,7 @@ func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, paylo
 		workspaceWrite = 1
 	}
 	id := NewID()
-	_, err = s.DB.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?, ?, NULLIF(?,''), NULLIF(?,''), ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING"), id, serverID, resolved.ProjectID, resolved.WorkspaceID, kind, payload, workspaceWrite, idempotency, time.Now().UTC())
+	_, err = s.DB.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?, ?, NULLIF(?,''), NULLIF(?,''), NULLIF(?,''), ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING"), id, serverID, resolved.ProjectID, resolved.WorkspaceID, resolved.ThreadID, kind, payload, workspaceWrite, idempotency, time.Now().UTC())
 	if err != nil {
 		if getErr := s.DB.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); getErr == nil {
 			return existing, nil
@@ -1585,6 +1661,29 @@ func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, paylo
 }
 
 func (s *Store) resolveOperationResource(ctx context.Context, serverID string, resource OperationResource) (OperationResource, error) {
+	if resource.ThreadID != "" {
+		var thread struct {
+			WorkspaceID string `db:"workspace_id"`
+			ProjectID   string `db:"project_id"`
+			ServerID    string `db:"server_id"`
+		}
+		if err := s.DB.GetContext(ctx, &thread, s.Q(`SELECT t.workspace_id,w.project_id,w.server_id
+			FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE t.id=?`), resource.ThreadID); err != nil {
+			return OperationResource{}, err
+		}
+		if thread.ServerID != serverID {
+			return OperationResource{}, errors.New("operation thread does not belong to server")
+		}
+		if resource.WorkspaceID != "" && resource.WorkspaceID != thread.WorkspaceID {
+			return OperationResource{}, errors.New("operation thread does not belong to workspace")
+		}
+		if resource.ProjectID != "" && resource.ProjectID != thread.ProjectID {
+			return OperationResource{}, errors.New("operation thread does not belong to project")
+		}
+		resource.WorkspaceID = thread.WorkspaceID
+		resource.ProjectID = thread.ProjectID
+		return resource, nil
+	}
 	if resource.WorkspaceID != "" {
 		var workspace struct {
 			ProjectID string `db:"project_id"`
@@ -1619,6 +1718,7 @@ type Operation struct {
 	ServerID       string     `db:"server_id" json:"server_id"`
 	ProjectID      string     `db:"project_id" json:"project_id"`
 	WorkspaceID    string     `db:"workspace_id" json:"workspace_id"`
+	ThreadID       string     `db:"thread_id" json:"thread_id"`
 	Kind           string     `db:"kind" json:"kind"`
 	Payload        string     `db:"payload" json:"-"`
 	Status         string     `db:"status" json:"status"`
@@ -1631,7 +1731,69 @@ type Operation struct {
 	CompletedAt    *time.Time `db:"completed_at" json:"completed_at"`
 }
 
-const operationSelect = `SELECT id,server_id,COALESCE(project_id,'') project_id,COALESCE(workspace_id,'') workspace_id,kind,payload,status,workspace_write,COALESCE(result,'') result,COALESCE(result_data,'{}') result_data,created_at,delivered_at,started_at,completed_at FROM agent_operations`
+type OperationSummary struct {
+	ID            string     `db:"id" json:"id"`
+	ServerID      string     `db:"server_id" json:"server_id"`
+	ServerName    string     `db:"server_name" json:"server_name"`
+	ProjectID     string     `db:"project_id" json:"project_id"`
+	ProjectName   string     `db:"project_name" json:"project_name"`
+	WorkspaceID   string     `db:"workspace_id" json:"workspace_id"`
+	WorkspacePath string     `db:"workspace_path" json:"workspace_path"`
+	WorkspaceName string     `db:"workspace_name" json:"workspace_name"`
+	ThreadID      string     `db:"thread_id" json:"thread_id"`
+	ThreadTitle   string     `db:"thread_title" json:"thread_title"`
+	ResourceType  string     `db:"resource_type" json:"resource_type"`
+	ResourceID    string     `db:"resource_id" json:"resource_id"`
+	Kind          string     `db:"kind" json:"kind"`
+	Status        string     `db:"status" json:"status"`
+	Result        string     `db:"result" json:"result"`
+	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt     string     `db:"updated_at" json:"updated_at"`
+	DeliveredAt   *time.Time `db:"delivered_at" json:"delivered_at"`
+	StartedAt     *time.Time `db:"started_at" json:"started_at"`
+	CompletedAt   *time.Time `db:"completed_at" json:"completed_at"`
+}
+
+var ErrInvalidOperationStatus = errors.New("invalid operation status")
+
+var operationStatuses = map[string]struct{}{
+	"queued": {}, "waiting": {}, "delivered": {}, "running": {}, "succeeded": {}, "failed": {}, "canceled": {}, "cancelled": {}, "superseded": {},
+}
+
+func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([]OperationSummary, error) {
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status != "" {
+		if _, ok := operationStatuses[status]; !ok {
+			return nil, ErrInvalidOperationStatus
+		}
+	}
+	canceledStatus := ""
+	if status == "canceled" || status == "cancelled" {
+		canceledStatus = "canceled"
+	}
+	limit = operationListLimit(limit)
+	const updatedAt = "COALESCE(o.completed_at,o.started_at,o.delivered_at,o.created_at)"
+	query := `SELECT o.id,o.server_id,COALESCE(s.name,'') server_name,COALESCE(o.project_id,'') project_id,COALESCE(p.name,'') project_name,
+		COALESCE(o.workspace_id,'') workspace_id,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,
+		COALESCE(o.thread_id,'') thread_id,COALESCE(t.title,'') thread_title,
+		CASE WHEN o.thread_id IS NOT NULL THEN 'thread' WHEN o.workspace_id IS NOT NULL THEN 'workspace' WHEN o.project_id IS NOT NULL THEN 'project' ELSE 'server' END resource_type,
+		CASE WHEN o.thread_id IS NOT NULL THEN o.thread_id WHEN o.workspace_id IS NOT NULL THEN o.workspace_id WHEN o.project_id IS NOT NULL THEN o.project_id ELSE o.server_id END resource_id,
+		o.kind,o.status,COALESCE(o.result,'') result,o.created_at,` + updatedAt + ` updated_at,o.delivered_at,o.started_at,o.completed_at
+		FROM agent_operations o
+		LEFT JOIN servers s ON s.id=o.server_id
+		LEFT JOIN projects p ON p.id=o.project_id
+		LEFT JOIN workspaces w ON w.id=o.workspace_id
+		LEFT JOIN codex_threads t ON t.id=o.thread_id
+		WHERE (?='' OR (?='canceled' AND o.status IN ('canceled','cancelled')) OR o.status=?)
+		ORDER BY CASE WHEN o.status IN ('queued','waiting','delivered','running') THEN 0 ELSE 1 END,` + updatedAt + ` DESC,o.id DESC LIMIT ?`
+	var out []OperationSummary
+	if err := s.DB.SelectContext(ctx, &out, s.Q(query), status, canceledStatus, status, limit); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+const operationSelect = `SELECT id,server_id,COALESCE(project_id,'') project_id,COALESCE(workspace_id,'') workspace_id,COALESCE(thread_id,'') thread_id,kind,payload,status,workspace_write,COALESCE(result,'') result,COALESCE(result_data,'{}') result_data,created_at,delivered_at,started_at,completed_at FROM agent_operations`
 
 func (s *Store) Operation(ctx context.Context, id string) (Operation, error) {
 	var operation Operation
@@ -2034,7 +2196,7 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 	}
 	now := time.Now().UTC()
 	operationID := NewID()
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, thread.ServerID, "codex.turn.rewrite", string(operationPayload), "codex-rewrite:"+NewID(), now); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?)"), operationID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, thread.ID, "codex.turn.rewrite", string(operationPayload), "codex-rewrite:"+NewID(), now); err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',updated_at=? WHERE id=?"), now, thread.ID); err != nil {

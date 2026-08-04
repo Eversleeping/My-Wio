@@ -102,7 +102,7 @@ func (r *Runner) enqueue(ctx context.Context, task store.ScheduledTask, now time
 		ReasoningEffort: task.ReasoningEffort,
 		ApprovalMode:    normalizedApprovalMode(task.ApprovalMode),
 	}
-	operationID, err := r.store.QueueOperation(ctx, thread.ServerID, "codex.turn.start", command, "codex-scheduled:"+task.ID+":"+now.Format(time.RFC3339Nano))
+	operationID, err := r.store.QueueResourceOperation(ctx, thread.ServerID, "codex.turn.start", command, "codex-scheduled:"+task.ID+":"+now.Format(time.RFC3339Nano), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		_ = r.store.SetThreadStatus(ctx, thread.ID, "idle")
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", err.Error(), "", now)

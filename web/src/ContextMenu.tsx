@@ -7,6 +7,7 @@ export interface ContextMenuAction {
   icon: LucideIcon;
   onSelect: () => void | Promise<void>;
   disabled?: boolean;
+  disabledReason?: string;
   danger?: boolean;
   separatorBefore?: boolean;
 }
@@ -78,7 +79,7 @@ export function ContextMenu({ className = "", label, actions, children }: { clas
     {children}
     <button ref={triggerRef} type="button" className="icon-button context-menu-button" aria-haspopup="menu" aria-expanded={open} title={label} aria-label={label} onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openAt(rect.right, rect.bottom + 4); }}><MoreVertical size={16} /></button>
     {open && <div ref={menuRef} className="context-menu" role="menu" aria-label={label} style={position} onKeyDown={onKeyDown}>
-      {actions.map(action => { const Icon = action.icon; return <div className={action.separatorBefore ? "context-menu-section" : undefined} key={action.id}><button type="button" role="menuitem" className={action.danger ? "danger" : ""} disabled={action.disabled} onClick={() => { close(false); void action.onSelect(); }}><Icon size={16} /><span>{action.label}</span></button></div>; })}
+      {actions.map(action => { const Icon = action.icon; return <div className={action.separatorBefore ? "context-menu-section" : undefined} key={action.id}><button type="button" role="menuitem" className={action.danger ? "danger" : ""} disabled={action.disabled} title={action.disabled ? action.disabledReason : undefined} onClick={() => { close(false); void action.onSelect(); }}><Icon size={16} /><span>{action.label}</span></button></div>; })}
     </div>}
   </div>;
 }

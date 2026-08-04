@@ -39,3 +39,16 @@ func TestCurrentVersionUpdatesExistingSelfUpdatingAgents(t *testing.T) {
 		t.Fatalf("current version %s must be newer than deployed Agent 0.2.43", Version)
 	}
 }
+
+func TestSupportsExactDeploymentRollback(t *testing.T) {
+	for version, want := range map[string]bool{
+		"0.2.44": false,
+		"0.2.45": true,
+		"v0.3.0": true,
+		"dev":    false,
+	} {
+		if got := SupportsExactDeploymentRollback(version); got != want {
+			t.Fatalf("SupportsExactDeploymentRollback(%q) = %v, want %v", version, got, want)
+		}
+	}
+}

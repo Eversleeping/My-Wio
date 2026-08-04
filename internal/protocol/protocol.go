@@ -506,11 +506,14 @@ type DeployCommand struct {
 }
 
 type RollbackCommand struct {
-	DeploymentID string `json:"deployment_id"`
-	TargetID     string `json:"target_id"`
-	ReleaseRoot  string `json:"release_root"`
-	ComposeFile  string `json:"compose_file"`
-	WorkingDir   string `json:"working_dir,omitempty"`
+	DeploymentID        string            `json:"deployment_id"`
+	TargetID            string            `json:"target_id"`
+	ReleaseDeploymentID string            `json:"release_deployment_id"`
+	ReleaseRoot         string            `json:"release_root"`
+	ComposeFile         string            `json:"compose_file"`
+	WorkingDir          string            `json:"working_dir,omitempty"`
+	PublicURL           string            `json:"public_url,omitempty"`
+	Environment         map[string]string `json:"environment,omitempty"`
 }
 
 // ContainerActionCommand operates on the Compose project from the target's

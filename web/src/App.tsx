@@ -39,6 +39,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Link,
+  ListChecks,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -122,7 +123,7 @@ import type {
   WorkspaceFilesSnapshot
 } from "./types";
 
-type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "monitoring" | "settings";
+type View = "dashboard" | "servers" | "projects" | "codex" | "deployments" | "operations" | "monitoring" | "settings";
 type RealtimeScope = View | "approvals";
 type RealtimeRevisions = Record<RealtimeScope, number>;
 type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
@@ -135,6 +136,7 @@ const ServersPageRoute = lazy(() => import("./pages/ServersPage"));
 const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
 const CodexPageRoute = lazy(() => import("./pages/CodexPage"));
 const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
+const OperationsPageRoute = lazy(() => import("./pages/OperationsPage"));
 const MonitoringPageRoute = lazy(() => import("./pages/MonitoringPage"));
 const SettingsPageRoute = lazy(() => import("./pages/SettingsPage"));
 const MarkdownContentRenderer = lazy(() => import("./MarkdownContent"));
@@ -152,14 +154,14 @@ const codexAutoFollowThreshold = 96;
 const threadEventsPageSize = 500;
 const threadListPageSize = 50;
 const auditListPageSize = 50;
-const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "deployments", "monitoring", "settings", "approvals"];
-const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, deployments: 0, monitoring: 0, settings: 0, approvals: 0 });
+const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "deployments", "operations", "monitoring", "settings", "approvals"];
+const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, deployments: 0, operations: 0, monitoring: 0, settings: 0, approvals: 0 });
 
 export function realtimeScopesForEvent(event: Pick<Partial<StreamEvent>, "kind">): RealtimeScope[] {
   const kind = event.kind ?? "";
-  if (kind === "inventory.updated") return ["dashboard", "servers", "projects", "deployments", "monitoring"];
-  if (kind.startsWith("deployment.")) return ["dashboard", "deployments", "monitoring"];
-  if (kind.startsWith("agent.")) return ["dashboard", "servers", "projects", "deployments", "monitoring"];
+  if (kind === "inventory.updated") return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
+  if (kind.startsWith("deployment.")) return ["dashboard", "deployments", "operations", "monitoring"];
+  if (kind.startsWith("agent.")) return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
   if (kind.startsWith("approval.") || kind.startsWith("codex.approval.")) return ["codex", "approvals"];
   if (kind === "user.message" || kind.startsWith("codex.") || kind.startsWith("thread.")) return ["dashboard", "codex"];
   return allRealtimeScopes;
@@ -212,6 +214,7 @@ const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboa
   { id: "projects", labelKey: "nav.projects", icon: GitBranch },
   { id: "codex", labelKey: "nav.codex", icon: Code2 },
   { id: "deployments", labelKey: "nav.deployments", icon: Rocket },
+  { id: "operations", labelKey: "nav.operations", icon: ListChecks },
   { id: "monitoring", labelKey: "nav.monitoring", icon: Activity },
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];
@@ -383,6 +386,7 @@ export default function App() {
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute realtime={realtimeRevisions.projects} notify={setToast} /></Suspense>,
     codex: <Suspense fallback={<PageLoading />}><CodexPageRoute realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute realtime={realtimeRevisions.deployments} notify={setToast} /></Suspense>,
+    operations: <Suspense fallback={<PageLoading />}><OperationsPageRoute realtime={realtimeRevisions.operations} /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute realtime={realtimeRevisions.monitoring} /></Suspense>,
     settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute realtime={realtimeRevisions.settings} notify={setToast} /></Suspense>
   }[view];

@@ -85,6 +85,7 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 		servers[index].CodexTargetVersion = codexTarget
 		servers[index].CodexUpdateSupported = buildinfo.SupportsCodexUpdate(servers[index].AgentVersion)
 		servers[index].CodexUpdateAvailable = servers[index].CodexUpdateSupported && (servers[index].CodexVersion == "" || codexcli.UpdateAvailable(servers[index].CodexVersion, codexTarget))
+		servers[index].ExactRollbackSupported = buildinfo.SupportsExactDeploymentRollback(servers[index].AgentVersion)
 	}
 	writeJSON(w, http.StatusOK, servers)
 }
@@ -257,7 +258,8 @@ func (a *API) operationMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) projects(w http.ResponseWriter, r *http.Request) {
-	projects, err := a.store.ListProjects(r.Context())
+	query := r.URL.Query()
+	projects, err := a.store.ListProjectsFiltered(r.Context(), query.Get("name"), query.Get("server_id"), query.Get("status"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list projects")
 		return
@@ -670,7 +672,12 @@ func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) workspaces(w http.ResponseWriter, r *http.Request) {
-	workspaces, err := a.store.ListWorkspaces(r.Context())
+	query := r.URL.Query()
+	workspaces, err := a.store.ListWorkspacesFiltered(r.Context(), query.Get("path"), query.Get("server_id"), query.Get("git_status"))
+	if errors.Is(err, store.ErrInvalidWorkspaceGitStatus) {
+		writeError(w, http.StatusBadRequest, "invalid workspace git status")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list workspaces")
 		return
@@ -997,7 +1004,7 @@ func (a *API) createWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree:"+command.TargetWorkspaceID)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue worktree creation")
 		return
@@ -1045,7 +1052,7 @@ func (a *API) forkThreadToWorktree(w http.ResponseWriter, r *http.Request) {
 	command.TargetThreadID = store.NewID()
 	command.CodexThread = thread.CodexThreadID
 	command.Title = thread.Title + " (continued)"
-	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree-fork:"+command.TargetWorkspaceID)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree-fork:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue worktree continuation")
 		return
@@ -1296,7 +1303,7 @@ func (a *API) refreshWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.WorkspaceFilesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}
-	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.files", command, "workspace-files:"+workspace.ID+":"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.files", command, "workspace-files:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue workspace file scan")
 		return
@@ -1373,7 +1380,7 @@ func (a *API) requestWorkspaceFilePreview(w http.ResponseWriter, r *http.Request
 		return
 	}
 	command := protocol.WorkspaceFilePreviewCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path}
-	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.file.preview", command, "workspace-file-preview:"+workspace.ID+":"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.file.preview", command, "workspace-file-preview:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		_ = a.store.FailWorkspaceFilePreview(r.Context(), workspace.ID, path, "could not queue workspace file preview")
 		writeError(w, http.StatusInternalServerError, "could not queue workspace file preview")
@@ -1436,7 +1443,7 @@ func (a *API) refreshWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.WorkspaceChangesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}
-	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.changes", command, "workspace-changes:"+workspace.ID+":"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.changes", command, "workspace-changes:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		_ = a.store.FailWorkspaceChangeScan(r.Context(), workspace.ID, "could not queue workspace change scan")
 		writeError(w, http.StatusInternalServerError, "could not queue workspace change scan")
@@ -1535,7 +1542,7 @@ func (a *API) requestWorkspaceDiffPreview(w http.ResponseWriter, r *http.Request
 		return
 	}
 	command := protocol.WorkspaceDiffCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path, OldPath: oldPath}
-	operationID, err := a.store.QueueOperation(r.Context(), workspace.ServerID, "workspace.diff.preview", command, "workspace-diff-preview:"+workspace.ID+":"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.diff.preview", command, "workspace-diff-preview:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		_ = a.store.FailWorkspaceDiffPreview(r.Context(), workspace.ID, path, "could not queue workspace diff preview")
 		writeError(w, http.StatusInternalServerError, "could not queue workspace diff preview")
@@ -1742,7 +1749,7 @@ func (a *API) forkThread(w http.ResponseWriter, r *http.Request) {
 	}
 	targetID := store.NewID()
 	command := protocol.ForkThreadCommand{SourceThreadID: thread.ID, TargetThreadID: targetID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Title: thread.Title + " (continued)"}
-	opID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.thread.fork", command, "codex-fork:"+targetID)
+	opID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.thread.fork", command, "codex-fork:"+targetID, store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Codex session continuation")
 		return
@@ -1967,7 +1974,7 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 		writeError(w, http.StatusInternalServerError, "could not reserve Codex session")
 		return
 	}
-	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.turn.start", command, "codex-turn:"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.turn.start", command, "codex-turn:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		_ = a.store.SetThreadStatus(r.Context(), thread.ID, thread.Status)
 		writeError(w, http.StatusInternalServerError, "could not queue Codex turn")
@@ -2061,7 +2068,7 @@ func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.InterruptTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, TurnID: turnID}
-	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.turn.interrupt", command, "codex-interrupt:"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.turn.interrupt", command, "codex-interrupt:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue interrupt")
 		return
@@ -2193,6 +2200,19 @@ func (a *API) deploymentTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, targets)
+}
+
+func (a *API) deploymentTargetReview(w http.ResponseWriter, r *http.Request) {
+	review, err := a.store.DeploymentTargetReview(r.Context(), chi.URLParam(r, "targetID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "deployment target not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load deployment configuration review")
+		return
+	}
+	writeJSON(w, http.StatusOK, review)
 }
 
 type deploymentTargetInput struct {
@@ -2416,6 +2436,23 @@ func (a *API) deployments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, deployments)
 }
 
+func (a *API) operations(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	operations, err := a.store.ListOperations(r.Context(), r.URL.Query().Get("status"), limit)
+	if errors.Is(err, store.ErrInvalidOperationStatus) {
+		writeError(w, http.StatusBadRequest, "invalid operation status")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list operations")
+		return
+	}
+	if operations == nil {
+		operations = []store.OperationSummary{}
+	}
+	writeJSON(w, http.StatusOK, operations)
+}
+
 func (a *API) deploymentDetails(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "deploymentID")
 	deployment, err := a.store.Deployment(r.Context(), id)
@@ -2434,6 +2471,11 @@ func (a *API) deploymentDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	if events == nil {
 		events = []store.DeploymentEvent{}
+	}
+	if snapshot, snapshotErr := a.store.DeploymentSnapshot(r.Context(), id); snapshotErr == nil {
+		deployment.Snapshot = &snapshot
+	} else if errors.Is(snapshotErr, sql.ErrNoRows) {
+		deployment.SnapshotError = "deployment configuration snapshot is unavailable"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deployment": deployment, "events": events})
 }
@@ -2488,33 +2530,50 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "deployment queued", Content: "Waiting for the target Agent to start deployment."})
-	environment, err := a.deploymentEnvironment(r.Context(), target)
+	snapshot, err := a.store.DeploymentSnapshot(r.Context(), deployment.ID)
+	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not load deployment snapshot"})
+		writeError(w, http.StatusInternalServerError, "could not load deployment snapshot")
+		return
+	}
+	server, err = a.store.Server(r.Context(), snapshot.ServerID)
+	if err != nil || server.Status != "online" {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "target server is no longer online"})
+		writeError(w, http.StatusConflict, "target server must be online before deployment")
+		return
+	}
+	if snapshot.SourceType == "workspace" && (snapshot.WorkspaceID == "" || snapshot.WorkspacePath == "") {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "selected project workspace is no longer available"})
+		writeError(w, http.StatusConflict, "selected project workspace is no longer available")
+		return
+	}
+	environment, err := a.deploymentEnvironmentForSnapshot(r.Context(), snapshot)
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not decrypt deployment secrets"})
 		writeError(w, http.StatusInternalServerError, "could not decrypt deployment secrets")
 		return
 	}
 	var checks []protocol.HealthCheck
-	_ = json.Unmarshal([]byte(target.HealthChecks), &checks)
+	_ = json.Unmarshal([]byte(snapshot.HealthChecks), &checks)
 	serverAddress := strings.TrimSpace(server.Address)
 	if serverAddress == "" {
 		serverAddress = strings.TrimSpace(server.Hostname)
 	}
-	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, DeploymentMode: deploymenttemplate.ModeAuto, ServerAddress: serverAddress, PublicURL: target.ConfiguredPublicURL, SourceType: target.SourceType, SourcePath: target.WorkspacePath, Repository: target.Repository, CommitRef: input.CommitRef, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir, BuildMode: target.BuildMode, ReleaseRoot: target.ReleaseRoot, Environment: environment, HealthChecks: checks}
+	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, DeploymentMode: deploymenttemplate.ModeAuto, ServerAddress: serverAddress, PublicURL: snapshot.ConfiguredPublicURL, SourceType: snapshot.SourceType, SourcePath: snapshot.WorkspacePath, Repository: snapshot.Repository, CommitRef: snapshot.GitRef, ComposeFile: snapshot.ComposeFile, WorkingDir: snapshot.WorkingDir, BuildMode: snapshot.BuildMode, ReleaseRoot: snapshot.ReleaseRoot, Environment: environment, HealthChecks: checks}
 	ciphertext, err := a.vault.Encrypt(command)
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not protect deployment operation"})
 		writeError(w, http.StatusInternalServerError, "could not protect deployment operation")
 		return
 	}
-	operationID, err := a.store.QueueEncryptedOperation(r.Context(), target.ServerID, "deploy.start", ciphertext, "deploy:"+deployment.ID)
+	operationID, err := a.store.QueueEncryptedResourceOperation(r.Context(), snapshot.ServerID, "deploy.start", ciphertext, "deploy:"+deployment.ID, store.OperationResource{ProjectID: snapshot.ProjectID, WorkspaceID: snapshot.WorkspaceID})
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not queue deployment"})
 		writeError(w, http.StatusInternalServerError, "could not queue deployment")
 		return
 	}
 	_ = a.store.AttachDeploymentOperation(r.Context(), deployment.ID, operationID)
-	a.gateway.Wake(target.ServerID)
+	a.gateway.Wake(snapshot.ServerID)
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "deployment.start", "deployment", deployment.ID, map[string]string{"target_id": target.ID, "commit_ref": input.CommitRef}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]any{"deployment": deployment, "operation_id": operationID})
@@ -2531,18 +2590,80 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "target server must be online before rollback")
 		return
 	}
-	deployment, err := a.store.CreateDeployment(r.Context(), target.ID, "rollback")
+	if !buildinfo.SupportsExactDeploymentRollback(server.AgentVersion) {
+		writeError(w, http.StatusConflict, "target Agent must be upgraded before selecting a historical rollback release")
+		return
+	}
+	var input struct {
+		DeploymentID string `json:"deployment_id"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+	}
+	sourceID := strings.TrimSpace(input.DeploymentID)
+	if sourceID == "" {
+		latest, latestErr := a.store.LatestDeploymentSnapshot(r.Context(), target.ID)
+		if errors.Is(latestErr, sql.ErrNoRows) {
+			writeError(w, http.StatusConflict, "no successful deployment with a configuration snapshot is available for rollback")
+			return
+		}
+		if latestErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not load rollback baseline")
+			return
+		}
+		sourceID = latest.DeploymentID
+	}
+	source, err := a.store.DeploymentSnapshot(r.Context(), sourceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusConflict, "the selected deployment has no compatible configuration snapshot")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load rollback baseline")
+		return
+	}
+	if source.TargetID != target.ID || source.ServerID != target.ServerID {
+		writeError(w, http.StatusConflict, "the selected historical release does not belong to the current deployment target")
+		return
+	}
+	deployment, err := a.store.CreateRollbackDeployment(r.Context(), target.ID, source.DeploymentID)
 	if errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
 		writeError(w, http.StatusConflict, "another deployment or container operation is already active")
+		return
+	}
+	if errors.Is(err, store.ErrDeploymentSnapshotUnavailable) {
+		writeError(w, http.StatusConflict, "the selected deployment has no compatible configuration snapshot")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create rollback")
 		return
 	}
-	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "rollback queued", Content: "Waiting for the target Agent to restore the previous release."})
-	command := protocol.RollbackCommand{DeploymentID: deployment.ID, TargetID: target.ID, ReleaseRoot: target.ReleaseRoot, ComposeFile: target.ComposeFile, WorkingDir: target.WorkingDir}
-	operationID, err := a.store.QueueOperation(r.Context(), target.ServerID, "deploy.rollback", command, "rollback:"+deployment.ID)
+	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "rollback queued", Content: "Waiting for the target Agent to restore the selected historical release."})
+	environment, err := a.deploymentEnvironmentForSnapshot(r.Context(), source)
+	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not decrypt rollback secrets"})
+		if errors.Is(err, store.ErrDeploymentSnapshotUnavailable) {
+			writeError(w, http.StatusConflict, "the selected deployment secret version is unavailable")
+		} else {
+			writeError(w, http.StatusInternalServerError, "could not decrypt rollback secrets")
+		}
+		return
+	}
+	publicURL := source.ConfiguredPublicURL
+	if publicURL == "" {
+		publicURL = source.DetectedPublicURL
+	}
+	command := protocol.RollbackCommand{DeploymentID: deployment.ID, TargetID: target.ID, ReleaseDeploymentID: source.DeploymentID, ReleaseRoot: source.ReleaseRoot, ComposeFile: source.ComposeFile, WorkingDir: source.WorkingDir, PublicURL: publicURL, Environment: environment}
+	ciphertext, err := a.vault.Encrypt(command)
+	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not protect rollback operation"})
+		writeError(w, http.StatusInternalServerError, "could not protect rollback operation")
+		return
+	}
+	operationID, err := a.store.QueueEncryptedResourceOperation(r.Context(), target.ServerID, "deploy.rollback", ciphertext, "rollback:"+deployment.ID, store.OperationResource{ProjectID: target.ProjectID, WorkspaceID: target.WorkspaceID})
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not queue rollback"})
 		writeError(w, http.StatusInternalServerError, "could not queue rollback")
@@ -2555,15 +2676,43 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deploymentEnvironment(ctx context.Context, target store.DeploymentTarget) (map[string]string, error) {
+	return a.deploymentEnvironmentForSecretSet(ctx, target.SecretSetID)
+}
+
+func (a *API) deploymentEnvironmentForSecretSet(ctx context.Context, secretSetID string) (map[string]string, error) {
 	environment := map[string]string{}
-	if target.SecretSetID != "" {
-		ciphertext, err := a.store.SecretCiphertext(ctx, target.SecretSetID)
+	if secretSetID != "" {
+		ciphertext, err := a.store.SecretCiphertext(ctx, secretSetID)
 		if err != nil {
 			return nil, err
 		}
 		if err := a.vault.Decrypt(ciphertext, &environment); err != nil {
 			return nil, err
 		}
+	}
+	return environment, nil
+}
+
+func (a *API) deploymentEnvironmentForSnapshot(ctx context.Context, snapshot store.DeploymentSnapshot) (map[string]string, error) {
+	if snapshot.SecretSetID == "" {
+		return map[string]string{}, nil
+	}
+	if snapshot.SecretSetKeyVersion <= 0 || snapshot.SecretSetUpdatedAt == nil {
+		return nil, store.ErrDeploymentSnapshotUnavailable
+	}
+	ciphertext, updatedAt, err := a.store.SecretCiphertextVersion(ctx, snapshot.SecretSetID, snapshot.SecretSetKeyVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, store.ErrDeploymentSnapshotUnavailable
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !snapshot.SecretSetUpdatedAt.UTC().Equal(updatedAt.UTC()) {
+		return nil, store.ErrDeploymentSnapshotUnavailable
+	}
+	environment := map[string]string{}
+	if err := a.vault.Decrypt(ciphertext, &environment); err != nil {
+		return nil, err
 	}
 	return environment, nil
 }

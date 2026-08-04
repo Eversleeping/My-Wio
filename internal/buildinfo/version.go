@@ -9,6 +9,7 @@ var Version = "0.2.45"
 
 const MinimumSelfUpdateVersion = "0.2.0"
 const MinimumCodexUpdateVersion = "0.2.9"
+const MinimumExactDeploymentRollbackVersion = "0.2.45"
 
 func SupportsSelfUpdate(version string) bool {
 	current, ok := parseVersion(version)
@@ -43,6 +44,10 @@ func UpdateAvailable(current, target string) bool {
 
 func SupportsCodexUpdate(version string) bool {
 	return atLeast(version, MinimumCodexUpdateVersion)
+}
+
+func SupportsExactDeploymentRollback(version string) bool {
+	return atLeast(version, MinimumExactDeploymentRollbackVersion)
 }
 
 func atLeast(currentValue, minimumValue string) bool {

@@ -146,7 +146,7 @@ func (a *API) compactThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.CodexSnapshotCommand{ScopeType: "thread", ScopeID: thread.ID, ThreadID: thread.ID, CodexThread: thread.CodexThreadID, Workspace: thread.Path, CodexVersion: server.CodexVersion}
-	operationID, err := a.store.QueueOperation(r.Context(), thread.ServerID, "codex.thread.compact", command, "codex-compact:"+store.NewID())
+	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.thread.compact", command, "codex-compact:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue context compaction")
 		return
@@ -222,7 +222,13 @@ func (a *API) queueWorkspaceCodex(w http.ResponseWriter, r *http.Request, kind s
 }
 
 func (a *API) queueCodex(w http.ResponseWriter, r *http.Request, serverID, kind string, command any, scopeType, scopeID, snapshotKind string) {
-	op, err := a.store.QueueOperation(r.Context(), serverID, kind, command, kind+":"+scopeID+":"+store.NewID())
+	resource := store.OperationResource{}
+	if scopeType == "thread" {
+		resource.ThreadID = scopeID
+	} else if scopeType == "workspace" {
+		resource.WorkspaceID = scopeID
+	}
+	op, err := a.store.QueueResourceOperation(r.Context(), serverID, kind, command, kind+":"+scopeID+":"+store.NewID(), resource, false)
 	if err != nil {
 		writeError(w, 500, "could not queue Codex operation")
 		return

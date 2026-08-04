@@ -69,6 +69,96 @@ const deploymentDetail = {
   }]
 };
 
+const successfulDeployment = {
+  ...queuedDeployment,
+  status: "succeeded",
+  message: "Deployment is healthy",
+  snapshot_available: true,
+  started_at: "2026-08-02T00:00:02Z",
+  finished_at: "2026-08-02T00:00:08Z"
+};
+
+const deploymentSnapshot = {
+  deployment_id: successfulDeployment.id,
+  target_id: deploymentTarget.id,
+  project_id: deploymentTarget.project_id,
+  project_name: deploymentTarget.project_name,
+  source_type: "workspace",
+  environment: "production",
+  server_id: deploymentTarget.server_id,
+  server_name: deploymentTarget.server_name,
+  workspace_id: deploymentTarget.workspace_id,
+  workspace_path: deploymentTarget.workspace_path,
+  workspace_name: deploymentTarget.workspace_name,
+  repository: "",
+  git_ref: "main",
+  resolved_commit: "8f4c2d1a",
+  compose_file: "compose.yaml",
+  working_dir: deploymentTarget.working_dir,
+  build_mode: "build",
+  release_root: deploymentTarget.release_root,
+  configured_public_url: deploymentTarget.configured_public_url,
+  detected_public_url: deploymentTarget.detected_public_url,
+  health_checks: "[]",
+  secret_set_id: "secret-set-1",
+  secret_set_name: "E2E deploy secrets",
+  secret_set_key_version: 3,
+  secret_set_updated_at: "2026-08-02T00:00:00Z",
+  rollback_of_deployment_id: "",
+  created_at: "2026-08-02T00:00:08Z"
+};
+
+const deploymentReview = {
+  target_id: deploymentTarget.id,
+  current: {
+    ...deploymentSnapshot,
+    environment: "staging",
+    git_ref: "release",
+    compose_file: "deploy/compose.yaml",
+    configured_public_url: "https://staging.demo.example.test"
+  },
+  last_successful: deploymentSnapshot,
+  changes: [
+    { field: "environment", previous: "production", current: "staging" },
+    { field: "git_ref", previous: "main", current: "release" },
+    { field: "compose_file", previous: "compose.yaml", current: "deploy/compose.yaml" }
+  ],
+  snapshot_available: true
+};
+
+const trustedDeploymentDetail = {
+  deployment: { ...successfulDeployment, snapshot: deploymentSnapshot },
+  events: [{
+    id: "event-success-1",
+    deployment_id: successfulDeployment.id,
+    status: "succeeded",
+    message: "Deployment is healthy",
+    content: "Compose services are healthy",
+    occurred_at: "2026-08-02T00:00:08Z"
+  }]
+};
+
+const rollbackDeployment = {
+  ...queuedDeployment,
+  id: "deployment-rollback-1",
+  operation_id: "operation-rollback-1",
+  status: "queued",
+  message: "Rollback is queued",
+  snapshot_available: true
+};
+
+const rollbackDeploymentDetail = {
+  deployment: rollbackDeployment,
+  events: [{
+    id: "event-rollback-1",
+    deployment_id: rollbackDeployment.id,
+    status: "queued",
+    message: "Rollback queued",
+    content: "Restoring the selected immutable release",
+    occurred_at: "2026-08-02T00:00:10Z"
+  }]
+};
+
 const deploymentServer = {
   id: deploymentTarget.server_id,
   name: deploymentTarget.server_name,
@@ -162,6 +252,70 @@ const managedWorkspace = {
   project_name: workspaceProject.name
 };
 
+const operationSummaries = [
+  {
+    id: "operation-summary-queued",
+    server_id: workspaceServer.id,
+    server_name: workspaceServer.name,
+    project_id: workspaceProject.id,
+    project_name: workspaceProject.name,
+    workspace_id: managedWorkspace.id,
+    workspace_path: managedWorkspace.path,
+    workspace_name: managedWorkspace.display_name,
+    resource_type: "workspace",
+    resource_id: managedWorkspace.id,
+    kind: "git.workspace.refresh",
+    status: "queued",
+    result: "Waiting for Agent",
+    created_at: "2026-08-02T00:00:00Z",
+    updated_at: "2026-08-02T00:00:02Z",
+    delivered_at: null,
+    started_at: null,
+    completed_at: null
+  },
+  {
+    id: "operation-summary-failed",
+    server_id: deploymentServer.id,
+    server_name: deploymentServer.name,
+    project_id: deploymentTarget.project_id,
+    project_name: deploymentTarget.project_name,
+    workspace_id: "",
+    workspace_path: "",
+    workspace_name: "",
+    resource_type: "deployment",
+    resource_id: deploymentTarget.id,
+    kind: "deploy.rollback",
+    status: "failed",
+    result: "Agent unavailable",
+    created_at: "2026-08-02T00:00:01Z",
+    updated_at: "2026-08-02T00:00:05Z",
+    delivered_at: "2026-08-02T00:00:02Z",
+    started_at: "2026-08-02T00:00:03Z",
+    completed_at: "2026-08-02T00:00:05Z"
+  }
+];
+
+const filteredProject = {
+  ...workspaceProject,
+  id: "project-filtered",
+  name: "Legacy API",
+  status: "failed",
+  provision_error: "Agent unavailable",
+  workspace_count: 0,
+  import_server_id: workspaceServer.id,
+  import_server_name: workspaceServer.name
+};
+
+const filteredWorkspace = {
+  ...managedWorkspace,
+  id: "workspace-filtered",
+  project_id: filteredProject.id,
+  path: "/srv/wio/legacy-api",
+  display_name: "legacy-main",
+  dirty: 1,
+  project_name: filteredProject.name
+};
+
 const codexThread = {
   id: "thread-codex-1",
   workspace_id: managedWorkspace.id,
@@ -228,6 +382,18 @@ function deploymentResponse(request: MockAPIRequest) {
   if (request.path === "/servers" && request.method === "GET") return { body: [deploymentServer] };
   if (request.path === "/secret-sets" && request.method === "GET") return { body: [] };
   if (request.path === `/deployments/${queuedDeployment.id}` && request.method === "GET") return { body: deploymentDetail };
+  return undefined;
+}
+
+function deploymentHistoryResponse(request: MockAPIRequest) {
+  if (request.path === "/deployment-targets" && request.method === "GET") return { body: [deploymentTarget] };
+  if (request.path === "/deployments" && request.method === "GET") return { body: [successfulDeployment] };
+  if (request.path === "/workspaces" && request.method === "GET") return { body: [] };
+  if (request.path === "/servers" && request.method === "GET") return { body: [deploymentServer] };
+  if (request.path === "/secret-sets" && request.method === "GET") return { body: [{ id: "secret-set-1", name: "E2E deploy secrets", updated_at: "2026-08-02T00:00:00Z" }] };
+  if (request.path === `/deployment-targets/${deploymentTarget.id}/review` && request.method === "GET") return { body: deploymentReview };
+  if (request.path === `/deployments/${successfulDeployment.id}` && request.method === "GET") return { body: trustedDeploymentDetail };
+  if (request.path === `/deployments/${rollbackDeployment.id}` && request.method === "GET") return { body: rollbackDeploymentDetail };
   return undefined;
 }
 
@@ -568,4 +734,145 @@ test("keeps a long Codex session list bounded and loads the next window", async 
   await expect(page.getByText("Long session 55", { exact: true })).toBeVisible();
   expect(listRequests).toContain("?limit=50");
   expect(listRequests).toContain("?limit=50&offset=50");
+});
+
+test("the operation center filters recent Agent work and links resources", async ({ page }) => {
+  const operationRequests: string[] = [];
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/operations" && request.method === "GET") {
+        operationRequests.push(request.search);
+        return { body: request.search.includes("status=failed") ? [operationSummaries[1]] : operationSummaries };
+      }
+      return undefined;
+    }
+  });
+  await page.goto("/?view=operations");
+
+  await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
+  await expect(page.getByText("Waiting for Agent", { exact: true })).toBeVisible();
+  await expect(page.getByText("Agent unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Demo app" })).toHaveAttribute("href", "?view=deployments");
+  await page.getByLabel("Filter by status").selectOption("failed");
+  await expect(page.getByText("Agent unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Waiting for Agent", { exact: true })).not.toBeVisible();
+  expect(operationRequests.some(search => new URLSearchParams(search).get("status") === "failed")).toBe(true);
+});
+
+test("project and workspace lists retain independent server, status, path, and Git filters", async ({ page }) => {
+  const projectRequests: string[] = [];
+  const workspaceRequests: string[] = [];
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/servers" && request.method === "GET") return { body: [workspaceServer, deploymentServer] };
+      if (request.path === "/projects" && request.method === "GET") {
+        projectRequests.push(request.search);
+        const params = new URLSearchParams(request.search);
+        if (params.get("name") === "Web") return { body: [workspaceProject] };
+        if (params.get("status") === "failed") return { body: [filteredProject] };
+        return { body: [workspaceProject, filteredProject] };
+      }
+      if (request.path === "/workspaces" && request.method === "GET") {
+        workspaceRequests.push(request.search);
+        const params = new URLSearchParams(request.search);
+        if (params.get("path") === filteredWorkspace.path || params.get("git_status") === "dirty") return { body: [filteredWorkspace] };
+        return { body: [managedWorkspace, filteredWorkspace] };
+      }
+      return undefined;
+    }
+  });
+  await page.goto("/?view=projects");
+
+  const projectSection = page.locator("section.section").filter({ has: page.getByRole("heading", { name: "Projects", exact: true }) });
+  const workspaceSection = page.locator("section.section").filter({ has: page.getByRole("heading", { name: "Workspaces", exact: true }) });
+  await expect(projectSection.getByRole("button", { name: "Web console", exact: true })).toBeVisible();
+  await expect(projectSection.getByRole("button", { name: "Legacy API", exact: true })).toBeVisible();
+
+  await projectSection.getByLabel("Project name").fill("Web");
+  await expect(page).toHaveURL(/project_name=Web/);
+  await expect(projectSection.getByRole("button", { name: "Web console", exact: true })).toBeVisible();
+  await expect(projectSection.getByRole("button", { name: "Legacy API", exact: true })).not.toBeVisible();
+
+  await projectSection.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(page).toHaveURL(/\?view=projects$/);
+  await projectSection.getByLabel("Project status").selectOption("failed");
+  await expect(projectSection.getByRole("button", { name: "Legacy API", exact: true })).toBeVisible();
+  await expect(projectSection.getByRole("button", { name: "Web console", exact: true })).not.toBeVisible();
+
+  await projectSection.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await workspaceSection.getByLabel("Workspace path").fill(filteredWorkspace.path);
+  await expect(workspaceSection.getByText(filteredWorkspace.path, { exact: true })).toBeVisible();
+  await expect(workspaceSection.getByText(managedWorkspace.path, { exact: true })).not.toBeVisible();
+  await workspaceSection.getByLabel("Git status").selectOption("dirty");
+  await expect(workspaceSection.getByText("Legacy API", { exact: true })).toBeVisible();
+  await expect(workspaceSection.getByText("Web console", { exact: true })).not.toBeVisible();
+  expect(projectRequests.some(search => new URLSearchParams(search).get("name") === "Web")).toBe(true);
+  expect(projectRequests.some(search => new URLSearchParams(search).get("status") === "failed")).toBe(true);
+  expect(workspaceRequests.some(search => new URLSearchParams(search).get("path") === filteredWorkspace.path)).toBe(true);
+  expect(workspaceRequests.some(search => new URLSearchParams(search).get("git_status") === "dirty")).toBe(true);
+});
+
+test("deployment editing shows configuration changes without exposing secret values", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Deployment configuration review is covered at desktop width.");
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: deploymentHistoryResponse
+  });
+  await page.goto("/?view=deployments");
+
+  const targetsSection = page.locator("section.section").filter({ has: page.getByRole("heading", { name: "Deployment targets", exact: true }) });
+  await targetsSection.getByRole("button", { name: "More deployment actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Edit deployment target", exact: true }).click();
+
+  const editDialog = page.getByRole("dialog", { name: "Edit deployment target" });
+  await expect(editDialog.getByText("Configuration review", { exact: true })).toBeVisible();
+  await expect(editDialog.getByText("deploy/compose.yaml", { exact: true }).first()).toBeVisible();
+  await expect(editDialog.getByText("release", { exact: true }).first()).toBeVisible();
+  await expect(editDialog.getByText(/Secret values are never shown\./)).toBeVisible();
+  await editDialog.getByRole("button", { name: "Close", exact: true }).click();
+  await targetsSection.getByRole("button", { name: "New target", exact: true }).click();
+  const createDialog = page.getByRole("dialog", { name: "New deployment target" });
+  await expect(createDialog.getByText("Configuration review", { exact: true })).not.toBeVisible();
+});
+
+test("deployment history shows immutable snapshots and can roll back a selected release", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Deployment history and rollback are covered at desktop width.");
+  let rollbackRequest: MockAPIRequest | null = null;
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === `/deployment-targets/${deploymentTarget.id}/rollback` && request.method === "POST") {
+        rollbackRequest = request;
+        return { body: { deployment: rollbackDeployment } };
+      }
+      return deploymentHistoryResponse(request);
+    }
+  });
+  await page.goto("/?view=deployments");
+
+  const historySection = page.locator("section.section").filter({ has: page.getByRole("heading", { name: "Deployment history", exact: true }) });
+  const historyRow = historySection.locator("tbody tr").filter({ hasText: deploymentTarget.project_name });
+  await expect(historyRow).toBeVisible();
+  await historyRow.getByRole("button", { name: "View process logs", exact: true }).click();
+
+  const logDialog = page.getByRole("dialog", { name: "Deployment process logs" });
+  await expect(logDialog.getByText("Immutable configuration snapshot", { exact: true })).toBeVisible();
+  await expect(logDialog.getByText("E2E deploy secrets (key version 3)", { exact: true })).toBeVisible();
+  await logDialog.getByRole("button", { name: "Close", exact: true }).click();
+
+  await historyRow.getByRole("button", { name: "Rollback to this release", exact: true }).click();
+  const confirmation = page.getByRole("dialog", { name: "Rollback to previous release" });
+  await expect(confirmation).toContainText("8f4c2d1a");
+  await confirmation.getByRole("button", { name: "Rollback to previous release", exact: true }).click();
+
+  await expect.poll(() => rollbackRequest).not.toBeNull();
+  expect(JSON.parse(rollbackRequest?.body ?? "{}")).toEqual({ deployment_id: successfulDeployment.id });
+  await expect(page.locator(".toast")).toContainText("Rollback queued");
+  await expect(page.getByRole("dialog", { name: "Deployment process logs" })).toBeVisible();
 });
