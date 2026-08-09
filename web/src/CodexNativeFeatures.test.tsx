@@ -74,16 +74,17 @@ test("starts the first turn after a new goal is persisted", async () => {
   const composer = await screen.findByPlaceholderText("Message Codex");
   await user.type(composer, "/goal");
   await user.click(await screen.findByRole("option", { name: /\/goal/ }));
-  const goalCard = await screen.findByRole("region", { name: "Task goal" });
-  expect(screen.queryByRole("dialog", { name: "Task goal" })).not.toBeInTheDocument();
-  const objective = within(goalCard).getByLabelText("Objective");
-  await user.type(objective, "Ship the release");
-  const save = within(goalCard).getByRole("button", { name: "Save" });
-  await waitFor(() => expect(save).toBeEnabled());
-  await user.click(save);
+  const goalComposer = await screen.findByPlaceholderText("Describe your goal and define measurable outcomes");
+  expect(goalComposer.closest("form")).toHaveClass("goal-mode");
+  expect(screen.getByText("Goal")).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Task goal" })).not.toBeInTheDocument();
+  await user.type(goalComposer, "Ship the release");
+  const send = screen.getByRole("button", { name: "Send" });
+  await waitFor(() => expect(send).toBeEnabled());
+  await user.click(send);
 
   await waitFor(() => expect(requests.some(request => request.url.includes(`/threads/${value.id}/turns`) && request.method === "POST")).toBe(true));
-  await waitFor(() => expect(screen.queryByRole("region", { name: "Task goal" })).not.toBeInTheDocument());
+  await screen.findByPlaceholderText("Message Codex");
   const goalIndex = requests.findIndex(request => request.url.endsWith(`/threads/${value.id}/goal`) && request.method === "PUT");
   const turnIndex = requests.findIndex(request => request.url.endsWith(`/threads/${value.id}/turns`) && request.method === "POST");
   expect(goalIndex).toBeGreaterThanOrEqual(0);
@@ -91,11 +92,13 @@ test("starts the first turn after a new goal is persisted", async () => {
   expect(requests[turnIndex].body?.prompt).toBe("Ship the release");
 });
 
-test("shows task status inline in the conversation", async () => {
+test("shows task status directly above the composer", async () => {
   const user = userEvent.setup();
   const value = thread("status-inline");
-  vi.stubGlobal("fetch", vi.fn(async input => {
+  const requests: Array<{ url: string; method: string }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    requests.push({ url, method: init?.method ?? "GET" });
     if (url.includes(`/threads/${value.id}/events`)) return jsonResponse([]);
     if (url.includes(`/threads/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
     if (url.includes(`/threads/${value.id}/codex/status`)) return jsonResponse({ status: "succeeded", supported: true, data: { model: "gpt-5.6-sol", reasoning_effort: "high", approval_policy: "on-request" }, error: "", reason: "", updated_at: "2026-07-23T01:00:00Z" });
@@ -103,7 +106,7 @@ test("shows task status inline in the conversation", async () => {
     return jsonResponse([]);
   }));
 
-  renderSession(value);
+  const { container } = renderSession(value);
   const composer = await screen.findByPlaceholderText("Message Codex");
   await user.type(composer, "/status");
   await user.click(await screen.findByRole("option", { name: /\/status/ }));
@@ -111,7 +114,14 @@ test("shows task status inline in the conversation", async () => {
   const statusCard = await screen.findByRole("region", { name: "Task status" });
   expect(screen.queryByRole("dialog", { name: "Task status" })).not.toBeInTheDocument();
   expect(within(statusCard).getByText("gpt-5.6-sol")).toBeInTheDocument();
-  expect(statusCard).toHaveTextContent(value.id);
+  expect(statusCard).toHaveTextContent(value.codex_thread_id);
+  expect(container.querySelector(".composer-stack > .composer-status-panel + .composer")).not.toBeNull();
+  expect(requests.some(request => request.url.endsWith(`/threads/${value.id}/codex/status/refresh`) && request.method === "POST")).toBe(true);
+
+  await user.type(composer, "/goal");
+  await user.click(await screen.findByRole("option", { name: /\/goal/ }));
+  expect(screen.getByRole("region", { name: "Task status" })).toBeInTheDocument();
+  expect(await screen.findByPlaceholderText("Describe your goal and define measurable outcomes")).toBeInTheDocument();
 });
 
 test("shows subagent activity above the composer and in the subagent dialog", async () => {
