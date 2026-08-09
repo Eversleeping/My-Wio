@@ -705,6 +705,18 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .task-status-list dd { min-width: 0; margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .task-status-list code { font-size: 11px; white-space: normal; }
 .task-status-list .status-note-row dd { color: var(--muted); }
+.inline-command-card { width: min(92%, 900px); flex: 0 0 auto; align-self: flex-start; margin: 0 0 14px; overflow: hidden; background: #fff; border: 1px solid #cfdad4; border-left: 3px solid var(--green); border-radius: 7px; box-shadow: 0 2px 8px rgba(28, 35, 38, .05); }
+.inline-command-card > header { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px 7px 12px; background: #f2f7f4; border-bottom: 1px solid var(--line); }
+.inline-command-card > header > span { min-width: 0; display: flex; align-items: center; gap: 7px; color: #315c4c; }
+.inline-command-card > header strong { font-size: 12px; }
+.inline-command-card > header code { color: var(--muted); font-size: 10px; font-weight: 500; }
+.inline-command-card > header .icon-button { width: 28px; height: 28px; flex: 0 0 28px; }
+.inline-command-body { padding: 12px 14px; }
+.inline-command-card > footer, .inline-command-card > form > footer { min-height: 50px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 9px 12px; background: #fafbfa; border-top: 1px solid var(--line); }
+.inline-command-card .field textarea { min-height: 78px; }
+.goal-command-card { border-left-color: #6f7597; }
+.goal-command-card > header { background: #f4f4f8; }
+.goal-command-card > header > span { color: #505778; }
 .snapshot-notice { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 9px 11px; background: #f3f6f4; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
 .snapshot-notice.warning { color: #80530b; background: #fff8e8; border-color: #ead7aa; }
 .snapshot-meta { margin: 0 0 10px; color: var(--muted); font-size: 10px; }
@@ -897,7 +909,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .session-area, .session-panes, .session-panel, .file-preview-panel { min-height: 0; }
   .session-panel { grid-template-rows: auto minmax(0, 1fr) auto; }
   .event-stream { max-height: none; padding: 14px 12px; }
-  .message, .tool-event, .context-compaction-event, .subagent-event, .command-event-group, .approval-prompt { width: 94%; }
+  .message, .tool-event, .context-compaction-event, .subagent-event, .command-event-group, .approval-prompt, .inline-command-card { width: 94%; }
   .message.user { width: 88%; }
   .composer { padding: 8px 10px max(8px, env(safe-area-inset-bottom)); }
   .composer textarea { min-height: 52px; max-height: 92px; }
