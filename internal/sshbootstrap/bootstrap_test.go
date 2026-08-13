@@ -136,6 +136,18 @@ func TestAgentServiceKeepsManagedProjectsWritable(t *testing.T) {
 	}
 }
 
+func TestAgentSetupCreatesManagedProjectRoot(t *testing.T) {
+	script := agentSetupScript(false)
+	for _, expected := range []string{
+		"install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent",
+		"install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/projects",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("Agent setup script missing %q:\n%s", expected, script)
+		}
+	}
+}
+
 func TestPrerequisiteServiceCreatesSocketRuntimeDirectory(t *testing.T) {
 	unit, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prerequisite.service"))
 	if err != nil {

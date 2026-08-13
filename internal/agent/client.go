@@ -598,6 +598,9 @@ func (c *Client) createProject(ctx context.Context, command protocol.GitProjectC
 	if err != nil {
 		return protocol.GitProjectCreateResult{}, err
 	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
+		return protocol.GitProjectCreateResult{}, fmt.Errorf("prepare repository parent directory: %w", err)
+	}
 	result, err := gitrepository.Create(ctx, gitrepository.CreateOptions{
 		ProjectID:          command.ProjectID,
 		Path:               destination,

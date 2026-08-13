@@ -202,24 +202,7 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		return InstallResult{}, fmt.Errorf("%w: could not install prerequisite helper: %v", ErrInstallation, err)
 	}
 	request.report("preparing_account", 0, 0)
-	setup := `set -eu
-getent group docker >/dev/null 2>&1 || groupadd --system docker
-id -u wio-agent >/dev/null 2>&1 || useradd --system --home /var/lib/wio-agent --create-home --shell /usr/sbin/nologin wio-agent
-usermod -aG docker wio-agent
-install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent
-install -d -o wio-agent -g wio-agent -m 0700 /var/lib/wio-agent/.codex
-install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
-	if request.AllowSudo {
-		setup += `
-command -v sudo >/dev/null 2>&1 || { echo 'sudo is required when Agent sudo is enabled' >&2; exit 1; }
-install -d -o root -g root -m 0755 /etc/sudoers.d
-printf '%s\n' 'wio-agent ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wio-agent
-chmod 0440 /etc/sudoers.d/wio-agent
-if command -v visudo >/dev/null 2>&1; then visudo -cf /etc/sudoers.d/wio-agent >/dev/null; fi`
-	} else {
-		setup += `
-rm -f /etc/sudoers.d/wio-agent`
-	}
+	setup := agentSetupScript(request.AllowSudo)
 	if _, err := run(client, elevated(root, setup)); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
@@ -430,6 +413,29 @@ fi
 rm -f /etc/systemd/system/wio-agent.service /etc/systemd/system/wio-prerequisite.service
 systemctl daemon-reload
 systemctl reset-failed wio-agent.service wio-prerequisite.service >/dev/null 2>&1 || true`
+}
+
+func agentSetupScript(allowSudo bool) string {
+	setup := `set -eu
+getent group docker >/dev/null 2>&1 || groupadd --system docker
+id -u wio-agent >/dev/null 2>&1 || useradd --system --home /var/lib/wio-agent --create-home --shell /usr/sbin/nologin wio-agent
+usermod -aG docker wio-agent
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/projects
+install -d -o wio-agent -g wio-agent -m 0700 /var/lib/wio-agent/.codex
+install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
+	if allowSudo {
+		setup += `
+command -v sudo >/dev/null 2>&1 || { echo 'sudo is required when Agent sudo is enabled' >&2; exit 1; }
+install -d -o root -g root -m 0755 /etc/sudoers.d
+printf '%s\n' 'wio-agent ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wio-agent
+chmod 0440 /etc/sudoers.d/wio-agent
+if command -v visudo >/dev/null 2>&1; then visudo -cf /etc/sudoers.d/wio-agent >/dev/null; fi`
+	} else {
+		setup += `
+rm -f /etc/sudoers.d/wio-agent`
+	}
+	return setup
 }
 
 func uninstallFilesScript() string {

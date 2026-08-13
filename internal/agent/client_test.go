@@ -88,7 +88,7 @@ func TestGitProjectCreateReturnsStructuredResultAndRefreshesInventory(t *testing
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
-	cloneRoot := t.TempDir()
+	cloneRoot := filepath.Join(t.TempDir(), "state", "projects")
 	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
 	if output, err := exec.Command("git", "config", "--file", globalConfig, "user.name", "Agent Test").CombinedOutput(); err != nil {
 		t.Fatalf("configure test Git name: %v: %s", err, output)
