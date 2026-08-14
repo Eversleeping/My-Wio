@@ -519,7 +519,7 @@ func TestFailedCodexTurnUpdatesThreadAndPublishesFailure(t *testing.T) {
 	}
 }
 
-func TestFailedInterruptWithNoActiveTurnReconcilesThreadStatus(t *testing.T) {
+func TestFailedInterruptWithMissingCodexThreadReconcilesThreadStatus(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatal(err)
@@ -557,7 +557,7 @@ func TestFailedInterruptWithNoActiveTurnReconcilesThreadStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	result := protocol.OperationResult{OperationID: operationID, Status: "failed", Message: "Codex turn/interrupt: no active turn to interrupt (-32600)"}
+	result := protocol.OperationResult{OperationID: operationID, Status: "failed", Message: "Codex turn/interrupt: thread not found: codex-thread (-32600)"}
 	payload, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -575,6 +575,24 @@ func TestFailedInterruptWithNoActiveTurnReconcilesThreadStatus(t *testing.T) {
 	events, err := database.Events(ctx, thread.ID, 0, 10)
 	if err != nil || len(events) != 1 || events[0].Kind != "codex.turn.cancelled" {
 		t.Fatalf("unexpected stale interrupt events: %#v %v", events, err)
+	}
+}
+
+func TestNoActiveCodexTurnRecognizesMissingTurnMessages(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+	}{
+		{name: "no active turn", message: "Codex turn/interrupt: no active turn to interrupt (-32600)"},
+		{name: "turn not found", message: "Codex turn/interrupt: turn not found (-32600)"},
+		{name: "thread not found", message: "Codex turn/interrupt: thread not found: codex-thread (-32600)"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !noActiveCodexTurn(test.message) {
+				t.Fatalf("noActiveCodexTurn(%q) = false", test.message)
+			}
+		})
 	}
 }
 

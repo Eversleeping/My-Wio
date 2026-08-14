@@ -669,7 +669,9 @@ func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store
 
 func noActiveCodexTurn(message string) bool {
 	normalized := strings.ToLower(message)
-	return strings.Contains(normalized, "no active turn") || strings.Contains(normalized, "turn not found")
+	return strings.Contains(normalized, "no active turn") ||
+		strings.Contains(normalized, "turn not found") ||
+		strings.Contains(normalized, "thread not found")
 }
 
 func (g *Gateway) acceptCodexTurn(ctx context.Context, event protocol.StreamEvent) error {
