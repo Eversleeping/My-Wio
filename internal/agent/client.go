@@ -52,8 +52,10 @@ type Client struct {
 }
 
 type operationExecution struct {
-	done   chan struct{}
-	result protocol.OperationResult
+	done        chan struct{}
+	result      protocol.OperationResult
+	completedAt time.Time
+	persisted   bool
 }
 
 func NewClient(config Config, log *slog.Logger) *Client {
@@ -215,6 +217,9 @@ func (c *Client) periodic(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-heartbeats.C:
+			c.seenMu.Lock()
+			c.pruneCompletedOperations(time.Now())
+			c.seenMu.Unlock()
 			_ = c.enqueueHeartbeat(ctx)
 		case <-metrics.C:
 			_ = c.enqueueMetrics(ctx)
@@ -229,6 +234,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		return
 	}
 	c.seenMu.Lock()
+	c.pruneCompletedOperations(time.Now())
 	execution, seen := c.seen[envelope.OperationID]
 	if seen {
 		done := execution.done
@@ -244,6 +250,14 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		return
 	}
 	execution = &operationExecution{done: make(chan struct{})}
+	if result, found, err := c.loadOperationResult(envelope.OperationID); found || err != nil {
+		c.seenMu.Unlock()
+		if err != nil {
+			result = protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: "could not read previous operation result; refusing to repeat operation"}
+		}
+		_ = c.queue("operation_result", result, true)
+		return
+	}
 	c.seen[envelope.OperationID] = execution
 	c.seenMu.Unlock()
 	timeout := 10 * time.Minute
@@ -455,9 +469,18 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		c.log.Warn("operation failed", "operation_id", envelope.OperationID, "kind", envelope.Kind, "error", err)
 	}
 	result := protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192), Data: resultData}
+	resultSaved := c.config.StateDir == ""
+	if err := c.saveOperationResult(result); err != nil {
+		c.log.Warn("could not persist operation result", "operation_id", envelope.OperationID, "error", err)
+	} else {
+		resultSaved = true
+	}
 	c.seenMu.Lock()
 	execution.result = result
+	execution.completedAt = time.Now()
+	execution.persisted = resultSaved
 	close(execution.done)
+	c.pruneCompletedOperations(execution.completedAt)
 	c.seenMu.Unlock()
 	if queueErr := c.queue("operation_result", result, true); queueErr != nil {
 		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
@@ -470,6 +493,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if restartErr := activateStagedUpdate(c.config.StateDir, restartPath); restartErr != nil {
 			c.log.Error("could not restart into Agent update", "operation_id", envelope.OperationID, "error", restartErr)
 			failure := protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: truncate(restartErr.Error(), 8192)}
+			_ = c.saveOperationResult(failure)
 			c.seenMu.Lock()
 			execution.result = failure
 			c.seenMu.Unlock()
