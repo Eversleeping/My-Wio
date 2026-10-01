@@ -40,7 +40,16 @@ case "$1" in
     fi ;;
 esac`)
 	docker := filepath.Join(bin, "docker")
-	writeExecutable(t, docker, "#!/bin/sh\necho compose-output")
+	writeExecutable(t, docker, `#!/bin/sh
+case "$1" in
+  inspect) echo "app sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
+  image) exit 0 ;;
+  compose)
+    case "$*" in
+      *"ps --all --quiet"*) echo container-1 ;;
+      *) echo compose-output ;;
+    esac ;;
+esac`)
 	root := filepath.Join(t.TempDir(), "releases")
 	command := protocol.DeployCommand{DeploymentID: "deployment-1", TargetID: "target-1", Repository: "https://example.com/repo.git", CommitRef: "main", ComposeFile: "compose.yaml", BuildMode: "build", ReleaseRoot: root}
 	var events []string
@@ -212,7 +221,7 @@ func TestDeploymentTargetRootRejectsUnsafePaths(t *testing.T) {
 	}
 }
 
-func TestPreflightStopsBeforeReleaseWhenDockerIsUnavailable(t *testing.T) {
+func TestDeployStopsBeforeReleaseWhenPrerequisiteSetupFails(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Compose deployment execution is supported only on Linux")
 	}
@@ -223,16 +232,16 @@ func TestPreflightStopsBeforeReleaseWhenDockerIsUnavailable(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "releases")
 	command := protocol.DeployCommand{DeploymentID: "deployment-preflight", TargetID: "target-preflight", SourceType: "remote", Repository: "https://example.com/repo.git", CommitRef: "main", ComposeFile: "compose.yaml", BuildMode: "build", ReleaseRoot: root}
 	var events []string
-	err := New(docker).Deploy(context.Background(), command, func(status, message, resolved, detectedPublicURL, content string) {
+	err := New(docker, filepath.Join(bin, "missing-helper.sock")).Deploy(context.Background(), command, func(status, message, resolved, detectedPublicURL, content string) {
 		events = append(events, status+":"+message+":"+content)
 	})
-	if err == nil || !strings.Contains(err.Error(), "Docker daemon") {
+	if err == nil || !strings.Contains(err.Error(), "install deployment prerequisites") {
 		t.Fatalf("unexpected preflight result: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "target-preflight")); !os.IsNotExist(statErr) {
 		t.Fatalf("release directory was created before preflight completed: %v", statErr)
 	}
-	if !strings.Contains(strings.Join(events, "\n"), "failed:environment check: Docker daemon") {
+	if !strings.Contains(strings.Join(events, "\n"), "failed:deployment prerequisite setup failed") {
 		t.Fatalf("missing failed preflight event: %#v", events)
 	}
 }

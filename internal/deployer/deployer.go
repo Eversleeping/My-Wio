@@ -199,6 +199,9 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		}
 	}
 	status("running", "health checks passed", resolved, "", "All configured health checks passed.")
+	if err := d.saveReleaseImages(ctx, release, workDir, environment, project, composePath); err != nil {
+		return fmt.Errorf("save release images: %w", err)
+	}
 	if err := promote(root, release); err != nil {
 		return err
 	}
@@ -351,7 +354,7 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 		return err
 	}
 	status("running", "restoring selected Compose release", "", "", "Starting Docker Compose from the selected historical release.")
-	if output, err := d.compose(ctx, workDir, environment, projectName(command.TargetID), composePath, "up", "-d", "--remove-orphans"); err != nil {
+	if output, err := d.pinnedCompose(ctx, release, workDir, environment, projectName(command.TargetID), composePath, "up", "-d", "--remove-orphans"); err != nil {
 		status("running", "rollback Compose start failed", "", "", output)
 		return fmt.Errorf("docker compose rollback: %w: %s", err, output)
 	} else {
@@ -408,7 +411,16 @@ func (d *Deployer) ContainerAction(ctx context.Context, command protocol.Contain
 		return result, err
 	}
 	result.State = state
-	output, err := d.compose(ctx, workDir, environment, projectName(command.TargetID), composePath, args...)
+	var output string
+	if _, statErr := os.Stat(filepath.Join(current, releaseImagesFile)); statErr == nil {
+		output, err = d.pinnedCompose(ctx, current, workDir, environment, projectName(command.TargetID), composePath, args...)
+	} else if errors.Is(statErr, os.ErrNotExist) {
+		// Existing releases can still be stopped/removed; only exact rollback
+		// requires a snapshot recorded by the new deployment flow.
+		output, err = d.compose(ctx, workDir, environment, projectName(command.TargetID), composePath, args...)
+	} else {
+		err = statErr
+	}
 	result.Content = truncate(output, maximumProcessLogSize)
 	if err != nil {
 		result.State = "failed"
