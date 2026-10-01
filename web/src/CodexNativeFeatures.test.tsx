@@ -180,7 +180,7 @@ test("builds a weekly scheduled task from time and weekday selectors", async () 
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/codex/models/refresh")) return jsonResponse({ operation_id: "models-op" }, 202);
-    if (url.endsWith("/codex/models")) return jsonResponse({ status: "succeeded", supported: true, data: [] });
+    if (url.endsWith("/codex/models")) return jsonResponse({ status: "succeeded", supported: true, data: [{ id: "deep", model: "deep", displayName: "Deep", defaultReasoningEffort: "high", supportedReasoningEfforts: [{ reasoningEffort: "high", description: "High" }, { reasoningEffort: "ultra", description: "Ultra" }] }] });
     if ((init?.method ?? "GET") === "POST") requests.push({ url, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     return jsonResponse({ id: "scheduled-task" }, 201);
   }));
@@ -192,10 +192,16 @@ test("builds a weekly scheduled task from time and weekday selectors", async () 
   await user.selectOptions(screen.getByLabelText("Hour"), "08");
   await user.selectOptions(screen.getByLabelText("Minute"), "30");
   await user.selectOptions(screen.getByLabelText("Weekday"), "2");
+  await screen.findByRole("option", { name: "Deep" });
+  await user.selectOptions(screen.getByLabelText("Model override"), "deep");
+  await user.selectOptions(screen.getByLabelText("Reasoning effort"), "ultra");
+  expect(screen.queryByRole("option", { name: "Low reasoning" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Save" }));
 
   await waitFor(() => expect(requests).toHaveLength(1));
   expect(requests[0].url).toContain("/scheduled-tasks");
   expect(requests[0].body.schedule).toBe("30 8 * * 2");
   expect(requests[0].body.thread_id).toBe(value.id);
+  expect(requests[0].body.model).toBe("deep");
+  expect(requests[0].body.reasoning_effort).toBe("ultra");
 });

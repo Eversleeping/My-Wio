@@ -11,12 +11,19 @@ import (
 // Model metadata is allowlisted; credentials and provider configuration never
 // become part of a browser snapshot.
 type codexModel struct {
-	ID          string `json:"id"`
-	Model       string `json:"model"`
-	DisplayName string `json:"displayName"`
-	Description string `json:"description"`
-	Hidden      bool   `json:"hidden"`
-	IsDefault   bool   `json:"isDefault"`
+	ID                        string                 `json:"id"`
+	Model                     string                 `json:"model"`
+	DisplayName               string                 `json:"displayName"`
+	Description               string                 `json:"description"`
+	Hidden                    bool                   `json:"hidden"`
+	IsDefault                 bool                   `json:"isDefault"`
+	DefaultReasoningEffort    string                 `json:"defaultReasoningEffort"`
+	SupportedReasoningEfforts []codexReasoningEffort `json:"supportedReasoningEfforts"`
+}
+
+type codexReasoningEffort struct {
+	ReasoningEffort string `json:"reasoningEffort"`
+	Description     string `json:"description"`
 }
 
 func codexModelsOperation(ctx context.Context, version string, request requestFunc) (protocol.CodexCapabilityResult, error) {

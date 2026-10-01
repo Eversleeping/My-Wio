@@ -19,7 +19,7 @@ func TestModelsListPaginatesFiltersAndUsesModelSlug(t *testing.T) {
 		}
 		calls++
 		if calls == 1 {
-			return json.RawMessage(`{"data":[{"id":"picker-id","model":"new-model","displayName":"New Model","secret":"private"},{"model":"hidden","hidden":true}],"nextCursor":"page-2"}`), nil
+			return json.RawMessage(`{"data":[{"id":"picker-id","model":"new-model","displayName":"New Model","secret":"private","defaultReasoningEffort":"ultra","supportedReasoningEfforts":[{"reasoningEffort":"ultra","description":"Maximum depth","secret":"private"}]},{"model":"hidden","hidden":true}],"nextCursor":"page-2"}`), nil
 		}
 		if p["cursor"] != "page-2" {
 			t.Fatal("pagination cursor missing")
@@ -38,6 +38,9 @@ func TestModelsListPaginatesFiltersAndUsesModelSlug(t *testing.T) {
 	}
 	if strings.Contains(string(result.Data), "private") {
 		t.Fatal("unrecognized metadata leaked")
+	}
+	if models[0].DefaultReasoningEffort != "ultra" || len(models[0].SupportedReasoningEfforts) != 1 || models[0].SupportedReasoningEfforts[0].ReasoningEffort != "ultra" {
+		t.Fatalf("reasoning metadata lost: %+v", models[0])
 	}
 }
 

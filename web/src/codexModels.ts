@@ -2,7 +2,32 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import type { CodexSnapshot } from "./types";
 
-export interface CodexModel { id: string; model: string; displayName: string; description: string; isDefault: boolean }
+export interface CodexModel { id: string; model: string; displayName: string; description: string; isDefault: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts?: { reasoningEffort: string; description: string }[] }
+
+export const codexReasoningOptions = [
+  { value: "none", labelKey: "codex.reasoningNone" },
+  { value: "minimal", labelKey: "codex.reasoningMinimal" },
+  { value: "low", labelKey: "codex.reasoningLow" },
+  { value: "medium", labelKey: "codex.reasoningMedium" },
+  { value: "high", labelKey: "codex.reasoningHigh" },
+  { value: "xhigh", labelKey: "codex.reasoningExtraHigh" },
+  { value: "max", labelKey: "codex.reasoningMax" },
+  { value: "ultra", labelKey: "codex.reasoningUltra" }
+] as const;
+
+export function reasoningOptionsFor(models: CodexModel[], model: string) {
+  const selected = model ? models.find(item => item.model === model) : undefined;
+  if (!selected?.supportedReasoningEfforts) return [...codexReasoningOptions];
+  return selected.supportedReasoningEfforts.map(effort => ({ value: effort.reasoningEffort, labelKey: codexReasoningOptions.find(option => option.value === effort.reasoningEffort)?.labelKey, description: effort.description }));
+}
+
+// An empty model uses the server configuration, which may differ from the CLI default.
+export function compatibleReasoningEffort(models: CodexModel[], model: string, effort: string): string {
+  const selected = models.find(item => item.model === model);
+  if (!effort || !selected?.supportedReasoningEfforts) return effort;
+  if (selected.supportedReasoningEfforts.some(item => item.reasoningEffort === effort)) return effort;
+  return selected.supportedReasoningEfforts.some(item => item.reasoningEffort === selected.defaultReasoningEffort) ? selected.defaultReasoningEffort! : "";
+}
 
 export function useCodexModels(workspaceID?: string) {
   const [result, setResult] = useState<{ workspaceID: string; models: CodexModel[]; error: string }>({ workspaceID: "", models: [], error: "" });

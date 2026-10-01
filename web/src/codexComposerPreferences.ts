@@ -12,7 +12,7 @@ export const defaultCodexComposerPreferences: CodexComposerPreferences = {
 
 const storagePrefix = "wio_codex_composer_preferences_v1:";
 const approvalModes = new Set(["on-request", "untrusted", "never"]);
-const reasoningEfforts = new Set(["", "low", "medium", "high", "xhigh", "max"]);
+const reasoningEfforts = new Set(["", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 function storageKey(threadID: string) {
   return `${storagePrefix}${threadID}`;

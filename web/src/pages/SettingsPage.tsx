@@ -42,13 +42,7 @@ export interface PageProps {
 type AuditListPage = { items: AuditEntry[]; has_more: boolean; next: number | null };
 const auditListPageSize = 50;
 const defaultCodexModel = defaultCodexComposerPreferences.model;
-const codexReasoningOptions = [
-  { value: "low", labelKey: "codex.reasoningLow" },
-  { value: "medium", labelKey: "codex.reasoningMedium" },
-  { value: "high", labelKey: "codex.reasoningHigh" },
-  { value: "xhigh", labelKey: "codex.reasoningExtraHigh" },
-  { value: "max", labelKey: "codex.reasoningMax" }
-] as const;
+
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : "Request failed";
