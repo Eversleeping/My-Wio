@@ -1,3 +1,4 @@
+import { CodexModelPicker } from "../components/CodexModelPicker";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -41,12 +42,6 @@ export interface PageProps {
 type AuditListPage = { items: AuditEntry[]; has_more: boolean; next: number | null };
 const auditListPageSize = 50;
 const defaultCodexModel = defaultCodexComposerPreferences.model;
-const codexModelOptions = [
-  { value: "gpt-5.6-sol", labelKey: "codex.model56Sol" },
-  { value: "gpt-5.6-terra", labelKey: "codex.model56Terra" },
-  { value: "gpt-5.6-luna", labelKey: "codex.model56Luna" },
-  { value: "gpt-5.5", labelKey: "codex.model55" }
-] as const;
 const codexReasoningOptions = [
   { value: "low", labelKey: "codex.reasoningLow" },
   { value: "medium", labelKey: "codex.reasoningMedium" },
@@ -68,16 +63,6 @@ function Dialog(props: Omit<DialogProps, "closeLabel">) {
   return <AccessibleDialog {...props} closeLabel={t("common.close")} />;
 }
 
-function CodexModelPicker({ value, onChange, allowServerDefault = false, required = false, requestCustom = 0 }: { value: string; onChange: (value: string) => void; allowServerDefault?: boolean; required?: boolean; requestCustom?: number }) {
-  const { t } = useI18n();
-  const known = value === "" || codexModelOptions.some(option => option.value === value);
-  const [customMode, setCustomMode] = useState(!known);
-  const [customValue, setCustomValue] = useState(known ? "" : value);
-  useEffect(() => { if (known) { setCustomMode(false); setCustomValue(""); } else { setCustomMode(true); setCustomValue(value); } }, [known, value]);
-  useEffect(() => { if (requestCustom) { setCustomMode(true); setCustomValue(""); } }, [requestCustom]);
-  const selectValue = customMode ? "__custom__" : value;
-  return <div className="codex-model-picker"><select aria-label={t("codex.modelOverride")} value={selectValue} required={required} onChange={event => { if (event.target.value === "__custom__") { setCustomMode(true); setCustomValue(""); onChange(""); } else { setCustomMode(false); onChange(event.target.value); } }}>{allowServerDefault && <option value="">{t("codex.modelServerDefault")}</option>}{codexModelOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}<option value="__custom__">{t("codex.modelCustom")}</option></select>{customMode && <input aria-label={t("codex.customModelName")} value={customValue} onChange={event => { setCustomValue(event.target.value); onChange(event.target.value); }} placeholder={t("codex.customModelPlaceholder")} required={required} />}</div>;
-}
 
 function ErrorBanner({ text }: { text: string }) {
   return <div className="error-banner"><AlertTriangle size={16} />{text}</div>;

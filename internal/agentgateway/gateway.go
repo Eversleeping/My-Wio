@@ -491,7 +491,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if strings.HasPrefix(operation.Kind, "codex.goal.") || operation.Kind == "codex.mcp.list" || operation.Kind == "codex.skills.list" || operation.Kind == "codex.status.snapshot" {
+		if strings.HasPrefix(operation.Kind, "codex.goal.") || operation.Kind == "codex.mcp.list" || operation.Kind == "codex.skills.list" || operation.Kind == "codex.models.list" || operation.Kind == "codex.status.snapshot" {
 			var command protocol.CodexSnapshotCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 				return err

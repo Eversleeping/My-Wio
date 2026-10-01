@@ -24,6 +24,12 @@ func (a *API) workspaceCodexMCP(w http.ResponseWriter, r *http.Request) {
 func (a *API) workspaceCodexSkills(w http.ResponseWriter, r *http.Request) {
 	a.writeCodexSnapshot(w, r, "workspace", chi.URLParam(r, "workspaceID"), "skills.list", false)
 }
+func (a *API) workspaceCodexModels(w http.ResponseWriter, r *http.Request) {
+	a.writeCodexSnapshot(w, r, "workspace", chi.URLParam(r, "workspaceID"), "models.list", false)
+}
+func (a *API) refreshWorkspaceCodexModels(w http.ResponseWriter, r *http.Request) {
+	a.queueWorkspaceCodex(w, r, "codex.models.list")
+}
 
 func (a *API) writeCodexSnapshot(w http.ResponseWriter, r *http.Request, scopeType, scopeID, kind string, thread bool) {
 	if !a.codexScopeExists(r, scopeType, scopeID) {

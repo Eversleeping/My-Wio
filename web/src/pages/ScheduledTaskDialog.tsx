@@ -1,18 +1,12 @@
+import { useCodexModels } from "../codexModels";
+import { CodexModelPicker } from "../components/CodexModelPicker";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { Check, LoaderCircle } from "lucide-react";
 import { post, put } from "../api";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
-import { defaultCodexComposerPreferences } from "../codexComposerPreferences";
 import { useI18n } from "../i18n";
 import type { ScheduledTask, Thread } from "../types";
 
-const defaultCodexModel = defaultCodexComposerPreferences.model;
-const codexModelOptions = [
-  { value: "gpt-5.6-sol", labelKey: "codex.model56Sol" },
-  { value: "gpt-5.6-terra", labelKey: "codex.model56Terra" },
-  { value: "gpt-5.6-luna", labelKey: "codex.model56Luna" },
-  { value: "gpt-5.5", labelKey: "codex.model55" }
-] as const;
 const codexReasoningOptions = [
   { value: "low", labelKey: "codex.reasoningLow" },
   { value: "medium", labelKey: "codex.reasoningMedium" },
@@ -33,16 +27,6 @@ function Dialog(props: Omit<DialogProps, "closeLabel">) {
   return <AccessibleDialog {...props} closeLabel={t("common.close")} />;
 }
 
-function CodexModelPicker({ value, onChange, allowServerDefault = false, required = false, requestCustom = 0 }: { value: string; onChange: (value: string) => void; allowServerDefault?: boolean; required?: boolean; requestCustom?: number }) {
-  const { t } = useI18n();
-  const known = value === "" || codexModelOptions.some(option => option.value === value);
-  const [customMode, setCustomMode] = useState(!known);
-  const [customValue, setCustomValue] = useState(known ? "" : value);
-  useEffect(() => { if (known) { setCustomMode(false); setCustomValue(""); } else { setCustomMode(true); setCustomValue(value); } }, [known, value]);
-  useEffect(() => { if (requestCustom) { setCustomMode(true); setCustomValue(""); } }, [requestCustom]);
-  const selectValue = customMode ? "__custom__" : value;
-  return <div className="codex-model-picker"><select aria-label={t("codex.modelOverride")} value={selectValue} required={required} onChange={event => { if (event.target.value === "__custom__") { setCustomMode(true); setCustomValue(""); onChange(""); } else { setCustomMode(false); onChange(event.target.value); } }}>{allowServerDefault && <option value="">{t("codex.modelServerDefault")}</option>}{codexModelOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}<option value="__custom__">{t("codex.modelCustom")}</option></select>{customMode && <input aria-label={t("codex.customModelName")} value={customValue} onChange={event => { setCustomValue(event.target.value); onChange(event.target.value); }} placeholder={t("codex.customModelPlaceholder")} required={required} />}</div>;
-}
 
 type ScheduledTaskFrequency = "daily" | "weekdays" | "weekly" | "monthly" | "interval" | "custom";
 type ScheduledTaskIntervalUnit = "m" | "h" | "d";
@@ -135,6 +119,7 @@ export function ScheduledTaskDialog({ open, task, initialThreadID, lockThread = 
       notify(t("settings.scheduledTaskSaved"));
     } catch (error) { notify(message(error)); } finally { setBusy(false); }
   };
+  const catalogue = useCodexModels(open ? threads.find(thread => thread.id === form.thread_id)?.workspace_id : undefined);
   const threadAvailable = threads.some(thread => thread.id === form.thread_id);
   return <Dialog open={open} title={t(form.id ? "settings.editScheduledTask" : "settings.newScheduledTask")} onClose={() => { if (!busy) onClose(); }} wide><form onSubmit={save}>
     <div className="form-grid"><Field label={t("settings.name")}><input value={form.name} onChange={event => update({ name: event.target.value })} maxLength={180} required /></Field><Field label={t("settings.scheduledThread")}><select value={form.thread_id} disabled={lockThread || busy} onChange={event => update({ thread_id: event.target.value })} required><option value="">{t("settings.selectScheduledThread")}</option>{form.thread_id && !threadAvailable && <option value={form.thread_id}>{task?.thread_title || form.thread_id}</option>}{threads.map(thread => <option value={thread.id} key={thread.id}>{thread.title} / {thread.project_name} / {thread.server_name}</option>)}</select></Field></div>
@@ -145,7 +130,7 @@ export function ScheduledTaskDialog({ open, task, initialThreadID, lockThread = 
     {form.frequency === "monthly" && <Field label={t("settings.scheduleMonthDay")}><select value={form.monthDay} disabled={busy} onChange={event => update({ monthDay: event.target.value })}>{scheduledMonthDays.map(value => <option value={value} key={value}>{value}</option>)}</select></Field>}
     {form.frequency === "interval" && <div className="form-grid"><Field label={t("settings.scheduleIntervalValue")}><select value={form.intervalValue} disabled={busy} onChange={event => update({ intervalValue: event.target.value })}>{!scheduledIntervalValues.includes(form.intervalValue) && <option value={form.intervalValue}>{form.intervalValue}</option>}{scheduledIntervalValues.map(value => <option value={value} key={value}>{value}</option>)}</select></Field><Field label={t("settings.scheduleIntervalUnit")}><select value={form.intervalUnit} disabled={busy} onChange={event => update({ intervalUnit: event.target.value as ScheduledTaskIntervalUnit })}><option value="m">{t("settings.scheduleMinutes")}</option><option value="h">{t("settings.scheduleHours")}</option><option value="d">{t("settings.scheduleDays")}</option></select></Field></div>}
     {form.frequency === "custom" && <Field label={t("settings.scheduleExpression")}><input value={form.schedule} disabled={busy} onChange={event => update({ schedule: event.target.value })} placeholder={t("settings.schedulePlaceholder")} maxLength={100} required /></Field>}
-    <div className="form-grid"><Field label={t("codex.modelOverride")}><CodexModelPicker value={form.model} onChange={model => update({ model })} allowServerDefault /></Field><Field label={t("codex.reasoningEffort")}><select value={form.reasoning_effort} disabled={busy} onChange={event => update({ reasoning_effort: event.target.value })}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></Field></div>
+    <div className="form-grid"><Field label={t("codex.modelOverride")}><CodexModelPicker models={catalogue.models} loading={catalogue.loading} error={catalogue.error} onRefresh={catalogue.refresh} value={form.model} onChange={model => update({ model })} allowServerDefault /></Field><Field label={t("codex.reasoningEffort")}><select value={form.reasoning_effort} disabled={busy} onChange={event => update({ reasoning_effort: event.target.value })}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></Field></div>
     <div className="form-grid"><Field label={t("codex.approveOnRequest")}><select value={form.approval_mode} disabled={busy} onChange={event => update({ approval_mode: event.target.value })}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select></Field><label className="toggle-row"><input type="checkbox" checked={form.enabled} disabled={busy} onChange={event => update({ enabled: event.target.checked })} /><span>{t("settings.scheduleEnabled")}</span></label></div>
     <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={busy || !form.thread_id || !form.name.trim() || !form.prompt.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions>
   </form></Dialog>;

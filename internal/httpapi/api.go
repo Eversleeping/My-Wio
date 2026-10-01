@@ -152,6 +152,8 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/workspaces/{workspaceID}/diff-preview", api.workspaceDiffPreview)
 			private.Post("/workspaces/{workspaceID}/diff-preview", api.requestWorkspaceDiffPreview)
 			private.Get("/workspaces/{workspaceID}/codex/mcp", api.workspaceCodexMCP)
+			private.Get("/workspaces/{workspaceID}/codex/models", api.workspaceCodexModels)
+			private.Post("/workspaces/{workspaceID}/codex/models/refresh", api.refreshWorkspaceCodexModels)
 			private.Post("/workspaces/{workspaceID}/codex/mcp/refresh", api.refreshWorkspaceCodexMCP)
 			private.Get("/workspaces/{workspaceID}/codex/skills", api.workspaceCodexSkills)
 			private.Post("/workspaces/{workspaceID}/codex/skills/refresh", api.refreshWorkspaceCodexSkills)

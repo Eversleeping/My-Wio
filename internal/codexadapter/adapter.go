@@ -171,6 +171,9 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 	if kind == "codex.status.snapshot" {
 		return codexStatusOperation(ctx, base.CodexVersion, request)
 	}
+	if kind == "codex.models.list" {
+		return codexModelsOperation(ctx, base.CodexVersion, request)
+	}
 	method := ""
 	var params any
 	switch kind {

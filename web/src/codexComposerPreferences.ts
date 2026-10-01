@@ -6,7 +6,7 @@ export interface CodexComposerPreferences {
 
 export const defaultCodexComposerPreferences: CodexComposerPreferences = {
   approvalMode: "on-request",
-  model: "gpt-5.6-sol",
+  model: "",
   reasoningEffort: ""
 };
 

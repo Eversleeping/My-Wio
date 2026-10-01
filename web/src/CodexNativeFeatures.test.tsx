@@ -179,6 +179,8 @@ test("builds a weekly scheduled task from time and weekday selectors", async () 
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith("/codex/models/refresh")) return jsonResponse({ operation_id: "models-op" }, 202);
+    if (url.endsWith("/codex/models")) return jsonResponse({ status: "succeeded", supported: true, data: [] });
     if ((init?.method ?? "GET") === "POST") requests.push({ url, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     return jsonResponse({ id: "scheduled-task" }, 201);
   }));

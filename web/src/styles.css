@@ -744,11 +744,12 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .composer-bar select, .composer-bar input { width: auto; min-height: 32px; padding: 5px 8px; font-size: 11px; }
 .composer-bar > div > select { min-width: 118px; max-width: 180px; flex: 1 1 128px; }
 .composer-bar input { max-width: 150px; }
-.codex-model-picker { min-width: 0; display: flex; gap: 7px; }
-.codex-model-picker select { min-width: 190px; }
+.codex-model-picker { min-width: 0; display: flex; flex-wrap: wrap; gap: 7px; }
+.codex-model-picker select { flex: 1; min-width: 190px; }
+.codex-model-picker small { flex-basis: 100%; overflow-wrap: anywhere; }
 .codex-model-picker input { min-width: 140px; }
 .composer-bar .codex-model-picker { flex: 1 1 170px; }
-.composer-bar .codex-model-picker select { width: 100%; min-width: 130px; }
+.composer-bar .codex-model-picker select { width: auto; min-width: 130px; }
 .composer-mode-pill { min-height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 5px 4px 9px; color: #596182; background: #f0f0f6; border: 1px solid #d9dbe7; border-radius: 16px; font-size: 11px; font-weight: 700; }
 .composer-mode-pill button { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; color: #747a8e; background: transparent; border: 0; border-radius: 50%; }
 .composer-mode-pill button:hover { color: #383d55; background: #e1e2eb; }

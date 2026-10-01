@@ -1,3 +1,5 @@
+import { useCodexModels } from "./codexModels";
+import { CodexModelPicker } from "./components/CodexModelPicker";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -84,7 +86,7 @@ import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "./c
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
 import { VirtualizedItems, VirtualizedList } from "./components/VirtualizedList";
-import { clearCodexComposerPreferences, defaultCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
+import { clearCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
 import { safeImageSource, type FilePreviewSelection } from "./codexContent";
 import { formatDate, formatTime, relative, shortSHA } from "./format";
 import { currentLocale, useI18n } from "./i18n";
@@ -194,13 +196,6 @@ export function clearCodexSessionMemory(threadID?: string) {
   }
 }
 
-const defaultCodexModel = defaultCodexComposerPreferences.model;
-const codexModelOptions = [
-  { value: "gpt-5.6-sol", labelKey: "codex.model56Sol" },
-  { value: "gpt-5.6-terra", labelKey: "codex.model56Terra" },
-  { value: "gpt-5.6-luna", labelKey: "codex.model56Luna" },
-  { value: "gpt-5.5", labelKey: "codex.model55" }
-] as const;
 const codexReasoningOptions = [
   { value: "low", labelKey: "codex.reasoningLow" },
   { value: "medium", labelKey: "codex.reasoningMedium" },
@@ -1007,11 +1002,12 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
       setNativeBusy("");
     }
   };
+  const catalogue = useCodexModels(thread.workspace_id);
   const modelItems: SlashCommandItem[] = [
     { id: "default", name: t("codex.modelServerDefault"), description: t("codex.slashModelDefaultDescription"), icon: Cpu, selected: model === "", onSelect: () => finishSlash(() => setModel("")) },
-    ...codexModelOptions.map(option => ({ id: option.value, name: t(option.labelKey), description: option.value, icon: Cpu, selected: model === option.value, onSelect: () => finishSlash(() => setModel(option.value)) }))
+    ...catalogue.models.map(option => ({ id: option.model, name: option.displayName || option.model, description: option.description || option.model, icon: Cpu, selected: model === option.model, onSelect: () => finishSlash(() => setModel(option.model)) }))
   ];
-  if (model && !codexModelOptions.some(option => option.value === model)) modelItems.push({ id: model, name: model, description: t("codex.slashCurrentCustomModel"), icon: Cpu, selected: true, onSelect: () => finishSlash(() => setModel(model)) });
+  if (model && !catalogue.models.some(option => option.model === model)) modelItems.push({ id: model, name: model, description: t("codex.slashCurrentCustomModel"), icon: Cpu, selected: true, onSelect: () => finishSlash(() => setModel(model)) });
   modelItems.push({ id: "custom", name: t("codex.modelCustom"), description: t("codex.slashCustomModelDescription"), icon: Cpu, onSelect: () => finishSlash(() => { setModel(""); setCustomModelSignal(value => value + 1); }) });
   const reasoningItems: SlashCommandItem[] = [
     { id: "default", name: t("codex.reasoningDefault"), description: t("codex.slashReasoningDefaultDescription"), icon: Gauge, selected: reasoningEffort === "", onSelect: () => finishSlash(() => setReasoningEffort("")) },
@@ -1199,7 +1195,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" title={t("common.close")} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
       {slashOpen && <SlashCommandMenu items={slashItems} query={slashQuery} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashMode === "commands" ? undefined : () => { setPrompt("/"); setSlashMode("commands"); }} onDismiss={closeSlash} keyboardRef={slashKeyboardRef} />}
       <textarea ref={promptRef} value={prompt} onChange={event => { setPrompt(event.target.value); if (event.target.value !== slashDismissedValue) setSlashDismissedValue(""); if (!event.target.value.startsWith("/model ") && !event.target.value.startsWith("/reasoning ")) setSlashMode("commands"); }} onKeyDown={event => { if (slashOpen && slashKeyboardRef.current?.(event)) return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onPaste={event => { if (composerMode === "goal") return; const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} placeholder={t(composerMode === "goal" ? "codex.goalComposerPlaceholder" : "codex.messagePlaceholder")} rows={3} />
-      <div className="composer-bar"><div><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={event => setApprovalMode(event.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select>{composerMode === "goal" && <span className="composer-mode-pill"><Target size={15} />{t("codex.goalMode")}<button type="button" title={t("common.close")} aria-label={t("common.close")} onClick={leaveGoalMode}><X size={13} /></button></span>}<CodexModelPicker value={model} onChange={setModel} allowServerDefault requestCustom={customModelSignal} /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" title={activeTurn ? t("codex.waitForTurn") : t("codex.send")} disabled={slashOpen || !composerHasContent || imageBusy || sending || activeTurn}>{sending ? <LoaderCircle className="spin" size={17} /> : <ChevronRight size={17} />}{t("codex.send")}</button></div>
+      <div className="composer-bar"><div><select aria-label={t("codex.approveOnRequest")} value={approvalMode} onChange={event => setApprovalMode(event.target.value)}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select>{composerMode === "goal" && <span className="composer-mode-pill"><Target size={15} />{t("codex.goalMode")}<button type="button" title={t("common.close")} aria-label={t("common.close")} onClick={leaveGoalMode}><X size={13} /></button></span>}<CodexModelPicker models={catalogue.models} loading={catalogue.loading} error={catalogue.error} onRefresh={catalogue.refresh} value={model} onChange={setModel} allowServerDefault requestCustom={customModelSignal} /><select aria-label={t("codex.reasoningEffort")} value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}</select></div><button className="primary-button" title={activeTurn ? t("codex.waitForTurn") : t("codex.send")} disabled={slashOpen || !composerHasContent || imageBusy || sending || activeTurn}>{sending ? <LoaderCircle className="spin" size={17} /> : <ChevronRight size={17} />}{t("codex.send")}</button></div>
     </form></div>}
     <Dialog open={mcpOpen} title={t("codex.mcpTitle")} onClose={() => setMcpOpen(false)}><SnapshotNotice snapshot={mcpSnapshot} loading={nativeBusy === "mcp"} error={nativeError} />{mcpSnapshot?.data?.length ? <div className="native-list">{mcpSnapshot.data.map(server => <article key={server.name}><header><strong>{server.name}</strong><Status value={server.auth_status || "unknown"} /></header>{(server.server_name || server.server_version) && <small>{[server.server_name, server.server_version].filter(Boolean).join(" ")}</small>}<p>{server.tools.length ? server.tools.join(", ") : t("codex.noTools")}</p><small>{t("codex.mcpResources", { resources: server.resource_count, templates: server.resource_template_count })}</small></article>)}</div> : !nativeBusy && <Empty icon={<Network size={24} />} text={t("codex.noMCPServers")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "mcp"} onClick={() => void loadSnapshot<CodexMCPServer[]>("mcp", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
     <Dialog open={skillsOpen} title={t("codex.skillsTitle")} onClose={() => setSkillsOpen(false)}><SnapshotNotice snapshot={skillsSnapshot} loading={nativeBusy === "skills"} error={nativeError} />{skillsSnapshot?.data?.length ? <div className="native-list">{skillsSnapshot.data.map(skill => <article key={`${skill.scope}:${skill.name}`}><header><strong>{skill.display_name || skill.name}</strong><Status value={skill.enabled ? "enabled" : "disabled"} /></header><p>{skill.short_description || skill.description}</p><small>{skill.scope}</small></article>)}</div> : !nativeBusy && <Empty icon={<Boxes size={24} />} text={t("codex.noSkills")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "skills"} onClick={() => void loadSnapshot<CodexSkill[]>("skills", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
@@ -1527,16 +1523,6 @@ function LanguageSwitch() {
 }
 
 export function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
-function CodexModelPicker({ value, onChange, allowServerDefault = false, required = false, requestCustom = 0 }: { value: string; onChange: (value: string) => void; allowServerDefault?: boolean; required?: boolean; requestCustom?: number }) {
-  const { t } = useI18n();
-  const known = value === "" || codexModelOptions.some(option => option.value === value);
-  const [customMode, setCustomMode] = useState(!known);
-  const [customValue, setCustomValue] = useState(known ? "" : value);
-  useEffect(() => { if (known) { setCustomMode(false); setCustomValue(""); } else { setCustomMode(true); setCustomValue(value); } }, [known, value]);
-  useEffect(() => { if (requestCustom) { setCustomMode(true); setCustomValue(""); } }, [requestCustom]);
-  const selectValue = customMode ? "__custom__" : value;
-  return <div className="codex-model-picker"><select aria-label={t("codex.modelOverride")} value={selectValue} required={required} onChange={event => { if (event.target.value === "__custom__") { setCustomMode(true); setCustomValue(""); onChange(""); } else { setCustomMode(false); onChange(event.target.value); } }}>{allowServerDefault && <option value="">{t("codex.modelServerDefault")}</option>}{codexModelOptions.map(option => <option value={option.value} key={option.value}>{t(option.labelKey)}</option>)}<option value="__custom__">{t("codex.modelCustom")}</option></select>{customMode && <input aria-label={t("codex.customModelName")} value={customValue} onChange={event => { setCustomValue(event.target.value); onChange(event.target.value); }} placeholder={t("codex.customModelPlaceholder")} required={required} />}</div>;
-}
 export function Dialog(props: Omit<DialogProps, "closeLabel">) { const { t } = useI18n(); return <AccessibleDialog {...props} closeLabel={t("common.close")} />; }
 export function ErrorBanner({ text }: { text: string }) { return <div className="error-banner"><AlertTriangle size={16} />{text}</div>; }
 

@@ -8,7 +8,11 @@ import type { Thread } from "./types";
 beforeEach(() => {
   window.localStorage.clear();
   window.localStorage.setItem("wio_language", "en");
-  vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const body = url.endsWith("/codex/models") ? { status: "succeeded", supported: true, data: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map(model => ({ id: model, model, displayName: model })) } : [];
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
 });
 
 afterEach(() => {
@@ -60,6 +64,7 @@ test("keeps approval, model, and reasoning selections isolated by session", asyn
   const second = thread("second");
   const { rerender, unmount } = render(sessionView(first));
 
+  await screen.findByRole("option", { name: "gpt-5.6-terra" });
   let selects = composerSelects();
   await user.selectOptions(selects.approval, "never");
   await user.selectOptions(selects.model, "gpt-5.6-terra");
@@ -68,9 +73,10 @@ test("keeps approval, model, and reasoning selections isolated by session", asyn
   rerender(sessionView(second));
   selects = composerSelects();
   expect(selects.approval).toHaveValue("on-request");
-  expect(selects.model).toHaveValue("gpt-5.6-sol");
+  expect(selects.model).toHaveValue("");
   expect(selects.reasoning).toHaveValue("");
 
+  await screen.findByRole("option", { name: "gpt-5.6-luna" });
   await user.selectOptions(selects.approval, "untrusted");
   await user.selectOptions(selects.model, "gpt-5.6-luna");
   await user.selectOptions(selects.reasoning, "low");
