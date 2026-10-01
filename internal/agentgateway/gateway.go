@@ -161,6 +161,13 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if err := json.Unmarshal(msg.PayloadJSON, &event); err != nil {
 			return err
 		}
+		thread, err := g.store.Thread(ctx, event.StreamID)
+		if err != nil {
+			return fmt.Errorf("resolve Agent event thread: %w", err)
+		}
+		if thread.ServerID != serverID {
+			return errors.New("Agent event server mismatch")
+		}
 		event.Payload = security.RedactJSON(event.Payload)
 		if event.Kind != "user.message" {
 			cancelled, err := g.store.HasPendingTurnCancellation(ctx, event.StreamID)
@@ -593,6 +600,25 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		var p protocol.DeploymentStatus
 		if err := json.Unmarshal(msg.PayloadJSON, &p); err != nil {
 			return err
+		}
+		deployment, err := g.store.Deployment(ctx, p.DeploymentID)
+		if err != nil {
+			return fmt.Errorf("resolve Agent deployment: %w", err)
+		}
+		target, err := g.store.DeploymentTarget(ctx, deployment.TargetID)
+		if err != nil {
+			return err
+		}
+		owner := target.ServerID
+		if deployment.SnapshotAvailable {
+			snapshot, err := g.store.DeploymentSnapshot(ctx, deployment.ID)
+			if err != nil {
+				return err
+			}
+			owner = snapshot.ServerID
+		}
+		if owner != serverID {
+			return errors.New("Agent deployment server mismatch")
 		}
 		if err := g.store.SaveDeploymentStatus(ctx, p); err != nil {
 			return err
