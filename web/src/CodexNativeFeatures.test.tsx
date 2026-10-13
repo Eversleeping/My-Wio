@@ -92,6 +92,68 @@ test("starts the first turn after a new goal is persisted", async () => {
   expect(requests[turnIndex].body?.prompt).toBe("Ship the release");
 });
 
+test("steers a running task without starting or interrupting a turn", async () => {
+  const user = userEvent.setup();
+  const value = { ...thread("steer"), status: "running" };
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "POST" && typeof init.body === "string") requests.push({ url, body: JSON.parse(init.body) });
+    if (url.endsWith("/steer")) return jsonResponse({ operation_id: "steer-op" }, 202);
+    if (url.includes("/goal")) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
+    return jsonResponse([]);
+  }));
+  renderSession(value);
+  const composer = await screen.findByPlaceholderText("Add instructions to correct the running task");
+  await user.type(composer, "Focus on failing tests{Enter}");
+  await waitFor(() => expect(requests.some(request => request.url.endsWith("/steer"))).toBe(true));
+  const correction = requests.find(request => request.url.endsWith("/steer"))!;
+  expect(correction.body).toEqual({ prompt: "Focus on failing tests", images: [] });
+  expect(requests.some(request => request.url.endsWith("/turns") || request.url.endsWith("/interrupt"))).toBe(false);
+  await waitFor(() => expect(composer).toHaveValue(""));
+});
+
+test("retains rejected corrections and blocks queued sessions", async () => {
+  const user = userEvent.setup();
+  const value = { ...thread("steer-reject"), status: "running" };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/steer")) return jsonResponse({ error: "Agent too old", code: "steer_agent_update" }, 409);
+    if (url.includes("/goal")) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
+    return jsonResponse([]);
+  }));
+  const notify = vi.fn();
+  const session = (status: string) => <I18nProvider><SessionView thread={{ ...value, status }} approvals={[]} realtime={0} reloadApprovals={vi.fn()} notify={notify} onOpenFile={vi.fn()} onNewTask={vi.fn()} /></I18nProvider>;
+  const { rerender } = render(session("running"));
+  const composer = await screen.findByPlaceholderText("Add instructions to correct the running task");
+  await user.type(composer, "Use the existing API");
+  await user.click(screen.getByRole("button", { name: "Send correction" }));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("Agent 0.2.51")));
+  expect(composer).toHaveValue("Use the existing API");
+  rerender(session("queued"));
+  expect(screen.getByPlaceholderText("Message Codex")).toHaveValue("Use the existing API");
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  rerender(session("completed"));
+  expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+});
+
+test("shows steering failures and additional instructions in conversation", async () => {
+  const value = { ...thread("steer-failure"), status: "running" };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/events")) return jsonResponse([
+      { event_id: "correction", stream_id: value.id, sequence: 1, kind: "user.message", occurred_at: "2026-10-13T00:00:00Z", payload: { text: "Correct the task", steer: true } },
+      { event_id: "failure", stream_id: value.id, sequence: 2, kind: "codex.steer.failed", occurred_at: "2026-10-13T00:00:01Z", payload: { text: "The target turn ended" } }
+    ]);
+    if (url.includes("/goal")) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
+    return jsonResponse([]);
+  }));
+  renderSession(value);
+  expect(await screen.findByText("You · Additional instruction")).toBeInTheDocument();
+  expect(await screen.findByText("The target turn ended")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Edit message" })).not.toBeInTheDocument();
+});
+
 test("shows task status directly above the composer", async () => {
   const user = userEvent.setup();
   const value = thread("status-inline");

@@ -176,6 +176,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Delete("/threads/{threadID}", api.deleteThread)
 			private.Get("/threads/{threadID}/events", api.threadEvents)
 			private.Post("/threads/{threadID}/turns", api.startTurn)
+			private.Post("/threads/{threadID}/steer", api.steerTurn)
 			private.Post("/threads/{threadID}/events/{eventID}/rewrite", api.rewriteTurn)
 			private.Post("/threads/{threadID}/interrupt", api.interruptTurn)
 			private.Get("/threads/{threadID}/codex/status", api.threadCodexStatus)

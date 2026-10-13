@@ -2065,7 +2065,7 @@ func (s *Store) ConversationEvents(ctx context.Context, streamID string, after i
 		limit = 10000
 	}
 	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
-		WHERE stream_id=? AND sequence>? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed')
+		WHERE stream_id=? AND sequence>? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed','codex.steer.failed')
 		ORDER BY sequence LIMIT ?`), streamID, after, limit)
 }
 
@@ -2076,7 +2076,7 @@ func (s *Store) ConversationEventsBefore(ctx context.Context, streamID string, b
 	}
 	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM (
 		SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
-		WHERE stream_id=? AND sequence<? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed')
+		WHERE stream_id=? AND sequence<? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed','codex.steer.failed')
 		ORDER BY sequence DESC LIMIT ?
 	) older ORDER BY sequence`), streamID, before, limit)
 }
@@ -2087,7 +2087,7 @@ func (s *Store) RecentConversationEvents(ctx context.Context, streamID string, l
 	}
 	return s.eventRows(ctx, s.Q(`SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM (
 		SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events
-		WHERE stream_id=? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed')
+		WHERE stream_id=? AND kind IN ('user.message','codex.item.started','codex.item.completed','codex.error','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.interrupt.failed','codex.approval.failed','codex.compact.failed','codex.steer.failed')
 		ORDER BY sequence DESC LIMIT ?
 	) recent ORDER BY sequence`), streamID, limit)
 }
@@ -2163,14 +2163,21 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 	var target struct {
 		Sequence int64  `db:"sequence"`
 		Kind     string `db:"kind"`
+		Payload  string `db:"payload"`
 	}
-	if err := tx.GetContext(ctx, &target, s.Q("SELECT sequence,kind FROM events WHERE stream_id=? AND event_id=?"), thread.ID, editEventID); err != nil {
+	if err := tx.GetContext(ctx, &target, s.Q("SELECT sequence,kind,payload FROM events WHERE stream_id=? AND event_id=?"), thread.ID, editEventID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", protocol.StreamEvent{}, ErrInvalidEditTarget
 		}
 		return "", protocol.StreamEvent{}, err
 	}
 	if target.Kind != "user.message" {
+		return "", protocol.StreamEvent{}, ErrInvalidEditTarget
+	}
+	var metadata struct {
+		Steer bool `json:"steer"`
+	}
+	if err := json.Unmarshal([]byte(target.Payload), &metadata); err != nil || metadata.Steer {
 		return "", protocol.StreamEvent{}, ErrInvalidEditTarget
 	}
 	var numTurns uint32

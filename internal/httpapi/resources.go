@@ -1891,6 +1891,65 @@ func (a *API) rewriteTurn(w http.ResponseWriter, r *http.Request) {
 	a.handleTurn(w, r, chi.URLParam(r, "eventID"))
 }
 
+func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Prompt string               `json:"prompt"`
+		Images []protocol.TurnImage `json:"images"`
+	}
+	if !decodeJSONLimit(w, r, &input, 6<<20) {
+		return
+	}
+	input.Prompt = strings.TrimSpace(input.Prompt)
+	if input.Prompt == "" && len(input.Images) == 0 {
+		writeError(w, http.StatusBadRequest, "prompt or image is required")
+		return
+	}
+	if !validTurnImages(input.Images) {
+		writeError(w, http.StatusBadRequest, "invalid or oversized turn images")
+		return
+	}
+	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if thread.ArchivedAt != nil || thread.Status != "running" || thread.CodexThreadID == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_inactive", "error": "Codex turn is not running; keep your correction and send it after the session starts or finishes"})
+		return
+	}
+	server, err := a.store.Server(r.Context(), thread.ServerID)
+	if err != nil || server.Status != "online" {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_offline", "error": "Agent must be online to steer a running turn"})
+		return
+	}
+	if !buildinfo.SupportsCodexSteer(server.AgentVersion) {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_agent_update", "error": "Steering requires Agent 0.2.51 or newer; update it after the current task finishes"})
+		return
+	}
+	turnID, err := a.store.LatestActiveTurnID(r.Context(), thread.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "could not identify active Codex turn")
+		return
+	}
+	if turnID == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_inactive", "error": "the target Codex turn is no longer active; send the correction as a new message"})
+		return
+	}
+	command := protocol.SteerTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, ExpectedTurnID: turnID, Prompt: input.Prompt, Images: input.Images}
+	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.turn.steer", command, "codex-steer:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue Codex steering")
+		return
+	}
+	event, err := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images), "steer": true, "operation_id": operationID, "turn_id": turnID})})
+	if err == nil {
+		a.hub.Publish(event)
+	}
+	a.gateway.Wake(thread.ServerID)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "codex.turn.steer", "thread", thread.ID, map[string]string{"operation_id": operationID, "turn_id": turnID}, clientIP(r))
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
+}
+
 func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventID string) {
 	threadID := chi.URLParam(r, "threadID")
 	var input struct {

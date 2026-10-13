@@ -409,6 +409,14 @@ type RewriteTurnCommand struct {
 	CutoffSequence     int64            `json:"cutoff_sequence,omitempty"`
 }
 
+type SteerTurnCommand struct {
+	ThreadID       string      `json:"thread_id"`
+	CodexThread    string      `json:"codex_thread_id"`
+	ExpectedTurnID string      `json:"expected_turn_id"`
+	Prompt         string      `json:"prompt"`
+	Images         []TurnImage `json:"images,omitempty"`
+}
+
 type ForkThreadCommand struct {
 	SourceThreadID string `json:"source_thread_id"`
 	TargetThreadID string `json:"target_thread_id"`

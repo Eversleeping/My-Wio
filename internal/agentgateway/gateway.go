@@ -584,7 +584,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if (operation.Kind == "codex.turn.interrupt" || operation.Kind == "codex.approval" || operation.Kind == "codex.thread.compact") && result.Status == "failed" {
+		if (operation.Kind == "codex.turn.interrupt" || operation.Kind == "codex.turn.steer" || operation.Kind == "codex.approval" || operation.Kind == "codex.thread.compact") && result.Status == "failed" {
 			if err := g.failCodexControlOperation(ctx, operation, result); err != nil {
 				return err
 			}
@@ -641,6 +641,13 @@ func publishOperationResult(ctx context.Context, g *Gateway, serverID string, re
 func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store.Operation, result protocol.OperationResult) error {
 	var threadID, kind string
 	switch operation.Kind {
+	case "codex.turn.steer":
+		var command protocol.SteerTurnCommand
+		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+			return err
+		}
+		threadID = command.ThreadID
+		kind = "codex.steer.failed"
 	case "codex.turn.interrupt":
 		var command protocol.InterruptTurnCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {

@@ -5,11 +5,16 @@ import (
 	"strings"
 )
 
-var Version = "0.2.50"
+var Version = "0.2.51"
 
 const MinimumSelfUpdateVersion = "0.2.0"
 const MinimumCodexUpdateVersion = "0.2.9"
 const MinimumExactDeploymentRollbackVersion = "0.2.45"
+const MinimumCodexSteerVersion = "0.2.51"
+
+func SupportsCodexSteer(version string) bool {
+	return atLeast(version, MinimumCodexSteerVersion)
+}
 
 func SupportsSelfUpdate(version string) bool {
 	current, ok := parseVersion(version)

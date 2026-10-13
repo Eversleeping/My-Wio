@@ -72,6 +72,13 @@ func init() {
 				respond(waiting.ID, map[string]any{"thread": map[string]string{"id": threadID}})
 			}
 			queued = nil
+		case "turn/steer":
+			if !active || findString(message.Params, "expectedTurnId") != "helper-turn" {
+				_ = encoder.Encode(map[string]any{"id": message.ID, "error": map[string]any{"code": -32600, "message": "no matching active turn"}})
+				continue
+			}
+			respond(message.ID, map[string]string{"turnId": "helper-turn"})
+			notify("item/completed", map[string]any{"threadId": threadID, "item": map[string]string{"id": "steered", "type": "agentMessage", "text": "correction received"}})
 		case "thread/goal/get":
 			if !loaded {
 				_ = encoder.Encode(map[string]any{"id": message.ID, "error": map[string]any{"code": -32600, "message": "thread not loaded"}})
@@ -100,6 +107,34 @@ func sessionTestPool(t *testing.T) (*Sessions, chan protocol.StreamEvent) {
 	})
 	t.Cleanup(func() { _ = p.Close() })
 	return p, events
+}
+
+func TestSessionsSteerWhileOtherConversationRuns(t *testing.T) {
+	p, events := sessionTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, id := range []string{"steer-a", "steer-b"} {
+		if err := p.StartTurn(ctx, protocol.StartTurnCommand{ThreadID: id, Workspace: t.TempDir(), Prompt: "work"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.SteerTurn(ctx, protocol.SteerTurnCommand{ThreadID: "steer-a", CodexThread: "helper-thread", ExpectedTurnID: "helper-turn", Prompt: "correct this"}); err != nil {
+		t.Fatal(err)
+	}
+	waitSessionEvent(t, events, "steer-a", "codex.item.completed")
+	p.mu.Lock()
+	bActive := p.sessions["steer-b"].adapter.hasActiveTurn()
+	p.mu.Unlock()
+	if !bActive {
+		t.Fatal("steering affected another conversation")
+	}
+	if err := p.Interrupt(ctx, protocol.InterruptTurnCommand{ThreadID: "steer-a"}); err != nil {
+		t.Fatal(err)
+	}
+	waitSessionEvent(t, events, "steer-a", "codex.turn.completed")
+	if err := p.SteerTurn(ctx, protocol.SteerTurnCommand{ThreadID: "steer-a", CodexThread: "helper-thread", ExpectedTurnID: "helper-turn", Prompt: "late"}); err == nil {
+		t.Fatal("completed turn accepted steering")
+	}
 }
 
 func waitSessionEvent(t *testing.T, events <-chan protocol.StreamEvent, threadID, kind string) protocol.StreamEvent {

@@ -728,16 +728,9 @@ func threadResumeParams(command protocol.StartTurnCommand, codexThread string) m
 }
 
 func turnStartParams(command protocol.StartTurnCommand, codexThread string) map[string]any {
-	input := []map[string]string{}
-	if command.Prompt != "" {
-		input = append(input, map[string]string{"type": "text", "text": command.Prompt})
-	}
-	for _, image := range command.Images {
-		input = append(input, map[string]string{"type": "image", "url": image.DataURL})
-	}
 	params := map[string]any{
 		"threadId":       codexThread,
-		"input":          input,
+		"input":          turnInput(command.Prompt, command.Images),
 		"approvalPolicy": approvalPolicy(command.ApprovalMode),
 		"cwd":            command.Workspace,
 	}
@@ -748,6 +741,42 @@ func turnStartParams(command protocol.StartTurnCommand, codexThread string) map[
 		params["effort"] = command.ReasoningEffort
 	}
 	return params
+}
+
+func turnInput(prompt string, images []protocol.TurnImage) []map[string]string {
+	input := []map[string]string{}
+	if prompt != "" {
+		input = append(input, map[string]string{"type": "text", "text": prompt})
+	}
+	for _, image := range images {
+		input = append(input, map[string]string{"type": "image", "url": image.DataURL})
+	}
+	return input
+}
+
+func (a *Adapter) SteerTurn(ctx context.Context, command protocol.SteerTurnCommand) error {
+	return a.steerTurn(ctx, command, a.request)
+}
+
+func (a *Adapter) steerTurn(ctx context.Context, command protocol.SteerTurnCommand, request requestFunc) error {
+	if command.ThreadID == "" || command.CodexThread == "" || command.ExpectedTurnID == "" {
+		return errors.New("session and expected active turn ID are required for steering")
+	}
+	if strings.TrimSpace(command.Prompt) == "" && len(command.Images) == 0 {
+		return errors.New("prompt or image is required")
+	}
+	a.mu.Lock()
+	state := a.turns[command.ThreadID]
+	a.mu.Unlock()
+	if !state.Active || state.CodexThread != command.CodexThread || state.TurnID != command.ExpectedTurnID {
+		return errors.New("the target Codex turn is no longer active; send the correction as a new message")
+	}
+	_, err := request(ctx, "turn/steer", map[string]any{
+		"threadId":       command.CodexThread,
+		"expectedTurnId": command.ExpectedTurnID,
+		"input":          turnInput(command.Prompt, command.Images),
+	})
+	return err
 }
 
 func (a *Adapter) Interrupt(ctx context.Context, command protocol.InterruptTurnCommand) error {

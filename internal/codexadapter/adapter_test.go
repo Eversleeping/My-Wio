@@ -41,6 +41,43 @@ func TestFindString(t *testing.T) {
 	}
 }
 
+func TestSteerTargetsOnlyExpectedActiveTurn(t *testing.T) {
+	a := &Adapter{turns: map[string]turnState{"wio": {CodexThread: "codex", TurnID: "turn", Active: true}}}
+	command := protocol.SteerTurnCommand{ThreadID: "wio", CodexThread: "codex", ExpectedTurnID: "turn", Prompt: "Focus on tests", Images: []protocol.TurnImage{{DataURL: "data:image/png;base64,aA=="}}}
+	calls := 0
+	request := func(_ context.Context, method string, params any) (json.RawMessage, error) {
+		calls++
+		values := params.(map[string]any)
+		if method != "turn/steer" || len(values) != 3 || values["expectedTurnId"] != "turn" || values["threadId"] != "codex" {
+			t.Fatalf("unexpected steering RPC: %s %#v", method, values)
+		}
+		input := values["input"].([]map[string]string)
+		if len(input) != 2 || input[0]["text"] != command.Prompt || input[1]["url"] != command.Images[0].DataURL {
+			t.Fatalf("missing correction content: %#v", input)
+		}
+		return json.RawMessage(`{"turnId":"turn"}`), nil
+	}
+	if err := a.steerTurn(context.Background(), command, request); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []turnState{
+		{CodexThread: "codex", TurnID: "turn", Active: false},
+		{CodexThread: "codex", TurnID: "next-turn", Active: true},
+		{CodexThread: "other-thread", TurnID: "turn", Active: true},
+	} {
+		a.turns["wio"] = state
+		if err := a.steerTurn(context.Background(), command, request); err == nil {
+			t.Fatal("stale correction was accepted")
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("stale correction reached Codex: %d calls", calls)
+	}
+	if a.turns["wio"].TurnID != "turn" || !a.turns["wio"].Active {
+		t.Fatal("steer changed turn lifecycle")
+	}
+}
+
 func TestClientInfoDoesNotIdentifyAsWio(t *testing.T) {
 	adapter := New("echo", slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.StreamEvent) error { return nil })
 	info := adapter.clientInfo(context.Background())

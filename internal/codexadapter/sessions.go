@@ -113,6 +113,13 @@ func (p *Sessions) Interrupt(ctx context.Context, command protocol.InterruptTurn
 	return p.withSession(command.ThreadID, func(a *Adapter) error { return a.Interrupt(ctx, command) })
 }
 
+func (p *Sessions) SteerTurn(ctx context.Context, command protocol.SteerTurnCommand) error {
+	if strings.TrimSpace(command.ThreadID) == "" {
+		return errors.New("Wio thread ID is required")
+	}
+	return p.withSession(command.ThreadID, func(a *Adapter) error { return a.SteerTurn(ctx, command) })
+}
+
 func (p *Sessions) Decide(command protocol.ApprovalDecisionCommand) error {
 	if strings.TrimSpace(command.ThreadID) == "" {
 		return errors.New("Wio thread ID is required")

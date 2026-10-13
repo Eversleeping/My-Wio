@@ -738,6 +738,12 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.codex.RewriteTurn(ctx, command)
+	case "codex.turn.steer":
+		var command protocol.SteerTurnCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.codex.SteerTurn(ctx, command)
 	case "codex.turn.interrupt":
 		var command protocol.InterruptTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
