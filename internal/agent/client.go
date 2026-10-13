@@ -44,7 +44,7 @@ type Client struct {
 	config      Config
 	log         *slog.Logger
 	outbound    chan *protocol.AgentEnvelope
-	codex       *codexadapter.Adapter
+	codex       *codexadapter.Sessions
 	deployer    *deployer.Deployer
 	seenMu      sync.Mutex
 	seen        map[string]*operationExecution
@@ -62,7 +62,7 @@ type operationExecution struct {
 func NewClient(config Config, log *slog.Logger) *Client {
 	codexPath := effectiveCodexPath(config)
 	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath, config.PrerequisiteSocket), seen: make(map[string]*operationExecution), codexPath: codexPath}
-	client.codex = codexadapter.NewWithEnvironment(codexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
+	client.codex = codexadapter.NewSessions(codexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
 		if event.EventID == "" {
 			event.EventID = uuid.NewString()
 		}

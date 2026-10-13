@@ -24,6 +24,7 @@ func TestConfigureCredentialsWritesProtectedFilesAndRemovesGit(t *testing.T) {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	client := NewClient(Config{CodexAPIKeyFile: keyFile, StateDir: filepath.Join(root, "state")}, log)
+	t.Cleanup(func() { _ = client.codex.Close() })
 	command := protocol.ConfigureCredentialsCommand{
 		CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "new-codex-secret", CodexModel: "gpt-5.6-sol",
 		GitEndpoint: "https://gitee.com", GitUsername: "user@example.com", GitToken: "token:/with spaces", GitCommitName: "Example User", GitCommitEmail: "user@users.noreply.github.com",
@@ -73,6 +74,7 @@ func TestInvalidCredentialCommandLeavesExistingFilesUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := NewClient(Config{CodexAPIKeyFile: keyFile, StateDir: filepath.Join(root, "state")}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = client.codex.Close() })
 	err := client.configureCredentials(protocol.ConfigureCredentialsCommand{CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "bad\nsecret", CodexModel: "gpt-5.6-sol", RemoveGit: true})
 	if err == nil {
 		t.Fatal("invalid credential command was accepted")
@@ -87,6 +89,7 @@ func TestConfigureCredentialsWritesMultipleGitCredentials(t *testing.T) {
 	root := t.TempDir()
 	keyFile := filepath.Join(root, "codex.key")
 	client := NewClient(Config{CodexAPIKeyFile: keyFile, StateDir: filepath.Join(root, "state")}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = client.codex.Close() })
 	command := protocol.ConfigureCredentialsCommand{
 		CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "new-codex-secret", CodexModel: "gpt-5.6-sol",
 		GitCredentials: []protocol.GitCredential{

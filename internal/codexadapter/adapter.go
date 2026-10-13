@@ -149,6 +149,22 @@ func (a *Adapter) CodexOperation(ctx context.Context, kind string, payload json.
 	if err := a.ensureStarted(ctx); err != nil {
 		return protocol.CodexCapabilityResult{}, err
 	}
+	// An idle session process may have been reclaimed. Thread-specific queries
+	// must load the persisted conversation before addressing its runtime state.
+	var base protocol.CodexSnapshotCommand
+	if err := json.Unmarshal(payload, &base); err != nil {
+		return protocol.CodexCapabilityResult{}, err
+	}
+	if base.ThreadID != "" && base.CodexThread != "" && (strings.HasPrefix(kind, "codex.goal.") || kind == "codex.mcp.list" || kind == "codex.thread.compact") {
+		a.mu.Lock()
+		loaded := a.threads[base.CodexThread] != ""
+		a.mu.Unlock()
+		if !loaded {
+			if _, err := a.request(ctx, "thread/resume", threadResumeParams(protocol.StartTurnCommand{Workspace: base.Workspace, ApprovalMode: "on-request"}, base.CodexThread)); err != nil {
+				return protocol.CodexCapabilityResult{}, err
+			}
+		}
+	}
 	return a.codexOperation(ctx, kind, payload, a.request)
 }
 
@@ -575,6 +591,12 @@ func (a *Adapter) rewriteTurn(ctx context.Context, command protocol.RewriteTurnC
 }
 
 func (a *Adapter) startTurn(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) error {
+	a.mu.Lock()
+	active := a.turns[command.ThreadID].Active
+	a.mu.Unlock()
+	if active {
+		return errors.New("Codex session already has an active turn")
+	}
 	codexThread, err := a.prepareCodexThread(ctx, command, request)
 	if err != nil {
 		return err
@@ -584,6 +606,10 @@ func (a *Adapter) startTurn(ctx context.Context, command protocol.StartTurnComma
 
 func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartTurnCommand, codexThread string, acceptedMetadata map[string]any, request requestFunc) error {
 	a.mu.Lock()
+	if a.turns[command.ThreadID].Active {
+		a.mu.Unlock()
+		return errors.New("Codex session already has an active turn")
+	}
 	a.threads[codexThread] = command.ThreadID
 	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, Active: true}
 	a.mu.Unlock()
@@ -880,16 +906,19 @@ func (a *Adapter) ReconfigureCommand(command string, update func() error) error 
 }
 
 func (a *Adapter) stopLocked(reason error) {
-	if a.cancel != nil {
-		a.cancel()
+	a.mu.Lock()
+	cancel, stdin, process := a.cancel, a.stdin, a.process
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	if a.stdin != nil {
-		_ = a.stdin.Close()
+	if stdin != nil {
+		_ = stdin.Close()
 	}
-	if a.process != nil && a.process.Process != nil {
-		_ = a.process.Process.Kill()
+	if process != nil && process.Process != nil {
+		_ = process.Process.Kill()
 	}
-	a.reset(reason)
+	a.resetProcess(process, reason)
 }
 
 func (a *Adapter) ensureStarted(ctx context.Context) error {

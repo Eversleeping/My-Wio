@@ -399,6 +399,61 @@ func gatewayTestServer(t *testing.T, agentToken string) (*store.Store, store.Ser
 	return database, server
 }
 
+func TestFlushStartsAnotherSessionWhileSameWorkspaceIsRunning(t *testing.T) {
+	database, server := gatewayTestServer(t, "parallel-agent-token")
+	ctx := context.Background()
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/parallel", Name: "parallel"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	first, err := database.CreateThread(ctx, workspaces[0].ID, "running session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetThreadStatus(ctx, first.ID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := database.CreateThread(ctx, workspaces[0].ID, "parallel session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ClaimThreadForTurn(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.StartTurnCommand{ThreadID: second.ID, WorkspaceID: second.WorkspaceID, Workspace: second.Path, Prompt: "parallel task"}
+	operationID, err := database.QueueResourceOperation(ctx, server.ID, "codex.turn.start", command, "parallel-operation", store.OperationResource{ThreadID: second.ID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &keepaliveStream{ctx: ctx, sent: make(chan *protocol.ControlEnvelope, 1)}
+	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := gateway.flush(stream, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case message := <-stream.sent:
+		if message.OperationID != operationID {
+			t.Fatalf("wrong operation delivered: %#v", message)
+		}
+	default:
+		t.Fatal("a running session blocked another session's delivery")
+	}
+	accepted := protocol.StreamEvent{StreamID: second.ID, Kind: "turn.accepted", Payload: json.RawMessage(`{"codex_thread_id":"parallel-codex","turn_id":"parallel-turn"}`)}
+	payload, _ := json.Marshal(accepted)
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "event", PayloadJSON: payload}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		thread, err := database.Thread(ctx, id)
+		if err != nil || thread.Status != "running" {
+			t.Fatalf("both sessions must be running: %#v %v", thread, err)
+		}
+	}
+}
+
 func TestOperationResultPublishesRealtimeEvent(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {
