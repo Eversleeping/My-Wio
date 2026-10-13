@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -691,7 +692,7 @@ func safeProjectName(value string) string {
 	value = strings.TrimSpace(value)
 	var builder strings.Builder
 	for _, char := range value {
-		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) || char == '-' || char == '_' {
 			builder.WriteRune(char)
 		} else {
 			builder.WriteByte('-')

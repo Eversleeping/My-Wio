@@ -175,6 +175,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   };
   const importMessage = (project: ProjectListRecord) => {
     const raw = project.provision_error || project.import_message;
+    if (/repository path already exists|destination already exists/i.test(raw)) return t("project.pathConflict");
     return /http2 framing|expected flush|timed? out|timeout|could not resolve|temporary failure in name resolution|connection (?:refused|reset)|network is unreachable|dial tcp/i.test(raw) ? t("project.networkFailure") : raw;
   };
   const serverOptions = (servers.data ?? []).map(server => ({ id: server.id, name: server.name, status: server.status }));

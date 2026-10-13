@@ -178,6 +178,64 @@ func TestProjectCreateDestinationRejectsCloneRootEscape(t *testing.T) {
 	}
 }
 
+func TestSafeProjectNamePreservesUnicode(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		want string
+	}{
+		{name: "生图网站", want: "生图网站"},
+		{name: "小说网站", want: "小说网站"},
+		{name: " 网站 API 2 ", want: "网站-API-2"},
+		{name: "café", want: "café"},
+		{name: "../网站\\服务", want: "网站-服务"},
+		{name: "---", want: "repository"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := safeProjectName(test.name); got != test.want {
+				t.Fatalf("safeProjectName(%q) = %q, want %q", test.name, got, test.want)
+			}
+		})
+	}
+}
+
+func TestCreateChineseProjectsAvoidsLegacyDestinationCollision(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	cloneRoot := t.TempDir()
+	client := &Client{config: Config{CloneRoot: cloneRoot}}
+	legacy := protocol.GitProjectCreateCommand{ProjectID: "legacy-project", Name: "repository", InitialBranch: "main"}
+	if _, err := client.createProject(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []protocol.GitProjectCreateCommand{
+		{ProjectID: "image-project", Name: "生图网站", InitialBranch: "main"},
+		{ProjectID: "novel-project", Name: "小说网站", InitialBranch: "main"},
+	} {
+		first, err := client.createProject(context.Background(), command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actualInfo, actualErr := os.Stat(first.Path)
+		wantedInfo, wantedErr := os.Stat(filepath.Join(cloneRoot, command.Name))
+		if actualErr != nil || wantedErr != nil || !os.SameFile(actualInfo, wantedInfo) || first.Branch != "main" || !first.Unborn {
+			t.Fatalf("unexpected Chinese project result: %#v", first)
+		}
+		retry, err := client.createProject(context.Background(), command)
+		if err != nil || retry != first {
+			t.Fatalf("retry must recover the same repository: %#v %v", retry, err)
+		}
+		command.Destination = "repository"
+		if _, err := client.createProject(context.Background(), command); err == nil || !strings.Contains(err.Error(), "different project") {
+			t.Fatalf("explicit destination must still reject another project's repository: %v", err)
+		}
+	}
+	marker, err := exec.Command("git", "-C", filepath.Join(cloneRoot, "repository"), "config", "--local", "--get", "wio.projectId").Output()
+	if err != nil || strings.TrimSpace(string(marker)) != legacy.ProjectID {
+		t.Fatalf("legacy repository must retain its owner: %q %v", marker, err)
+	}
+}
+
 func TestGitProjectDeleteReturnsStructuredResult(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
