@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { CodexModel } from "../codexModels";
 
-export function CodexModelPicker({ value, onChange, models = [], allowServerDefault = false, required = false, requestCustom = 0, loading = false, error = "", onRefresh }: {
-  value: string; onChange: (value: string) => void; models?: CodexModel[]; allowServerDefault?: boolean; required?: boolean; requestCustom?: number; loading?: boolean; error?: string; onRefresh?: () => void;
+export function CodexModelPicker({ value, onChange, models = [], allowServerDefault = false, required = false, requestCustom = 0, loading = false, error = "" }: {
+  value: string; onChange: (value: string) => void; models?: CodexModel[]; allowServerDefault?: boolean; required?: boolean; requestCustom?: number; loading?: boolean; error?: string;
 }) {
   const { t } = useI18n();
   const [customMode, setCustomMode] = useState(!allowServerDefault && !value);
   useEffect(() => { if (requestCustom) setCustomMode(true); }, [requestCustom]);
-  return <div className="codex-model-picker">
+  return <div className="codex-model-picker" aria-busy={loading}>
     <select aria-label={t("codex.modelOverride")} value={customMode ? "__custom__" : value} required={required} onChange={event => {
       const custom = event.target.value === "__custom__";
       onChange(custom ? "" : event.target.value);
@@ -21,7 +20,6 @@ export function CodexModelPicker({ value, onChange, models = [], allowServerDefa
       <option value="__custom__">{t("codex.modelCustom")}</option>
     </select>
     {customMode && <input aria-label={t("codex.customModelName")} value={value} onChange={event => onChange(event.target.value)} placeholder={t("codex.customModelPlaceholder")} required={required} />}
-    {onRefresh && <button type="button" className="icon-button" disabled={loading} title={t("codex.refreshModels")} aria-label={t("codex.refreshModels")} onClick={onRefresh}><RefreshCw size={16} className={loading ? "spin" : undefined} /></button>}
     {error && <small role="status">{t("codex.modelsUnavailable")}: {error}</small>}
   </div>;
 }

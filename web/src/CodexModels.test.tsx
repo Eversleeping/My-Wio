@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { useCodexModels } from "./codexModels";
 import { CodexModelPicker } from "./components/CodexModelPicker";
@@ -10,11 +10,11 @@ afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 function Picker({ workspaceID }: { workspaceID: string }) {
   const catalogue = useCodexModels(workspaceID);
   const [value, setValue] = useState("");
-  return <CodexModelPicker value={value} onChange={setValue} models={catalogue.models} loading={catalogue.loading} error={catalogue.error} onRefresh={catalogue.refresh} allowServerDefault />;
+  return <CodexModelPicker value={value} onChange={setValue} models={catalogue.models} loading={catalogue.loading} error={catalogue.error} allowServerDefault />;
 }
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
 
-test("loads server models, refreshes after CLI changes, and isolates workspaces", async () => {
+test("refreshes once per session opening, survives StrictMode, and isolates workspaces", async () => {
   window.localStorage.setItem("wio_language", "en");
   let version = "new-model";
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -25,15 +25,18 @@ test("loads server models, refreshes after CLI changes, and isolates workspaces"
   });
   vi.stubGlobal("fetch", fetchMock);
   const user = userEvent.setup();
-  const { rerender } = render(<I18nProvider><Picker workspaceID="first" /></I18nProvider>);
+  const { rerender } = render(<StrictMode><I18nProvider><Picker key="session-1" workspaceID="first" /></I18nProvider></StrictMode>);
   expect(await screen.findByRole("option", { name: "new-model" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: /GPT-5.6/ })).not.toBeInTheDocument();
   await user.selectOptions(screen.getByLabelText("Model override"), "new-model");
   version = "upgraded-model";
-  await user.click(screen.getByRole("button", { name: "Refresh models" }));
+  expect(screen.queryByRole("button", { name: "Refresh models" })).not.toBeInTheDocument();
+  rerender(<StrictMode><I18nProvider><Picker key="session-1" workspaceID="first" /></I18nProvider></StrictMode>);
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/refresh"))).toHaveLength(1);
+  rerender(<StrictMode><I18nProvider><Picker key="session-2" workspaceID="first" /></I18nProvider></StrictMode>);
   expect(await screen.findByRole("option", { name: "upgraded-model" })).toBeInTheDocument();
-  expect(screen.getByLabelText("Model override")).toHaveValue("new-model");
-  rerender(<I18nProvider><Picker workspaceID="second" /></I18nProvider>);
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/refresh"))).toHaveLength(2);
+  rerender(<StrictMode><I18nProvider><Picker key="session-3" workspaceID="second" /></I18nProvider></StrictMode>);
   expect(await screen.findByRole("option", { name: "second-server-model" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "upgraded-model" })).not.toBeInTheDocument();
   expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/workspaces/second/codex/models/refresh"))).toBe(true);

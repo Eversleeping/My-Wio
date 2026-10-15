@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { CodexSnapshot } from "./types";
 
@@ -29,11 +29,9 @@ export function compatibleReasoningEffort(models: CodexModel[], model: string, e
   return selected.supportedReasoningEfforts.some(item => item.reasoningEffort === selected.defaultReasoningEffort) ? selected.defaultReasoningEffort! : "";
 }
 
-export function useCodexModels(workspaceID?: string) {
+export function useCodexModels(workspaceID?: string, refreshOnOpen = true) {
   const [result, setResult] = useState<{ workspaceID: string; models: CodexModel[]; error: string }>({ workspaceID: "", models: [], error: "" });
   const [loading, setLoading] = useState(false);
-  const [nonce, setNonce] = useState(0);
-  const refresh = useCallback(() => setNonce(value => value + 1), []);
   useEffect(() => {
     if (!workspaceID) return;
     const controller = new AbortController();
@@ -43,13 +41,13 @@ export function useCodexModels(workspaceID?: string) {
       setLoading(true);
       setResult(current => ({ workspaceID, models: current.workspaceID === workspaceID ? current.models : [], error: "" }));
       try {
-        // Always refresh when entering a workspace, even if its persisted snapshot
-        // came from an older CLI. Never reuse another server's model catalogue.
-        await api(`${path}/refresh`, { method: "POST", body: "{}", signal: controller.signal });
+        // Session views refresh once on opening. Other consumers only read the snapshot.
+        if (refreshOnOpen) await api(`${path}/refresh`, { method: "POST", body: "{}", signal: controller.signal });
         const deadline = Date.now() + 30_000;
         const poll = async (): Promise<void> => {
           const snapshot = await api<CodexSnapshot<CodexModel[]>>(path, { signal: controller.signal });
           if (controller.signal.aborted) return;
+          if (!refreshOnOpen && snapshot.status === "idle") { setLoading(false); return; }
           if (snapshot.status === "refreshing" || snapshot.status === "loading" || snapshot.status === "idle") {
             if (Date.now() >= deadline) throw new Error("Model list refresh timed out");
             timer = setTimeout(() => void poll().catch(fail), 500);
@@ -69,8 +67,9 @@ export function useCodexModels(workspaceID?: string) {
       setResult({ workspaceID: workspaceID!, models: [], error: error instanceof Error ? error.message : "Model list refresh failed" });
       setLoading(false);
     }
-    void request();
+    // Defer until mount settles so StrictMode effect replay cannot queue two refreshes.
+    timer = setTimeout(() => void request(), 0);
     return () => { controller.abort(); if (timer) clearTimeout(timer); };
-  }, [workspaceID, nonce]);
-  return { models: result.workspaceID === workspaceID ? result.models : [], error: result.workspaceID === workspaceID ? result.error : "", loading: Boolean(workspaceID) && loading, refresh };
+  }, [workspaceID, refreshOnOpen]);
+  return { models: result.workspaceID === workspaceID ? result.models : [], error: result.workspaceID === workspaceID ? result.error : "", loading: Boolean(workspaceID) && loading };
 }
