@@ -43,6 +43,30 @@ beforeEach(() => {
   window.localStorage.setItem("wio_language", "en");
 });
 
+test("collapses replayed items while retaining equal answers from different turns", async () => {
+  const value = thread("replayed-items");
+  const events: StreamEvent[] = [1, 2, 3].map(sequence => ({
+    ...event(value.id, sequence, "", "codex.item.completed"),
+    payload: { threadId: "native-thread", turnId: sequence === 3 ? "next-turn" : "first-turn", item: { id: "item-1", type: "agentMessage", text: "Repeated answer" } }
+  }));
+  vi.stubGlobal("fetch", vi.fn(async input => response(String(input).includes("/events") ? events : [])));
+  render(session(value));
+  await waitFor(() => expect(screen.getAllByText("Repeated answer")).toHaveLength(2));
+});
+
+test("shows one capacity error per turn across error and completion notifications", async () => {
+  const value = thread("capacity-errors");
+  const error = { message: "Selected model is at capacity. Please try a different model." };
+  const events: StreamEvent[] = [
+    { ...event(value.id, 1, "", "codex.error"), payload: { threadId: "native", turnId: "turn-1", error, willRetry: false } },
+    { ...event(value.id, 2, "", "codex.turn.completed"), payload: { threadId: "native", turn: { id: "turn-1", status: "failed", error } } },
+    { ...event(value.id, 3, "", "codex.error"), payload: { threadId: "native", turnId: "turn-2", error, willRetry: false } }
+  ];
+  vi.stubGlobal("fetch", vi.fn(async input => response(String(input).includes("/events") ? events : [])));
+  render(session(value));
+  await waitFor(() => expect(screen.getAllByText(error.message)).toHaveLength(2));
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -63,7 +87,7 @@ test("loads the first session view from its recent window without a cursor", asy
 
   render(session(value));
 
-  expect(await screen.findByText("Recent window message")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByText("Recent window message")).toBeInTheDocument());
   expect(eventRequests).toEqual([`/api/threads/${value.id}/events?view=conversation`]);
 });
 

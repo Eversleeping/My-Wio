@@ -1,5 +1,6 @@
 import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
 import { CodexModelPicker } from "./components/CodexModelPicker";
+import { UserInputPrompt, isUserInputRequest } from "./components/UserInputPrompt";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -165,7 +166,8 @@ export function realtimeScopesForEvent(event: Pick<Partial<StreamEvent>, "kind">
   if (kind === "inventory.updated") return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
   if (kind.startsWith("deployment.")) return ["dashboard", "deployments", "operations", "monitoring"];
   if (kind.startsWith("agent.")) return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
-  if (kind.startsWith("approval.") || kind.startsWith("codex.approval.")) return ["codex", "approvals"];
+  if (kind.startsWith("approval.") || kind.startsWith("codex.approval.") || kind === "codex.serverRequest.resolved") return ["codex", "approvals"];
+  if (["codex.turn.completed", "codex.turn.failed", "codex.turn.cancelled"].includes(kind)) return ["dashboard", "codex", "approvals"];
   if (kind === "user.message" || kind.startsWith("codex.") || kind.startsWith("thread.")) return ["dashboard", "codex"];
   return allRealtimeScopes;
 }
@@ -1343,6 +1345,7 @@ function collectSubagentActivity(events: StreamEvent[]): SubagentActivity[] {
 
 function ApprovalPrompt({ item, onDecided, notify }: { item: Approval; onDecided: () => void; notify: (text: string) => void }) {
   const { t } = useI18n();
+  if (isUserInputRequest(item)) return <UserInputPrompt item={item} onDecided={onDecided} />;
   return <article className="approval-prompt"><header><ShieldCheck size={16} /><strong>{t("codex.pendingApprovals")}</strong><time>{relative(item.expires_at)}</time></header><small>{readableKind(item.kind)}</small><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={onDecided} notify={notify} /></article>;
 }
 
@@ -1772,12 +1775,23 @@ export async function copyText(value: string) {
 function conversationEvents(events: StreamEvent[]) {
   const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabToolCall", "collabAgentToolCall", "subAgentActivity", "contextCompaction", "webSearch"]);
   const result: StreamEvent[] = [];
+  const completedItems = new Set<string>();
+  const turnErrors = new Set<string>();
   for (const event of events) {
     if (event.kind === "user.message") {
       result.push(event);
       continue;
     }
     const payload = asRecord(event.payload);
+    const turn = asRecord(payload?.turn);
+    const turnID = payload?.turnId ?? turn?.id;
+    const terminalError = event.kind === "codex.turn.failed" || (event.kind === "codex.error" && payload?.willRetry !== true) || (event.kind === "codex.turn.completed" && turn?.status === "failed");
+    if (terminalError && typeof turnID === "string" && turnID) {
+      const detail = errorText(event.kind === "codex.turn.completed" ? turn : payload);
+      const key = JSON.stringify([event.stream_id, turnID, detail]);
+      if (turnErrors.has(key)) continue;
+      turnErrors.add(key);
+    }
     if (event.kind === "codex.item.started") {
       const item = asRecord(payload?.item);
       if (item?.type === "contextCompaction") result.push(event);
@@ -1785,6 +1799,13 @@ function conversationEvents(events: StreamEvent[]) {
     }
     if (event.kind === "codex.item.completed") {
       const item = asRecord(payload?.item);
+      // Older Agents persisted replayed notifications with fresh event IDs.
+      // Only deduplicate identified items, never matching message text alone.
+      if (typeof payload?.turnId === "string" && payload.turnId && typeof item?.id === "string" && item.id) {
+        const key = JSON.stringify([event.stream_id, payload.threadId, payload.turnId, item.id]);
+        if (completedItems.has(key)) continue;
+        completedItems.add(key);
+      }
       if (item?.type === "userMessage") {
         const images = extractImageSources(item?.content);
         const text = extractText(item?.content);

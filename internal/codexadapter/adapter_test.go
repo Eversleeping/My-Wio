@@ -22,6 +22,51 @@ func TestApprovalDecisionCompatibility(t *testing.T) {
 	}
 }
 
+func TestReadLoopAcceptsLargeHistoryAndKeepsReading(t *testing.T) {
+	a := New("", slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.StreamEvent) error { return nil })
+	first, second := make(chan rpcMessage, 1), make(chan rpcMessage, 1)
+	a.pending["1"], a.pending["2"] = first, second
+	history := strings.Repeat("x", 17<<20)
+	input := `{"id":1,"result":{"thread":{"id":"long-thread","history":"` + history + `"}}}` + "\n" + `{"id":2,"result":{"ok":true}}` + "\n"
+	if err := a.readLoop(strings.NewReader(input)); !errors.Is(err, io.EOF) {
+		t.Fatalf("read loop: %v", err)
+	}
+	select {
+	case reply := <-first:
+		if id, err := responseThreadID(reply.Result, "thread/resume"); err != nil || id != "long-thread" {
+			t.Fatalf("large resume response: %q %v", id, err)
+		}
+	default:
+		t.Fatal("large history response was lost")
+	}
+	select {
+	case <-second:
+	default:
+		t.Fatal("reader stopped after large history")
+	}
+}
+
+func TestCompletedItemReplayIdentityIsScoped(t *testing.T) {
+	var events []protocol.StreamEvent
+	a := New("", slog.New(slog.NewTextHandler(io.Discard, nil)), func(e protocol.StreamEvent) error { events = append(events, e); return nil })
+	a.threads["codex-a"] = "wio-a"
+	a.threads["codex-b"] = "wio-b"
+	for _, params := range []string{
+		`{"threadId":"codex-a","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"same answer"}}`,
+		`{"threadId":"codex-a","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"same answer"}}`,
+		`{"threadId":"codex-b","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"same answer"}}`,
+		`{"threadId":"codex-a","turnId":"turn-2","item":{"id":"item-1","type":"agentMessage","text":"same answer"}}`,
+	} {
+		a.handleNotification(rpcMessage{Method: "item/completed", Params: json.RawMessage(params)})
+	}
+	if len(events) != 4 || events[0].EventID == "" || events[0].EventID != events[1].EventID {
+		t.Fatalf("replayed notification must retain its identity: %+v", events)
+	}
+	if events[2].StreamID != "wio-b" || events[2].EventID == events[0].EventID || events[3].EventID == events[0].EventID {
+		t.Fatalf("different sessions/turns must retain distinct identities: %+v", events)
+	}
+}
+
 func TestFailedApprovalWriteKeepsRequestPending(t *testing.T) {
 	adapter := &Adapter{
 		approve: map[string]approvalRequest{"request-1": {ID: json.RawMessage(`1`), Method: "item/commandExecution/requestApproval"}},
@@ -321,6 +366,73 @@ func TestRewriteTurnForksBeforeRollingBackAndStartingReplacement(t *testing.T) {
 	}
 	if emitted.Kind != "turn.accepted" || !strings.Contains(string(emitted.Payload), "replacement-turn") || !strings.Contains(string(emitted.Payload), "replacement-id") || !strings.Contains(string(emitted.Payload), "cutoff_sequence") {
 		t.Fatalf("replacement turn was not accepted: %#v", emitted)
+	}
+}
+
+func TestRevertThreadTurnsNegotiatesRemovedRollback(t *testing.T) {
+	var methods []string
+	err := revertThreadTurns(context.Background(), "fork", 3, func(_ context.Context, method string, value any) (json.RawMessage, error) {
+		methods = append(methods, method)
+		params := value.(map[string]any)
+		if params["threadId"] != "fork" {
+			t.Fatalf("must only modify fork: %#v", params)
+		}
+		switch method {
+		case "thread/rollback":
+			return nil, &rpcRequestError{Code: -32600, Message: "Invalid request: unknown variant `thread/rollback`, expected ..."}
+		case "thread/turns/list":
+			if params["sortDirection"] != "desc" || params["itemsView"] != "notLoaded" {
+				t.Fatalf("unexpected pagination: %#v", params)
+			}
+			if params["cursor"] == nil {
+				return json.RawMessage(`{"data":[{"id":"newest"},{"id":"middle"}],"nextCursor":"older"}`), nil
+			}
+			if params["cursor"] != "older" || params["limit"] != uint32(1) {
+				t.Fatalf("unexpected continuation: %#v", params)
+			}
+			return json.RawMessage(`{"data":[{"id":"boundary"}],"nextCursor":null}`), nil
+		case "thread/revert":
+			if params["beforeTurnId"] != "boundary" {
+				t.Fatalf("wrong edit boundary: %#v", params)
+			}
+			return json.RawMessage(`{}`), nil
+		default:
+			t.Fatalf("unexpected method %s", method)
+			return nil, nil
+		}
+	})
+	if err != nil || strings.Join(methods, ",") != "thread/rollback,thread/turns/list,thread/turns/list,thread/revert" {
+		t.Fatalf("negotiation: %v %v", methods, err)
+	}
+}
+
+func TestRevertThreadTurnsDoesNotFallbackAfterExecutionFailure(t *testing.T) {
+	for _, failure := range []error{context.DeadlineExceeded, &rpcRequestError{Code: -32602, Message: "invalid params"}} {
+		calls := 0
+		err := revertThreadTurns(context.Background(), "fork", 2, func(context.Context, string, any) (json.RawMessage, error) {
+			calls++
+			return nil, failure
+		})
+		if err != failure || calls != 1 {
+			t.Fatalf("must not retry potentially applied mutation: %v %d", err, calls)
+		}
+	}
+}
+
+func TestRevertThreadTurnsRefusesMissingBoundary(t *testing.T) {
+	err := revertThreadTurns(context.Background(), "fork", 2, func(_ context.Context, method string, _ any) (json.RawMessage, error) {
+		switch method {
+		case "thread/rollback":
+			return nil, &rpcRequestError{Code: -32601}
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"only-one"}],"nextCursor":null}`), nil
+		default:
+			t.Fatalf("must not revert without a verified boundary: %s", method)
+			return nil, nil
+		}
+	})
+	if err == nil {
+		t.Fatal("expected missing boundary error")
 	}
 }
 

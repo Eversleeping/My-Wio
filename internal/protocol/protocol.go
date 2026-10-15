@@ -435,9 +435,10 @@ type TurnImage struct {
 }
 
 type ApprovalDecisionCommand struct {
-	ThreadID  string `json:"thread_id"`
-	RequestID string `json:"request_id"`
-	Decision  string `json:"decision"`
+	ThreadID  string                     `json:"thread_id"`
+	RequestID string                     `json:"request_id"`
+	Decision  string                     `json:"decision"`
+	Answers   map[string]UserInputAnswer `json:"answers,omitempty"`
 }
 
 type InterruptTurnCommand struct {

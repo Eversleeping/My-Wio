@@ -189,6 +189,21 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if event.Kind == "thread.bound" {
 			_ = g.bindCodexThread(ctx, event)
 		}
+		if event.Kind == "codex.serverRequest.resolved" {
+			var params struct {
+				RequestID json.RawMessage `json:"requestId"`
+			}
+			if err := json.Unmarshal(event.Payload, &params); err != nil {
+				return err
+			}
+			var requestID string
+			if json.Unmarshal(params.RequestID, &requestID) != nil {
+				requestID = string(params.RequestID)
+			}
+			if _, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE approvals SET status='resolved',decision='cancelled',resolved_at=? WHERE thread_id=? AND request_id=? AND status='pending'"), time.Now().UTC(), event.StreamID, requestID); err != nil {
+				return err
+			}
+		}
 		if event.Kind == "codex.thread.name.updated" {
 			_ = g.updateThreadTitle(ctx, event)
 		}

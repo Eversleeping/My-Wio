@@ -2163,12 +2163,13 @@ func (a *API) approvals(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) decideApproval(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Decision string `json:"decision"`
+		Decision string                              `json:"decision"`
+		Answers  map[string]protocol.UserInputAnswer `json:"answers"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Decision != "approved" && input.Decision != "denied" {
+	if input.Decision != "approved" && input.Decision != "denied" && input.Decision != "answered" {
 		writeError(w, http.StatusBadRequest, "decision must be approved or denied")
 		return
 	}
@@ -2177,13 +2178,28 @@ func (a *API) decideApproval(w http.ResponseWriter, r *http.Request) {
 		ThreadID  string `db:"thread_id"`
 		RequestID string `db:"request_id"`
 		ServerID  string `db:"server_id"`
+		Kind      string `db:"kind"`
+		Detail    string `db:"detail"`
 	}
-	err := a.store.DB.GetContext(r.Context(), &approval, a.store.Q(`SELECT a.id,a.thread_id,a.request_id,w.server_id FROM approvals a JOIN codex_threads t ON t.id=a.thread_id JOIN workspaces w ON w.id=t.workspace_id WHERE a.id=? AND a.status='pending' AND a.expires_at>?`), chi.URLParam(r, "approvalID"), time.Now().UTC())
+	err := a.store.DB.GetContext(r.Context(), &approval, a.store.Q(`SELECT a.id,a.thread_id,a.request_id,a.kind,a.detail,w.server_id FROM approvals a JOIN codex_threads t ON t.id=a.thread_id JOIN workspaces w ON w.id=t.workspace_id WHERE a.id=? AND a.status='pending' AND a.expires_at>?`), chi.URLParam(r, "approvalID"), time.Now().UTC())
 	if err != nil {
 		writeError(w, http.StatusNotFound, "pending approval not found")
 		return
 	}
-	command := protocol.ApprovalDecisionCommand{ThreadID: approval.ThreadID, RequestID: approval.RequestID, Decision: input.Decision}
+	if approval.Kind == protocol.UserInputRequestMethod {
+		if input.Decision != "answered" {
+			writeError(w, http.StatusBadRequest, "user input requires answers")
+			return
+		}
+		if err := protocol.ValidateUserInputAnswers(json.RawMessage(approval.Detail), input.Answers); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else if input.Decision == "answered" || len(input.Answers) > 0 {
+		writeError(w, http.StatusBadRequest, "approval requires an approval decision")
+		return
+	}
+	command := protocol.ApprovalDecisionCommand{ThreadID: approval.ThreadID, RequestID: approval.RequestID, Decision: input.Decision, Answers: input.Answers}
 	operationID, err := a.store.ResolveApprovalAndQueue(r.Context(), approval.ID, approval.ServerID, input.Decision, command)
 	if errors.Is(err, store.ErrApprovalResolved) {
 		writeError(w, http.StatusConflict, "approval was already resolved")

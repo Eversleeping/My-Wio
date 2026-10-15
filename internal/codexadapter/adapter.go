@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -48,8 +49,10 @@ type turnState struct {
 }
 
 type approvalRequest struct {
-	ID     json.RawMessage
-	Method string
+	ID       json.RawMessage
+	Method   string
+	ThreadID string
+	Detail   json.RawMessage
 }
 
 type rpcMessage struct {
@@ -578,7 +581,7 @@ func (a *Adapter) rewriteTurn(ctx context.Context, command protocol.RewriteTurnC
 	a.threads[codexThread] = command.Start.ThreadID
 	a.mu.Unlock()
 	if command.NumTurns > 0 {
-		if _, err := request(ctx, "thread/rollback", map[string]any{"threadId": codexThread, "numTurns": command.NumTurns}); err != nil {
+		if err := revertThreadTurns(ctx, codexThread, command.NumTurns, request); err != nil {
 			return err
 		}
 	}
@@ -588,6 +591,59 @@ func (a *Adapter) rewriteTurn(ctx context.Context, command protocol.RewriteTurnC
 		"replacement_payload":  command.ReplacementPayload,
 		"cutoff_sequence":      command.CutoffSequence,
 	}, request)
+}
+
+// Older app-servers use a turn count; newer ones require an exact turn ID.
+// Only negotiate after an explicit unknown-method response, never after a
+// timeout or execution failure that may already have changed the history.
+func revertThreadTurns(ctx context.Context, threadID string, count uint32, request requestFunc) error {
+	_, err := request(ctx, "thread/rollback", map[string]any{"threadId": threadID, "numTurns": count})
+	if err == nil {
+		return nil
+	}
+	var rpcErr *rpcRequestError
+	if !errors.As(err, &rpcErr) || !(rpcErr.Code == -32601 || (rpcErr.Code == -32600 && strings.Contains(rpcErr.Message, "unknown variant `thread/rollback`"))) {
+		return err
+	}
+	remaining := count
+	cursor := ""
+	seen := make(map[string]bool)
+	for remaining > 0 {
+		limit := min(remaining, uint32(100))
+		params := map[string]any{"threadId": threadID, "limit": limit, "sortDirection": "desc", "itemsView": "notLoaded"}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		raw, err := request(ctx, "thread/turns/list", params)
+		if err != nil {
+			return err
+		}
+		var page struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return fmt.Errorf("invalid thread/turns/list response: %w", err)
+		}
+		for _, turn := range page.Data {
+			if turn.ID == "" {
+				return errors.New("thread/turns/list returned an empty turn ID")
+			}
+			remaining--
+			if remaining == 0 {
+				_, err := request(ctx, "thread/revert", map[string]any{"threadId": threadID, "beforeTurnId": turn.ID})
+				return err
+			}
+		}
+		if page.NextCursor == "" || seen[page.NextCursor] || len(page.Data) == 0 {
+			return errors.New("could not locate the edit boundary in Codex thread history")
+		}
+		cursor = page.NextCursor
+		seen[cursor] = true
+	}
+	return nil
 }
 
 func (a *Adapter) startTurn(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) error {
@@ -876,8 +932,21 @@ func (a *Adapter) Decide(command protocol.ApprovalDecisionCommand) error {
 	if !ok {
 		return errors.New("approval request is no longer pending")
 	}
+	if request.ThreadID != "" && request.ThreadID != command.ThreadID {
+		return errors.New("request belongs to another session")
+	}
 	decision := approvalDecision(request.Method, command.Decision)
-	if err := a.write(map[string]any{"id": request.ID, "result": map[string]any{"decision": decision}}); err != nil {
+	result := map[string]any{"decision": decision}
+	if request.Method == protocol.UserInputRequestMethod {
+		if command.Decision != "answered" {
+			return errors.New("user input requires answers")
+		}
+		if err := protocol.ValidateUserInputAnswers(request.Detail, command.Answers); err != nil {
+			return err
+		}
+		result = map[string]any{"answers": command.Answers}
+	}
+	if err := a.write(map[string]any{"id": request.ID, "result": result}); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -986,7 +1055,16 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	a.stdin = stdin
 	a.cancel = cancel
 	a.mu.Unlock()
-	go a.readLoop(stdout)
+	go func() {
+		if err := a.readLoop(stdout); err != nil {
+			a.log.Warn("reading Codex app-server output failed", "error", err)
+			// A process with an unreadable stdout cannot service RPCs. Release
+			// waiters and allow this session to restart, without touching others.
+			cancel()
+			_ = stdin.Close()
+			a.resetProcess(process, fmt.Errorf("reading Codex app-server output: %w", err))
+		}
+	}()
 	go a.stderrLoop(stderr)
 	go func() {
 		err := process.Wait()
@@ -1075,29 +1153,33 @@ func (a *Adapter) write(value any) error {
 	return err
 }
 
-func (a *Adapter) readLoop(reader io.Reader) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64<<10), 16<<20)
-	for scanner.Scan() {
+func (a *Adapter) readLoop(reader io.Reader) error {
+	// Resume/fork responses contain persisted history even after compaction.
+	// Read complete JSONL frames without Scanner's fixed token size ceiling.
+	buffer := bufio.NewReaderSize(reader, 64<<10)
+	for {
+		raw, readErr := buffer.ReadBytes('\n')
+		if len(raw) == 0 {
+			return readErr
+		}
 		var message rpcMessage
-		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+		if err := json.Unmarshal(raw, &message); err != nil {
 			a.log.Warn("invalid Codex app-server message", "error", err)
+			if readErr != nil {
+				return readErr
+			}
 			continue
 		}
 		if len(message.ID) > 0 && message.Method == "" {
 			a.handleResponse(message)
-			continue
-		}
-		if len(message.ID) > 0 {
+		} else if len(message.ID) > 0 {
 			a.handleServerRequest(message)
-			continue
-		}
-		if message.Method != "" {
+		} else if message.Method != "" {
 			a.handleNotification(message)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		a.log.Warn("reading Codex app-server output failed", "error", err)
+		if readErr != nil {
+			return readErr
+		}
 	}
 }
 
@@ -1121,7 +1203,7 @@ func (a *Adapter) handleResponse(message rpcMessage) {
 }
 
 func (a *Adapter) handleServerRequest(message rpcMessage) {
-	if !isApproval(message.Method) {
+	if !isApproval(message.Method) && message.Method != protocol.UserInputRequestMethod {
 		_ = a.write(map[string]any{"id": message.ID, "error": map[string]any{"code": -32601, "message": "Wio does not support this server request"}})
 		return
 	}
@@ -1129,7 +1211,7 @@ func (a *Adapter) handleServerRequest(message rpcMessage) {
 	codexThread := findString(message.Params, "threadId", "conversationId")
 	a.mu.Lock()
 	wioThread := a.threads[codexThread]
-	a.approve[requestID] = approvalRequest{ID: append(json.RawMessage(nil), message.ID...), Method: message.Method}
+	a.approve[requestID] = approvalRequest{ID: append(json.RawMessage(nil), message.ID...), Method: message.Method, ThreadID: wioThread, Detail: append(json.RawMessage(nil), message.Params...)}
 	a.mu.Unlock()
 	if wioThread == "" {
 		a.mu.Lock()
@@ -1147,6 +1229,17 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 	ignore := false
 	a.mu.Lock()
 	wioThread := a.threads[codexThread]
+	if wioThread != "" && message.Method == "serverRequest/resolved" {
+		var params struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(message.Params, &params) == nil {
+			key := idKey(params.RequestID)
+			if a.approve[key].ThreadID == wioThread {
+				delete(a.approve, key)
+			}
+		}
+	}
 	if wioThread != "" && message.Method == "turn/started" && turnID != "" {
 		state := a.turns[wioThread]
 		state.CodexThread = codexThread
@@ -1161,6 +1254,11 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 		} else {
 			state.Active = false
 			a.turns[wioThread] = state
+			for id, request := range a.approve {
+				if request.ThreadID == wioThread {
+					delete(a.approve, id)
+				}
+			}
 		}
 	}
 	a.mu.Unlock()
@@ -1171,7 +1269,21 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 		return
 	}
 	kind := "codex." + strings.ReplaceAll(message.Method, "/", ".")
-	_ = a.emit(protocol.StreamEvent{StreamID: wioThread, Kind: kind, OccurredAt: time.Now().UTC(), Payload: append(json.RawMessage(nil), message.Params...)})
+	eventID := ""
+	if message.Method == "item/completed" && turnID != "" {
+		var params struct {
+			Item struct {
+				ID string `json:"id"`
+			} `json:"item"`
+		}
+		if json.Unmarshal(message.Params, &params) == nil && params.Item.ID != "" {
+			// Stable across notification replay and Agent reconnects; include
+			// both thread identities so forks and parallel projects stay separate.
+			identity, _ := json.Marshal([]string{wioThread, codexThread, turnID, params.Item.ID, message.Method})
+			eventID = uuid.NewSHA1(uuid.NameSpaceOID, identity).String()
+		}
+	}
+	_ = a.emit(protocol.StreamEvent{EventID: eventID, StreamID: wioThread, Kind: kind, OccurredAt: time.Now().UTC(), Payload: append(json.RawMessage(nil), message.Params...)})
 }
 
 func persistNotification(method string) bool {
