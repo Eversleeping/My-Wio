@@ -74,3 +74,23 @@ func TestMergeRejectsInvalidExistingConfiguration(t *testing.T) {
 		t.Fatal("invalid existing configuration was accepted")
 	}
 }
+
+func TestMergeEnablesInteractiveQuestionsInDefaultMode(t *testing.T) {
+	for _, existing := range []string{"", "[features]\ndefault_mode_request_user_input = false\nshell_snapshot = false\n"} {
+		merged, err := Merge([]byte(existing), "https://api.example.com/v1", "custom-model")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var configuration map[string]any
+		if err := toml.Unmarshal(merged, &configuration); err != nil {
+			t.Fatal(err)
+		}
+		features := configuration["features"].(map[string]any)
+		if features["default_mode_request_user_input"] != true {
+			t.Fatalf("interactive questions were not enabled: %#v", features)
+		}
+		if existing != "" && features["shell_snapshot"] != false {
+			t.Fatalf("unrelated feature was changed: %#v", features)
+		}
+	}
+}

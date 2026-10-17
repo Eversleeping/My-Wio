@@ -2,10 +2,12 @@ package codexadapter
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -46,5 +48,48 @@ func TestUserInputRoundTripAndResolution(t *testing.T) {
 	command.RequestID = "8"
 	if err := a.Decide(command); err == nil {
 		t.Fatal("resolved request accepted")
+	}
+}
+
+func TestSessionsAskAndAnswerInDefaultMode(t *testing.T) {
+	for _, codexThread := range []string{"", "existing-thread"} {
+		name := "new"
+		if codexThread != "" {
+			name = "resumed"
+		}
+		t.Run(name, func(t *testing.T) {
+			pool, events := sessionTestPool(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := pool.StartTurn(ctx, protocol.StartTurnCommand{ThreadID: "question-thread", CodexThread: codexThread, Workspace: t.TempDir(), Prompt: "ask-user"}); err != nil {
+				t.Fatal(err)
+			}
+			question := waitSessionEvent(t, events, "question-thread", "approval.requested")
+			var request struct {
+				Kind   string `json:"kind"`
+				Detail struct {
+					Questions []protocol.UserInputQuestion `json:"questions"`
+				} `json:"detail"`
+			}
+			if err := json.Unmarshal(question.Payload, &request); err != nil || request.Kind != protocol.UserInputRequestMethod || len(request.Detail.Questions) != 2 {
+				t.Fatalf("interactive question missing: %s (%v)", question.Payload, err)
+			}
+			if err := pool.Decide(protocol.ApprovalDecisionCommand{
+				ThreadID: "question-thread", RequestID: "43", Decision: "answered",
+				Answers: map[string]protocol.UserInputAnswer{"choice": {Answers: []string{"B"}}, "details": {Answers: []string{"custom answer"}}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			answer := waitSessionEvent(t, events, "question-thread", "codex.item.completed")
+			var reply struct {
+				Item struct {
+					Text string `json:"text"`
+				} `json:"item"`
+			}
+			if err := json.Unmarshal(answer.Payload, &reply); err != nil || reply.Item.Text != "B: custom answer" {
+				t.Fatalf("answers did not reach Codex: %s", answer.Payload)
+			}
+			waitSessionEvent(t, events, "question-thread", "codex.turn.completed")
+		})
 	}
 }

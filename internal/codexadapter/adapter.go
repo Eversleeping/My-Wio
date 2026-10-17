@@ -1029,7 +1029,9 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 		return nil
 	}
 	processContext, cancel := context.WithCancel(context.Background())
-	process := exec.CommandContext(processContext, a.command, "app-server", "--listen", "stdio://")
+	// Enable interactive questions for ordinary turns, including existing Agent
+	// installations whose on-disk Codex configuration predates this feature.
+	process := exec.CommandContext(processContext, a.command, "app-server", "--listen", "stdio://", "-c", "features.default_mode_request_user_input=true")
 	process.Env = append(os.Environ(), a.environment...)
 	stdout, err := process.StdoutPipe()
 	if err != nil {

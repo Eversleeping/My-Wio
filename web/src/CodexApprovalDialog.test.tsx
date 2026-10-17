@@ -28,8 +28,8 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-function ApprovalPage() {
-  const [approvals, setApprovals] = useState<Approval[]>([approval]);
+function ApprovalPage({ pending = approval }: { pending?: Approval }) {
+  const [approvals, setApprovals] = useState<Approval[]>([pending]);
   return <I18nProvider><CodexPage realtime={0} streamRevisions={{}} approvals={approvals} approvalSignal={0} reloadApprovals={() => setApprovals([])} notify={vi.fn()} selectedThreadID="" onSelectThread={vi.fn()} /></I18nProvider>;
 }
 
@@ -42,4 +42,30 @@ test("closes the approval dialog after the final request is approved", async () 
 
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Pending approvals" })).not.toBeInTheDocument());
   expect(fetch).toHaveBeenCalledWith("/api/approvals/approval-1/decision", expect.objectContaining({ method: "POST" }));
+});
+
+test("renders interactive questions and sends selected and typed answers through the page", async () => {
+  const pending: Approval = {
+    ...approval,
+    kind: "item/tool/requestUserInput",
+    detail: { questions: [
+      { id: "choice", header: "Choice", question: "Choose an option", options: [{ label: "A", description: "First option" }, { label: "B", description: "Second option" }] },
+      { id: "details", header: "Details", question: "Add details", isOther: true }
+    ] }
+  };
+  const user = userEvent.setup();
+  render(<ApprovalPage pending={pending} />);
+
+  expect(await screen.findByRole("radio", { name: "B Second option" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Submit answers" })).toBeDisabled();
+  await user.click(screen.getByRole("radio", { name: "B Second option" }));
+  await user.type(screen.getByRole("textbox", { name: "Your answer" }), "My custom details");
+  await user.click(screen.getByRole("button", { name: "Submit answers" }));
+
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Pending approvals" })).not.toBeInTheDocument());
+  expect(fetch).toHaveBeenCalledWith("/api/approvals/approval-1/decision", expect.objectContaining({
+    method: "POST",
+    body: JSON.stringify({ decision: "answered", answers: { choice: { answers: ["B"] }, details: { answers: ["My custom details"] } } })
+  }));
 });

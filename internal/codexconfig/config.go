@@ -33,6 +33,7 @@ func Merge(existing []byte, apiURL, model string) ([]byte, error) {
 	features := table(configuration, "features")
 	features["goals"] = true
 	features["multi_agent"] = true
+	features["default_mode_request_user_input"] = true
 	agents := table(configuration, "agents")
 	agents["enabled"] = true
 

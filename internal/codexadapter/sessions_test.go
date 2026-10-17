@@ -63,6 +63,20 @@ func init() {
 			active = true
 			respond(message.ID, map[string]any{"turn": map[string]string{"id": "helper-turn"}})
 			notify("turn/started", map[string]any{"threadId": threadID, "turn": map[string]string{"id": "helper-turn"}})
+			if strings.Contains(string(message.Params), "ask-user") {
+				if !strings.Contains(strings.Join(os.Args, " "), "features.default_mode_request_user_input=true") {
+					notify("item/completed", map[string]any{"threadId": threadID, "item": map[string]string{"id": "plain-question", "type": "agentMessage", "text": "Which option do you prefer?"}})
+					continue
+				}
+				_ = encoder.Encode(map[string]any{"id": 43, "method": protocol.UserInputRequestMethod, "params": map[string]any{
+					"threadId": threadID, "turnId": "helper-turn", "itemId": "question",
+					"questions": []map[string]any{
+						{"id": "choice", "header": "Choice", "question": "Which option?", "options": []map[string]string{{"label": "A"}, {"label": "B"}}},
+						{"id": "details", "header": "Details", "question": "Any details?", "isOther": true},
+					},
+				}})
+				continue
+			}
 			_ = encoder.Encode(map[string]any{"id": 42, "method": "item/commandExecution/requestApproval", "params": map[string]string{"threadId": threadID, "turnId": "helper-turn", "itemId": "helper-command"}})
 		case "turn/interrupt":
 			active = false
@@ -86,6 +100,18 @@ func init() {
 			}
 			respond(message.ID, map[string]any{"goal": map[string]string{"threadId": threadID, "objective": fmt.Sprintf("process:%d", os.Getpid())}})
 		case "":
+			if idKey(message.ID) == "43" {
+				var response struct {
+					Answers map[string]protocol.UserInputAnswer `json:"answers"`
+				}
+				if json.Unmarshal(message.Result, &response) != nil || len(response.Answers["choice"].Answers) != 1 || len(response.Answers["details"].Answers) != 1 {
+					continue
+				}
+				notify("serverRequest/resolved", map[string]any{"threadId": threadID, "requestId": 43})
+				notify("item/completed", map[string]any{"threadId": threadID, "item": map[string]string{"id": "answer-received", "type": "agentMessage", "text": response.Answers["choice"].Answers[0] + ": " + response.Answers["details"].Answers[0]}})
+				active = false
+				notify("turn/completed", map[string]any{"threadId": threadID, "turn": map[string]string{"id": "helper-turn", "status": "completed"}})
+			}
 			if idKey(message.ID) == "42" {
 				notify("item/completed", map[string]any{"threadId": threadID, "item": map[string]string{"id": "approval-handled", "type": "commandExecution"}})
 			}
