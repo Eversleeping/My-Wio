@@ -287,7 +287,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		var command protocol.WorkspaceFilesCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.WorkspaceFilesResult
-			result, err = scanner.ListWorkspaceFiles(ctx, command.Path, c.inventoryRoots(), 4000)
+			result, err = scanner.ListWorkspaceFiles(ctx, command.Path, c.inventoryRoots())
 			if err == nil {
 				resultData, err = json.Marshal(result)
 			}

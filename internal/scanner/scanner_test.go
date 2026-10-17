@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,7 +181,7 @@ func TestListWorkspaceFilesFiltersGeneratedDirectoriesAndEnforcesRoots(t *testin
 		}
 	}
 
-	result, err := ListWorkspaceFiles(context.Background(), root, []string{base}, 100)
+	result, err := ListWorkspaceFiles(context.Background(), root, []string{base})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,12 +199,30 @@ func TestListWorkspaceFilesFiltersGeneratedDirectoriesAndEnforcesRoots(t *testin
 		t.Fatalf(".git was included: %#v", entries)
 	}
 
-	limited, err := ListWorkspaceFiles(context.Background(), root, []string{base}, 2)
-	if err != nil || !limited.Truncated || len(limited.Files) != 2 {
-		t.Fatalf("unexpected limited result: %#v %v", limited, err)
-	}
-	if _, err := ListWorkspaceFiles(context.Background(), root, []string{filepath.Join(base, "other")}, 100); err == nil {
+	if _, err := ListWorkspaceFiles(context.Background(), root, []string{filepath.Join(base, "other")}); err == nil {
 		t.Fatal("workspace outside the configured roots was accepted")
+	}
+}
+
+func TestListWorkspaceFilesReturnsMoreThan4000Entries(t *testing.T) {
+	root := t.TempDir()
+	const count = 4001
+	for i := 0; i < count; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%04d.txt", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := ListWorkspaceFiles(context.Background(), root, []string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Truncated || len(result.Files) != count {
+		t.Fatalf("expected all %d entries, got %d (truncated=%v)", count, len(result.Files), result.Truncated)
+	}
+	for i, entry := range result.Files {
+		if want := fmt.Sprintf("file-%04d.txt", i); entry.Path != want || entry.Kind != "file" {
+			t.Fatalf("entry %d = %#v, want file %q", i, entry, want)
+		}
 	}
 }
 

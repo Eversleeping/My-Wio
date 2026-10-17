@@ -244,7 +244,7 @@ Git 和 Docker 未安装时，服务器仍可注册并上报基础指标，但�
 
 扫描根目录与 Agent 克隆根目录都会标记为 `managed`，允许 Git 写操作、移动、复制和受管文件删除。跨服务器复制要求源工作区干净、已检出分支、有 upstream 且 upstream 已登记为项目远程。删除项目或工作区前，Wio 会检查脏文件、活动操作、Codex 任务、子工作区和部署；项目删除可选择仅删除 Wio 元数据，或删除全部受管工作区文件。
 
-工作区 Git 页面支持状态、ahead/behind、分支、远程和提交查看，以及创建/重命名/删除/切换分支、添加或修改远程、fetch、pull、push、stage、unstage、discard 和 commit。文件树最多返回 4,000 项，文本文件和 diff 预览默认限制为 1 MiB；所有文件路径都会解析并校验在配置的根目录内。
+工作区 Git 页面支持状态、ahead/behind、分支、远程和提交查看，以及创建/重命名/删除/切换分支、添加或修改远程、fetch、pull、push、stage、unstage、discard 和 commit。文件树不限制返回条目数量，文本文件和 diff 预览默认限制为 1 MiB；所有文件路径都会解析并校验在配置的根目录内。
 
 ## Agent 发现、升级与 Codex CLI 管理
 

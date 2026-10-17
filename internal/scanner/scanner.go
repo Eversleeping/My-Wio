@@ -92,10 +92,7 @@ func Discover(ctx context.Context, roots []string, limit int) (protocol.Inventor
 
 var errLimitReached = errors.New("repository limit reached")
 
-func ListWorkspaceFiles(ctx context.Context, root string, allowedRoots []string, limit int) (protocol.WorkspaceFilesResult, error) {
-	if limit <= 0 {
-		limit = 4000
-	}
+func ListWorkspaceFiles(ctx context.Context, root string, allowedRoots []string) (protocol.WorkspaceFilesResult, error) {
 	root, err := resolveWorkspaceRoot(root, allowedRoots)
 	if err != nil {
 		return protocol.WorkspaceFilesResult{}, err
@@ -152,13 +149,9 @@ func ListWorkspaceFiles(ctx context.Context, root string, allowedRoots []string,
 			}
 		}
 		result.Files = append(result.Files, item)
-		if len(result.Files) >= limit {
-			result.Truncated = true
-			return errLimitReached
-		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errLimitReached) {
+	if err != nil {
 		return protocol.WorkspaceFilesResult{}, err
 	}
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
