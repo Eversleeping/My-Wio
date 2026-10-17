@@ -1,6 +1,7 @@
 import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
 import { CodexModelPicker } from "./components/CodexModelPicker";
-import { UserInputPrompt, isUserInputRequest } from "./components/UserInputPrompt";
+import { UserInputPrompt, QuestionForm, isUserInputRequest } from "./components/UserInputPrompt";
+import { asyncQuestions, parseQuestionReply, questionReply, readableQuestionReply } from "./asyncUserInput";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -854,6 +855,17 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const slashKeyboardRef = useRef<((event: ReactKeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
   const sourceEvents = events.data ?? [];
+  const [submittedAnswers, setSubmittedAnswers] = useState<Record<string, string>>({});
+  const questionAnswers = useMemo(() => {
+    const answers = { ...submittedAnswers };
+    for (const event of sourceEvents) {
+      const payload = asRecord(event.payload);
+      const item = asRecord(payload?.item);
+      const text = event.kind === "user.message" ? String(payload?.text ?? "") : item?.type === "userMessage" ? extractText(item) : "";
+      for (const reply of parseQuestionReply(text)) answers[reply.questionItemId] = reply.answer;
+    }
+    return answers;
+  }, [sourceEvents, submittedAnswers]);
   const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
   const displayItems = useMemo(() => groupCommandEvents(chatEvents), [chatEvents]);
   const subagents = useMemo(() => collectSubagentActivity(sourceEvents), [sourceEvents]);
@@ -1170,9 +1182,25 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
       setInterrupting(false);
     }
   };
+  const answerQuestion = async (event: StreamEvent, answers: Record<string, string>) => {
+    const questions = asyncQuestions(asRecord(asRecord(event.payload)?.item));
+    const content = { prompt: questionReply(questions, answers), images: [] };
+    const current = await api<Thread>(`/threads/${thread.id}`);
+    const start = () => post(`/threads/${thread.id}/turns`, { ...content, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode });
+    if (current.status === "running") {
+      try { await post(`/threads/${thread.id}/steer`, content); }
+      catch (error) {
+        // Only retry a request explicitly rejected before it was queued.
+        if (!(error instanceof APIError) || error.code !== "steer_inactive") throw error;
+        await start();
+      }
+    } else await start();
+    setSubmittedAnswers(previous => ({ ...previous, ...answers }));
+    events.reload();
+  };
   const renderDisplayItem = (item: ConversationDisplayItem) => item.type === "commandGroup"
     ? <CommandEventGroup events={item.events} />
-    : <ConversationEventItem event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} />;
+    : <ConversationEventItem event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} questionAnswers={questionAnswers} onAnswer={thread.archived_at ? undefined : values => answerQuestion(item.event, values)} />;
   const statusPanel = statusVisible ? <section className="composer-status-panel" role="region" aria-label={t("codex.taskStatus")}>
     <header><strong>{t("codex.taskStatus")}</strong><div><button type="button" className="text-button" disabled={nativeBusy === "status"} onClick={() => void loadSnapshot<CodexStatusData>("status", true)}>{nativeBusy === "status" ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("common.refresh")}</button><button type="button" className="text-button" onClick={() => setStatusVisible(false)}>{t("common.close")}</button></div></header>
     <SnapshotNotice snapshot={statusSnapshot} loading={nativeBusy === "status"} error={nativeError} />
@@ -1356,16 +1384,18 @@ export function ApprovalActions({ item, onDecided, notify }: { item: Approval; o
   return <div className="approval-actions"><button type="button" className="secondary-button danger" disabled={busy} onClick={() => void decide("denied")}><Ban size={16} />{t("codex.deny")}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void decide("approved")}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("codex.approveOnce")}</button></div>;
 }
 
-function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFile }: { event: StreamEvent; onEdit?: (eventID: string, text: string) => void; notify: (text: string) => void; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void }) {
+function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFile, questionAnswers = {}, onAnswer }: { event: StreamEvent; onEdit?: (eventID: string, text: string) => void; notify: (text: string) => void; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void; questionAnswers?: Record<string, string>; onAnswer?: (values: Record<string, string>) => Promise<void> }) {
   const { t } = useI18n();
   const kind = event.kind;
   const payload = asRecord(event.payload);
   if (kind === "user.message") {
-    const text = String(payload?.text ?? "");
+    const originalText = String(payload?.text ?? "");
+    const text = readableQuestionReply(originalText);
+
     const images = extractImageSources(payload?.images);
     const imageCount = Math.max(images.length, Number(payload?.image_count ?? 0));
     const copyMessage = async () => { try { await copyText(text); notify(t("codex.messageCopied")); } catch (error) { notify(message(error)); } };
-    return <article className="message user"><header><UserRound size={15} /><strong>{t(payload?.steer ? "codex.youSteering" : "codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{images.length > 0 ? <MessageImages sources={images} /> : imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button>{onEdit && !payload?.steer && <button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button>}</div></article>;
+    return <article className="message user"><header><UserRound size={15} /><strong>{t(payload?.steer ? "codex.youSteering" : "codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{images.length > 0 ? <MessageImages sources={images} /> : imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button>{onEdit && text === originalText && !payload?.steer && <button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button>}</div></article>;
   }
   if (kind === "codex.turn.cancelled") return <article className="message interrupted"><header><Ban size={15} /><strong>{t("codex.turnInterrupted")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{t("codex.turnInterruptedDetail")}</div></article>;
   if (kind === "codex.error" || kind === "codex.turn.failed" || kind === "codex.interrupt.failed" || kind === "codex.approval.failed" || (kind === "codex.compact.failed" || kind === "codex.steer.failed")) return <article className="message error"><header><AlertTriangle size={15} /><strong>{t(kind === "codex.turn.failed" || kind === "codex.error" ? "codex.turnFailed" : "codex.actionFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
@@ -1381,6 +1411,8 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
   if (item?.type === "collabToolCall" || item?.type === "collabAgentToolCall" || item?.type === "subAgentActivity") return <SubagentEvent event={event} item={item} />;
   if (item?.type === "agentMessage" || item?.type === "plan" || itemImages.length > 0) {
     const text = extractText(item);
+    const questions = asyncQuestions(item);
+    if (questions.length) return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><QuestionForm questions={questions} answers={questionAnswers} readOnly={!onAnswer} onSubmit={async values => { await onAnswer?.(values); }} /></article>;
     return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{itemImages.length > 0 && <MessageImages sources={itemImages} />}</article>;
   }
   return <ToolEvent event={event} item={item} />;
