@@ -1404,7 +1404,7 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
     return <article className="message user"><header><UserRound size={15} /><strong>{t(payload?.steer ? "codex.youSteering" : "codex.you")}</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{images.length > 0 ? <MessageImages sources={images} /> : imageCount > 0 && <span className="message-image-count"><ImageIcon size={14} />{imageCount}</span>}<div className="message-actions"><button type="button" className="message-action" disabled={!text} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyMessage()}><Copy size={14} /></button>{onEdit && text === originalText && !payload?.steer && <button type="button" className="message-action" disabled={!text} title={t("codex.editMessage")} aria-label={t("codex.editMessage")} onClick={() => onEdit(event.event_id, text)}><Pencil size={14} /></button>}</div></article>;
   }
   if (kind === "codex.turn.cancelled") return <article className="message interrupted"><header><Ban size={15} /><strong>{t("codex.turnInterrupted")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{t("codex.turnInterruptedDetail")}</div></article>;
-  if (kind === "codex.error" && payload?.willRetry === true) return <article className="message interrupted"><header><RefreshCw size={15} /><strong>{t("codex.reconnectingModel")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload)}{typeof asRecord(payload.error)?.additionalDetails === "string" && <p>{String(asRecord(payload.error)?.additionalDetails)}</p>}<p>{t("codex.reconnectingModelDetail")}</p></div></article>;
+  if (kind === "codex.error" && payload?.willRetry === true) return null;
   if (kind === "codex.error" || kind === "codex.turn.failed" || kind === "codex.interrupt.failed" || kind === "codex.approval.failed" || (kind === "codex.compact.failed" || kind === "codex.steer.failed")) return <article className="message error"><header><AlertTriangle size={15} /><strong>{t(kind === "codex.turn.failed" || kind === "codex.error" ? "codex.turnFailed" : "codex.actionFailed")}</strong><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{errorText(payload) || t("codex.unknownError")}</div></article>;
   if (kind === "codex.turn.completed") {
     const turn = asRecord(payload?.turn);
@@ -1873,7 +1873,7 @@ function conversationEvents(events: StreamEvent[]) {
       continue;
     }
     if (event.kind === "codex.error") {
-      result.push(event);
+      if (payload?.willRetry !== true) result.push(event);
       continue;
     }
     if (event.kind === "codex.turn.completed") {

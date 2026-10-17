@@ -67,7 +67,7 @@ test("shows one capacity error per turn across error and completion notification
   await waitFor(() => expect(screen.getAllByText(error.message)).toHaveLength(2));
 });
 
-test("shows retryable stream errors and distinguishes replies awaiting turn completion", async () => {
+test("hides retryable error cards while preserving the running status", async () => {
   const value = thread("stream-retry"); value.status = "running";
   let events: StreamEvent[] = [
     { ...event(value.id, 1, "", "codex.turn.started"), payload: { turn: { id: "active" } } },
@@ -78,10 +78,11 @@ test("shows retryable stream errors and distinguishes replies awaiting turn comp
   expect(await screen.findByText("Reply received; waiting for the model to confirm completion")).toBeInTheDocument();
   events = [...events, { ...event(value.id, 3, "", "codex.error"), payload: { turnId: "active", willRetry: true, error: { message: "Reconnecting... 1/5", additionalDetails: "stream disconnected before completion: Transport error: timeout" } } }];
   view.rerender(session(value, 1));
-  expect(await screen.findByText("Reconnecting... 1/5")).toBeInTheDocument();
-  expect(screen.getByText("stream disconnected before completion: Transport error: timeout")).toBeInTheDocument();
+  expect(await screen.findByText("Reconnecting to the model")).toBeInTheDocument();
+  expect(screen.queryByText("Reconnecting... 1/5")).not.toBeInTheDocument();
+  expect(screen.queryByText("stream disconnected before completion: Transport error: timeout")).not.toBeInTheDocument();
   expect(screen.queryByText("Reply received; waiting for the model to confirm completion")).not.toBeInTheDocument();
-  expect(screen.getByText("The model connection was interrupted. Codex is retrying this turn; your message has not been resubmitted.")).toBeInTheDocument();
+  expect(screen.queryByText("The model connection was interrupted. Codex is retrying this turn; your message has not been resubmitted.")).not.toBeInTheDocument();
 });
 
 afterEach(() => {
