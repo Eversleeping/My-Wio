@@ -11,6 +11,11 @@ const MinimumSelfUpdateVersion = "0.2.0"
 const MinimumCodexUpdateVersion = "0.2.9"
 const MinimumExactDeploymentRollbackVersion = "0.2.45"
 const MinimumCodexSteerVersion = "0.2.51"
+const MinimumWorkspaceFileWriteVersion = "0.2.56"
+
+func SupportsWorkspaceFileWrite(version string) bool {
+	return atLeast(version, MinimumWorkspaceFileWriteVersion)
+}
 
 func SupportsCodexSteer(version string) bool {
 	return atLeast(version, MinimumCodexSteerVersion)

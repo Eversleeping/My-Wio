@@ -292,6 +292,11 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
+	} else if envelope.Kind == "workspace.file.write" {
+		var command protocol.WorkspaceFileWriteCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			err = scanner.WriteWorkspaceFile(ctx, command, c.inventoryRoots())
+		}
 	} else if envelope.Kind == "workspace.file.preview" {
 		var command protocol.WorkspaceFilePreviewCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {

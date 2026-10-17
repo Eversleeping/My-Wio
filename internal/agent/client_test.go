@@ -335,6 +335,29 @@ func TestWorkspaceGitInspectReturnsStatusBranchesRemotesAndCommits(t *testing.T)
 	}
 }
 
+func TestWorkspaceFileWriteOperationCreatesAndRejectsOverwrite(t *testing.T) {
+	root := t.TempDir()
+	client := &Client{config: Config{ScanRoots: []string{root}, CloneRoot: filepath.Join(root, "clone")}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), outbound: make(chan *protocol.AgentEnvelope, 2), seen: make(map[string]*operationExecution)}
+	command := protocol.WorkspaceFileWriteCommand{Root: root, Path: "docs/new.txt", Content: []byte("new\n"), Create: true}
+	payload, _ := json.Marshal(command)
+	for _, id := range []string{"create-file", "do-not-overwrite"} {
+		client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: id, Kind: "workspace.file.write", PayloadJSON: payload})
+		receiveOperationStarted(t, client.outbound, id)
+		envelope := receiveAgentEnvelope(t, client.outbound)
+		var result protocol.OperationResult
+		if err := json.Unmarshal(envelope.PayloadJSON, &result); err != nil {
+			t.Fatal(err)
+		}
+		if (id == "create-file" && result.Status != "succeeded") || (id == "do-not-overwrite" && result.Status != "failed") {
+			t.Fatalf("write result: %#v", result)
+		}
+	}
+	content, err := os.ReadFile(filepath.Join(root, "docs", "new.txt"))
+	if err != nil || string(content) != "new\n" {
+		t.Fatalf("file contents: %q %v", content, err)
+	}
+}
+
 func receiveAgentEnvelope(t *testing.T, outbound <-chan *protocol.AgentEnvelope) *protocol.AgentEnvelope {
 	t.Helper()
 	select {

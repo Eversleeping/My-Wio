@@ -1055,4 +1055,24 @@ func TestWorkspaceFilesOperationStoresAgentSnapshot(t *testing.T) {
 	if err != nil || diff.Status != "succeeded" || diff.Additions != 1 || diff.Deletions != 1 {
 		t.Fatalf("unexpected workspace diff: %#v %v", diff, err)
 	}
+	writeID, err := database.QueueResourceOperation(ctx, server.ID, "workspace.file.write", protocol.WorkspaceFileWriteCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: "new.txt", Content: []byte("new"), Create: true}, "write-file", store.OperationResource{WorkspaceID: workspace.ID}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePayload, _ := json.Marshal(protocol.OperationResult{OperationID: writeID, Status: "succeeded"})
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: writePayload}); err != nil {
+		t.Fatal(err)
+	}
+	filesAfterWrite, err := database.WorkspaceFileSnapshot(ctx, workspace.ID)
+	if err != nil || filesAfterWrite.Status != "scanning" {
+		t.Fatalf("files not rescanned after write: %#v %v", filesAfterWrite, err)
+	}
+	changesAfterWrite, err := database.WorkspaceChangeSnapshot(ctx, workspace.ID)
+	if err != nil || changesAfterWrite.Status != "scanning" {
+		t.Fatalf("changes not rescanned after write: %#v %v", changesAfterWrite, err)
+	}
+	var count int
+	if err := database.DB.GetContext(ctx, &count, database.Q("SELECT COUNT(*) FROM agent_operations WHERE idempotency_key IN (?,?)"), writeID+":files", writeID+":changes"); err != nil || count != 2 {
+		t.Fatalf("missing refresh operations: %d %v", count, err)
+	}
 }

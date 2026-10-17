@@ -1341,7 +1341,11 @@ func (a *API) workspaceFilePreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load workspace file preview")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": preview.WorkspaceID, "path": preview.Path, "content": preview.Content, "size": preview.Size, "truncated": preview.Truncated != 0, "status": preview.Status, "error": preview.Error, "requested_at": preview.RequestedAt, "updated_at": preview.UpdatedAt})
+	hash := ""
+	if preview.Status == "succeeded" && preview.Truncated == 0 {
+		hash = workspaceContentHash(preview.Content)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": preview.WorkspaceID, "path": preview.Path, "content": preview.Content, "hash": hash, "size": preview.Size, "truncated": preview.Truncated != 0, "status": preview.Status, "error": preview.Error, "requested_at": preview.RequestedAt, "updated_at": preview.UpdatedAt})
 }
 
 func (a *API) requestWorkspaceFilePreview(w http.ResponseWriter, r *http.Request) {

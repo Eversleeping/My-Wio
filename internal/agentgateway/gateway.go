@@ -422,6 +422,25 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		if operation.Kind == "workspace.file.write" && result.Status == "succeeded" {
+			var command protocol.WorkspaceFileWriteCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if err := g.store.BeginWorkspaceFileScan(ctx, command.WorkspaceID); err != nil {
+				return err
+			}
+			if _, err := g.store.QueueResourceOperation(ctx, serverID, "workspace.files", protocol.WorkspaceFilesCommand{WorkspaceID: command.WorkspaceID, Path: command.Root}, operation.ID+":files", store.OperationResource{WorkspaceID: command.WorkspaceID}, false); err != nil {
+				return err
+			}
+			if err := g.store.BeginWorkspaceChangeScan(ctx, command.WorkspaceID); err != nil {
+				return err
+			}
+			if _, err := g.store.QueueResourceOperation(ctx, serverID, "workspace.changes", protocol.WorkspaceChangesCommand{WorkspaceID: command.WorkspaceID, Path: command.Root}, operation.ID+":changes", store.OperationResource{WorkspaceID: command.WorkspaceID}, false); err != nil {
+				return err
+			}
+			g.Wake(serverID)
+		}
 		if operation.Kind == "workspace.file.preview" {
 			var command protocol.WorkspaceFilePreviewCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {

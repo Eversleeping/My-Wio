@@ -92,6 +92,17 @@ type WorkspaceFilePreviewResult struct {
 	Truncated bool   `json:"truncated"`
 }
 
+const MaxWorkspaceFileBytes = 1024 * 1024
+
+type WorkspaceFileWriteCommand struct {
+	WorkspaceID  string `json:"workspace_id"`
+	Root         string `json:"root"`
+	Path         string `json:"path"`
+	Content      []byte `json:"content"`
+	Create       bool   `json:"create"`
+	ExpectedHash string `json:"expected_hash,omitempty"`
+}
+
 type WorkspaceChangesCommand struct {
 	WorkspaceID string `json:"workspace_id"`
 	Path        string `json:"path"`

@@ -555,6 +555,11 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .file-preview-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; }
 .file-language, .file-size { padding: 3px 6px; color: #536067; background: #f1f3f1; border: 1px solid var(--line); border-radius: 4px; font-size: 9px; white-space: nowrap; }
 .file-preview-body { min-width: 0; min-height: 0; position: relative; overflow: auto; }
+.file-preview-panel.editing .file-preview-body { display: flex; flex-direction: column; overflow: hidden; }
+.workspace-file-editor { flex: 1; min-height: 220px; width: 100%; resize: none; border: 0; border-radius: 0; padding: 14px; font-family: Consolas, monospace; font-size: 12px; line-height: 1.6; tab-size: 2; white-space: pre; overflow: auto; }
+.workspace-add-file { display: grid; gap: 14px; }
+.workspace-add-file label { display: grid; gap: 6px; }
+.workspace-add-file textarea { font-family: Consolas, monospace; }
 .file-preview-loading, .file-preview-error { min-height: 220px; height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 20px; color: var(--muted); font-size: 11px; text-align: center; }
 .file-preview-error { flex-direction: column; color: #8e2d34; }
 .file-preview-error span { max-width: 420px; overflow-wrap: anywhere; }

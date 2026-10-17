@@ -2,6 +2,7 @@ import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "
 import { CodexModelPicker } from "./components/CodexModelPicker";
 import { UserInputPrompt, QuestionForm, isUserInputRequest } from "./components/UserInputPrompt";
 import { asyncQuestions, parseQuestionReply, questionReply, readableQuestionReply } from "./asyncUserInput";
+import { AddWorkspaceFileDialog, clearFileDrafts, useFileEditor } from "./workspaceFileEditing";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -30,6 +31,7 @@ import {
   File as FileIcon,
   FileCode2,
   FileDiff,
+  FilePlus2,
   Folder,
   FolderOpen,
   FolderTree,
@@ -189,6 +191,7 @@ function isNearCodexStreamBottom(element: HTMLElement) {
 }
 
 export function clearCodexSessionMemory(threadID?: string) {
+  if (!threadID) clearFileDrafts();
   const eventPrefix = threadID ? `/threads/${threadID}/events?` : "/threads/";
   clearDataCacheMatching(path => path.startsWith(eventPrefix) && path.includes("/events?"));
   for (const path of threadEventsCache.keys()) {
@@ -620,6 +623,7 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [commitMessage, setCommitMessage] = useState("");
   const [gitAction, setGitAction] = useState<"" | "commit" | "pull" | "push">("");
+  const [addingFile, setAddingFile] = useState(false);
   const previousTask = useRef({ id: taskID, status: taskStatus });
   const syncedGitUpdate = useRef("");
   const currentSnapshot = snapshot.data?.workspace_id === workspaceID ? snapshot.data : null;
@@ -666,6 +670,7 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
     setRequestedWorkspace("");
     setCommitMessage("");
     setGitAction("");
+    setAddingFile(false);
     syncedGitUpdate.current = "";
   }, [workspaceID]);
   useEffect(() => {
@@ -735,7 +740,8 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
   const writeBusy = Boolean(gitAction) || currentGit?.status === "refreshing";
   const writeDisabled = !workspaceID || !writable || writeBusy;
   return <section className={`workspace-files ${mode === "changes" ? "changes-mode" : ""}`}>
-    <div className="panel-heading"><div>{mode === "changes" ? <FileDiff size={17} /> : <FolderTree size={17} />}<h2>{t(mode === "changes" ? "codex.changedFiles" : "codex.projectFiles")}</h2></div><div className="row-actions"><button className={`icon-button ${mode === "changes" ? "active" : ""}`} type="button" aria-pressed={mode === "changes"} disabled={!workspaceID} title={t(mode === "changes" ? "codex.showProjectFiles" : "codex.showChangedFiles")} onClick={toggleMode}><FileDiff size={16} /></button><button className="icon-button" type="button" disabled={!workspaceID || busy} title={t(mode === "changes" ? "codex.refreshChanges" : "codex.refreshFiles")} onClick={refresh}>{busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div></div>
+    {addingFile && workspaceID && <AddWorkspaceFileDialog key={workspaceID} workspaceID={workspaceID} onClose={() => setAddingFile(false)} onCreated={path => { snapshot.reload(); changes.reload(); onOpenFile({ path, mode: "file" }); }} />}
+    <div className="panel-heading"><div>{mode === "changes" ? <FileDiff size={17} /> : <FolderTree size={17} />}<h2>{t(mode === "changes" ? "codex.changedFiles" : "codex.projectFiles")}</h2></div><div className="row-actions"><button type="button" className="icon-button" disabled={!workspaceID || !writable} title={t("codex.addFile")} aria-label={t("codex.addFile")} onClick={() => setAddingFile(true)}><FilePlus2 size={16} /></button><button className={`icon-button ${mode === "changes" ? "active" : ""}`} type="button" aria-pressed={mode === "changes"} disabled={!workspaceID} title={t(mode === "changes" ? "codex.showProjectFiles" : "codex.showChangedFiles")} onClick={toggleMode}><FileDiff size={16} /></button><button className="icon-button" type="button" disabled={!workspaceID || busy} title={t(mode === "changes" ? "codex.refreshChanges" : "codex.refreshFiles")} onClick={refresh}>{busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</button></div></div>
     <div className="workspace-file-body">{mode === "changes" ? <ChangedFilesView workspaceID={workspaceID} snapshot={currentChanges} loading={changes.loading} activePath={activeMode === "diff" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "diff" })} /> : !workspaceID ? <Empty icon={<FolderTree size={22} />} text={t("codex.selectWorkspace")} /> : !currentSnapshot ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : currentSnapshot.status === "failed" ? <div className="file-tree-error"><AlertTriangle size={16} /><span>{currentSnapshot.error || t("codex.fileScanFailed")}</span></div> : fileScanning && tree.length === 0 ? <div className="file-tree-state"><LoaderCircle className="spin" size={17} />{t("codex.scanningFiles")}</div> : tree.length === 0 ? <Empty icon={<Folder size={22} />} text={t("codex.noProjectFiles")} /> : <div className="file-tree">{tree.map(node => <FileTreeItem key={node.path} node={node} depth={0} expanded={expanded} onToggle={toggle} activePath={activeMode === "file" ? activePath : ""} onOpenFile={path => onOpenFile({ path, mode: "file" })} />)}{currentSnapshot.truncated && <div className="file-tree-note">{t("codex.fileListTruncated")}</div>}</div>}</div>
     {mode === "changes" && <div className="workspace-change-actions">
       <form onSubmit={event => { event.preventDefault(); void runGitAction("commit"); }}><input aria-label={t("project.gitCommitMessage")} value={commitMessage} maxLength={20 * 1024} disabled={writeDisabled} placeholder={t("project.gitCommitPlaceholder")} onChange={event => setCommitMessage(event.target.value)} /><button className="primary-button small" disabled={writeDisabled || changeCount === 0 || !commitMessage.trim()}>{gitAction === "commit" ? <LoaderCircle className="spin" size={14} /> : <GitCommit size={14} />}{t("project.gitCommitAction")}</button></form>
@@ -1434,9 +1440,12 @@ function MessageImages({ sources }: { sources: string[] }) {
   return <><div className={"message-images " + (sources.length === 1 ? "single" : "")}>{sources.map((source, index) => <button type="button" key={source.slice(0, 80) + ":" + index} title={t("codex.openImage")} onClick={() => setActive(source)}><img src={source} alt={t("codex.messageImage")} loading="lazy" referrerPolicy="no-referrer" /></button>)}</div>{active && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={t("codex.messageImage")} onClick={() => setActive("")}><button type="button" className="image-lightbox-close" title={t("common.close")} aria-label={t("common.close")} onClick={() => setActive("")}><X size={19} /></button><img src={active} alt={t("codex.messageImage")} referrerPolicy="no-referrer" onClick={event => event.stopPropagation()} /></div>}</>;
 }
 
-export function FilePreviewPane({ workspaceID, selection, realtime, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; onClose: () => void }) {
+type FilePreviewPaneProps = { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable?: boolean; onClose: () => void };
+export function FilePreviewPane(props: FilePreviewPaneProps) { return <EditableFilePreviewPane key={`${props.workspaceID}:${props.selection.path}`} {...props} />; }
+function EditableFilePreviewPane({ workspaceID, selection, realtime, writable = false, onClose }: FilePreviewPaneProps) {
   const { t } = useI18n();
   const preview = useWorkspacePreview<WorkspaceFilePreview>(workspaceID, selection.path, "file-preview", realtime, t("codex.previewTimedOut"));
+  const edit = useFileEditor(workspaceID, selection.path, preview.data, writable, preview.retry, onClose);
   const data = preview.data;
   const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
   const error = preview.error || data?.error || "";
@@ -1444,13 +1453,13 @@ export function FilePreviewPane({ workspaceID, selection, realtime, onClose }: {
   const updatedText = data?.updated_at ? t("codex.previewUpdated", { time: formatDate(data.updated_at) }) : "";
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
-  return <section className="file-preview-panel">
-    <header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className="icon-button" disabled={preview.requesting} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} onClick={onClose}><X size={16} /></button></div></header>
+  return <><section className={`file-preview-panel ${edit.editing ? "editing" : ""}`}>
+    <header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}<button type="button" className={`icon-button ${edit.editing ? "active" : ""}`} aria-pressed={edit.editing} disabled={edit.saving || (!edit.editing && (!writable || !showData || data.truncated || !data.hash || preview.loading))} title={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} aria-label={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} onClick={edit.editing ? edit.finish : edit.begin}><Pencil size={15} /></button><button type="button" className="icon-button" disabled={preview.requesting || edit.editing} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} disabled={edit.saving} onClick={edit.close}><X size={16} /></button></div></header>
     <div className="file-preview-body">
       {showData && (error || preview.loading) && <PreviewStatusNote messageText={error ? t("codex.previewStale", { error }) : t("codex.previewRefreshing")} updatedText={updatedText} loading={preview.loading} retry={preview.retry} retryLabel={t("common.retry")} />}
-      {error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}
+      {edit.editing ? edit.editor : error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}><HighlightedFile content={data.content} language={language.id} targetLine={selection.line} /></Suspense></> : null}
     </div>
-  </section>;
+  </section>{edit.dialog}</>;
 }
 
 export function FileDiffPane({ workspaceID, selection, realtime, writable, notify, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable: boolean; notify: (text: string) => void; onClose: () => void }) {
