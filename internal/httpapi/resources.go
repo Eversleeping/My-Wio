@@ -1632,6 +1632,19 @@ func parseThreadPageValue(values []string, present bool, name string, fallback i
 	return int(parsed), nil
 }
 
+func (a *API) thread(w http.ResponseWriter, r *http.Request) {
+	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Codex session")
+		return
+	}
+	writeJSON(w, http.StatusOK, thread)
+}
+
 func (a *API) updateThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Title    *string `json:"title"`

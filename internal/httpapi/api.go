@@ -169,6 +169,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Put("/scheduled-tasks/{taskID}", api.updateScheduledTask)
 			private.Delete("/scheduled-tasks/{taskID}", api.deleteScheduledTask)
 			private.Post("/threads", api.createThread)
+			private.Get("/threads/{threadID}", api.thread)
 			private.Patch("/threads/{threadID}", api.updateThread)
 			private.Post("/threads/{threadID}/fork", api.forkThread)
 			private.Post("/threads/{threadID}/fork-worktree", api.forkThreadToWorktree)
