@@ -60,12 +60,12 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 
 - Linux amd64 或 arm64、systemd 和 SSH
 - 控制面注册时使用 `root`，或拥有无需交互输入密码的 `sudo` 的 SSH 用户
-- Git、Docker Engine/Compose v2、Node.js/npm 和 Codex CLI 均可选；缺少它们时仍可注册并上报基础状态，相关功能会显示为不可用或警告
+- SSH 注册和修复会自动补装缺失的 Git、Docker Engine/Compose v2、Node.js/npm、Codex CLI、Playwright 与 Chromium；Node.js 使用校验 SHA-256 的 22 LTS 包，保留已可用的 Node.js 20+ 环境。系统依赖安装支持 apt-get、dnf 和 yum
 - 目标服务器需要能够主动访问控制面的 Agent URL，以及按使用场景访问 Git 远程仓库、Codex API 和 npm/Playwright 下载源
 
 ## 功能可用性、依赖与离线行为
 
-服务器是否能注册与某项功能是否可用是两件事：核心 Agent 安装、注册和配置失败会终止流程；Git、Docker、Codex CLI、npm 或 Playwright 的缺失通常只产生警告。下表说明各项能力的实际边界。
+服务器是否能注册与某项功能是否可用是两件事：核心 Agent 安装、注册和配置失败会终止流程；缺失的运行依赖会先自动补装，再以 Agent 账号复查；安装失败或系统软件源不支持时保留警告，可使用“通过 SSH 重试安装”进入修复流程。下表说明各项能力的实际边界。
 
 | 条件 | 可使用的能力 | 缺失或离线时该怎么理解与处理 |
 | --- | --- | --- |
@@ -122,7 +122,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 1. **创建管理员**：打开页面后选择登录方式。固定密码至少 12 个字符；选择动态验证码（TOTP）时，立刻离线保存恢复码。组合方式需要同时提供密码和 TOTP/恢复码。
 2. **准备凭据预设**：如果要使用 Codex 会话或注册服务器，先进入“设置”创建 Codex 凭据预设（服务地址、模型和 API Key）；Git HTTPS 凭据预设为可选项，但提交代码前应配置提交者姓名和邮箱。
 3. **注册第一台 Linux 服务器**：进入“服务器”并选择“注册服务器”。目标主机需运行 Linux、systemd 和 SSH；登录用户应为 `root` 或可免交互执行 `sudo` 的用户。先核对页面展示的 SSH 主机指纹，再确认安装。目标主机只需能够主动访问控制面，不需要开放 Wio 的入站端口。
-4. **确认可用状态**：等待服务器显示“在线”，检查心跳和所需能力。缺少 Git、Docker、Codex CLI 或 npm 时不会阻止注册，但对应功能会显示不可用或警告。
+4. **确认可用状态**：等待服务器显示“在线”，检查心跳和所需能力。系统会先尝试补装缺失依赖；仍有警告时，可通过 SSH 修复重试。
 5. **开始管理工作**：在“项目”中创建、克隆或导入仓库；需要发布时再创建部署目标、密钥集和健康检查。首次生产部署请使用下方的部署指引，而不是复用本地 SQLite 数据库。
 
 ### 常见启动问题

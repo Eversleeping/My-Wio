@@ -35,6 +35,46 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+test("shows automatic dependency setup and retries an incomplete enrollment as SSH repair", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const requests: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input); requests.push(url);
+    if (url.endsWith("/ssh/bootstrap-stream") || url.endsWith("/ssh/repair-stream")) {
+      return new Response([
+        { type: "progress", step: "installing_node" },
+        { type: "progress", step: "installing_deployment_dependencies" },
+        { type: "complete", result: { server_id: server.id, hostname: server.hostname, architecture: "amd64", warnings: url.endsWith("/ssh/repair-stream") ? [] : ["node_install_failed", "docker_compose_unavailable"] } }
+      ].map(event => JSON.stringify(event)).join("\n"), { status: 200 });
+    }
+    const payload = url === "/api/servers" ? [server] : url === "/api/credential-profiles" ? [{ id: "codex", kind: "codex", name: "Codex", model: "gpt-6.1-sol" }] : url.endsWith("/ssh/probe") ? { fingerprint: "SHA256:test", key_type: "ssh-ed25519" } : [];
+    return new Response(JSON.stringify(payload), { status: 200 });
+  }));
+  const user = userEvent.setup();
+  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  await user.click(await screen.findByRole("button", { name: "Enroll server" }));
+  const form = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  expect(within(form).getByText(/will be installed and checked automatically/)).toBeInTheDocument();
+  await user.type(within(form).getByRole("textbox", { name: "Server name" }), server.name);
+  await user.type(within(form).getByRole("textbox", { name: "SSH host or IP" }), server.address);
+  await user.selectOptions(within(form).getByRole("combobox", { name: "Authentication" }), "password");
+  await user.type(within(form).getByLabelText("SSH password"), "temporary-secret");
+  await user.click(within(form).getByRole("button", { name: "Check fingerprint" }));
+  await user.click(await screen.findByRole("button", { name: "Confirm and install" }));
+  expect(await screen.findByText(/Automatic Node.js\/npm setup failed/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Retry setup with SSH" }));
+  const repair = await screen.findByRole("dialog", { name: "Repair server registration" });
+  expect(within(repair).getByRole("textbox", { name: "SSH host or IP" })).toHaveValue(server.address);
+  await user.selectOptions(within(repair).getByRole("combobox", { name: "Authentication" }), "password");
+  expect(within(repair).getByLabelText("SSH password")).toHaveValue("");
+  await user.type(within(repair).getByLabelText("SSH password"), "new-temporary-secret");
+  await user.click(within(repair).getByRole("button", { name: "Check fingerprint" }));
+  await user.click(await screen.findByRole("button", { name: "Confirm and install" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Retry setup with SSH" })).not.toBeInTheDocument());
+  expect(requests).toContain(`/api/servers/${server.id}/ssh/repair-stream`);
+  expect(requests.filter(path => path.endsWith("/ssh/bootstrap-stream"))).toHaveLength(1);
+});
+
 test("verifies the host fingerprint before completely retiring a server", async () => {
   window.localStorage.setItem("wio_language", "en");
   const notify = vi.fn();

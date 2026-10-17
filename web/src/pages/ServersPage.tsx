@@ -25,7 +25,7 @@ import {
   Wrench,
   X
 } from "lucide-react";
-import { APIError, patch, post, postStream, remove } from "../api";
+import { api, APIError, patch, post, postStream, remove } from "../api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
 import { DataTable, Section, Status } from "../components/PageUI";
@@ -103,6 +103,16 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
 	setDialog(true);
   };
   const close = () => { if (busy) return; setDialog(false); setRepairingServer(null); reset(); };
+  const retryDependencies = async () => {
+    if (!result || busy) return;
+    setBusy(true);
+    try {
+      const server = (await api<Server[]>("/servers")).find(item => item.id === result.server_id);
+      if (server) repair(server);
+      else throw new Error(t("server.error.server_not_found"));
+    } catch (failure) { notify(enrollmentMessage(failure, t)); }
+    finally { setBusy(false); }
+  };
   const probe = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true); setError("");
@@ -269,6 +279,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
   </Section><Dialog open={dialog} title={t(repairingServer ? "server.repairTitle" : "server.enrollLinux")} onClose={close} wide>{step === "form" ? <form onSubmit={probe}>
     {error && <ErrorBanner text={error} />}
     {repairingServer && <p className="security-notice">{t("server.repairDescription")}</p>}
+    <p className="security-notice">{t("server.automaticDependencies")}</p>
     {!repairingServer && <div className="form-grid"><Field label={t("server.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></Field><Field label={t("server.scanRoots")}><input value={form.roots} onChange={e => setForm({ ...form, roots: e.target.value })} required /></Field></div>}
     <div className="form-grid"><Field label={t("server.configuration")}><textarea rows={3} maxLength={4096} value={form.configuration} onChange={e => setForm({ ...form, configuration: e.target.value })} placeholder={t("server.configurationPlaceholder")} /></Field><Field label={t("server.notes")}><textarea rows={3} maxLength={4096} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder={t("server.notesPlaceholder")} /></Field></div>
     <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={form.port} onChange={e => setForm({ ...form, port: e.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} placeholder="root / ubuntu / ec2-user" required /></Field></div>
@@ -285,7 +296,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     <p className="security-notice">{t("server.fingerprintNotice")}</p>
     {installLogs.length > 0 && <div className="install-log" aria-live="polite"><div className="install-log-heading"><SquareTerminal size={16} /><strong>{t("server.installLog")}</strong></div><div className="install-log-lines">{installLogs.map(entry => <div className={`install-log-entry ${entry.status}`} key={entry.step}>{entry.status === "running" ? <LoaderCircle className="spin" size={15} /> : entry.status === "done" ? <Check size={15} /> : <AlertTriangle size={15} />}<span>{t(`server.progress.${entry.step}`)}</span>{entry.total > 0 && <code>{Math.min(100, Math.round((entry.current / entry.total) * 100))}%</code>}{entry.detail && <small>{entry.detail}</small>}</div>)}</div></div>}
     <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={() => { setStep("form"); setError(""); setInstallLogs([]); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button" disabled={busy} onClick={() => void install()}>{busy ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{busy ? t("server.installing") : t("server.confirmInstall")}</button></DialogActions>
-  </div> : <div className="enrollment-step enrollment-complete"><div className="completion-mark"><Check size={28} /></div><h3>{t(repairingServer ? "server.repaired" : "server.installed")}</h3>{result && <p>{t("server.installedSummary", { hostname: result.hostname, architecture: result.architecture })}</p>}{result && result.warnings.length > 0 && <div className="warning-list"><strong>{t("server.warningTitle")}</strong>{result.warnings.map(warning => <span key={warning}><AlertTriangle size={15} />{t(`server.warning.${warning}`)}</span>)}</div>}<DialogActions><button className="primary-button" onClick={close}><Check size={16} />{t("common.done")}</button></DialogActions></div>}</Dialog>
+  </div> : <div className="enrollment-step enrollment-complete"><div className="completion-mark"><Check size={28} /></div><h3>{t(repairingServer ? "server.repaired" : "server.installed")}</h3>{result && <p>{t("server.installedSummary", { hostname: result.hostname, architecture: result.architecture })}</p>}{result && result.warnings.length > 0 && <div className="warning-list"><strong>{t("server.warningTitle")}</strong>{result.warnings.map(warning => <span key={warning}><AlertTriangle size={15} />{t(`server.warning.${warning}`)}</span>)}</div>}<DialogActions>{result && result.warnings.length > 0 && <button type="button" className="secondary-button" disabled={busy} onClick={() => void retryDependencies()}><Wrench size={16} />{t("server.retryDependencies")}</button>}<button className="primary-button" disabled={busy} onClick={close}><Check size={16} />{t("common.done")}</button></DialogActions></div>}</Dialog>
   <Dialog open={retiringServer !== null} title={t("server.retireTitle", { name: retiringServer?.name ?? "" })} onClose={closeRetirement} wide>
     {retireStep === "form" ? <form onSubmit={probeRetirement}>
       {retireError && <ErrorBanner text={retireError} />}

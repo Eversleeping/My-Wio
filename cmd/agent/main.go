@@ -82,11 +82,21 @@ func run(log *slog.Logger, args []string) error {
 		}
 		flags := flag.NewFlagSet("prerequisite-helper", flag.ContinueOnError)
 		socket := flags.String("socket", prerequisite.DefaultSocket, "Unix socket path")
+		once := flags.Bool("once", false, "install and verify deployment prerequisites, then exit")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
+		if *once {
+			ctx, timeoutCancel := context.WithTimeout(ctx, 15*time.Minute)
+			defer timeoutCancel()
+			result, err := prerequisite.RunOnce(ctx)
+			for _, line := range result.Logs {
+				fmt.Println(line)
+			}
+			return err
+		}
 		return prerequisite.Serve(ctx, *socket)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])

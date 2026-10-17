@@ -310,7 +310,8 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 	if err != nil {
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentToken, err)
 	}
-	expires := time.Now().UTC().Add(15 * time.Minute)
+	// First-time dependency and browser downloads may outlive a short enrollment.
+	expires := time.Now().UTC().Add(time.Hour)
 	var enrollmentID string
 	if serverID == "" {
 		enrollmentID, err = a.store.CreateEnrollmentWithMetadata(r.Context(), input.Name, input.ScanRoots, token, expires, store.ServerMetadata{

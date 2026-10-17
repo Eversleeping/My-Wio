@@ -127,6 +127,8 @@ func (s *Service) Probe(ctx context.Context, target HostTarget) (HostKeyResult, 
 }
 
 func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
+	defer cancel()
 	target, err := normalizeTarget(request.Target)
 	if err != nil {
 		return InstallResult{}, err
@@ -207,11 +209,14 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
 	resultWarnings := make([]string, 0, 10)
-	npmRegistry := officialNPMRegistry
+	countries, _ := run(client, npmCountryDetectionScript())
+	npmRegistry := npmRegistryForCountries(countries)
+	probe, dependencyWarnings := ensureBootstrapDependencies(request, probe, func(script string) (string, error) {
+		return run(client, elevated(root, script))
+	}, npmRegistry)
+	resultWarnings = append(resultWarnings, dependencyWarnings...)
 	if probe.NPMReady {
 		request.report("configuring_npm", 0, 0)
-		countries, _ := run(client, npmCountryDetectionScript())
-		npmRegistry = npmRegistryForCountries(countries)
 		if _, err := run(client, elevated(root, npmRegistryConfigurationScript(npmRegistry))); err != nil {
 			resultWarnings = append(resultWarnings, "npm_registry_configuration_failed")
 		}
@@ -263,7 +268,7 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		packageName := "@openai/codex@" + codexcli.DefaultTargetVersion
 		install := "su -s /bin/sh -c " + shellQuote("npm install --prefix "+shellQuote(prefix)+" --omit=dev "+shellQuote(packageName)) + " wio-agent"
 		managedPath := prefix + "/node_modules/.bin/codex"
-		if _, installErr := run(client, elevated(root, install)); installErr == nil && commandAvailable(client, managedPath) {
+		if _, installErr := run(client, elevated(root, install)); installErr == nil && agentCommandWorks(client, root, managedPath+" --version") {
 			codexReady = true
 			codexPath = managedPath
 		} else {
@@ -308,7 +313,7 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		result.Warnings = append(result.Warnings, "config_permission_failed")
 	}
 	request.report("starting_service", 0, 0)
-	start := "systemctl daemon-reload && systemctl enable --now wio-prerequisite wio-agent"
+	start := "systemctl daemon-reload && systemctl enable wio-prerequisite wio-agent && systemctl restart wio-prerequisite wio-agent"
 	if _, err := run(client, elevated(root, start)); err != nil {
 		result.Warnings = append(result.Warnings, "service_start_failed")
 	} else if _, err := run(client, "systemctl is-active --quiet wio-agent"); err != nil {
@@ -316,6 +321,9 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	}
 	if !probe.DockerReady {
 		result.Warnings = append(result.Warnings, "docker_unavailable")
+	}
+	if !probe.ComposeReady {
+		result.Warnings = append(result.Warnings, "docker_compose_unavailable")
 	}
 	if !probe.GitReady {
 		result.Warnings = append(result.Warnings, "git_unavailable")
@@ -797,6 +805,7 @@ type inspection struct {
 	Architecture string
 	SudoReady    bool
 	DockerReady  bool
+	ComposeReady bool
 	GitReady     bool
 	CodexReady   bool
 	NPMReady     bool
@@ -827,11 +836,22 @@ func inspect(client *ssh.Client, _ hostKeyInfo) (inspection, error) {
 		OS:           strings.ToLower(strings.TrimSpace(osName)),
 		Architecture: normalizedArchitecture(architecture),
 		SudoReady:    sudoReady,
-		DockerReady:  commandAvailable(client, "docker"),
-		GitReady:     commandAvailable(client, "git"),
-		CodexReady:   commandAvailable(client, "codex"),
-		NPMReady:     commandAvailable(client, "npm"),
+		DockerReady:  rootCommandWorks(client, root, `docker info --format '{{.ServerVersion}}'`),
+		ComposeReady: rootCommandWorks(client, root, "docker compose version --short"),
+		GitReady:     rootCommandWorks(client, root, "git --version"),
+		CodexReady:   rootCommandWorks(client, root, "codex --version"),
+		NPMReady:     rootCommandWorks(client, root, `node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)' && npm --version`),
 	}, nil
+}
+
+func rootCommandWorks(client *ssh.Client, root bool, command string) bool {
+	_, err := run(client, elevated(root, command))
+	return err == nil
+}
+
+func agentCommandWorks(client *ssh.Client, root bool, command string) bool {
+	_, err := run(client, elevated(root, "su -s /bin/sh -c "+shellQuote(command)+" wio-agent"))
+	return err == nil
 }
 
 func normalizedArchitecture(value string) string {

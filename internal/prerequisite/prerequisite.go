@@ -143,6 +143,10 @@ func handle(connection net.Conn) {
 }
 
 func ensure(ctx context.Context, runner Runner) (Result, error) {
+	return ensureWithManager(ctx, runner, packageManager)
+}
+
+func ensureWithManager(ctx context.Context, runner Runner, detectManager func() (string, error)) (Result, error) {
 	result := Result{}
 	gitAvailable := commandWorks(ctx, runner, "git", "--version")
 	dockerAvailable := commandWorks(ctx, runner, "docker", "info", "--format", "{{.ServerVersion}}")
@@ -151,7 +155,7 @@ func ensure(ctx context.Context, runner Runner) (Result, error) {
 		result.Logs = append(result.Logs, "deployment prerequisites are already available")
 		return result, nil
 	}
-	manager, err := packageManager()
+	manager, err := detectManager()
 	if err != nil {
 		return result, err
 	}
@@ -173,6 +177,18 @@ func ensure(ctx context.Context, runner Runner) (Result, error) {
 	if !composeAvailable {
 		if err := installCompose(ctx, runner, manager, &result); err != nil {
 			return result, err
+		}
+	}
+	for _, check := range []struct {
+		name string
+		args []string
+	}{
+		{"git", []string{"--version"}},
+		{"docker", []string{"info", "--format", "{{.ServerVersion}}"}},
+		{"docker", []string{"compose", "version", "--short"}},
+	} {
+		if !commandWorks(ctx, runner, check.name, check.args...) {
+			return result, fmt.Errorf("prerequisite verification failed: %s %s", check.name, strings.Join(check.args, " "))
 		}
 	}
 	return result, nil
