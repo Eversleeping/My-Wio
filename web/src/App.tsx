@@ -634,6 +634,11 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
   const branch = gitData?.status.branch ?? "";
   const fileScanning = currentSnapshot?.status === "scanning";
   const changeScanning = currentChanges?.status === "scanning";
+  useEffect(() => {
+    if (!workspaceID || !fileScanning) return;
+    const timer = window.setInterval(snapshot.reload, 5000);
+    return () => window.clearInterval(timer);
+  }, [fileScanning, snapshot.reload, workspaceID]);
   const refreshFiles = useCallback(async (silent = false) => {
     if (!workspaceID) return;
     try {

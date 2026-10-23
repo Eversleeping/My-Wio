@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -83,6 +84,28 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The migration fixture intentionally has a reduced legacy servers table.
+	// Exercise the scan lifecycle against a separate, complete production schema.
+	admin, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(`CREATE DATABASE wio_scan_timeout`); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	admin.Close()
+	scanURL, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanURL.Path = "/wio_scan_timeout"
+	scans, err := Open(scanURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scans.Close()
+	assertWorkspaceFileScanTimeoutAndRetry(t, scans)
 }
 
 func availablePostgresPort(t *testing.T) uint32 {

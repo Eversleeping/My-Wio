@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChangedFilesView, FileDiffPane, WorkspaceFilesPanel } from "./App";
@@ -6,6 +6,7 @@ import { I18nProvider } from "./i18n";
 import type { WorkspaceChangesSnapshot, WorkspaceGitSnapshot } from "./types";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.localStorage.clear();
@@ -45,6 +46,28 @@ const gitSnapshot: WorkspaceGitSnapshot = {
 function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
+
+test("polls a scan without websocket events and unlocks refresh after timeout", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let reads = 0;
+  const fetchMock = vi.fn(async () => {
+    reads += 1;
+    return jsonResponse({ workspace_id: "workspace-1", files: [], status: reads === 1 ? "scanning" : "failed", error: reads === 1 ? "" : "Workspace file scan timed out. Please refresh to retry." });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const { unmount } = render(<I18nProvider><WorkspaceFilesPanel workspaceID="workspace-1" taskID="task-1" taskStatus="idle" realtime={0} notify={vi.fn()} activePath="" activeMode="file" onOpenFile={vi.fn()} /></I18nProvider>);
+  await screen.findByText("Scanning project files");
+  const refresh = screen.getByTitle("Refresh project files");
+  expect(refresh).toBeDisabled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(await screen.findByText("Workspace file scan timed out. Please refresh to retry.")).toBeInTheDocument();
+  expect(refresh).toBeEnabled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  unmount();
+  expect(vi.getTimerCount()).toBe(0);
+});
 
 test("shows modified, added, untracked, and deleted files", () => {
   window.localStorage.setItem("wio_language", "en");

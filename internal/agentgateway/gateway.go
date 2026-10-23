@@ -410,17 +410,10 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 				return err
 			}
-			if result.Status == "succeeded" {
-				var files protocol.WorkspaceFilesResult
-				if err := json.Unmarshal(result.Data, &files); err != nil {
-					return err
-				}
-				if err := g.store.SaveWorkspaceFiles(ctx, command.WorkspaceID, files); err != nil {
-					return err
-				}
-			} else if err := g.store.FailWorkspaceFileScan(ctx, command.WorkspaceID, result.Message); err != nil {
+			if completed, err := g.store.CompleteWorkspaceFileScan(ctx, operation, command.WorkspaceID, result); err != nil || !completed {
 				return err
 			}
+			return publishOperationResult(ctx, g, serverID, result)
 		}
 		if operation.Kind == "workspace.file.write" && result.Status == "succeeded" {
 			var command protocol.WorkspaceFileWriteCommand

@@ -117,6 +117,7 @@ func run(log *slog.Logger) error {
 	errCh := make(chan error, 1)
 	agentContext, stopAgent := context.WithCancel(context.Background())
 	defer stopAgent()
+	go runWorkspaceFileScanMaintenance(agentContext, database, log)
 	go func() {
 		log.Info("Wio control plane listening", "address", listenerAddress, "version", buildinfo.Version)
 		errCh <- server.Serve(listener)
