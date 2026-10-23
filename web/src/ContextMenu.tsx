@@ -1,5 +1,6 @@
 import { KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { MoreVertical, type LucideIcon } from "lucide-react";
+import { createPortal } from "react-dom";
 
 export interface ContextMenuAction {
   id: string;
@@ -12,7 +13,7 @@ export interface ContextMenuAction {
   separatorBefore?: boolean;
 }
 
-export function ContextMenu({ className = "", label, actions, children }: { className?: string; label: string; actions: ContextMenuAction[]; children: ReactNode }) {
+export function ContextMenu({ className = "", label, actions, children, triggerIcon: TriggerIcon = MoreVertical }: { className?: string; label: string; actions: ContextMenuAction[]; children: ReactNode; triggerIcon?: LucideIcon }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -61,6 +62,7 @@ export function ContextMenu({ className = "", label, actions, children }: { clas
     const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []);
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       close();
       return;
     }
@@ -75,11 +77,11 @@ export function ContextMenu({ className = "", label, actions, children }: { clas
     buttons[next]?.focus();
   };
 
-  return <div ref={rootRef} className={`context-menu-trigger ${className}`} onContextMenu={event => { event.preventDefault(); const rect = rootRef.current?.getBoundingClientRect(); const left = event.clientX || rect?.left || 0; const top = event.clientY || rect?.bottom || 0; openAt(left, top); }}>
+  return <div ref={rootRef} className={`context-menu-trigger ${className}`} onKeyDown={event => { if (open && event.key === "Escape") { event.preventDefault(); close(); } }} onContextMenu={event => { event.preventDefault(); const rect = rootRef.current?.getBoundingClientRect(); const left = event.clientX || rect?.left || 0; const top = event.clientY || rect?.bottom || 0; openAt(left, top); }}>
     {children}
-    <button ref={triggerRef} type="button" className="icon-button context-menu-button" aria-haspopup="menu" aria-expanded={open} title={label} aria-label={label} onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openAt(rect.right, rect.bottom + 4); }}><MoreVertical size={16} /></button>
-    {open && <div ref={menuRef} className="context-menu" role="menu" aria-label={label} style={position} onKeyDown={onKeyDown}>
+    <button ref={triggerRef} type="button" className="icon-button context-menu-button" aria-haspopup="menu" aria-expanded={open} title={label} aria-label={label} onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openAt(rect.right, rect.bottom + 4); }}><TriggerIcon size={16} /></button>
+    {open && createPortal(<div ref={menuRef} className="context-menu" role="menu" aria-label={label} style={position} onKeyDown={onKeyDown}>
       {actions.map(action => { const Icon = action.icon; return <div className={action.separatorBefore ? "context-menu-section" : undefined} key={action.id}><button type="button" role="menuitem" className={action.danger ? "danger" : ""} disabled={action.disabled} title={action.disabled ? action.disabledReason : undefined} onClick={() => { close(false); void action.onSelect(); }}><Icon size={16} /><span>{action.label}</span></button></div>; })}
-    </div>}
+    </div>, document.body)}
   </div>;
 }

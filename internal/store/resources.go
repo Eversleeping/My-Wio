@@ -241,7 +241,16 @@ func (s *Store) CommitThreadFork(ctx context.Context, command protocol.ForkThrea
 		return sql.ErrNoRows
 	}
 	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO codex_threads(id,workspace_id,codex_thread_id,title,status,last_sequence,created_at,updated_at) SELECT ?,workspace_id,?,?,'idle',last_sequence,?,? FROM codex_threads WHERE id=?`), command.TargetThreadID, codexThread, command.Title, now, now, command.SourceThreadID); err != nil {
+	if command.LastTurnID != "" {
+		var sourceID string
+		if err := tx.GetContext(ctx, &sourceID, s.Q("SELECT codex_thread_id FROM codex_threads WHERE id=?"), command.SourceThreadID); err != nil {
+			return err
+		}
+		if sourceID != command.CodexThread || command.CutoffSequence <= 0 {
+			return errors.New("source conversation changed while forking")
+		}
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO codex_threads(id,workspace_id,codex_thread_id,title,status,last_sequence,created_at,updated_at) SELECT ?,workspace_id,?,?,'idle',CASE WHEN ?>0 THEN ? ELSE last_sequence END,?,? FROM codex_threads WHERE id=?`), command.TargetThreadID, codexThread, command.Title, command.CutoffSequence, command.CutoffSequence, now, now, command.SourceThreadID); err != nil {
 		return err
 	}
 	var events []struct {
@@ -250,7 +259,7 @@ func (s *Store) CommitThreadFork(ctx context.Context, command protocol.ForkThrea
 		OccurredAt time.Time `db:"occurred_at"`
 		Payload    string    `db:"payload"`
 	}
-	if err := tx.SelectContext(ctx, &events, s.Q(`SELECT sequence,kind,occurred_at,payload FROM events WHERE stream_id=? ORDER BY sequence`), command.SourceThreadID); err != nil {
+	if err := tx.SelectContext(ctx, &events, s.Q(`SELECT sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND (?=0 OR sequence<=?) ORDER BY sequence`), command.SourceThreadID, command.CutoffSequence, command.CutoffSequence); err != nil {
 		return err
 	}
 	for _, event := range events {

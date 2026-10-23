@@ -2,6 +2,7 @@ import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "
 import { CodexModelPicker } from "./components/CodexModelPicker";
 import { UserInputPrompt, QuestionForm, isUserInputRequest } from "./components/UserInputPrompt";
 import { MessageImages } from "./components/MessageImages";
+import { messageForkTargets } from "./messageForks";
 import { asyncQuestions, parseQuestionReply, questionReply, readableQuestionReply } from "./asyncUserInput";
 import { AddWorkspaceFileDialog, clearFileDrafts, useFileEditor } from "./workspaceFileEditing";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -55,6 +56,7 @@ import {
   MemoryStick,
   MessageSquare,
   Minimize2,
+  MoreHorizontal,
   MonitorDot,
   Network,
   Pause,
@@ -818,7 +820,7 @@ export function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[
   return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/threads", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;
 }
 
-export function SessionView({ thread, approvals, realtime, globalStreamRevision = 0, streamRevision = 0, invalidationSequence, reloadApprovals, notify, onOpenFile, onNewTask }: { thread: Thread; approvals: Approval[]; realtime: unknown; globalStreamRevision?: number; streamRevision?: number; invalidationSequence?: number | null; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; onNewTask: () => void }) {
+export function SessionView({ thread, approvals, realtime, globalStreamRevision = 0, streamRevision = 0, invalidationSequence, reloadApprovals, notify, onOpenFile, onNewTask, onFork, forkBusy = false }: { thread: Thread; approvals: Approval[]; realtime: unknown; globalStreamRevision?: number; streamRevision?: number; invalidationSequence?: number | null; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; onNewTask: () => void; onFork?: (eventID: string) => Promise<void>; forkBusy?: boolean }) {
   const { t } = useI18n();
   const [rawEvents, setRawEvents] = useState(false);
   const events = useThreadEvents(thread.id, rawEvents, realtime, globalStreamRevision, streamRevision, invalidationSequence);
@@ -879,6 +881,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     return answers;
   }, [sourceEvents, submittedAnswers]);
   const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
+  const forkTargets = useMemo(() => messageForkTargets(sourceEvents, chatEvents), [sourceEvents, chatEvents]);
   const displayItems = useMemo(() => groupCommandEvents(chatEvents), [chatEvents]);
   const subagents = useMemo(() => collectSubagentActivity(sourceEvents), [sourceEvents]);
   const activeSubagents = subagents.filter(agent => ["pendingInit", "running"].includes(agent.status));
@@ -1212,7 +1215,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   };
   const renderDisplayItem = (item: ConversationDisplayItem) => item.type === "commandGroup"
     ? <CommandEventGroup events={item.events} />
-    : <ConversationEventItem event={item.event} onEdit={thread.archived_at ? undefined : editMessage} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} questionAnswers={questionAnswers} onAnswer={thread.archived_at ? undefined : values => answerQuestion(item.event, values)} />;
+    : <ConversationEventItem event={item.event} onEdit={thread.archived_at ? undefined : editMessage} onFork={!thread.archived_at && thread.codex_thread_id && forkTargets.has(item.event.event_id) ? onFork : undefined} forkDisabled={forkBusy || thread.status === "running" || thread.status === "queued"} notify={notify} workspaceRoot={thread.path} onOpenFile={onOpenFile} questionAnswers={questionAnswers} onAnswer={thread.archived_at ? undefined : values => answerQuestion(item.event, values)} />;
   const statusPanel = statusVisible ? <section className="composer-status-panel" role="region" aria-label={t("codex.taskStatus")}>
     <header><strong>{t("codex.taskStatus")}</strong><div><button type="button" className="text-button" disabled={nativeBusy === "status"} onClick={() => void loadSnapshot<CodexStatusData>("status", true)}>{nativeBusy === "status" ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("common.refresh")}</button><button type="button" className="text-button" onClick={() => setStatusVisible(false)}>{t("common.close")}</button></div></header>
     <SnapshotNotice snapshot={statusSnapshot} loading={nativeBusy === "status"} error={nativeError} />
@@ -1275,8 +1278,15 @@ async function waitForGoalSnapshot(threadID: string, expected?: { objective?: st
   return latest;
 }
 
-export async function waitForThread(threadID: string, timeoutMessage: string) {
+export async function waitForThread(threadID: string, timeoutMessage: string, operationID?: string) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (operationID) {
+      const operation = await api<{ status: string; result: string }>(`/operations/${encodeURIComponent(operationID)}`);
+      if (["failed", "cancelled"].includes(operation.status)) throw new Error(operation.result || timeoutMessage);
+      if (operation.status === "succeeded") return api<Thread>(`/threads/${encodeURIComponent(threadID)}`);
+      await waitForBackoff(attempt);
+      continue;
+    }
     const threads = await api<Thread[]>("/threads");
     const thread = threads.find(item => item.id === threadID);
     if (thread) return thread;
@@ -1396,7 +1406,7 @@ export function ApprovalActions({ item, onDecided, notify }: { item: Approval; o
   return <div className="approval-actions"><button type="button" className="secondary-button danger" disabled={busy} onClick={() => void decide("denied")}><Ban size={16} />{t("codex.deny")}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void decide("approved")}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("codex.approveOnce")}</button></div>;
 }
 
-function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFile, questionAnswers = {}, onAnswer }: { event: StreamEvent; onEdit?: (eventID: string, text: string) => void; notify: (text: string) => void; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void; questionAnswers?: Record<string, string>; onAnswer?: (values: Record<string, string>) => Promise<void> }) {
+function ConversationEventItem({ event, onEdit, onFork, forkDisabled = false, notify, workspaceRoot, onOpenFile, questionAnswers = {}, onAnswer }: { event: StreamEvent; onEdit?: (eventID: string, text: string) => void; onFork?: (eventID: string) => Promise<void>; forkDisabled?: boolean; notify: (text: string) => void; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void; questionAnswers?: Record<string, string>; onAnswer?: (values: Record<string, string>) => Promise<void> }) {
   const { t } = useI18n();
   const kind = event.kind;
   const payload = asRecord(event.payload);
@@ -1425,8 +1435,10 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
   if (item?.type === "agentMessage" || item?.type === "plan" || itemImages.length > 0) {
     const text = extractText(item);
     const questions = asyncQuestions(item);
-    if (questions.length) return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><QuestionForm questions={questions} answers={questionAnswers} readOnly={!onAnswer} onSubmit={async values => { await onAnswer?.(values); }} /></article>;
-    return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{itemImages.length > 0 && <MessageImages sources={itemImages} />}</article>;
+    const copyValue = questions.length ? questions.map(question => question.question).join("\n\n") : text;
+    const actions = <div className="message-actions"><button type="button" className="message-action" disabled={!copyValue} title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => void copyText(copyValue).then(() => notify(t("codex.messageCopied"))).catch(error => notify(message(error)))}><Copy size={14} /></button>{onFork && <ContextMenu className="message-menu" label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.branchToNewChat"), icon: GitFork, disabled: forkDisabled, disabledReason: t("codex.forkWaitForTurn"), onSelect: () => onFork(event.event_id) }]}>{null}</ContextMenu>}</div>;
+    if (questions.length) return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header><QuestionForm questions={questions} answers={questionAnswers} readOnly={!onAnswer} onSubmit={async values => { await onAnswer?.(values); }} />{actions}</article>;
+    return <article className="message assistant"><header><Bot size={15} /><strong>Codex</strong><time>{formatTime(event.occurred_at)}</time></header>{text && <MarkdownContent text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} />}{itemImages.length > 0 && <MessageImages sources={itemImages} />}{actions}</article>;
   }
   return <ToolEvent event={event} item={item} />;
 }

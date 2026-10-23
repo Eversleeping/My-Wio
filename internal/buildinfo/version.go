@@ -5,13 +5,18 @@ import (
 	"strings"
 )
 
-var Version = "0.2.58"
+var Version = "0.2.59"
 
 const MinimumSelfUpdateVersion = "0.2.0"
 const MinimumCodexUpdateVersion = "0.2.9"
 const MinimumExactDeploymentRollbackVersion = "0.2.45"
 const MinimumCodexSteerVersion = "0.2.51"
 const MinimumWorkspaceFileWriteVersion = "0.2.56"
+const MinimumMessageForkVersion = "0.2.59"
+
+func SupportsMessageFork(version string) bool {
+	return atLeast(version, MinimumMessageForkVersion)
+}
 
 func SupportsWorkspaceFileWrite(version string) bool {
 	return atLeast(version, MinimumWorkspaceFileWriteVersion)

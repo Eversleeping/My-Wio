@@ -435,10 +435,13 @@ type ForkThreadCommand struct {
 	WorkspaceID    string `json:"workspace_id"`
 	Workspace      string `json:"workspace"`
 	Title          string `json:"title"`
+	LastTurnID     string `json:"last_turn_id,omitempty"`
+	CutoffSequence int64  `json:"cutoff_sequence,omitempty"`
 }
 
 type ForkThreadResult struct {
 	CodexThread string `json:"codex_thread_id"`
+	LastTurnID  string `json:"last_turn_id,omitempty"`
 }
 
 type TurnImage struct {

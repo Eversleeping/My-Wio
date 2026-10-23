@@ -106,6 +106,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	}
 	defer scans.Close()
 	assertWorkspaceFileScanTimeoutAndRetry(t, scans)
+	assertMessageForkCopiesOnlySelectedHistory(t, scans)
 }
 
 func availablePostgresPort(t *testing.T) uint32 {

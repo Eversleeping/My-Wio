@@ -134,6 +134,9 @@ func (a *Adapter) forkThread(ctx context.Context, command protocol.ForkThreadCom
 		return protocol.ForkThreadResult{}, errors.New("Codex thread is not initialized")
 	}
 	params := threadResumeParams(protocol.StartTurnCommand{Workspace: command.Workspace, ApprovalMode: "on-request"}, command.CodexThread)
+	if command.LastTurnID != "" {
+		params["lastTurnId"] = command.LastTurnID
+	}
 	result, err := request(ctx, "thread/fork", params)
 	if err != nil {
 		return protocol.ForkThreadResult{}, err
@@ -142,10 +145,19 @@ func (a *Adapter) forkThread(ctx context.Context, command protocol.ForkThreadCom
 	if err != nil {
 		return protocol.ForkThreadResult{}, err
 	}
+	if id == command.CodexThread {
+		return protocol.ForkThreadResult{}, errors.New("thread/fork returned the source thread")
+	}
+	if command.LastTurnID != "" {
+		if err := trimForkToTurn(ctx, id, command.LastTurnID, result, request); err != nil {
+			_, _ = request(ctx, "thread/archive", map[string]any{"threadId": id})
+			return protocol.ForkThreadResult{}, err
+		}
+	}
 	a.mu.Lock()
 	a.threads[id] = command.TargetThreadID
 	a.mu.Unlock()
-	return protocol.ForkThreadResult{CodexThread: id}, nil
+	return protocol.ForkThreadResult{CodexThread: id, LastTurnID: command.LastTurnID}, nil
 }
 
 func (a *Adapter) CodexOperation(ctx context.Context, kind string, payload json.RawMessage) (protocol.CodexCapabilityResult, error) {

@@ -555,11 +555,10 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			if err := json.Unmarshal(result.Data, &fork); err != nil {
 				return err
 			}
-			if fork.CodexThread == "" {
-				return errors.New("forked Codex thread id is empty")
-			}
-			if err := g.store.CommitThreadFork(ctx, command, fork.CodexThread); err != nil {
-				return err
+			if err := store.ValidateThreadForkResult(command, fork); err != nil {
+				result.Status, result.Message = "failed", err.Error()
+			} else if err := g.store.CommitThreadFork(ctx, command, fork.CodexThread); err != nil {
+				result.Status, result.Message = "failed", "could not persist fork: "+err.Error()
 			}
 		}
 		if operation.Kind == "git.worktree.create" && result.Status == "succeeded" {

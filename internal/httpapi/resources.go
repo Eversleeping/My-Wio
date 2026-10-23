@@ -1734,6 +1734,12 @@ func (a *API) archiveProjectThreads(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) forkThread(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		EventID string `json:"event_id"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
 	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
@@ -1766,6 +1772,22 @@ func (a *API) forkThread(w http.ResponseWriter, r *http.Request) {
 	}
 	targetID := store.NewID()
 	command := protocol.ForkThreadCommand{SourceThreadID: thread.ID, TargetThreadID: targetID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Title: thread.Title + " (continued)"}
+	if input.EventID != "" {
+		if !buildinfo.SupportsMessageFork(server.AgentVersion) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "fork_agent_update", "error": "Branching from a message requires Agent 0.2.59 or newer"})
+			return
+		}
+		command.LastTurnID, command.CutoffSequence, err = a.store.ThreadForkBoundary(r.Context(), thread.ID, input.EventID)
+		if errors.Is(err, store.ErrInvalidForkTarget) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "fork_invalid_target", "error": err.Error()})
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not resolve fork boundary")
+			return
+		}
+		command.Title = thread.Title + " (branch)"
+	}
 	opID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.thread.fork", command, "codex-fork:"+targetID, store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Codex session continuation")
