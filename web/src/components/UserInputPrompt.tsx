@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { Check, LoaderCircle, MessageCircleQuestion, Send } from "lucide-react";
 import { post } from "../api";
 import { useI18n } from "../i18n";
 import type { Approval } from "../types";
@@ -34,19 +35,19 @@ export function QuestionForm({ questions, onSubmit, answers = {}, readOnly = fal
     } catch (failure) { setError(failure instanceof Error ? failure.message : t("codex.answerFailed")); }
     finally { setBusy(false); }
   };
-  return <section className="user-input-prompt" aria-label={t("codex.userQuestion")}>
-    <strong>{t("codex.userQuestion")}</strong>
+  return <section className={`user-input-prompt${answered ? " answered" : ""}`} aria-label={t("codex.userQuestion")}>
+    <div className="question-heading"><MessageCircleQuestion size={15} aria-hidden="true" /><strong>{t(answered ? "codex.questionAnswered" : "codex.userQuestion")}</strong></div>
     {questions.map(question => <fieldset key={question.id} disabled={disabled}>
-      <legend>{question.header}</legend><p>{question.question}</p>
-      {question.options?.map(option => <label className="user-input-option" key={option.label}>
+      <legend className={questions.length === 1 && /^\d+$/.test(question.header) ? "question-number-only" : undefined}>{question.header}</legend><p className="question-text">{question.question}</p>
+      {!!question.options?.length && <div className="question-options">{question.options.map(option => <label className={`user-input-option${valueFor(question.id) === option.label ? " selected" : ""}`} key={option.label}>
         <input type="radio" name={`${instanceID}-${question.id}`} checked={valueFor(question.id) === option.label} onChange={() => setValues(current => ({ ...current, [question.id]: option.label }))} />
-        <span><strong>{option.label}</strong><small>{option.description}</small></span>
-      </label>)}
-      {(!question.options?.length || question.isOther) && <label>{t("codex.customAnswer")}
+        <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
+      </label>)}</div>}
+      {(!question.options?.length || question.isOther) && <label className="question-custom-answer"><span>{t("codex.customAnswer")}</span>
         <input type={question.isSecret ? "password" : "text"} autoComplete="off" value={valueFor(question.id)} onChange={event => setValues(current => ({ ...current, [question.id]: event.target.value }))} />
       </label>}
     </fieldset>)}
-    {error && <p role="alert">{error}</p>}
-    <button type="button" className="primary-button" disabled={!valid || disabled} onClick={() => void submit()}>{t(answered ? "codex.answerSent" : "codex.submitAnswer")}</button>
+    {error && <p className="question-error" role="alert">{error}</p>}
+    <div className="question-actions"><button type="button" className={`${answered ? "question-sent" : "primary-button small"}`} disabled={!valid || disabled} onClick={() => void submit()}>{answered ? <Check size={14} aria-hidden="true" /> : busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Send size={13} aria-hidden="true" />}{t(answered ? "codex.answerSent" : "codex.submitAnswer")}</button></div>
   </section>;
 }

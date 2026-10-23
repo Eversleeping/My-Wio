@@ -682,14 +682,33 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .subagent-event code { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .approval-prompt { width: min(82%, 820px); align-self: flex-start; margin: 0 0 14px; padding: 12px 14px; color: #6e4309; background: var(--amber-soft); border: 1px solid #e6c58f; border-left: 3px solid #c78423; border-radius: 6px; }
 .approval-prompt header { display: flex; align-items: center; gap: 7px; font-size: 12px; }
-.user-input-prompt { width: min(100%, 820px); box-sizing: border-box; padding: 16px; margin-bottom: 14px; border: 1px solid #e6c58f; border-radius: 8px; background: var(--amber-soft); }
-.user-input-prompt fieldset { min-width: 0; margin: 14px 0; padding: 12px; border: 1px solid #e6c58f; border-radius: 6px; }
-.user-input-prompt legend { font-weight: 600; }
-.user-input-prompt p { margin: 0 0 10px; overflow-wrap: anywhere; }
-.user-input-prompt label { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
-.user-input-prompt .user-input-option { flex-direction: row; align-items: flex-start; cursor: pointer; }
-.user-input-option input { width: auto; flex: 0 0 auto; margin-top: 4px; }
-.user-input-option small { display: block; color: var(--muted); margin-top: 4px; }
+.user-input-prompt { width: min(100%, 820px); min-width: 0; padding: 12px 14px; margin: 0 0 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 6px; font-size: 13px; line-height: 1.65; }
+.message .user-input-prompt { width: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; }
+.question-heading { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.question-heading > svg { flex: 0 0 auto; color: var(--green); }
+.question-heading > strong { font-weight: 500; }
+.user-input-prompt fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.user-input-prompt fieldset + fieldset { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.user-input-prompt legend { max-width: 100%; margin-bottom: 4px; padding: 0; color: var(--muted); font-size: 11px; font-weight: 500; overflow-wrap: anywhere; }
+.user-input-prompt .question-number-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.user-input-prompt .question-text { margin: 0 0 10px; font-size: 13px; font-weight: 400; line-height: 1.65; overflow-wrap: anywhere; }
+.question-options { display: grid; gap: 6px; }
+.user-input-prompt .user-input-option { display: flex; align-items: flex-start; gap: 9px; min-width: 0; margin: 0; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; transition: border-color .15s, background .15s; }
+.user-input-prompt fieldset:not(:disabled) .user-input-option:hover { background: var(--canvas); border-color: #a5bdb1; }
+.user-input-prompt .user-input-option.selected { background: var(--green-soft); border-color: #b5d8c8; }
+.user-input-option input[type="radio"] { width: 15px; height: 15px; min-height: 15px; flex: 0 0 15px; margin: 3px 0 0; padding: 0; accent-color: var(--green); box-shadow: none; }
+.user-input-option > span { min-width: 0; overflow-wrap: anywhere; }
+.user-input-option strong { font-size: 12px; font-weight: 500; line-height: 1.55; }
+.user-input-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.user-input-prompt fieldset:disabled .user-input-option { cursor: default; }
+.question-custom-answer { display: grid; gap: 5px; margin-top: 10px; }
+.question-custom-answer > span { color: var(--muted); font-size: 11px; }
+.question-custom-answer input { min-width: 0; min-height: 34px; padding: 6px 9px; font-size: 12px; line-height: 1.5; }
+.user-input-prompt.answered .question-custom-answer input { color: #52635c; background: var(--canvas); }
+.question-actions { display: flex; align-items: center; margin-top: 12px; }
+.question-actions .primary-button { min-height: 30px; font-size: 11px; }
+.question-sent:disabled { display: inline-flex; align-items: center; gap: 5px; padding: 0; color: var(--green); background: none; border: 0; font-size: 11px; font-weight: 500; line-height: 1.5; opacity: 1; cursor: default; }
+.user-input-prompt .question-error { margin: 10px 0 0; color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
 .approval-prompt header time { margin-left: auto; color: var(--muted); font-size: 10px; }
 .approval-prompt > small { display: block; margin: 7px 0; color: var(--muted); font-size: 10px; }
 .approval-prompt pre { max-height: 220px; margin: 0 0 10px; padding: 10px; overflow: auto; color: #31383d; background: rgba(255, 255, 255, .72); border: 1px solid #e6cda6; border-radius: 5px; font-size: 11px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
