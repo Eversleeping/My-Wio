@@ -1,6 +1,7 @@
 import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
 import { CodexModelPicker } from "./components/CodexModelPicker";
 import { UserInputPrompt, QuestionForm, isUserInputRequest } from "./components/UserInputPrompt";
+import { MessageImages } from "./components/MessageImages";
 import { asyncQuestions, parseQuestionReply, questionReply, readableQuestionReply } from "./asyncUserInput";
 import { AddWorkspaceFileDialog, clearFileDrafts, useFileEditor } from "./workspaceFileEditing";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -1432,18 +1433,6 @@ function ConversationEventItem({ event, onEdit, notify, workspaceRoot, onOpenFil
 
 function MarkdownContent({ text, workspaceRoot, onOpenFile }: { text: string; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void }) {
   return <Suspense fallback={<div className="message-content">{text}</div>}><MarkdownContentRenderer text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} /></Suspense>;
-}
-
-function MessageImages({ sources }: { sources: string[] }) {
-  const { t } = useI18n();
-  const [active, setActive] = useState("");
-  useEffect(() => {
-    if (!active) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setActive(""); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [active]);
-  return <><div className={"message-images " + (sources.length === 1 ? "single" : "")}>{sources.map((source, index) => <button type="button" key={source.slice(0, 80) + ":" + index} title={t("codex.openImage")} onClick={() => setActive(source)}><img src={source} alt={t("codex.messageImage")} loading="lazy" referrerPolicy="no-referrer" /></button>)}</div>{active && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={t("codex.messageImage")} onClick={() => setActive("")}><button type="button" className="image-lightbox-close" title={t("common.close")} aria-label={t("common.close")} onClick={() => setActive("")}><X size={19} /></button><img src={active} alt={t("codex.messageImage")} referrerPolicy="no-referrer" onClick={event => event.stopPropagation()} /></div>}</>;
 }
 
 type FilePreviewPaneProps = { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable?: boolean; onClose: () => void };
