@@ -215,7 +215,8 @@ test("manages Codex updates through the shared AI Agent dialog and keeps failure
   const user = userEvent.setup();
   render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
   const manager = await screen.findByTitle("Manage AI Agents");
-  expect(screen.getByText("Gemini · Gemini Studio")).toBeInTheDocument();
+  expect(screen.getByText("Gemini Studio")).toBeInTheDocument();
+  expect(screen.queryByText("Gemini · Gemini Studio")).not.toBeInTheDocument();
   expect(screen.queryByTitle("Update Codex CLI to 0.145.0")).not.toBeInTheDocument();
   await user.click(manager);
   const dialog = await screen.findByRole("dialog");

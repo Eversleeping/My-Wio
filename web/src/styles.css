@@ -1060,5 +1060,3 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 @media (max-width: 600px) { .server-cli-list { grid-template-columns: 1fr; } .server-cli-refresh { padding-bottom: 0; } .server-cli-manager .dialog-actions { flex-wrap: wrap; } }
 
 .gemini-settings-help { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-
-.settings-credential-actions { flex-wrap: wrap; max-width: 100%; }

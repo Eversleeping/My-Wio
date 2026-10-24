@@ -7,7 +7,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 const profile = { id:"gemini-1", kind:"gemini", name:"Gemini Studio", endpoint:"https://generativelanguage.googleapis.com", model:"flash", username:"", commit_name:"", commit_email:"", updated_at:"2026-10-25T00:00:00Z" };
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), {status, headers:{"Content-Type":"application/json"}});
 
-function setup(failApply = false) {
+function setup() {
   window.localStorage.setItem("wio_language","en");
   const requests: Array<{url:string; body:unknown}> = [];
   let target = "0.65.0";
@@ -17,7 +17,6 @@ function setup(failApply = false) {
       const body = JSON.parse(String(init.body)); requests.push({url,body});
       if (url.endsWith("/select-version")) { target = body.version; return response({target_version:target}); }
       if (url === "/api/credential-profiles") return response(profile,201);
-      if (url.endsWith("/gemini-credential-profile")) return failApply ? response({error:"finish active Gemini turns"},409) : response({operation_id:"apply-1"},202);
     }
     if (url === "/api/settings/gemini-cli") return response({target_version:target, versions:["0.65.0","0.64.0"]});
     if (url === "/api/settings/codex-cli") return response({target_version:"1.0.0", versions:["1.0.0"]});
@@ -45,7 +44,7 @@ test("selects Gemini target independently and saves Gemini API profiles with mas
   await user.click(within(section).getByRole("button",{name:"Apply version"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/settings/gemini-cli/select-version",body:{version:"0.64.0"}}));
   expect(within(section).queryByText("Gemini API")).not.toBeInTheDocument();
-  expect(within(section).queryByRole("button",{name:"Apply Gemini API to server"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"Apply Gemini API to server"})).not.toBeInTheDocument();
   await user.click(screen.getByRole("button",{name:"New credential profile"}));
   const dialog = await screen.findByRole("dialog");
   await user.click(within(dialog).getByRole("tab",{name:"Gemini API"}));
@@ -57,19 +56,4 @@ test("selects Gemini target independently and saves Gemini API profiles with mas
   await user.type(key,"synthetic-api-key");
   await user.click(within(dialog).getByRole("button",{name:"Encrypt and save"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/credential-profiles",body:expect.objectContaining({kind:"gemini",name:"New Gemini",secret:"synthetic-api-key",model:"auto"})}));
-});
-
-test.each([false,true])("applies only Gemini credentials and reports result (failure=%s)", async fail => {
-  const {user,requests} = setup(fail);
-  await screen.findByText(profile.name);
-  await user.click(screen.getByRole("button",{name:"Apply Gemini API to server"}));
-  const dialog = await screen.findByRole("dialog",{name:"Apply Gemini API to server"});
-  const server = within(dialog).getByRole("combobox",{name:"Target server"});
-  expect(within(server).getByRole("option",{name:/Old Agent/})).toBeDisabled();
-  expect(within(server).getByRole("option",{name:/Offline/})).toBeDisabled();
-  await user.selectOptions(server,"server-1");
-  await user.click(within(dialog).getByRole("button",{name:"Apply Gemini API to server"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/servers/server-1/gemini-credential-profile",body:{profile_id:profile.id}}));
-  await screen.findByText(fail ? "finish active Gemini turns" : /Gemini credentials configured/);
-  expect(requests.some(item => item.url.endsWith("/credential-profiles"))).toBe(false);
 });
