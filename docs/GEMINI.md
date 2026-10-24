@@ -47,7 +47,7 @@
 
 - 默认权限遵循服务器的 Gemini 策略；无头模式无法弹出交互审批，需要确认且未被策略允许的操作会被拒绝。
 - “允许编辑文件”映射至官方 `auto_edit` 模式，允许自动编辑，命令执行仍遵循 Gemini 策略。Wio 暂不接入 Gemini 的交互式审批，不启用 `yolo`。
-- 工作区信任、`GEMINI.md`、MCP、Skills 和策略由目标服务器上的 Gemini CLI 管理。Wio 只在 Agent 配置允许的工作区根目录中启动 CLI。
+- 从 `0.2.64` 起，Agent 校验用户所选工作区的规范路径属于配置允许的根目录后，通过官方 `GEMINI_CLI_TRUST_WORKSPACE=true` 为本次无头调用声明工作区信任，避免 CLI 因无法弹出信任对话框而以退出码 55 结束。这会允许加载该项目的 Gemini 配置、`GEMINI.md`、MCP、Skills 等；不修改全局信任文件，工具权限仍遵循所选审批模式。
 - 同一会话同时只运行一个任务；运行中的 Gemini 任务会占用工作区写操作锁。单次执行上限 10 分钟，超时后可在原会话继续。
 - 当前列表展示最近 200 个活动或归档会话；对话记录以每批 500 条事件加载，可加载更早记录。页面支持会话链接 `?view=gemini&thread=<Wio 会话 ID>`。
 - 此接入使用真实 CLI，不通过 OpenAI 兼容接口转换 Gemini 请求；需要服务器可访问相应 Google 服务。图片输入和跨服务器迁移原生会话暂未提供。安装 CLI 不会自动配置模型认证。
@@ -58,6 +58,7 @@
 - [CLI 参数及模型别名](https://geminicli.com/docs/cli/cli-reference/)
 - [模型列表 API](https://ai.google.dev/api/models)
 - [认证配置](https://geminicli.com/docs/get-started/authentication/)
+- [工作区信任与无头环境](https://geminicli.com/docs/cli/trusted-folders/)
 - [官方 JSONL 事件类型](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/output/types.ts)
 
 - [Gemini CLI API key 与基础地址实现（v0.65.0）](https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/core/contentGenerator.ts)

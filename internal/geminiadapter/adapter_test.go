@@ -46,8 +46,12 @@ func init() {
 		return
 	}
 	stdin, _ := io.ReadAll(os.Stdin)
-	raw, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin), "dir": mustWorkingDir(), "apiKey": os.Getenv("GEMINI_API_KEY"), "endpoint": os.Getenv("GOOGLE_GEMINI_BASE_URL")})
+	raw, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin), "dir": mustWorkingDir(), "apiKey": os.Getenv("GEMINI_API_KEY"), "endpoint": os.Getenv("GOOGLE_GEMINI_BASE_URL"), "trust": os.Getenv("GEMINI_CLI_TRUST_WORKSPACE")})
 	_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), raw, 0600)
+	if mode == "untrusted" {
+		fmt.Fprintln(os.Stderr, "private-provider-diagnostic")
+		os.Exit(55)
+	}
 	fmt.Println(`{"type":"init","session_id":"native-session","model":"flash"}`)
 	if mode == "wait" {
 		time.Sleep(time.Hour)
@@ -68,6 +72,50 @@ func init() {
 }
 
 func mustWorkingDir() string { dir, _ := os.Getwd(); return dir }
+
+func TestWorkspaceTrustIsProcessScopedAndPreservesApprovalMode(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")
+	t.Setenv("GEMINI_CLI_TRUST_WORKSPACE", "false")
+	record := filepath.Join(t.TempDir(), "record.json")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	binary, _ := os.Executable()
+	a := New(binary, func(protocol.StreamEvent) error { return nil })
+	for _, mode := range []string{"default", "auto_edit"} {
+		command := protocol.GeminiTurnCommand{Workspace: t.TempDir(), Model: "flash", ApprovalMode: mode, Prompt: "test"}
+		for _, trusted := range []bool{true, false} {
+			run := a.Run
+			want := "false"
+			if trusted {
+				run, want = a.RunInTrustedWorkspace, "true"
+			}
+			if err := run(context.Background(), "trust", command); err != nil {
+				t.Fatal(err)
+			}
+			var captured struct {
+				Args  []string
+				Trust string
+			}
+			raw, _ := os.ReadFile(record)
+			if json.Unmarshal(raw, &captured) != nil || captured.Trust != want || !strings.Contains(strings.Join(captured.Args, " "), "--approval-mode "+mode) {
+				t.Fatalf("unexpected workspace configuration: %+v", captured)
+			}
+			if os.Getenv("GEMINI_CLI_TRUST_WORKSPACE") != "false" {
+				t.Fatal("workspace trust escaped CLI process")
+			}
+		}
+	}
+}
+
+func TestUntrustedWorkspaceErrorDoesNotExposeStderr(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "untrusted")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record.json"))
+	binary, _ := os.Executable()
+	a := New(binary, func(protocol.StreamEvent) error { return nil })
+	err := a.Run(context.Background(), "untrusted", protocol.GeminiTurnCommand{Workspace: t.TempDir(), Model: "flash", ApprovalMode: "default", Prompt: "test"})
+	if err == nil || !strings.Contains(err.Error(), "untrusted workspace") || strings.Contains(err.Error(), "private-provider-diagnostic") {
+		t.Fatalf("incorrect trust diagnostic: %v", err)
+	}
+}
 
 func TestRunStreamsAndResumesWithoutPuttingPromptInArguments(t *testing.T) {
 	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")

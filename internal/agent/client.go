@@ -755,7 +755,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		command.Workspace = root
-		return c.gemini.Run(ctx, envelope.OperationID, command)
+		return c.gemini.RunInTrustedWorkspace(ctx, envelope.OperationID, command)
 	case "gemini.turn.interrupt":
 		var command protocol.GeminiInterruptCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

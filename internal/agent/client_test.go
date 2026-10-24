@@ -30,6 +30,24 @@ func TestCodexEnvironmentIsScopedFromKeyFile(t *testing.T) {
 	}
 }
 
+func TestGeminiRejectsWorkspaceOutsideRootsBeforeGrantingTrust(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	client := &Client{config: Config{ScanRoots: []string{root}, CloneRoot: root}}
+	paths := []string{outside}
+	link := filepath.Join(root, "escape")
+	if os.Symlink(outside, link) == nil {
+		paths = append(paths, link)
+	}
+	for _, path := range paths {
+		payload, _ := json.Marshal(protocol.GeminiTurnCommand{Workspace: path, Prompt: "test", Model: "flash", ApprovalMode: "auto_edit"})
+		// No adapter is installed: reaching CLI execution would panic.
+		err := client.execute(context.Background(), &protocol.ControlEnvelope{OperationID: "outside", Kind: "gemini.turn.start", PayloadJSON: payload})
+		if err == nil || !strings.Contains(err.Error(), "outside the configured scan roots") {
+			t.Fatalf("unvalidated workspace reached Gemini: %v", err)
+		}
+	}
+}
+
 func TestRedeliveredOperationReplaysCachedResult(t *testing.T) {
 	client := &Client{
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),

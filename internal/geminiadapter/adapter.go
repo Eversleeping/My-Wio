@@ -108,6 +108,18 @@ func (a *Adapter) Interrupt(operationID string) {
 }
 
 func (a *Adapter) Run(parent context.Context, operationID string, command protocol.GeminiTurnCommand) error {
+	return a.run(parent, operationID, command, false)
+}
+
+// RunInTrustedWorkspace is for a user-selected workspace whose canonical path
+// the Agent has already checked against its configured roots. Trust applies only
+// to this CLI process; it does not change the user's persistent trust decisions
+// or the requested tool approval mode.
+func (a *Adapter) RunInTrustedWorkspace(parent context.Context, operationID string, command protocol.GeminiTurnCommand) error {
+	return a.run(parent, operationID, command, true)
+}
+
+func (a *Adapter) run(parent context.Context, operationID string, command protocol.GeminiTurnCommand, trustedWorkspace bool) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	a.mu.Lock()
@@ -116,7 +128,11 @@ func (a *Adapter) Run(parent context.Context, operationID string, command protoc
 		return errors.New("Gemini configuration is changing; try again after it finishes")
 	}
 	executable := a.command
-	environment := mergedEnvironment(a.environment)
+	overrides := append([]string(nil), a.environment...)
+	if trustedWorkspace {
+		overrides = append(overrides, "GEMINI_CLI_TRUST_WORKSPACE=true")
+	}
+	environment := mergedEnvironment(overrides)
 	if (command.Model == "" || command.Model == "auto") && a.defaultModel != "" {
 		command.Model = a.defaultModel
 	}
@@ -210,6 +226,10 @@ func (a *Adapter) Run(parent context.Context, operationID string, command protoc
 		return ctx.Err()
 	}
 	if waitErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == 55 {
+			return fmt.Errorf("Gemini CLI rejected an untrusted workspace; update the Wio Agent or review Gemini workspace trust settings: %w", waitErr)
+		}
 		return fmt.Errorf("Gemini CLI failed; check Gemini authentication, model access and tool results: %w", waitErr)
 	}
 	if !gotResult {
