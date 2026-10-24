@@ -156,6 +156,8 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			return err
 		}
 		return g.publish(ctx, protocol.StreamEvent{StreamID: "inventory", Kind: "inventory.updated", Payload: msg.PayloadJSON})
+	case "gemini_event":
+		return g.handleGeminiEvent(ctx, serverID, msg.PayloadJSON)
 	case "event":
 		var event protocol.StreamEvent
 		if err := json.Unmarshal(msg.PayloadJSON, &event); err != nil {
@@ -600,6 +602,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if updatedOperation.Status == "cancelled" {
 			return nil
 		}
+		if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.interrupt" {
+			if err := g.completeGeminiOperation(ctx, operation, result); err != nil {
+				return err
+			}
+		}
 		if operation.Kind == "codex.turn.start" || operation.Kind == "codex.turn.rewrite" {
 			if result.Status == "succeeded" {
 				_ = g.store.MarkScheduledTaskByOperation(ctx, result.OperationID, "running", "")
@@ -890,6 +897,20 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				if err := g.queueBestEffortInterrupt(stream.Context(), serverID, op); err != nil {
 					g.log.Warn("could not queue best-effort Codex interrupt", "operation_id", op.ID, "error", err)
 				}
+			}
+		}
+		if op.Kind == "gemini.turn.start" {
+			updated, statusErr := g.store.Operation(stream.Context(), op.ID)
+			if statusErr == nil && updated.Status == "cancelled" {
+				var command protocol.GeminiTurnCommand
+				if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
+					return err
+				}
+				_, err := g.store.QueueResourceOperation(stream.Context(), serverID, "gemini.turn.interrupt", protocol.GeminiInterruptCommand{ThreadID: command.ThreadID, OperationID: op.ID}, "gemini-cancel:"+op.ID, store.OperationResource{ProjectID: op.ProjectID, WorkspaceID: op.WorkspaceID}, false)
+				if err != nil {
+					return err
+				}
+				g.Wake(serverID)
 			}
 		}
 	}

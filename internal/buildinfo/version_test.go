@@ -2,6 +2,14 @@ package buildinfo
 
 import "testing"
 
+func TestSupportsGemini(t *testing.T) {
+	for version, want := range map[string]bool{"0.2.59": false, "0.2.60": true, "0.2.61": true, "invalid": false} {
+		if got := SupportsGemini(version); got != want {
+			t.Fatalf("SupportsGemini(%q)=%v, want %v", version, got, want)
+		}
+	}
+}
+
 func TestSupportsMessageFork(t *testing.T) {
 	for version, want := range map[string]bool{"0.2.58": false, "0.2.59": true, "0.2.60": true, "invalid": false} {
 		if got := SupportsMessageFork(version); got != want {

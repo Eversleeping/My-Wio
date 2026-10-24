@@ -210,7 +210,9 @@ func ReadWorkspaceFile(ctx context.Context, root, relative string, allowedRoots 
 	return protocol.WorkspaceFilePreviewResult{Path: filepath.ToSlash(clean), Content: string(data), Size: info.Size(), Truncated: truncated}, nil
 }
 
-func resolveWorkspaceRoot(root string, allowedRoots []string) (string, error) {
+// ResolveWorkspaceRoot validates a workspace against configured roots and
+// returns its canonical path, including symlink checks.
+func ResolveWorkspaceRoot(root string, allowedRoots []string) (string, error) {
 	root, err := filepath.Abs(filepath.Clean(root))
 	if err != nil {
 		return "", err
@@ -239,6 +241,10 @@ func resolveWorkspaceRoot(root string, allowedRoots []string) (string, error) {
 		}
 	}
 	return "", errors.New("workspace path is outside the configured scan roots")
+}
+
+func resolveWorkspaceRoot(root string, allowedRoots []string) (string, error) {
+	return ResolveWorkspaceRoot(root, allowedRoots)
 }
 
 func inspect(ctx context.Context, repositoryPath string) protocol.Repository {

@@ -34,6 +34,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 - 支持工作区文件树、文本预览、变更和 diff 预览，以及工作区重命名、移动、同机/跨服务器复制和受管文件删除
 - 控制面下发 Agent 更新包，Agent 校验大小与 SHA-256 后原子切换版本，首次启动失败时自动回退
 - 实时展示 Codex 消息、命令输出、文件变更、任务状态、中断和审批请求；支持图片输入、消息改写、任务分叉、独立 worktree、目标、MCP、Skills、限额状态和模型/推理强度选择
+- 在 Codex 下方提供独立 Gemini 页面，通过官方 Gemini CLI 支持模型选择、流式会话、工具结果、历史续聊、中断及归档；接入步骤见 [Gemini 使用说明](docs/GEMINI.md)
 - 支持在设置中检查并选择稳定的 Codex CLI 版本，并向在线 Agent 下发 Codex CLI 更新
 - 使用 Docker Compose 发布目录、健康检查、稳定的 Compose 项目名、部署日志、容器启停/重启/删除和上一版本回滚
 - 支持 Vault Secret Set、Codex/Git 凭据预设、外部访问链接、告警确认和审计日志

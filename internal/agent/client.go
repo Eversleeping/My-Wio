@@ -32,6 +32,7 @@ import (
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexadapter"
 	"github.com/wio-platform/wio/internal/deployer"
+	"github.com/wio-platform/wio/internal/geminiadapter"
 	"github.com/wio-platform/wio/internal/gitrepository"
 	"github.com/wio-platform/wio/internal/gitworktree"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -45,6 +46,7 @@ type Client struct {
 	log         *slog.Logger
 	outbound    chan *protocol.AgentEnvelope
 	codex       *codexadapter.Sessions
+	gemini      *geminiadapter.Adapter
 	deployer    *deployer.Deployer
 	seenMu      sync.Mutex
 	seen        map[string]*operationExecution
@@ -67,6 +69,10 @@ func NewClient(config Config, log *slog.Logger) *Client {
 			event.EventID = uuid.NewString()
 		}
 		return client.queue("event", event, true)
+	})
+	client.gemini = geminiadapter.New("", func(event protocol.StreamEvent) error {
+		event.EventID = uuid.NewString()
+		return client.queue("gemini_event", event, true)
 	})
 	return client
 }
@@ -731,6 +737,24 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.enqueueInventory(ctx)
+	case "gemini.turn.start":
+		var command protocol.GeminiTurnCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		root, err := scanner.ResolveWorkspaceRoot(command.Workspace, c.inventoryRoots())
+		if err != nil {
+			return err
+		}
+		command.Workspace = root
+		return c.gemini.Run(ctx, envelope.OperationID, command)
+	case "gemini.turn.interrupt":
+		var command protocol.GeminiInterruptCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		c.gemini.Interrupt(command.OperationID)
+		return nil
 	case "codex.turn.start":
 		var command protocol.StartTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

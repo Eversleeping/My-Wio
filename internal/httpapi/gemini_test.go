@@ -1,0 +1,148 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/store"
+)
+
+func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
+	ctx := context.Background()
+	db := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, db, "gemini-server-token")
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.60"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/gemini", Name: "gemini"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, _ := db.ListWorkspaces(ctx)
+	u := store.User{ID: "gemini-user", Username: "gemini-user", AuthMode: store.AuthModePassword}
+	if err := db.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateSession(ctx, u.ID, store.HashToken("gemini-cookie"), "gemini-csrf", time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	a := resourceTestAPI(db)
+	handler := New(db, a.hub, a.gateway, a.vault, a.log, fstest.MapFS{"index.html": {Data: []byte("ok")}}, "http://localhost", true)
+	request := func(method, path, body string, authenticated bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if authenticated {
+			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "gemini-cookie"})
+			r.Header.Set("X-CSRF-Token", "gemini-csrf")
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if w := request("GET", "/api/gemini/threads", "", false); w.Code != 401 {
+		t.Fatal(w.Code)
+	}
+	if w := request("POST", "/api/gemini/threads", `{"workspace_id":"missing"}`, true); w.Code != 400 {
+		t.Fatal(w.Code)
+	}
+	for _, options := range []string{`"model":"--help"`, `"approval_mode":"yolo"`} {
+		if w := request("POST", "/api/gemini/threads", `{"workspace_id":"`+workspaces[0].ID+`",`+options+`}`, true); w.Code != 400 {
+			t.Fatalf("options accepted: %s", w.Body.String())
+		}
+	}
+	w := request("POST", "/api/gemini/threads", `{"workspace_id":"`+workspaces[0].ID+`","model":"flash"}`, true)
+	if w.Code != 201 {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var thread store.GeminiThread
+	if err := json.Unmarshal(w.Body.Bytes(), &thread); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/gemini/threads/" + thread.ID
+	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE servers SET last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-time.Hour), server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("POST", path+"/turns", `{"prompt":"offline"}`, true); w.Code != 409 {
+		t.Fatalf("offline server accepted turn: %d", w.Code)
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.59"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("POST", path+"/turns", `{"prompt":"old agent"}`, true); w.Code != 409 {
+		t.Fatalf("old Agent accepted Gemini turn: %d", w.Code)
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.60"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("GET", "/api/threads/"+thread.ID, "", true); w.Code != 404 {
+		t.Fatalf("Gemini leaked into Codex: %d", w.Code)
+	}
+	if w := request("POST", path+"/turns", `{"prompt":"检查项目","model":"pro","approval_mode":"auto_edit"}`, true); w.Code != 202 {
+		t.Fatalf("turn: %d %s", w.Code, w.Body.String())
+	}
+	claimed, _ := db.GeminiThread(ctx, thread.ID)
+	op, err := db.Operation(ctx, claimed.OperationID)
+	if err != nil || op.Kind != "gemini.turn.start" || op.WorkspaceWrite != 1 {
+		t.Fatalf("operation: %+v %v", op, err)
+	}
+	var command protocol.GeminiTurnCommand
+	_ = json.Unmarshal([]byte(op.Payload), &command)
+	if command.Model != "pro" || command.ApprovalMode != "auto_edit" || command.Workspace != thread.Path {
+		t.Fatalf("command: %+v", command)
+	}
+	for method, suffix := range map[string]string{"POST": "/turns", "PATCH": "", "DELETE": ""} {
+		body := `{}`
+		if method == "POST" {
+			body = `{"prompt":"duplicate"}`
+		}
+		if method == "PATCH" {
+			body = `{"title":"busy"}`
+		}
+		if w := request(method, path+suffix, body, true); w.Code != 409 {
+			t.Fatalf("active %s: %d", method, w.Code)
+		}
+	}
+	events, _ := db.Events(ctx, thread.ID, 0, 500)
+	users := 0
+	for _, e := range events {
+		if e.Kind == "gemini.user.message" {
+			users++
+		}
+	}
+	if users != 1 {
+		t.Fatalf("duplicate messages: %d", users)
+	}
+	if w := request("POST", path+"/interrupt", `{}`, true); w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	current, _ := db.GeminiThread(ctx, thread.ID)
+	if current.Status != "interrupted" {
+		t.Fatalf("queued cancellation: %+v", current)
+	}
+	if w := request("PATCH", path, `{"archived":true,"title":"历史"}`, true); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if w := request("POST", path+"/turns", `{"prompt":"archived"}`, true); w.Code != 409 {
+		t.Fatal(w.Code)
+	}
+	if w := request("GET", "/api/gemini/threads?archived=true", "", true); !strings.Contains(w.Body.String(), "历史") {
+		t.Fatal(w.Body.String())
+	}
+	if w := request("GET", path+"/events?after=bad", "", true); w.Code != 400 {
+		t.Fatal(w.Code)
+	}
+	if w := request("DELETE", path, `{}`, true); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	events, _ = db.Events(ctx, thread.ID, 0, 500)
+	// The deletion notification is persisted after the history is removed.
+	if len(events) != 1 || events[0].Kind != "gemini.thread.deleted" {
+		t.Fatalf("history remains: %+v", events)
+	}
+}

@@ -19,7 +19,7 @@ describe("realtime refresh scopes", () => {
 
   test("falls back to a safe global refresh for unknown events", () => {
     expect(realtimeScopesForEvent({ kind: "operation.succeeded" })).toEqual(expect.arrayContaining(["dashboard", "servers", "projects", "codex", "deployments", "monitoring", "settings", "approvals"]));
-    expect(realtimeScopesForEvent({})).toHaveLength(9);
+    expect(realtimeScopesForEvent({})).toHaveLength(10);
   });
 });
 

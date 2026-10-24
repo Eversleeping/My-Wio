@@ -475,3 +475,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS alerts_status_idx ON alerts(status, opened_at);
 CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_log(occurred_at);
+
+CREATE TABLE IF NOT EXISTS gemini_threads (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT 'Gemini',
+  model TEXT NOT NULL DEFAULT 'auto',
+  approval_mode TEXT NOT NULL DEFAULT 'default',
+  status TEXT NOT NULL DEFAULT 'idle',
+  operation_id TEXT NOT NULL DEFAULT '',
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS gemini_threads_workspace_idx ON gemini_threads(workspace_id, updated_at);
