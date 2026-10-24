@@ -18,6 +18,8 @@
 
    API 配置包括名称、基础地址、默认模型和密钥。默认地址为 `https://generativelanguage.googleapis.com`；自定义地址必须兼容 Gemini API，CLI 会追加 API 路径，不要填写 OpenAI 接口地址。密钥在控制面及操作队列中加密，响应只返回元数据；编辑时留空保留原密钥。编辑后需重新下发，各服务器在操作成功后才更新绑定。服务器需在线且 Wio Agent 至少为 `0.2.63`。
 
+   从 `0.2.65` 起，地址末尾的 `/v1` 或 `/v1beta` 会统一转换为 Gemini 原生 `/v1beta` 请求，模型发现与会话调用使用相同路径；网关路径前缀保留。Agent 升级重启时也会修正已下发的旧配置，避免出现 `/v1/v1beta` 路径。
+
    Agent 将配置写入状态目录下受限权限的 `gemini/api.json`，重启后恢复。运行 Gemini CLI 时独立注入 `GEMINI_API_KEY`、`GOOGLE_GEMINI_BASE_URL` 和 API 密钥认证设置，不修改 Codex/Git 配置或全局进程环境。运行中的 Gemini 任务及配置/安装操作会阻止切换。
 
    也可选择以下认证方式：

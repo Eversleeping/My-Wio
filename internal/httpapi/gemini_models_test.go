@@ -62,6 +62,22 @@ func TestFetchGeminiModelsRejectsRedirectAndRedactsErrors(t *testing.T) {
 	}
 }
 
+func TestGeminiModelsUseNativePathForVersionedEndpoints(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gateway/v1beta/models" {
+			t.Errorf("incorrect native Gemini API path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-upstream"}]}`))
+	}))
+	defer upstream.Close()
+	for _, suffix := range []string{"", "/", "/v1", "/v1/", "/v1beta", "/v1beta/"} {
+		models, err := fetchGeminiModels(context.Background(), upstream.URL+"/gateway"+suffix, "synthetic-gemini-key")
+		if err != nil || len(models) != 1 || models[0].ID != "gemini-upstream" {
+			t.Fatalf("versioned endpoint %q: %+v %v", suffix, models, err)
+		}
+	}
+}
+
 func TestWorkspaceGeminiModelsUsesBoundProfileAndHandlesMissingConfig(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)

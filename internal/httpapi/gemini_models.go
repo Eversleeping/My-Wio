@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/wio-platform/wio/internal/geminiapi"
 )
 
 type geminiModel struct {
@@ -62,12 +63,10 @@ func fetchGeminiModels(ctx context.Context, endpoint, key string) ([]geminiModel
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("invalid Gemini API endpoint")
 	}
-	u.Path = strings.TrimRight(u.Path, "/")
-	if !strings.HasSuffix(u.Path, "/v1beta") && !strings.HasSuffix(u.Path, "/v1") {
-		u.Path += "/v1beta"
-	}
-	u.Path += "/models"
-	u.RawPath = ""
+	u, _ = url.Parse(geminiapi.BaseURL(endpoint))
+	escapedPrefix := u.EscapedPath()
+	u.Path += "/v1beta/models"
+	u.RawPath = escapedPrefix + "/v1beta/models"
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}

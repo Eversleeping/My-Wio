@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -44,5 +46,31 @@ func TestGeminiCredentialsPersistAndInvalidUpdatesPreserveConfiguration(t *testi
 	}
 	if _, err := os.Stat(config.CodexAPIKeyFile); !os.IsNotExist(err) {
 		t.Fatal("Gemini wrote Codex credentials")
+	}
+}
+
+func TestExistingGeminiVersionedEndpointIsNormalizedOnRestart(t *testing.T) {
+	config := Config{StateDir: t.TempDir()}
+	command := protocol.ConfigureGeminiCredentialsCommand{Endpoint: "https://example.test/gateway/v1/", APIKey: "synthetic-secret", Model: "flash"}
+	dir := filepath.Join(config.StateDir, "gemini")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(command)
+	path := filepath.Join(dir, "api.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient(config, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer c.codex.Close()
+	// NewClient restores the persisted credentials using the same path as a
+	// newly applied profile, so older Agents' configuration is migrated too.
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &command) != nil || command.Endpoint != "https://example.test/gateway" || command.APIKey != "synthetic-secret" {
+		t.Fatal("existing Gemini endpoint was not migrated")
+	}
+	env := strings.Join(c.geminiCredentialEnvironment(command), "\n")
+	if !strings.Contains(env, "GOOGLE_GEMINI_BASE_URL=https://example.test/gateway\n") || !strings.Contains(env, "GOOGLE_GENAI_API_VERSION=v1beta\n") {
+		t.Fatal("CLI API path differs from model discovery")
 	}
 }

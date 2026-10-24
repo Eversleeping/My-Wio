@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wio-platform/wio/internal/geminiapi"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -26,6 +27,7 @@ func (c *Client) geminiCredentialEnvironment(command protocol.ConfigureGeminiCre
 	return []string{
 		"GEMINI_API_KEY=" + command.APIKey,
 		"GOOGLE_GEMINI_BASE_URL=" + command.Endpoint,
+		"GOOGLE_GENAI_API_VERSION=v1beta",
 		"GOOGLE_GENAI_USE_GCA=false", "GOOGLE_GENAI_USE_VERTEXAI=false", "GOOGLE_API_KEY=",
 		"GEMINI_CLI_AUTH_OVERRIDE=gemini-api-key",
 		"GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + filepath.Join(c.config.StateDir, "gemini", "api-settings.json"),
@@ -38,6 +40,7 @@ func (c *Client) configureGeminiCredentials(command protocol.ConfigureGeminiCred
 	if err := validateGeminiCredentials(command); err != nil {
 		return err
 	}
+	command.Endpoint = geminiapi.BaseURL(command.Endpoint)
 	dir := filepath.Join(c.config.StateDir, "gemini")
 	return c.gemini.ReconfigureEnvironment(c.geminiCredentialEnvironment(command), command.Model, func() error {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
