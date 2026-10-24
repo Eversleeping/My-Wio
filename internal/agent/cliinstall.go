@@ -7,10 +7,28 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/protocol"
 )
+
+var readGeminiUpdateVersion = func(ctx context.Context, executable string) string {
+	return commandVersionWithTimeout(ctx, executable, 15*time.Second)
+}
+
+func (c *Client) currentGeminiVersion(ctx context.Context, executable string) string {
+	c.geminiVersionMu.Lock()
+	defer c.geminiVersionMu.Unlock()
+	if c.geminiVersionPath == executable && time.Now().Before(c.geminiVersionUntil) {
+		return c.geminiVersion
+	}
+	version := readGeminiUpdateVersion(ctx, executable)
+	if version != "" {
+		c.geminiVersionPath, c.geminiVersion, c.geminiVersionUntil = executable, version, time.Now().Add(2*time.Minute)
+	}
+	return version
+}
 
 func (c *Client) installCLI(ctx context.Context, command protocol.CLIInstallCommand) error {
 	if !codexcli.ValidTargetVersion(command.Version) {
@@ -46,7 +64,7 @@ func installGeminiCLI(ctx context.Context, stateDir, version string) error {
 	if err := runCodexUpdateCommand(ctx, "npm", "install", "--prefix", prefix, "--omit=dev", "--registry=https://registry.npmjs.org", "@google/gemini-cli@"+version); err != nil {
 		return fmt.Errorf("install Gemini CLI %s: %w", version, err)
 	}
-	if reported := readCodexUpdateVersion(ctx, managedGeminiExecutable(stateDir, version)); !codexcli.ReportedVersionMatches(reported, version) {
+	if reported := readGeminiUpdateVersion(ctx, managedGeminiExecutable(stateDir, version)); !codexcli.ReportedVersionMatches(reported, version) {
 		return errors.New("Gemini CLI version verification failed")
 	}
 	return nil

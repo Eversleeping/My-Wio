@@ -13,9 +13,9 @@ import (
 )
 
 func TestGeminiInstallVerifiesBeforeActivationAndPersists(t *testing.T) {
-	originalRun, originalFind, originalRead := runCodexUpdateCommand, findCodexUpdateCommand, readCodexUpdateVersion
+	originalRun, originalFind, originalRead := runCodexUpdateCommand, findCodexUpdateCommand, readGeminiUpdateVersion
 	t.Cleanup(func() {
-		runCodexUpdateCommand, findCodexUpdateCommand, readCodexUpdateVersion = originalRun, originalFind, originalRead
+		runCodexUpdateCommand, findCodexUpdateCommand, readGeminiUpdateVersion = originalRun, originalFind, originalRead
 	})
 	dir := t.TempDir()
 	c := &Client{config: Config{StateDir: dir}, gemini: geminiadapter.New("gemini", nil)}
@@ -28,7 +28,7 @@ func TestGeminiInstallVerifiesBeforeActivationAndPersists(t *testing.T) {
 		args = values
 		return nil
 	}
-	readCodexUpdateVersion = func(context.Context, string) string { return "0.64.0" }
+	readGeminiUpdateVersion = func(context.Context, string) string { return "0.64.0" }
 	command := protocol.CLIInstallCommand{Kind: "gemini", Version: "0.65.0"}
 	if err := c.installCLI(context.Background(), command); err == nil {
 		t.Fatal("version mismatch accepted")
@@ -36,7 +36,7 @@ func TestGeminiInstallVerifiesBeforeActivationAndPersists(t *testing.T) {
 	if c.gemini.Command() != "gemini" || effectiveGeminiPath(dir) != "gemini" {
 		t.Fatal("failed verification changed active CLI")
 	}
-	readCodexUpdateVersion = func(context.Context, string) string { return "0.65.0" }
+	readGeminiUpdateVersion = func(context.Context, string) string { return "0.65.0" }
 	if err := c.installCLI(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
@@ -63,5 +63,31 @@ func TestGeminiInstallVerifiesBeforeActivationAndPersists(t *testing.T) {
 	}
 	if err := c.installCLI(context.Background(), protocol.CLIInstallCommand{Kind: "evil", Version: "0.65.0"}); err == nil {
 		t.Fatal("unknown package accepted")
+	}
+}
+
+func TestGeminiVersionCacheTracksExecutableAndRetriesFailures(t *testing.T) {
+	original := readGeminiUpdateVersion
+	t.Cleanup(func() { readGeminiUpdateVersion = original })
+	count := 0
+	readGeminiUpdateVersion = func(context.Context, string) string { count++; return "0.65.0" }
+	c := &Client{}
+	for i := 0; i < 3; i++ {
+		if c.currentGeminiVersion(context.Background(), "original") != "0.65.0" {
+			t.Fatal("wrong version")
+		}
+	}
+	if count != 1 {
+		t.Fatal("heartbeat repeatedly starts Gemini CLI")
+	}
+	c.currentGeminiVersion(context.Background(), "new-managed-path")
+	if count != 2 {
+		t.Fatal("new executable reused old cache")
+	}
+	readGeminiUpdateVersion = func(context.Context, string) string { count++; return "" }
+	c.currentGeminiVersion(context.Background(), "failure")
+	c.currentGeminiVersion(context.Background(), "failure")
+	if count != 4 {
+		t.Fatal("empty version was cached")
 	}
 }

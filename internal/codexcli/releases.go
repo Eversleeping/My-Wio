@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,9 +26,14 @@ const (
 var ErrNoStableRelease = errors.New("no stable Codex CLI release was found")
 
 type ReleaseChecker struct {
-	client    *http.Client
-	url       string
-	tagPrefix string
+	client      *http.Client
+	url         string
+	tagPrefix   string
+	registryURL string
+	cacheMu     sync.Mutex
+	cache       []string
+	cacheLimit  int
+	cacheUntil  time.Time
 }
 
 func NewReleaseChecker(client *http.Client, url string) *ReleaseChecker {
@@ -46,7 +52,14 @@ func NewTaggedReleaseChecker(client *http.Client, url, tagPrefix string) *Releas
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &ReleaseChecker{client: client, url: url, tagPrefix: tagPrefix}
+	registryURL := ""
+	switch url {
+	case ReleaseListURL:
+		registryURL = "https://registry.npmjs.org/@openai%2fcodex"
+	case "https://api.github.com/repos/google-gemini/gemini-cli/releases":
+		registryURL = "https://registry.npmjs.org/@google%2fgemini-cli"
+	}
+	return &ReleaseChecker{client: client, url: url, tagPrefix: tagPrefix, registryURL: registryURL}
 }
 
 func (c *ReleaseChecker) LatestStable(ctx context.Context) (string, error) {
@@ -60,6 +73,79 @@ func (c *ReleaseChecker) LatestStable(ctx context.Context) (string, error) {
 // RecentStable returns the newest formal Rust-tagged releases in descending
 // semantic-version order. Preview, draft, and non-Rust tags are ignored.
 func (c *ReleaseChecker) RecentStable(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+	c.cacheMu.Lock()
+	if time.Now().Before(c.cacheUntil) && limit <= c.cacheLimit {
+		versions := append([]string(nil), c.cache...)
+		c.cacheMu.Unlock()
+		if len(versions) > limit {
+			versions = versions[:limit]
+		}
+		return versions, nil
+	}
+	c.cacheMu.Unlock()
+	versions, err := c.recentGitHub(ctx, limit)
+	if err != nil && c.registryURL != "" {
+		versions, err = c.recentNPM(ctx, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.cacheMu.Lock()
+	c.cache, c.cacheLimit, c.cacheUntil = append([]string(nil), versions...), limit, time.Now().Add(5*time.Minute)
+	c.cacheMu.Unlock()
+	return versions, nil
+}
+
+// The official npm package is a second release source when GitHub is
+// unavailable or includes unusually large release notes/assets.
+func (c *ReleaseChecker) recentNPM(ctx context.Context, limit int) ([]string, error) {
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, c.registryURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	r.Header.Set("Accept", "application/vnd.npm.install-v1+json")
+	response, err := c.client.Do(r)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("load official npm releases: %s", response.Status)
+	}
+	const maxBytes = 16 << 20
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxBytes {
+		return nil, errors.New("npm release metadata is too large")
+	}
+	var metadata struct {
+		Versions map[string]json.RawMessage `json:"versions"`
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil, err
+	}
+	versions := []string{}
+	for version := range metadata.Versions {
+		if ValidTargetVersion(version) {
+			versions = append(versions, version)
+		}
+	}
+	if len(versions) == 0 {
+		return nil, ErrNoStableRelease
+	}
+	sort.Slice(versions, func(i, j int) bool { return versionGreater(versions[i], versions[j]) })
+	if len(versions) > limit {
+		versions = versions[:limit]
+	}
+	return versions, nil
+}
+
+func (c *ReleaseChecker) recentGitHub(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		return []string{}, nil
 	}

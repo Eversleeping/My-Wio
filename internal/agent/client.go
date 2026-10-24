@@ -42,17 +42,21 @@ import (
 const initialReconnectBackoff = time.Second
 
 type Client struct {
-	config       Config
-	log          *slog.Logger
-	outbound     chan *protocol.AgentEnvelope
-	codex        *codexadapter.Sessions
-	gemini       *geminiadapter.Adapter
-	deployer     *deployer.Deployer
-	seenMu       sync.Mutex
-	seen         map[string]*operationExecution
-	codexPathMu  sync.RWMutex
-	codexPath    string
-	cliInstallMu sync.Mutex
+	config             Config
+	log                *slog.Logger
+	outbound           chan *protocol.AgentEnvelope
+	codex              *codexadapter.Sessions
+	gemini             *geminiadapter.Adapter
+	deployer           *deployer.Deployer
+	seenMu             sync.Mutex
+	seen               map[string]*operationExecution
+	codexPathMu        sync.RWMutex
+	codexPath          string
+	cliInstallMu       sync.Mutex
+	geminiVersionMu    sync.Mutex
+	geminiVersionPath  string
+	geminiVersion      string
+	geminiVersionUntil time.Time
 }
 
 type operationExecution struct {
@@ -915,7 +919,7 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	codexPath := c.currentCodexPath()
 	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
 	geminiPath := c.gemini.Command()
-	heartbeat.GeminiVersion = commandVersion(ctx, geminiPath)
+	heartbeat.GeminiVersion = c.currentGeminiVersion(ctx, geminiPath)
 	heartbeat.GeminiReady = commandAvailable(geminiPath)
 	return c.queue("heartbeat", heartbeat, false)
 }
@@ -1016,7 +1020,11 @@ func (c *Client) queue(kind string, payload any, important bool) error {
 }
 
 func commandVersion(ctx context.Context, command string) string {
-	versionContext, cancel := context.WithTimeout(ctx, 3*time.Second)
+	return commandVersionWithTimeout(ctx, command, 3*time.Second)
+}
+
+func commandVersionWithTimeout(ctx context.Context, command string, timeout time.Duration) string {
+	versionContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	output, err := exec.CommandContext(versionContext, command, "--version").Output()
 	if err != nil {
