@@ -190,36 +190,41 @@ test("locks the Agent update confirmation while it is being queued", async () =>
   expect(screen.queryByRole("dialog", { name: "Update Agent to 0.3.0" })).not.toBeInTheDocument();
 });
 
-test("keeps a failed Codex update confirmation open for retry", async () => {
+test("manages Codex updates through the shared AI Agent dialog and keeps failures available for retry", async () => {
   window.localStorage.setItem("wio_language", "en");
   const notify = vi.fn();
-  const updating = { ...server, codex_version: "0.144.4", codex_target_version: "0.145.0", codex_update_available: true };
+  const updating = { ...server, codex_version: "0.144.4", codex_target_version: "0.145.0", codex_update_available: true, gemini_profile_name: "Gemini Studio" };
   let attempts = 0;
+  const requests: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     const method = init.method ?? "GET";
-    if (url === "/api/servers" && method === "GET") return new Response(JSON.stringify([updating]), { status: 200, headers: { "Content-Type": "application/json" } });
-    if (url === "/api/credential-profiles" && method === "GET") return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
-    if (url === `/api/servers/${updating.id}/codex-update` && method === "POST") {
+    requests.push(url);
+    let body: unknown = [];
+    let status = 200;
+    if (url === "/api/servers") body = [updating];
+    else if (url.endsWith("/ai-clis")) body = [{kind:"codex",version:"0.144.4",ready:true,supported:true},{kind:"gemini",version:"0.65.0",ready:true,supported:true}];
+    else if (url.endsWith("/versions")) body = {versions:url.includes("codex")?["0.145.0","0.144.4"]:["0.65.0"],target_version:"0.145.0"};
+    else if (url.endsWith("/ai-clis/codex/install") && method === "POST") {
       attempts += 1;
-      return attempts === 1
-        ? new Response(JSON.stringify({ error: "Codex update failed" }), { status: 500, headers: { "Content-Type": "application/json" } })
-        : new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
+      body = attempts === 1 ? {error:"Codex update failed"} : {operation_id:"codex-install"};
+      status = attempts === 1 ? 500 : 202;
     }
-    return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(body),{status,headers:{"Content-Type":"application/json"}});
   }));
-
   const user = userEvent.setup();
   render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
-  await user.click(await screen.findByTitle("Update Codex CLI to 0.145.0"));
-  const confirmation = await screen.findByRole("dialog", { name: "Update Codex CLI to 0.145.0" });
-  expect(within(confirmation).getByText(/Active Codex turns must finish first/)).toBeInTheDocument();
-
-  await user.click(within(confirmation).getByRole("button", { name: "Update Codex CLI to 0.145.0" }));
-  await waitFor(() => expect(notify).toHaveBeenCalledWith("Codex update failed"));
-  expect(screen.getByRole("dialog", { name: "Update Codex CLI to 0.145.0" })).toBeInTheDocument();
-
-  await user.click(within(confirmation).getByRole("button", { name: "Update Codex CLI to 0.145.0" }));
-  await waitFor(() => expect(notify).toHaveBeenCalledWith("Codex CLI 0.145.0 update queued"));
-  expect(screen.queryByRole("dialog", { name: "Update Codex CLI to 0.145.0" })).not.toBeInTheDocument();
+  const manager = await screen.findByTitle("Manage AI Agents");
+  expect(screen.getByText("Gemini · Gemini Studio")).toBeInTheDocument();
+  expect(screen.queryByTitle("Update Codex CLI to 0.145.0")).not.toBeInTheDocument();
+  await user.click(manager);
+  const dialog = await screen.findByRole("dialog");
+  await user.click(await within(dialog).findByRole("button",{name:/Codex CLI/}));
+  const install = await within(dialog).findByRole("button",{name:"Switch Codex to 0.145.0"});
+  await user.click(install);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("Codex update failed");
+  await user.click(install);
+  await waitFor(() => expect(notify).toHaveBeenCalledWith("Codex 0.145.0 installation queued"));
+  expect(attempts).toBe(2);
+  expect(requests.some(url => url.endsWith("/codex-update"))).toBe(false);
 });

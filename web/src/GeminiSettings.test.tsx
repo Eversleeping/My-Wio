@@ -44,8 +44,11 @@ test("selects Gemini target independently and saves Gemini API profiles with mas
   const section = version.closest("section")!;
   await user.click(within(section).getByRole("button",{name:"Apply version"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/settings/gemini-cli/select-version",body:{version:"0.64.0"}}));
-  await user.click(screen.getByRole("button",{name:"New Gemini API profile"}));
+  expect(within(section).queryByText("Gemini API")).not.toBeInTheDocument();
+  expect(within(section).queryByRole("button",{name:"Apply Gemini API to server"})).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"New credential profile"}));
   const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("tab",{name:"Gemini API"}));
   expect(within(dialog).getByRole("tab",{name:"Gemini API"})).toHaveAttribute("aria-selected","true");
   expect(within(dialog).getByLabelText("Service URL")).toHaveValue(profile.endpoint);
   const key = within(dialog).getByLabelText("Gemini API key");
