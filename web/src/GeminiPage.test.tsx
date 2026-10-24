@@ -24,30 +24,33 @@ function setup(selected = false, model = "auto", upstreamState = "configured") {
 }
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
-test("shows every model alias and creates a session with a selected model",async () => {
+test("shows only fetched models and creates a session with a selected model",async () => {
   const {user,requests} = setup();
   await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
   const dialog = screen.getByRole("dialog");
   const models = within(dialog).getByRole("combobox",{name:"Gemini model"});
-  expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["auto","pro","flash","flash-lite","Custom model"]);
-  await user.selectOptions(models,"pro");
+  expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a model","Custom model"]);
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
+  await within(models).findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a model","Upstream · gemini-upstream-current","Custom model"]);
+  await user.selectOptions(models,"gemini-upstream-current");
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"pro",approval_mode:"default"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default"}}));
 });
 
 test("switches an existing session model for the next turn",async () => {
   const {user,requests} = setup(true);
   const models = await screen.findByRole("combobox",{name:"Gemini model"});
-  await user.selectOptions(models,"flash");
+  await within(models).findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  await user.selectOptions(models,"gemini-upstream-current");
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   await user.click(screen.getByRole("button",{name:"Send"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Hello",model:"flash",approval_mode:"default"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Hello",model:"gemini-upstream-current",approval_mode:"default"}}));
 });
 
 test("preserves and edits a custom model name",async () => {
   const {user,requests} = setup(true,"gemini-custom-model");
-  expect(await screen.findByRole("combobox",{name:"Gemini model"})).toHaveValue("custom");
+  expect(await screen.findByRole("combobox",{name:"Gemini model"})).toHaveValue("__custom__");
   const name = screen.getByRole("textbox",{name:"Model name"});
   expect(name).toHaveValue("gemini-custom-model");
   await user.clear(name); await user.type(name,"gemini-custom-next");
@@ -86,8 +89,8 @@ test.each(["failed","unconfigured"])("keeps manual model selection available whe
   if (state === "failed") await screen.findByText("Upstream unavailable");
   else await screen.findByText("Configure Gemini API in server credentials to load upstream models.");
   const models = screen.getByRole("combobox",{name:"Gemini model"});
-  expect(within(models).getByRole("option",{name:"flash"})).toBeInTheDocument();
-  await user.selectOptions(models,"custom");
+  for (const alias of ["auto","pro","flash","flash-lite"]) expect(within(models).queryByRole("option",{name:alias})).not.toBeInTheDocument();
+  await user.selectOptions(models,"__custom__");
   await user.type(screen.getByRole("textbox",{name:"Model name"}),"gemini-manual");
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   await user.click(screen.getByRole("button",{name:"Send"}));
