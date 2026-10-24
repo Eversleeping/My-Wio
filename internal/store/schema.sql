@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS servers (
   agent_version TEXT NOT NULL DEFAULT '',
   codex_version TEXT NOT NULL DEFAULT '',
   codex_ready INTEGER NOT NULL DEFAULT 0,
+  gemini_version TEXT NOT NULL DEFAULT '',
+  gemini_ready INTEGER NOT NULL DEFAULT 0,
   scan_roots TEXT NOT NULL DEFAULT '[]',
   managed_roots TEXT NOT NULL DEFAULT '[]',
   is_control_plane INTEGER NOT NULL DEFAULT 0,

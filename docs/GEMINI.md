@@ -5,7 +5,9 @@
 ## 安装和认证
 
 1. 更新控制面及目标服务器的 Wio Agent 至 `0.2.60` 或以上版本。旧版 Agent 不识别 Gemini 操作，页面会要求先升级。
-2. 在目标 Linux 服务器上，以运行 `wio-agent` 的账号安装 CLI。需要 Node.js 20 或以上版本，且服务的 `PATH` 能找到 `gemini`：
+2. 从 `0.2.61` 起，可在 **服务器 → 管理 AI Agent** 中分别查看 Codex、Gemini 的安装状态和版本，选择最近五个官方稳定版进行安装、升级或切换至较早版本。目标 Wio Agent 也需为 `0.2.61` 或以上；通过现有 Agent 通道安装，无需重新输入 SSH 凭据。CLI 安装到 Agent 状态目录的 `gemini/versions/<版本>`，校验后切换，并在重启后恢复。运行中的对话会阻止切换，失败则保留原有版本。需要 Node.js 20+ 和 npm；缺失时可使用 SSH 修复补齐依赖。
+
+   也可在目标 Linux 服务器上，以运行 `wio-agent` 的账号手动安装。服务的 `PATH` 必须能找到 `gemini`：
 
    ```bash
    npm install -g @google/gemini-cli
@@ -18,7 +20,7 @@
    - 将 Google AI Studio 的 `GEMINI_API_KEY` 配置到 Agent 的服务环境或该账号的 `~/.gemini/.env` 中。服务环境变化后需重启 Agent；不要将真实密钥写入项目仓库。
    - Vertex AI 用户可按官方文档配置 ADC、项目和区域等环境变量。
 
-   systemd 服务不会自动读取交互式终端的 `.bashrc`。CLI 的账号、`HOME`、凭据及 `PATH` 必须与 Agent 服务一致。内置控制机 Agent 使用控制面进程的环境；官方控制面镜像从 `0.2.60` 起已包含 Gemini CLI，认证目录位于持久化的 Agent 状态卷中。外部 Agent 主机仍需单独安装 CLI。
+   systemd 服务不会自动读取交互式终端的 `.bashrc`。CLI 的账号、`HOME`、凭据及 `PATH` 必须与 Agent 服务一致。内置控制机 Agent 使用控制面进程的环境；官方控制面镜像从 `0.2.60` 起已包含 Gemini CLI，认证目录位于持久化的 Agent 状态卷中。外部 Agent 可通过服务器页面安装 CLI；网页安装的版本优先于系统全局版本。
 
 4. 在实际工作区内，以相同账号和环境验证无头调用：
 
@@ -42,7 +44,7 @@
 - 工作区信任、`GEMINI.md`、MCP、Skills 和策略由目标服务器上的 Gemini CLI 管理。Wio 只在 Agent 配置允许的工作区根目录中启动 CLI。
 - 同一会话同时只运行一个任务；运行中的 Gemini 任务会占用工作区写操作锁。单次执行上限 10 分钟，超时后可在原会话继续。
 - 当前列表展示最近 200 个活动或归档会话；对话记录以每批 500 条事件加载，可加载更早记录。页面支持会话链接 `?view=gemini&thread=<Wio 会话 ID>`。
-- 此接入使用真实 CLI，不通过 OpenAI 兼容接口转换 Gemini 请求；需要服务器可访问相应 Google 服务。自动安装 CLI、网页管理 Gemini 凭据、图片输入和跨服务器迁移原生会话暂未提供。
+- 此接入使用真实 CLI，不通过 OpenAI 兼容接口转换 Gemini 请求；需要服务器可访问相应 Google 服务。网页管理 Gemini 凭据、图片输入和跨服务器迁移原生会话暂未提供。安装 CLI 不会自动配置模型认证。
 
 ## 官方参考
 

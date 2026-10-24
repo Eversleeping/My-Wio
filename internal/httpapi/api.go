@@ -38,23 +38,24 @@ import (
 const sessionCookie = "wio_session"
 
 type API struct {
-	store         *store.Store
-	hub           *realtime.Hub
-	gateway       *agentgateway.Gateway
-	vault         *security.Vault
-	log           *slog.Logger
-	frontend      fs.FS
-	frontendHash  string
-	bootstrapper  serverBootstrapper
-	agentUpdates  *agentupdate.Store
-	codexReleases *codexcli.ReleaseChecker
-	gitProviders  gitprovider.Creator
-	publicURL     string
-	secureCookie  bool
-	setupMu       sync.Mutex
-	loginMu       sync.Mutex
-	bootstrapMu   sync.Mutex
-	login         map[string]*loginAttempt
+	store          *store.Store
+	hub            *realtime.Hub
+	gateway        *agentgateway.Gateway
+	vault          *security.Vault
+	log            *slog.Logger
+	frontend       fs.FS
+	frontendHash   string
+	bootstrapper   serverBootstrapper
+	agentUpdates   *agentupdate.Store
+	codexReleases  *codexcli.ReleaseChecker
+	geminiReleases *codexcli.ReleaseChecker
+	gitProviders   gitprovider.Creator
+	publicURL      string
+	secureCookie   bool
+	setupMu        sync.Mutex
+	loginMu        sync.Mutex
+	bootstrapMu    sync.Mutex
+	login          map[string]*loginAttempt
 }
 
 type loginAttempt struct {
@@ -67,20 +68,21 @@ type sessionContextKey struct{}
 func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool) http.Handler {
 	assetDir := os.Getenv("WIO_AGENT_ASSET_DIR")
 	api := &API{
-		store:         s,
-		hub:           hub,
-		gateway:       gateway,
-		vault:         vault,
-		log:           log,
-		frontend:      frontend,
-		frontendHash:  fingerprintFrontend(frontend),
-		bootstrapper:  sshbootstrap.New(assetDir),
-		agentUpdates:  agentupdate.New(assetDir),
-		codexReleases: codexcli.NewReleaseChecker(nil, ""),
-		gitProviders:  gitprovider.Client{},
-		publicURL:     strings.TrimRight(strings.TrimSpace(publicURL), "/"),
-		secureCookie:  strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
-		login:         make(map[string]*loginAttempt),
+		store:          s,
+		hub:            hub,
+		gateway:        gateway,
+		vault:          vault,
+		log:            log,
+		frontend:       frontend,
+		frontendHash:   fingerprintFrontend(frontend),
+		bootstrapper:   sshbootstrap.New(assetDir),
+		agentUpdates:   agentupdate.New(assetDir),
+		codexReleases:  codexcli.NewReleaseChecker(nil, ""),
+		geminiReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/google-gemini/gemini-cli/releases", "v"),
+		gitProviders:   gitprovider.Client{},
+		publicURL:      strings.TrimRight(strings.TrimSpace(publicURL), "/"),
+		secureCookie:   strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
+		login:          make(map[string]*loginAttempt),
 	}
 	router := chi.NewRouter()
 	router.Use(api.recoverer, api.securityHeaders)
@@ -109,6 +111,9 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/servers/{serverID}/credential-profiles", api.updateServerCredentialProfiles)
 			private.Post("/servers/{serverID}/agent-update", api.updateAgent)
 			private.Post("/servers/{serverID}/codex-update", api.updateCodexCLI)
+			private.Get("/servers/{serverID}/ai-clis", api.serverCLIs)
+			private.Get("/ai-clis/{kind}/versions", api.cliVersions)
+			private.Post("/servers/{serverID}/ai-clis/{kind}/install", api.installServerCLI)
 			private.Post("/servers/enrollments", api.createEnrollment)
 			private.Post("/servers/ssh/probe", api.probeServerSSH)
 			private.Post("/servers/ssh/bootstrap", api.bootstrapServerSSH)

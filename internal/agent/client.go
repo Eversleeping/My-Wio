@@ -42,16 +42,17 @@ import (
 const initialReconnectBackoff = time.Second
 
 type Client struct {
-	config      Config
-	log         *slog.Logger
-	outbound    chan *protocol.AgentEnvelope
-	codex       *codexadapter.Sessions
-	gemini      *geminiadapter.Adapter
-	deployer    *deployer.Deployer
-	seenMu      sync.Mutex
-	seen        map[string]*operationExecution
-	codexPathMu sync.RWMutex
-	codexPath   string
+	config       Config
+	log          *slog.Logger
+	outbound     chan *protocol.AgentEnvelope
+	codex        *codexadapter.Sessions
+	gemini       *geminiadapter.Adapter
+	deployer     *deployer.Deployer
+	seenMu       sync.Mutex
+	seen         map[string]*operationExecution
+	codexPathMu  sync.RWMutex
+	codexPath    string
+	cliInstallMu sync.Mutex
 }
 
 type operationExecution struct {
@@ -70,7 +71,7 @@ func NewClient(config Config, log *slog.Logger) *Client {
 		}
 		return client.queue("event", event, true)
 	})
-	client.gemini = geminiadapter.New("", func(event protocol.StreamEvent) error {
+	client.gemini = geminiadapter.New(effectiveGeminiPath(config.StateDir), func(event protocol.StreamEvent) error {
 		event.EventID = uuid.NewString()
 		return client.queue("gemini_event", event, true)
 	})
@@ -792,11 +793,28 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		}
 		return c.configureCredentials(command)
 	case "codex.update":
+		if !c.cliInstallMu.TryLock() {
+			return errors.New("an AI CLI installation is already running")
+		}
+		defer c.cliInstallMu.Unlock()
 		var command protocol.CodexUpdateCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		if err := c.updateCodexCLI(ctx, command); err != nil {
+			return err
+		}
+		return c.enqueueHeartbeat(ctx)
+	case "cli.install":
+		if !c.cliInstallMu.TryLock() {
+			return errors.New("an AI CLI installation is already running")
+		}
+		defer c.cliInstallMu.Unlock()
+		var command protocol.CLIInstallCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		if err := c.installCLI(ctx, command); err != nil {
 			return err
 		}
 		return c.enqueueHeartbeat(ctx)
@@ -896,6 +914,9 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	hostname, _ := os.Hostname()
 	codexPath := c.currentCodexPath()
 	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
+	geminiPath := c.gemini.Command()
+	heartbeat.GeminiVersion = commandVersion(ctx, geminiPath)
+	heartbeat.GeminiReady = commandAvailable(geminiPath)
 	return c.queue("heartbeat", heartbeat, false)
 }
 

@@ -3,6 +3,7 @@ package geminiadapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,30 @@ import (
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
+
+func TestVersionSwitchReservesAdapterWithoutBlockingHeartbeat(t *testing.T) {
+	a := New("original", nil)
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- a.ReconfigureCommand("new", func() error { close(started); <-release; return errors.New("failed install") })
+	}()
+	<-started
+	if a.Command() != "original" {
+		t.Fatal("command changed during installation")
+	}
+	if err := a.Run(context.Background(), "blocked", protocol.GeminiTurnCommand{}); err == nil {
+		t.Fatal("turn started during installation")
+	}
+	close(release)
+	if err := <-done; err == nil || a.Command() != "original" {
+		t.Fatal("failed installation changed command")
+	}
+	a.active["running"] = func() {}
+	called := false
+	if err := a.ReconfigureCommand("new", func() error { called = true; return nil }); err == nil || called {
+		t.Fatal("active turn did not block installation")
+	}
+}
 
 // Re-execute the test binary as a portable fake CLI, including on Windows.
 func init() {

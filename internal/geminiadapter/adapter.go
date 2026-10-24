@@ -21,6 +21,33 @@ type Adapter struct {
 	mu        sync.Mutex
 	active    map[string]context.CancelFunc
 	cancelled map[string]time.Time
+	updating  bool
+}
+
+func (a *Adapter) Command() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.command
+}
+
+// Reserve the adapter while installing without blocking heartbeats. A failed
+// install preserves the command and existing native sessions.
+func (a *Adapter) ReconfigureCommand(command string, install func() error) error {
+	a.mu.Lock()
+	if a.updating || len(a.active) != 0 {
+		a.mu.Unlock()
+		return errors.New("finish or interrupt active Gemini turns before changing versions")
+	}
+	a.updating = true
+	a.mu.Unlock()
+	err := install()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.updating = false
+	if err == nil {
+		a.command = command
+	}
+	return err
 }
 
 func New(command string, emit func(protocol.StreamEvent) error) *Adapter {
@@ -44,6 +71,11 @@ func (a *Adapter) Run(parent context.Context, operationID string, command protoc
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	a.mu.Lock()
+	if a.updating {
+		a.mu.Unlock()
+		return errors.New("Gemini CLI installation is in progress; try again after it finishes")
+	}
+	executable := a.command
 	_, cancelled := a.cancelled[operationID]
 	delete(a.cancelled, operationID)
 	for id, at := range a.cancelled {
@@ -71,7 +103,7 @@ func (a *Adapter) Run(parent context.Context, operationID string, command protoc
 	if command.SessionID != "" {
 		args = append(args, "--resume", command.SessionID)
 	}
-	cmd := exec.CommandContext(ctx, a.command, args...)
+	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = command.Workspace
 	cmd.Stdin = strings.NewReader(command.Prompt)
 	configureProcess(cmd)

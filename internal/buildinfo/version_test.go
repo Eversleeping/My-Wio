@@ -2,6 +2,14 @@ package buildinfo
 
 import "testing"
 
+func TestCLIManagementRequiresNewAgent(t *testing.T) {
+	for version, want := range map[string]bool{"0.2.60": false, "0.2.61": true, "0.3.0": true, "invalid": false} {
+		if SupportsCLIManagement(version) != want {
+			t.Errorf("CLI management %s: want %v", version, want)
+		}
+	}
+}
+
 func TestSupportsGemini(t *testing.T) {
 	for version, want := range map[string]bool{"0.2.59": false, "0.2.60": true, "0.2.61": true, "invalid": false} {
 		if got := SupportsGemini(version); got != want {

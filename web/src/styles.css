@@ -1049,3 +1049,12 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .deletion-summary-grid > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .deletion-summary-grid > div:last-child { border-bottom: 0; }
 }
+.server-cli-manager { display: grid; gap: 16px; }
+.server-cli-manager > p { margin: 0; }
+.server-cli-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.server-cli-card { display: grid; gap: 10px; padding: 18px; text-align: left; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
+.server-cli-card.selected { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+.server-cli-card > span, .server-cli-card > small { display: flex; align-items: center; gap: 6px; min-height: 20px; }
+.server-cli-card code { overflow-wrap: anywhere; }
+.server-cli-refresh { display: flex; align-items: end; padding-bottom: 16px; }
+@media (max-width: 600px) { .server-cli-list { grid-template-columns: 1fr; } .server-cli-refresh { padding-bottom: 0; } .server-cli-manager .dialog-actions { flex-wrap: wrap; } }

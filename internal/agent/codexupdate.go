@@ -85,7 +85,11 @@ func managedCodexExecutable(stateDir, version string) string {
 }
 
 func writeManagedCodexVersion(stateDir, version string) error {
-	root := filepath.Join(stateDir, "codex")
+	return writeManagedCLIVersion(stateDir, "codex", version)
+}
+
+func writeManagedCLIVersion(stateDir, kind, version string) error {
+	root := filepath.Join(stateDir, kind)
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return err
 	}

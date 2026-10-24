@@ -5,7 +5,13 @@ import (
 	"strings"
 )
 
-var Version = "0.2.60"
+var Version = "0.2.61"
+
+const MinimumCLIManagementVersion = "0.2.61"
+
+func SupportsCLIManagement(version string) bool {
+	return atLeast(version, MinimumCLIManagementVersion)
+}
 
 const MinimumSelfUpdateVersion = "0.2.0"
 const MinimumCodexUpdateVersion = "0.2.9"

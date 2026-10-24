@@ -25,8 +25,9 @@ const (
 var ErrNoStableRelease = errors.New("no stable Codex CLI release was found")
 
 type ReleaseChecker struct {
-	client *http.Client
-	url    string
+	client    *http.Client
+	url       string
+	tagPrefix string
 }
 
 func NewReleaseChecker(client *http.Client, url string) *ReleaseChecker {
@@ -36,7 +37,16 @@ func NewReleaseChecker(client *http.Client, url string) *ReleaseChecker {
 	if strings.TrimSpace(url) == "" {
 		url = ReleaseListURL
 	}
-	return &ReleaseChecker{client: client, url: url}
+	return NewTaggedReleaseChecker(client, url, "rust-v")
+}
+
+// NewTaggedReleaseChecker shares bounded GitHub release discovery with other
+// official CLIs whose stable releases use a different tag prefix.
+func NewTaggedReleaseChecker(client *http.Client, url, tagPrefix string) *ReleaseChecker {
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	return &ReleaseChecker{client: client, url: url, tagPrefix: tagPrefix}
 }
 
 func (c *ReleaseChecker) LatestStable(ctx context.Context) (string, error) {
@@ -61,7 +71,8 @@ func (c *ReleaseChecker) RecentStable(ctx context.Context, limit int) ([]string,
 			return nil, err
 		}
 		for _, release := range releases {
-			version, ok := stableVersion(release)
+			version := strings.TrimPrefix(release.TagName, c.tagPrefix)
+			ok := !release.Draft && !release.Prerelease && strings.HasPrefix(release.TagName, c.tagPrefix) && ValidTargetVersion(version)
 			if !ok {
 				continue
 			}

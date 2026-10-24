@@ -31,12 +31,14 @@ type ControlEnvelope struct {
 }
 
 type Heartbeat struct {
-	Hostname     string   `json:"hostname"`
-	AgentVersion string   `json:"agent_version"`
-	CodexVersion string   `json:"codex_version"`
-	CodexReady   bool     `json:"codex_ready"`
-	ScanRoots    []string `json:"scan_roots"`
-	ManagedRoots []string `json:"managed_roots,omitempty"`
+	Hostname      string   `json:"hostname"`
+	AgentVersion  string   `json:"agent_version"`
+	CodexVersion  string   `json:"codex_version"`
+	CodexReady    bool     `json:"codex_ready"`
+	GeminiVersion string   `json:"gemini_version"`
+	GeminiReady   bool     `json:"gemini_ready"`
+	ScanRoots     []string `json:"scan_roots"`
+	ManagedRoots  []string `json:"managed_roots,omitempty"`
 }
 
 type Metrics struct {
