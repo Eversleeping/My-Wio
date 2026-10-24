@@ -67,7 +67,17 @@ func (a *API) cliVersions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "could not load official CLI releases; retry later")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"versions": versions})
+	target := ""
+	if chi.URLParam(r, "kind") == "gemini" {
+		target, err = a.store.Setting(r.Context(), geminiCLITargetSetting, defaultGeminiTargetVersion)
+	} else {
+		target, err = a.store.Setting(r.Context(), codexCLITargetSetting, codexcli.DefaultTargetVersion)
+	}
+	if err != nil {
+		writeError(w, 500, "could not load CLI target")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"versions": versions, "target_version": target})
 }
 
 func (a *API) installServerCLI(w http.ResponseWriter, r *http.Request) {

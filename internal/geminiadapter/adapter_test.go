@@ -46,7 +46,7 @@ func init() {
 		return
 	}
 	stdin, _ := io.ReadAll(os.Stdin)
-	raw, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin), "dir": mustWorkingDir()})
+	raw, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin), "dir": mustWorkingDir(), "apiKey": os.Getenv("GEMINI_API_KEY"), "endpoint": os.Getenv("GOOGLE_GEMINI_BASE_URL")})
 	_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), raw, 0600)
 	fmt.Println(`{"type":"init","session_id":"native-session","model":"flash"}`)
 	if mode == "wait" {
@@ -145,6 +145,10 @@ func TestInterruptBeforeAndDuringStart(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("CLI did not start")
 	}
+	called := false
+	if err := a.ReconfigureEnvironment([]string{"GEMINI_API_KEY=new-secret"}, "pro", func() error { called = true; return nil }); err == nil || called {
+		t.Fatal("active turn allowed credential change")
+	}
 	a.Interrupt("active")
 	select {
 	case err := <-done:
@@ -153,5 +157,34 @@ func TestInterruptBeforeAndDuringStart(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("interrupt did not stop process")
+	}
+}
+
+func TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")
+	record := filepath.Join(t.TempDir(), "record.json")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_API_KEY", "inherited-secret")
+	binary, _ := os.Executable()
+	a := New(binary, func(protocol.StreamEvent) error { return nil })
+	if err := a.ReconfigureEnvironment([]string{"GEMINI_API_KEY=configured-secret", "GOOGLE_GEMINI_BASE_URL=https://gemini.example.test"}, "flash", func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReconfigureEnvironment([]string{"GEMINI_API_KEY=failed-secret"}, "pro", func() error { return errors.New("write failed") }); err == nil {
+		t.Fatal("expected failure")
+	}
+	if err := a.Run(context.Background(), "configured", protocol.GeminiTurnCommand{Workspace: t.TempDir(), Model: "auto", ApprovalMode: "default", Prompt: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Args             []string
+		APIKey, Endpoint string
+	}
+	raw, _ := os.ReadFile(record)
+	if json.Unmarshal(raw, &captured) != nil || captured.APIKey != "configured-secret" || captured.Endpoint != "https://gemini.example.test" || !strings.Contains(strings.Join(captured.Args, " "), "--model flash") {
+		t.Fatal("incorrect process configuration")
+	}
+	if os.Getenv("GEMINI_API_KEY") != "inherited-secret" {
+		t.Fatal("global environment changed")
 	}
 }

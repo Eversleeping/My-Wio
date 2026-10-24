@@ -65,6 +65,18 @@ func (s *Store) QueueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		return protocol.StreamEvent{}, err
 	}
 	defer tx.Rollback()
+
+	// Serialize configuration changes with newly queued turns on this server.
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), thread.ServerID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	var configuring int
+	if err := tx.GetContext(ctx, &configuring, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('gemini.credentials.configure','cli.install') AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	if configuring != 0 {
+		return protocol.StreamEvent{}, ErrGeminiCredentialsBusy
+	}
 	opID, now := NewID(), time.Now().UTC()
 	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET status='queued',operation_id=?,model=?,approval_mode=?,updated_at=?,title=CASE WHEN title='Gemini' THEN ? ELSE title END
  WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting')`), opID, model, mode, now, truncateGeminiTitle(prompt), thread.ID)

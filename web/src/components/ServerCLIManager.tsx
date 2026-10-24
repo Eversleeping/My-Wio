@@ -42,8 +42,8 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
   useEffect(() => {
     const controller = new AbortController();
     setLoadingVersions(true); setError(""); setVersions([]); setVersion("");
-    void api<{ versions: string[] }>(`/ai-clis/${kind}/versions`, { signal: controller.signal }).then(data => {
-      if (!controller.signal.aborted) { setVersions(data.versions); setVersion(data.versions[0] ?? ""); }
+    void api<{ versions: string[]; target_version?: string }>(`/ai-clis/${kind}/versions`, { signal: controller.signal }).then(data => {
+      if (!controller.signal.aborted) { setVersions(data.versions); setVersion(data.target_version && data.versions.includes(data.target_version) ? data.target_version : data.versions[0] ?? ""); }
     }).catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure)); })
       .finally(() => { if (!controller.signal.aborted) setLoadingVersions(false); });
     return () => controller.abort();

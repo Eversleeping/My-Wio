@@ -98,26 +98,26 @@ func (a *API) saveCredentialProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateCredentialProfile(input credentialProfileInput) error {
-	if input.Kind != "codex" && input.Kind != "git" {
-		return errors.New("credential profile kind must be codex or git")
+	if input.Kind != "codex" && input.Kind != "gemini" && input.Kind != "git" {
+		return errors.New("credential profile kind must be codex, gemini or git")
 	}
 	if input.Name == "" || utf8.RuneCountInString(input.Name) > 128 {
 		return errors.New("credential profile name is required")
 	}
 	parsed, err := url.Parse(input.Endpoint)
-	validScheme := parsed != nil && (parsed.Scheme == "https" || input.Kind == "codex" && parsed.Scheme == "http")
+	validScheme := parsed != nil && (parsed.Scheme == "https" || input.Kind != "git" && parsed.Scheme == "http")
 	if err != nil || !validScheme || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("credential profile endpoint is invalid")
 	}
-	if input.Kind == "codex" {
+	if input.Kind != "git" {
 		if !credentialModelPattern.MatchString(input.Model) {
-			return errors.New("Codex model is invalid")
+			return errors.New("AI model is invalid")
 		}
 		if input.Username != "" {
-			return errors.New("Codex credential profile must not include a username")
+			return errors.New("AI credential profile must not include a username")
 		}
 		if input.CommitName != "" || input.CommitEmail != "" {
-			return errors.New("Codex credential profile must not include a Git commit identity")
+			return errors.New("AI credential profile must not include a Git commit identity")
 		}
 	} else {
 		if input.Username == "" || utf8.RuneCountInString(input.Username) > 256 || strings.ContainsAny(input.Username, "\r\n\x00") {

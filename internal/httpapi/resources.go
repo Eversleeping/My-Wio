@@ -84,6 +84,7 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 		servers[index].AgentUpdateAvailable = packagesAvailable && buildinfo.UpdateAvailable(servers[index].AgentVersion, buildinfo.Version)
 		servers[index].CodexTargetVersion = codexTarget
 		servers[index].CodexUpdateSupported = buildinfo.SupportsCodexUpdate(servers[index].AgentVersion)
+		servers[index].GeminiCredentialsSupported = buildinfo.SupportsGeminiCredentials(servers[index].AgentVersion)
 		servers[index].CLIManagementSupported = buildinfo.SupportsCLIManagement(servers[index].AgentVersion)
 		servers[index].CodexUpdateAvailable = servers[index].CodexUpdateSupported && (servers[index].CodexVersion == "" || codexcli.UpdateAvailable(servers[index].CodexVersion, codexTarget))
 		servers[index].ExactRollbackSupported = buildinfo.SupportsExactDeploymentRollback(servers[index].AgentVersion)

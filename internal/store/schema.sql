@@ -493,3 +493,14 @@ CREATE TABLE IF NOT EXISTS gemini_threads (
 );
 
 CREATE INDEX IF NOT EXISTS gemini_threads_workspace_idx ON gemini_threads(workspace_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS server_gemini_credential_profiles (
+ server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS server_gemini_credential_updates (
+ operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
+ server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL
+);

@@ -667,3 +667,10 @@ func (c *connectClient) Recv() (*ControlEnvelope, error) {
 	}
 	return m, nil
 }
+
+// Gemini credentials are dispatched independently from Codex and Git.
+type ConfigureGeminiCredentialsCommand struct {
+	Endpoint string `json:"endpoint"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+}

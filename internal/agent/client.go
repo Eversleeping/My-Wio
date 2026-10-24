@@ -79,6 +79,9 @@ func NewClient(config Config, log *slog.Logger) *Client {
 		event.EventID = uuid.NewString()
 		return client.queue("gemini_event", event, true)
 	})
+	if err := client.loadGeminiCredentials(); err != nil {
+		log.Warn("Gemini API configuration could not be loaded")
+	}
 	return client
 }
 
@@ -790,6 +793,12 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.codex.Decide(command)
+	case "gemini.credentials.configure":
+		var command protocol.ConfigureGeminiCredentialsCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.configureGeminiCredentials(command)
 	case "credentials.configure":
 		var command protocol.ConfigureCredentialsCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

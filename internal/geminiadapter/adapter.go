@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -16,12 +17,51 @@ import (
 )
 
 type Adapter struct {
-	command   string
-	emit      func(protocol.StreamEvent) error
-	mu        sync.Mutex
-	active    map[string]context.CancelFunc
-	cancelled map[string]time.Time
-	updating  bool
+	command      string
+	emit         func(protocol.StreamEvent) error
+	mu           sync.Mutex
+	active       map[string]context.CancelFunc
+	cancelled    map[string]time.Time
+	updating     bool
+	environment  []string
+	defaultModel string
+}
+
+// Apply persistent API settings only between turns. The reservation also
+// excludes concurrent executable changes without blocking inventory probes.
+func (a *Adapter) ReconfigureEnvironment(environment []string, model string, apply func() error) error {
+	a.mu.Lock()
+	if a.updating || len(a.active) != 0 {
+		a.mu.Unlock()
+		return errors.New("finish or interrupt active Gemini turns before changing API settings")
+	}
+	a.updating = true
+	a.mu.Unlock()
+	err := apply()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.updating = false
+	if err == nil {
+		a.environment = append([]string(nil), environment...)
+		a.defaultModel = model
+	}
+	return err
+}
+
+func mergedEnvironment(overrides []string) []string {
+	env := os.Environ()
+	for _, override := range overrides {
+		key, _, _ := strings.Cut(override, "=")
+		kept := env[:0]
+		for _, entry := range env {
+			name, _, _ := strings.Cut(entry, "=")
+			if !strings.EqualFold(name, key) {
+				kept = append(kept, entry)
+			}
+		}
+		env = append(kept, override)
+	}
+	return env
 }
 
 func (a *Adapter) Command() string {
@@ -73,9 +113,13 @@ func (a *Adapter) Run(parent context.Context, operationID string, command protoc
 	a.mu.Lock()
 	if a.updating {
 		a.mu.Unlock()
-		return errors.New("Gemini CLI installation is in progress; try again after it finishes")
+		return errors.New("Gemini configuration is changing; try again after it finishes")
 	}
 	executable := a.command
+	environment := mergedEnvironment(a.environment)
+	if (command.Model == "" || command.Model == "auto") && a.defaultModel != "" {
+		command.Model = a.defaultModel
+	}
 	_, cancelled := a.cancelled[operationID]
 	delete(a.cancelled, operationID)
 	for id, at := range a.cancelled {
@@ -105,6 +149,7 @@ func (a *Adapter) Run(parent context.Context, operationID string, command protoc
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = command.Workspace
+	cmd.Env = environment
 	cmd.Stdin = strings.NewReader(command.Prompt)
 	configureProcess(cmd)
 	stdout, err := cmd.StdoutPipe()

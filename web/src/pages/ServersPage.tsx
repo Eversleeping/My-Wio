@@ -340,7 +340,7 @@ function ServerCredentialSummary({ server }: { server: Server }) {
   const { t } = useI18n();
   const gitProfiles = server.git_profiles ?? [];
   if (!server.codex_profile_name && gitProfiles.length === 0 && !server.git_profile_name) return <span className="muted">{t("server.noBoundCredentials")}</span>;
-  return <div className="server-credential-summary">{server.codex_profile_name && <span title={server.codex_profile_name}><SquareTerminal size={13} /><span>{server.codex_profile_name}</span></span>}{gitProfiles.length ? gitProfiles.map(profile => <span key={profile.id} title={`${profile.name} ${String.fromCharCode(183)} ${profile.username}`}><GitFork size={13} /><span>{profile.name}</span></span>) : server.git_profile_name && <span title={server.git_profile_name}><GitFork size={13} /><span>{server.git_profile_name}</span></span>}</div>;
+  return <div className="server-credential-summary">{server.gemini_profile_name && <span title={server.gemini_profile_name}><SquareTerminal size={13} /><span>Gemini ¡¤ {server.gemini_profile_name}</span></span>}{server.codex_profile_name && <span title={server.codex_profile_name}><SquareTerminal size={13} /><span>{server.codex_profile_name}</span></span>}{gitProfiles.length ? gitProfiles.map(profile => <span key={profile.id} title={`${profile.name} ${String.fromCharCode(183)} ${profile.username}`}><GitFork size={13} /><span>{profile.name}</span></span>) : server.git_profile_name && <span title={server.git_profile_name}><GitFork size={13} /><span>{server.git_profile_name}</span></span>}</div>;
 }
 
 function Dialog(props: Omit<DialogProps, "closeLabel">) {

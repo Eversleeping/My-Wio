@@ -14,7 +14,13 @@
    gemini --version
    ```
 
-3. 选择一种认证方式：
+3. 从 `0.2.63` 起，可在 **设置 → Gemini CLI 版本与 API 配置** 中检查最近五个正式版本、保存目标版本、新增 Gemini API 配置，并选择服务器下发。目标版本会在服务器的「管理 AI Agent」中默认选中，实际安装仍由服务器页面执行。
+
+   API 配置包括名称、基础地址、默认模型和密钥。默认地址为 `https://generativelanguage.googleapis.com`；自定义地址必须兼容 Gemini API，CLI 会追加 API 路径，不要填写 OpenAI 接口地址。密钥在控制面及操作队列中加密，响应只返回元数据；编辑时留空保留原密钥。编辑后需重新下发，各服务器在操作成功后才更新绑定。服务器需在线且 Wio Agent 至少为 `0.2.63`。
+
+   Agent 将配置写入状态目录下受限权限的 `gemini/api.json`，重启后恢复。运行 Gemini CLI 时独立注入 `GEMINI_API_KEY`、`GOOGLE_GEMINI_BASE_URL` 和 API 密钥认证设置，不修改 Codex/Git 配置或全局进程环境。运行中的 Gemini 任务及配置/安装操作会阻止切换。
+
+   也可选择以下认证方式：
 
    - 以同一 Agent 账号运行 `gemini`，完成 Google 登录。无头模式会使用该账号已缓存的认证。
    - 将 Google AI Studio 的 `GEMINI_API_KEY` 配置到 Agent 的服务环境或该账号的 `~/.gemini/.env` 中。服务环境变化后需重启 Agent；不要将真实密钥写入项目仓库。
@@ -33,7 +39,7 @@
 ## 使用方式
 
 1. 打开 **Gemini → 新建 Gemini 会话**，选择现有工作区。
-2. 选择模型和工具权限。支持官方别名 `auto`、`pro`、`flash`、`flash-lite`，也可输入账号有权访问的具体模型名称；别名由已安装的 CLI 解析。
+2. 选择模型和工具权限。支持官方别名 `auto`、`pro`、`flash`、`flash-lite`，也可输入账号有权访问的具体模型名称；别名由已安装的 CLI 解析。使用网页下发的 API 配置时，会话选择 `auto` 会使用该配置中的默认模型；配置本身为 `auto` 时由 CLI 自动选择。
 3. 输入任务，按 Enter 发送，Shift+Enter 换行。页面显示回答、工具参数与结果、输入输出 token 数。运行期间可中断；服务器离线时保留历史，恢复连接后可继续。
 4. 在左侧查看项目文件和变更；会话菜单可重命名、归档、恢复或删除。归档会话只读，删除仅清除 Wio 会话记录，保留项目文件和 Gemini 本地会话。
 
@@ -44,7 +50,7 @@
 - 工作区信任、`GEMINI.md`、MCP、Skills 和策略由目标服务器上的 Gemini CLI 管理。Wio 只在 Agent 配置允许的工作区根目录中启动 CLI。
 - 同一会话同时只运行一个任务；运行中的 Gemini 任务会占用工作区写操作锁。单次执行上限 10 分钟，超时后可在原会话继续。
 - 当前列表展示最近 200 个活动或归档会话；对话记录以每批 500 条事件加载，可加载更早记录。页面支持会话链接 `?view=gemini&thread=<Wio 会话 ID>`。
-- 此接入使用真实 CLI，不通过 OpenAI 兼容接口转换 Gemini 请求；需要服务器可访问相应 Google 服务。网页管理 Gemini 凭据、图片输入和跨服务器迁移原生会话暂未提供。安装 CLI 不会自动配置模型认证。
+- 此接入使用真实 CLI，不通过 OpenAI 兼容接口转换 Gemini 请求；需要服务器可访问相应 Google 服务。图片输入和跨服务器迁移原生会话暂未提供。安装 CLI 不会自动配置模型认证。
 
 ## 官方参考
 
@@ -52,3 +58,5 @@
 - [CLI 参数及模型别名](https://geminicli.com/docs/cli/cli-reference/)
 - [认证配置](https://geminicli.com/docs/get-started/authentication/)
 - [官方 JSONL 事件类型](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/output/types.ts)
+
+- [Gemini CLI API key 与基础地址实现（v0.65.0）](https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/core/contentGenerator.ts)

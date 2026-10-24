@@ -29,7 +29,7 @@ func (s *Store) QueueCLIInstall(ctx context.Context, serverID string, command pr
 		return "", errors.New("server unavailable")
 	}
 	var active int
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT count(*) FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update') AND status IN ('queued','delivered','running')"), serverID); err != nil {
+	if err := tx.GetContext(ctx, &active, s.Q("SELECT count(*) FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','gemini.credentials.configure') AND status IN ('queued','delivered','running')"), serverID); err != nil {
 		return "", err
 	}
 	if active != 0 {

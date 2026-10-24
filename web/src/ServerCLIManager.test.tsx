@@ -61,3 +61,11 @@ test("disables installation until Wio Agent supports CLI management", async () =
   expect(await screen.findByText(/Update Wio Agent to 0.2.61/)).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: "Install Gemini 0.65.0" })).toBeDisabled();
 });
+
+test("preselects the Gemini target saved in Settings", async () => {
+ window.localStorage.setItem("wio_language", "en");
+ vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith("/versions") ? {versions:["0.65.0","0.64.0"],target_version:"0.64.0"} : [{kind:"gemini",version:"",ready:false,supported:true}]),{status:200})));
+ render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
+ expect(await screen.findByRole("button",{name:"Install Gemini 0.64.0"})).toBeEnabled();
+ expect(screen.getByRole("combobox")).toHaveValue("0.64.0");
+});

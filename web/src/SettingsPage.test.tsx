@@ -24,6 +24,8 @@ function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Re
     requests.push({ url, method });
     if (method === "DELETE") return onDelete?.(url) ?? jsonResponse({});
     if (url === "/api/settings/codex-cli") return jsonResponse({ target_version: "1.0.0", versions: ["1.0.0"] });
+    if (url === "/api/settings/gemini-cli") return jsonResponse({ target_version: "0.65.0", versions: ["0.65.0"] });
+    if (url === "/api/servers") return jsonResponse([]);
     if (url === "/api/credential-profiles") return jsonResponse([profile]);
     if (url === "/api/secret-sets") return jsonResponse([secretSet]);
     if (url.startsWith("/api/audit?")) return jsonResponse({ items: [], has_more: false, next: null });

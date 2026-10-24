@@ -587,7 +587,9 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if operation.Kind == "credentials.configure" {
+		if operation.Kind == "gemini.credentials.configure" {
+			err = g.store.CompleteGeminiCredentialUpdate(ctx, result)
+		} else if operation.Kind == "credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
 		} else {
 			err = g.store.CompleteOperation(ctx, result)

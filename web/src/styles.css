@@ -1058,3 +1058,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .server-cli-card code { overflow-wrap: anywhere; }
 .server-cli-refresh { display: flex; align-items: end; padding-bottom: 16px; }
 @media (max-width: 600px) { .server-cli-list { grid-template-columns: 1fr; } .server-cli-refresh { padding-bottom: 0; } .server-cli-manager .dialog-actions { flex-wrap: wrap; } }
+
+.gemini-settings-content { padding: 0 16px 16px; }
+.gemini-settings-content .row-actions { flex-wrap: wrap; gap: 8px; }
+.gemini-settings-help { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
