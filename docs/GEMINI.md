@@ -39,7 +39,7 @@
 ## 使用方式
 
 1. 打开 **Gemini → 新建 Gemini 会话**，选择现有工作区。
-2. 选择模型和工具权限。支持官方别名 `auto`、`pro`、`flash`、`flash-lite`，选择“自定义模型”后可输入账号有权访问的具体模型名称；别名由已安装的 CLI 解析。使用网页下发的 API 配置时，会话选择 `auto` 会使用该配置中的默认模型；配置本身为 `auto` 时由 CLI 自动选择。切换的模型在发送下一条消息时生效。
+2. 打开会话时自动使用该服务器绑定的 Gemini API 凭据从上游获取模型列表；新建会话选择工作区后也会自动获取，可通过模型旁的刷新按钮手动更新。选择模型和工具权限。支持官方别名 `auto`、`pro`、`flash`、`flash-lite`，选择“自定义模型”后可输入账号有权访问的具体模型名称；别名由已安装的 CLI 解析。使用网页下发的 API 配置时，会话选择 `auto` 会使用该配置中的默认模型；配置本身为 `auto` 时由 CLI 自动选择。切换的模型在发送下一条消息时生效。未配置 API 凭据或上游不可用时，仍可使用别名或自定义名称；Google 登录和 Vertex AI 认证的模型自动发现暂未提供。
 3. 输入任务，按 Enter 发送，Shift+Enter 换行。页面显示回答、工具参数与结果、输入输出 token 数。运行期间可中断；服务器离线时保留历史，恢复连接后可继续。
 4. 在左侧查看项目文件和变更；会话菜单可重命名、归档、恢复或删除。归档会话只读，删除仅清除 Wio 会话记录，保留项目文件和 Gemini 本地会话。
 
@@ -56,6 +56,7 @@
 
 - [无头模式与流式 JSON 协议](https://geminicli.com/docs/cli/headless/)
 - [CLI 参数及模型别名](https://geminicli.com/docs/cli/cli-reference/)
+- [模型列表 API](https://ai.google.dev/api/models)
 - [认证配置](https://geminicli.com/docs/get-started/authentication/)
 - [官方 JSONL 事件类型](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/output/types.ts)
 
