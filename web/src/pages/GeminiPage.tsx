@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Bot, FileCode2, Folder, HelpCircle, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, SquareTerminal, Trash2, UserRound } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, FileDiffPane, FilePreviewPane, message, WorkspaceFilesPanel, type FilePreviewSelection } from "../App";
@@ -81,8 +81,9 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
 
 function ModelOptions({ model, mode, setModel, setMode, disabled = false }: { model: string; mode: string; setModel: (value: string) => void; setMode: (value: string) => void; disabled?: boolean }) {
   const { t } = useI18n();
-  const modelListID = useId();
-  return <div className="gemini-options"><Field label={t("gemini.model")}><input aria-label={t("gemini.model")} list={modelListID} required maxLength={128} value={model} disabled={disabled} onChange={event => setModel(event.target.value)} /><datalist id={modelListID}>{["auto", "pro", "flash", "flash-lite"].map(value => <option value={value} key={value} />)}</datalist></Field><Field label={t("gemini.permissions")}><select aria-label={t("gemini.permissions")} value={mode} disabled={disabled} onChange={event => setMode(event.target.value)}><option value="default">{t("gemini.defaultMode")}</option><option value="auto_edit">{t("gemini.autoEditMode")}</option></select></Field></div>;
+  const aliases = ["auto", "pro", "flash", "flash-lite"];
+  const custom = !aliases.includes(model);
+  return <div className="gemini-options"><Field label={t("gemini.model")}><select aria-label={t("gemini.model")} value={custom ? "custom" : model} disabled={disabled} onChange={event => setModel(event.target.value === "custom" ? "" : event.target.value)}>{aliases.map(value => <option value={value} key={value}>{value}</option>)}<option value="custom">{t("gemini.customModel")}</option></select>{custom && <input aria-label={t("gemini.customModelName")} placeholder={t("gemini.customModelName")} required maxLength={128} value={model} disabled={disabled} onChange={event => setModel(event.target.value)} />}</Field><Field label={t("gemini.permissions")}><select aria-label={t("gemini.permissions")} value={mode} disabled={disabled} onChange={event => setMode(event.target.value)}><option value="default">{t("gemini.defaultMode")}</option><option value="auto_edit">{t("gemini.autoEditMode")}</option></select></Field></div>;
 }
 
 function CreateGeminiSession({ workspaces, error, onRetry, onCreated }: { workspaces: Workspace[]; error: string; onRetry: () => void; onCreated: (thread: GeminiThread) => void }) {
