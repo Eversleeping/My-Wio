@@ -96,7 +96,7 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.2.69", CodexReady: true}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.2.70", CodexReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduler", Name: "scheduler"}}}); err != nil {

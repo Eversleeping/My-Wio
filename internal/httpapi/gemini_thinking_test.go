@@ -24,7 +24,7 @@ func TestGeminiThinkingPersistsDispatchesAndCanResetToDefault(t *testing.T) {
 	if create() != 409 {
 		t.Fatal("old Agent accepted unsupported thinking control")
 	}
-	db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.69"})
+	db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.70"})
 	w := directJSONRequest(t, "POST", "/api/gemini/threads", input, &store.Session{UserID: "test-user"}, api.createGeminiThread)
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())

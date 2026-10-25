@@ -1,133 +1,37 @@
 package geminiadapter
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/tailscale/hujson"
 	"github.com/wio-platform/wio/internal/geminiapi"
 )
 
-// Use the CLI's official system override layer only for this process. Preserve
-// existing admin settings and defaults; never edit user/workspace settings.
-func thinkingEnvironment(environment []string, model, level, workspace string) ([]string, func(), error) {
-	return prepareThinkingEnvironment(environment, model, level, workspace, createThinkingSettingsFile)
-}
+const thinkingAlias = "wio-internal-thinking"
 
-func prepareThinkingEnvironment(environment []string, model, level, workspace string, createFile func(string) (*os.File, error)) ([]string, func(), error) {
-	noop := func() {}
-	if !geminiapi.ValidThinkingLevel(model, level) {
-		return nil, noop, errors.New("invalid Gemini thinking level for this model")
+var thinkingSettingsMu sync.Mutex
+
+// Install one inert official CLI alias in the Agent account. Each process
+// supplies its model and level through the CLI's documented environment
+// interpolation. This works without administrator privileges, preserves native
+// history paths, and never places generated settings in a Git workspace.
+func thinkingEnvironment(environment []string, model, level string) ([]string, string, error) {
+	if !geminiapi.ValidThinkingLevel(model, level) || model == thinkingAlias {
+		return nil, "", errors.New("invalid Gemini thinking level for this model")
 	}
 	if level == "" {
-		return environment, noop, nil
+		return environment, model, nil
 	}
-	systemPath := "/etc/gemini-cli/settings.json"
-	if runtime.GOOS == "windows" {
-		systemPath = `C:\ProgramData\gemini-cli\settings.json`
-	}
-	if runtime.GOOS == "darwin" {
-		systemPath = "/Library/Application Support/GeminiCli/settings.json"
-	}
-	defaultsPath := ""
-	for _, entry := range environment {
-		if value, ok := strings.CutPrefix(entry, "GEMINI_CLI_SYSTEM_SETTINGS_PATH="); ok && value != "" {
-			systemPath = value
-		}
-		if value, ok := strings.CutPrefix(entry, "GEMINI_CLI_SYSTEM_DEFAULTS_PATH="); ok {
-			defaultsPath = value
-		}
-	}
-	if defaultsPath == "" {
-		defaultsPath = filepath.Join(filepath.Dir(systemPath), "system-defaults.json")
-	}
-	settings := map[string]any{}
-	if raw, err := os.ReadFile(systemPath); err == nil {
-		raw, err = hujson.Standardize(raw)
-		if err != nil || json.Unmarshal(raw, &settings) != nil || settings == nil {
-			return nil, noop, errors.New("could not parse Gemini system settings; original configuration was kept")
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, noop, errors.New("could not read Gemini system settings")
-	}
-	configs, ok := settings["modelConfigs"].(map[string]any)
-	if !ok && settings["modelConfigs"] != nil {
-		return nil, noop, errors.New("invalid Gemini modelConfigs")
-	}
-	if configs == nil {
-		configs = map[string]any{}
-		settings["modelConfigs"] = configs
-	}
-	// Arrays in CLI settings are replaced by higher layers. Retain the
-	// effective inherited array before adding the process-local override.
-	if _, exists := configs["customOverrides"]; !exists {
-		inherited, err := inheritedThinkingOverrides(environment, workspace, defaultsPath)
-		if err != nil {
-			return nil, noop, err
-		}
-		configs["customOverrides"] = inherited
-	}
-	overrides, ok := configs["customOverrides"].([]any)
-	if !ok && configs["customOverrides"] != nil {
-		return nil, noop, errors.New("invalid Gemini model overrides")
-	}
-	configs["customOverrides"] = append(overrides, map[string]any{
-		"match":       map[string]any{"model": model},
-		"modelConfig": map[string]any{"generateContentConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": strings.ToUpper(level)}}},
-	})
-	raw, err := json.Marshal(settings)
-	if err != nil {
-		return nil, noop, err
-	}
-	f, err := createFile(filepath.Dir(systemPath))
-	if err != nil {
-		return nil, noop, errors.New("could not prepare Gemini thinking settings: the Agent needs an administrator-owned Gemini system configuration directory")
-	}
-	cleanup := func() { _ = os.Remove(f.Name()) }
-	if _, err = f.Write(raw); err == nil {
-		err = f.Close()
-	} else {
-		_ = f.Close()
-	}
-	if err != nil {
-		cleanup()
-		return nil, noop, errors.New("could not save Gemini thinking settings")
-	}
-	result := make([]string, 0, len(environment)+2)
-	for _, entry := range environment {
-		if !strings.HasPrefix(entry, "GEMINI_CLI_SYSTEM_SETTINGS_PATH=") && !strings.HasPrefix(entry, "GEMINI_CLI_SYSTEM_DEFAULTS_PATH=") {
-			result = append(result, entry)
-		}
-	}
-	result = append(result, "GEMINI_CLI_SYSTEM_SETTINGS_PATH="+f.Name(), "GEMINI_CLI_SYSTEM_DEFAULTS_PATH="+defaultsPath)
-	return result, cleanup, nil
-}
-
-// The CLI rejects system settings in /tmp or under non-administrator-owned
-// ancestors. Keep per-turn files alongside the original system settings.
-func createThinkingSettingsFile(directory string) (*os.File, error) {
-	if err := os.MkdirAll(directory, 0755); err != nil {
-		return nil, err
-	}
-	if err := validateThinkingDirectory(directory); err != nil {
-		return nil, err
-	}
-	return os.CreateTemp(directory, "wio-gemini-thinking-*.json")
-}
-
-func inheritedThinkingOverrides(environment []string, workspace, defaultsPath string) ([]any, error) {
 	home, _ := os.UserHomeDir()
-	trusted := false
 	for _, entry := range environment {
 		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
 			home = value
-		}
-		if entry == "GEMINI_CLI_TRUST_WORKSPACE=true" {
-			trusted = true
 		}
 	}
 	for _, entry := range environment {
@@ -135,43 +39,133 @@ func inheritedThinkingOverrides(environment []string, workspace, defaultsPath st
 			home = value
 		}
 	}
-	paths := []string{}
-	// The CLI ignores insecure system defaults. Do not import them into a
-	// secure override file and accidentally grant them system precedence.
-	if validateThinkingDirectory(defaultsPath) == nil {
-		if info, err := os.Stat(defaultsPath); err == nil && info.Mode().Perm()&0022 == 0 {
-			paths = append(paths, defaultsPath)
+	if home == "" {
+		return nil, "", errors.New("Gemini home directory unavailable")
+	}
+	if err := ensureThinkingAlias(home); err != nil {
+		return nil, "", err
+	}
+	result := make([]string, 0, len(environment)+2)
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, "WIO_GEMINI_THINKING_MODEL=") && !strings.HasPrefix(entry, "WIO_GEMINI_THINKING_LEVEL=") {
+			result = append(result, entry)
 		}
 	}
-	if home != "" {
-		paths = append(paths, filepath.Join(home, ".gemini", "settings.json"))
+	result = append(result, "WIO_GEMINI_THINKING_MODEL="+model, "WIO_GEMINI_THINKING_LEVEL="+strings.ToUpper(level))
+	return result, thinkingAlias, nil
+}
+
+func ensureThinkingAlias(home string) error {
+	thinkingSettingsMu.Lock()
+	defer thinkingSettingsMu.Unlock()
+	directory := filepath.Join(home, ".gemini")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return errors.New("could not prepare Gemini account settings")
 	}
-	if trusted && workspace != "" && filepath.Clean(workspace) != filepath.Clean(home) {
-		paths = append(paths, filepath.Join(workspace, ".gemini", "settings.json"))
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("Gemini account settings directory must be a regular directory")
 	}
-	var overrides []any
-	for _, path := range paths {
-		raw, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, errors.New("could not read inherited Gemini model settings")
-		}
-		raw, err = hujson.Standardize(raw)
-		var settings map[string]any
-		if err != nil || json.Unmarshal(raw, &settings) != nil {
-			return nil, errors.New("could not parse inherited Gemini model settings")
-		}
-		if configs, ok := settings["modelConfigs"].(map[string]any); ok {
-			if value, exists := configs["customOverrides"]; exists {
-				var valid bool
-				overrides, valid = value.([]any)
-				if !valid {
-					return nil, errors.New("invalid inherited Gemini model overrides")
-				}
-			}
-		}
+	path := filepath.Join(directory, "settings.json")
+	settings, original, mode, err := readThinkingSettings(path)
+	if err != nil {
+		return err
 	}
-	return overrides, nil
+	desired := map[string]any{
+		"extends": "chat-base",
+		"modelConfig": map[string]any{
+			"model":                 "${WIO_GEMINI_THINKING_MODEL:-gemini-3-flash-preview}",
+			"generateContentConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": "${WIO_GEMINI_THINKING_LEVEL:-HIGH}"}},
+		},
+	}
+	patches := []map[string]any{}
+	configs, ok := settings["modelConfigs"].(map[string]any)
+	if !ok && settings["modelConfigs"] != nil {
+		return errors.New("invalid Gemini modelConfigs")
+	}
+	if configs == nil {
+		configs = map[string]any{}
+		patches = append(patches, map[string]any{"op": "add", "path": "/modelConfigs", "value": configs})
+	}
+	aliases, ok := configs["customAliases"].(map[string]any)
+	if !ok && configs["customAliases"] != nil {
+		return errors.New("invalid Gemini custom aliases")
+	}
+	if aliases == nil {
+		aliases = map[string]any{}
+		patches = append(patches, map[string]any{"op": "add", "path": "/modelConfigs/customAliases", "value": aliases})
+	}
+	if existing, ok := aliases[thinkingAlias]; ok {
+		a, _ := json.Marshal(existing)
+		b, _ := json.Marshal(desired)
+		if !bytes.Equal(a, b) {
+			return errors.New("Gemini's Wio thinking alias conflicts with an existing custom alias")
+		}
+		return nil
+	}
+	patches = append(patches, map[string]any{"op": "add", "path": "/modelConfigs/customAliases/" + thinkingAlias, "value": desired})
+	existed := original != nil
+	if original == nil {
+		original = []byte("{}\n")
+	}
+	document, err := hujson.Parse(append([]byte(nil), original...))
+	if err != nil {
+		return errors.New("could not parse Gemini account settings")
+	}
+	patch, _ := json.Marshal(patches)
+	if err = document.Patch(patch); err != nil {
+		return errors.New("could not add Gemini thinking alias")
+	}
+	document.Format()
+	// Recheck before replacing a settings file that a user may have edited.
+	current, readErr := os.ReadFile(path)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return errors.New("could not recheck Gemini account settings")
+	}
+	if (existed && (readErr != nil || !bytes.Equal(current, original))) || (!existed && !os.IsNotExist(readErr)) {
+		return errors.New("Gemini account settings changed; retry after saving the configuration")
+	}
+	if err = writeThinkingSettings(path, document.Pack(), mode); err != nil {
+		return errors.New("could not save Gemini thinking alias")
+	}
+	return nil
+}
+
+func readThinkingSettings(path string) (map[string]any, []byte, os.FileMode, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return map[string]any{}, nil, 0600, nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 2<<20 {
+		return nil, nil, 0, errors.New("Gemini settings must be a regular JSON file no larger than 2 MiB")
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, 0, errors.New("could not read Gemini settings")
+	}
+	raw, err := hujson.Standardize(append([]byte(nil), original...))
+	var settings map[string]any
+	if err != nil || json.Unmarshal(raw, &settings) != nil || settings == nil {
+		return nil, nil, 0, errors.New("could not parse Gemini settings; original configuration was kept")
+	}
+	return settings, original, info.Mode().Perm(), nil
+}
+
+func writeThinkingSettings(path string, raw []byte, mode os.FileMode) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".wio-thinking-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err = file.Write(raw); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	if err = os.Chmod(file.Name(), mode); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }

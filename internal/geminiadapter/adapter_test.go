@@ -46,11 +46,11 @@ func init() {
 		return
 	}
 	stdin, _ := io.ReadAll(os.Stdin)
-	thinkingSettings, _ := os.ReadFile(os.Getenv("GEMINI_CLI_SYSTEM_SETTINGS_PATH"))
+	thinkingSettings, _ := os.ReadFile(filepath.Join(os.Getenv("GEMINI_CLI_HOME"), ".gemini", "settings.json"))
 	if len(thinkingSettings) == 0 {
 		thinkingSettings = []byte("null")
 	}
-	raw, _ := json.Marshal(map[string]any{"thinkingPath": os.Getenv("GEMINI_CLI_SYSTEM_SETTINGS_PATH"), "thinkingSettings": json.RawMessage(thinkingSettings), "args": os.Args[1:], "stdin": string(stdin), "dir": mustWorkingDir(), "apiKey": os.Getenv("GEMINI_API_KEY"), "endpoint": os.Getenv("GOOGLE_GEMINI_BASE_URL"), "trust": os.Getenv("GEMINI_CLI_TRUST_WORKSPACE")})
+	raw, _ := json.Marshal(map[string]any{"thinkingModel": os.Getenv("WIO_GEMINI_THINKING_MODEL"), "thinkingLevel": os.Getenv("WIO_GEMINI_THINKING_LEVEL"), "thinkingSettings": json.RawMessage(thinkingSettings), "args": os.Args[1:], "stdin": string(stdin), "dir": mustWorkingDir(), "apiKey": os.Getenv("GEMINI_API_KEY"), "endpoint": os.Getenv("GOOGLE_GEMINI_BASE_URL"), "trust": os.Getenv("GEMINI_CLI_TRUST_WORKSPACE")})
 	_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), raw, 0600)
 	if mode == "untrusted" {
 		fmt.Fprintln(os.Stderr, "private-provider-diagnostic")

@@ -81,7 +81,7 @@ func TestGeminiScheduledTaskCRUD(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "scheduled-task-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.2.69"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.2.70"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduled", Name: "scheduled"}}}); err != nil {
