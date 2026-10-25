@@ -106,6 +106,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	}
 	defer scans.Close()
 	assertWorkspaceFileScanTimeoutAndRetry(t, scans)
+	assertCodexSnapshotTimeoutAndRetry(t, scans)
 	assertMessageForkCopiesOnlySelectedHistory(t, scans)
 	assertGeminiCredentialBindingsAndReplay(t, scans)
 }

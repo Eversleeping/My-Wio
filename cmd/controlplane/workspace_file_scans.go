@@ -17,6 +17,11 @@ func runWorkspaceFileScanMaintenance(ctx context.Context, database *store.Store,
 			log.Warn("could not expire workspace file scans", "error", err)
 		}
 		cancel()
+		checkContext, cancel = context.WithTimeout(ctx, 10*time.Second)
+		if err := database.ExpireCodexSnapshots(checkContext, time.Now()); err != nil && ctx.Err() == nil {
+			log.Warn("could not expire Codex information refreshes", "error", err)
+		}
+		cancel()
 		select {
 		case <-ctx.Done():
 			return

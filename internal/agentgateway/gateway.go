@@ -527,7 +527,34 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if strings.HasPrefix(operation.Kind, "codex.goal.") || operation.Kind == "codex.mcp.list" || operation.Kind == "codex.skills.list" || operation.Kind == "codex.models.list" || operation.Kind == "codex.status.snapshot" {
+		if store.IsReadOnlyCodexSnapshotOperation(operation.Kind) {
+			var command protocol.CodexSnapshotCommand
+			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				result.Status, result.Message, result.Data = "failed", "Invalid Codex refresh request. Please refresh to retry.", nil
+				command = protocol.CodexSnapshotCommand{}
+				if operation.ThreadID != "" {
+					command.ScopeType, command.ScopeID = "thread", operation.ThreadID
+				} else if operation.WorkspaceID != "" {
+					command.ScopeType, command.ScopeID = "workspace", operation.WorkspaceID
+				}
+			}
+			if result.Status == "succeeded" {
+				var snapshot *protocol.CodexCapabilityResult
+				if err := json.Unmarshal(result.Data, &snapshot); err != nil || snapshot == nil {
+					result.Status, result.Message, result.Data = "failed", "Invalid Codex refresh result. Please refresh to retry.", nil
+				}
+			} else {
+				result.Status = "failed"
+				if result.Message == "" {
+					result.Message = "Codex information refresh failed. Please refresh to retry."
+				}
+			}
+			if completed, err := g.store.CompleteCodexSnapshotOperation(ctx, operation, command, result); err != nil || !completed {
+				return err
+			}
+			return publishOperationResult(ctx, g, serverID, result)
+		}
+		if strings.HasPrefix(operation.Kind, "codex.goal.") {
 			var command protocol.CodexSnapshotCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 				return err

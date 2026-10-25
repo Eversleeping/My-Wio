@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.2.70"
+var Version = "0.2.71"
 
 const MinimumCLIManagementVersion = "0.2.61"
 

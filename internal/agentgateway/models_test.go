@@ -42,6 +42,10 @@ func TestModelsOperationResultUpdatesWorkspaceSnapshot(t *testing.T) {
 		{name: "success", result: protocol.OperationResult{Status: "succeeded", Data: json.RawMessage(`{"supported":true,"data":[{"model":"new-model"}],"codex_version":"0.159.3"}`)}, expected: "succeeded"},
 		{name: "unsupported", result: protocol.OperationResult{Status: "succeeded", Data: json.RawMessage(`{"supported":false,"reason":"model/list unsupported"}`)}, expected: "succeeded"},
 		{name: "failure", result: protocol.OperationResult{Status: "failed", Message: "CLI unavailable"}, expected: "failed"},
+		{name: "invalid result", result: protocol.OperationResult{Status: "succeeded", Data: json.RawMessage(`[]`)}, expected: "failed"},
+		{name: "null result", result: protocol.OperationResult{Status: "succeeded", Data: json.RawMessage(`null`)}, expected: "failed"},
+		{name: "missing result", result: protocol.OperationResult{Status: "succeeded"}, expected: "failed"},
+		{name: "invalid request", result: protocol.OperationResult{Status: "succeeded", Data: json.RawMessage(`{"supported":true,"data":[]}`)}, expected: "failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			command := protocol.CodexSnapshotCommand{ScopeType: "workspace", ScopeID: "workspace-1", Workspace: "/srv/project"}
@@ -51,6 +55,13 @@ func TestModelsOperationResultUpdatesWorkspaceSnapshot(t *testing.T) {
 			}
 			if err := database.BeginCodexSnapshot(ctx, "workspace", command.ScopeID, "models.list"); err != nil {
 				t.Fatal(err)
+			}
+			if test.name == "invalid request" {
+				if _, err := database.DB.ExecContext(ctx, database.Q(`UPDATE agent_operations SET payload=? WHERE id=?`), `{`, operationID); err != nil {
+					t.Fatal(err)
+				}
+				// Legacy operations without a resource still terminate, even when
+				// their malformed payload cannot identify the snapshot to fail.
 			}
 			result := test.result
 			result.OperationID = operationID
@@ -62,7 +73,11 @@ func TestModelsOperationResultUpdatesWorkspaceSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot, err := database.CodexSnapshot(ctx, "workspace", command.ScopeID, "models.list")
-			if err != nil || snapshot.Status != test.expected {
+			expectedSnapshot := test.expected
+			if test.name == "invalid request" {
+				expectedSnapshot = "loading"
+			}
+			if err != nil || snapshot.Status != expectedSnapshot {
 				t.Fatalf("unexpected snapshot: %+v %v", snapshot, err)
 			}
 			if test.name == "success" && snapshot.Data != `[{"model":"new-model"}]` {
@@ -70,6 +85,10 @@ func TestModelsOperationResultUpdatesWorkspaceSnapshot(t *testing.T) {
 			}
 			if test.name == "unsupported" && (snapshot.Supported != 0 || snapshot.Reason != "model/list unsupported") {
 				t.Fatalf("missing capability status: %+v", snapshot)
+			}
+			op, err := database.Operation(ctx, operationID)
+			if err != nil || op.Status != test.expected || op.CompletedAt == nil {
+				t.Fatalf("operation not completed: %+v %v", op, err)
 			}
 		})
 	}
