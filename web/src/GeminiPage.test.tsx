@@ -12,16 +12,17 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     let body: unknown = [];
-    if (init.method === "POST") { requests.push({url,body:JSON.parse(String(init.body))}); body = {...thread,model}; }
+    if (init.method === "POST") { requests.push({url,body:JSON.parse(String(init.body))}); body = {...thread,model,id:"thread-created"}; }
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
     else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? events.slice(-500) : events.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
-    else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"}];
+    else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
     else if (url.includes("/gemini/threads?") && selected) body = [{...thread,model}];
     else if (url === "/api/gemini/threads/thread-1") body = {...thread,model};
     return new Response(JSON.stringify(body),{status:200,headers:{"Content-Type":"application/json"}});
   }));
-  render(<I18nProvider><GeminiPage realtime={0} notify={vi.fn()} selectedThreadID={selected ? thread.id : ""} onSelectThread={vi.fn()} /></I18nProvider>);
-  return {user:userEvent.setup(),requests,modelRequests};
+  const onSelectThread = vi.fn();
+  render(<I18nProvider><GeminiPage realtime={0} notify={vi.fn()} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>);
+  return {user:userEvent.setup(),requests,modelRequests,onSelectThread};
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
@@ -110,31 +111,57 @@ test("starts a new independent session in the current project with its model pre
   await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default"}}));
 });
 
-test("shows projects without sessions and creates their first session",async () => {
+test("hides projects without sessions but allows their first session through the global new button",async () => {
   const {user,requests} = setup();
   expect(screen.queryByText("Connect Gemini CLI")).not.toBeInTheDocument();
-  await user.click(await screen.findByRole("button",{name:"New session in Project · Production"}));
+  await screen.findByText("No Gemini sessions yet");
+  expect(screen.queryByRole("button",{name:/Workspace menu/})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:/Empty project/})).not.toBeInTheDocument();
+  await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
   const dialog = screen.getByRole("dialog");
-  expect(within(dialog).getByRole("combobox",{name:"Workspace"})).toHaveValue("workspace-1");
+  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-2");
   await waitFor(() => expect(within(dialog).getByRole("button",{name:"New Gemini session"})).toBeEnabled());
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-2",model:"gemini-upstream-current",approval_mode:"default"}}));
+});
+
+test.each(["button","right-click"])("creates a separate session directly from the Codex-style project menu via %s",async trigger => {
+  const {user,requests,onSelectThread} = setup(true,"gemini-upstream-current");
+  const project = await screen.findByRole("button",{name:/Project · project.*1/});
+  expect(screen.queryByRole("button",{name:/Empty project/})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"New session in Project · Production"})).not.toBeInTheDocument();
+  if (trigger === "right-click") await user.pointer({target:project,keys:"[MouseRight]"});
+  else {
+    const menu = screen.getByRole("button",{name:"Workspace menu for Project · project"});
+    menu.focus(); await user.keyboard("{Enter}");
+  }
+  await user.click(await screen.findByRole("menuitem",{name:"New session"}));
+  await waitFor(() => expect(requests).toEqual([{url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default"}}]));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(onSelectThread).toHaveBeenCalledWith("thread-created");
 });
 
 test("filters and collapses project sessions without losing the open conversation",async () => {
   const {user} = setup(true);
   const search = screen.getByRole("searchbox",{name:"Search sessions or projects"});
-  const newSession = await screen.findByRole("button",{name:"New session in Project · Production"});
+  await screen.findByRole("button",{name:"Workspace menu for Project · project"});
   await user.type(search,"missing-project");
-  expect(screen.queryByRole("button",{name:"New session in Project · Production"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"Workspace menu for Project · project"})).not.toBeInTheDocument();
   expect(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"})).toBeInTheDocument();
   await user.clear(search);
-  expect(await screen.findByRole("button",{name:newSession.getAttribute("aria-label")!})).toBeInTheDocument();
-  const group = screen.getByRole("button",{name:/Project · Production.*1/});
+  await user.type(search,"Production");
+  const group = await screen.findByRole("button",{name:/Project · project.*1/});
   expect(group).toHaveAttribute("aria-expanded","true");
   await user.click(group);
   expect(group).toHaveAttribute("aria-expanded","false");
   expect(screen.queryByRole("button",{name:"Delete Gemini session"})).not.toBeInTheDocument();
+});
+
+test("keeps session management in the Codex-style task menu",async () => {
+  const {user} = setup(true);
+  await user.click(await screen.findByRole("button",{name:"Task menu for Gemini"}));
+  await user.click(screen.getByRole("menuitem",{name:"Rename session"}));
+  expect(screen.getByRole("dialog",{name:"Rename session"})).toBeInTheDocument();
 });
 
 test("renders legacy usage as known counts and unavailable values",async () => {

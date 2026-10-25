@@ -2,11 +2,12 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Bot, ChevronDown, ChevronRight, Download, FileCode2, Folder, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, SquareTerminal, Trash2, UserRound } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, FileDiffPane, FilePreviewPane, message, WorkspaceFilesPanel, type FilePreviewSelection } from "../App";
+import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DialogActions } from "../components/Dialog";
 import { Empty, ErrorState, Status } from "../components/PageUI";
 import { geminiMessages } from "../geminiContent";
-import { formatTime, relative } from "../format";
+import { formatTime } from "../format";
 import { useI18n } from "../i18n";
 import MarkdownContent from "../MarkdownContent";
 import type { GeminiThread, StreamEvent, Workspace } from "../types";
@@ -42,20 +43,22 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
   useEffect(() => { setPreview(null); if (selectedThreadID) setMobileView("conversation"); }, [selectedThreadID]);
   const groups = useMemo(() => {
     const result = new Map<string, { name: string; path: string; threads: GeminiThread[] }>();
-    if (!archived) for (const workspace of workspaces.data ?? []) {
-      if (workspace.status === "ready") result.set(workspace.id, { name: `${workspace.project_name} · ${workspace.server_name}`, path: workspace.path, threads: [] });
-    }
+    const byID = new Map((workspaces.data ?? []).map(workspace => [workspace.id, workspace]));
     for (const thread of threads.data ?? []) {
-      const group = result.get(thread.workspace_id) ?? { name: `${thread.project_name} · ${thread.server_name}`, path: thread.path, threads: [] };
+      const workspace = byID.get(thread.workspace_id);
+      const path = workspace?.path || thread.path;
+      const identity = [workspace?.display_name?.trim(), workspace?.branch?.trim(), path.split(/[\\/]/).filter(Boolean).at(-1)].find(value => value && value !== thread.project_name);
+      const name = identity ? `${thread.project_name} · ${identity}` : thread.project_name;
+      const group = result.get(thread.workspace_id) ?? { name, path, threads: [] };
       group.threads.push(thread); result.set(thread.workspace_id, group);
     }
     const query = search.trim().toLocaleLowerCase();
     return [...result.entries()].flatMap(([id, group]) => {
       if (!query || `${group.name} ${group.path}`.toLocaleLowerCase().includes(query)) return [[id, group] as const];
-      const matching = group.threads.filter(thread => `${thread.title} ${thread.id} ${thread.session_id ?? ""}`.toLocaleLowerCase().includes(query));
+      const matching = group.threads.filter(thread => `${thread.title} ${thread.server_name} ${thread.id} ${thread.session_id ?? ""}`.toLocaleLowerCase().includes(query));
       return matching.length ? [[id, { ...group, threads: matching }] as const] : [];
     });
-  }, [archived, search, threads.data, workspaces.data]);
+  }, [search, threads.data, workspaces.data]);
   const openNewSession = (workspaceID = active?.workspace_id ?? "") => {
     const previous = active?.workspace_id === workspaceID ? active : threads.data?.find(thread => thread.workspace_id === workspaceID);
     setNewWorkspaceID(workspaceID); setNewModel(previous?.model ?? ""); setNewMode(previous?.approval_mode ?? "default"); setCreateOpen(true);
@@ -67,6 +70,20 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
     try { await patch(`/gemini/threads/${thread.id}`, values); setRename(null); refresh(); }
     catch (error) { notify(message(error)); } finally { setBusy(false); }
   };
+  const createSessionInWorkspace = async (workspaceID: string) => {
+    if (busy) return;
+    const previous = active?.workspace_id === workspaceID ? active : threads.data?.find(thread => thread.workspace_id === workspaceID);
+    if (!previous?.model) { openNewSession(workspaceID); return; }
+    setBusy(true);
+    try {
+      const created = await post<GeminiThread>("/gemini/threads", { workspace_id: workspaceID, model: previous.model, approval_mode: previous.approval_mode });
+      setArchived(false); onSelectThread(created.id); refresh();
+    } catch (error) { notify(message(error)); } finally { setBusy(false); }
+  };
+  const threadMenuActions = (thread: GeminiThread): ContextMenuAction[] => [
+    { id: "rename", label: t("gemini.rename"), icon: Pencil, disabled: isActive(thread) || busy, onSelect: () => { setRename(thread); setTitle(thread.title); } },
+    { id: "archive", label: t(thread.archived_at ? "gemini.restore" : "gemini.archive"), icon: thread.archived_at ? ArchiveRestore : Archive, disabled: isActive(thread) || busy, onSelect: () => mutate(thread, { archived: !thread.archived_at }) }
+  ];
   const deleteThread = async () => {
     if (!deleting) return;
     setBusy(true);
@@ -78,8 +95,18 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
     <div className="gemini-mobile-tabs">{["sessions", "files", "conversation"].map(view => <button key={view} className={mobileView === view ? "active" : ""} onClick={() => setMobileView(view)}>{t(`gemini.${view}`)}</button>)}</div>
     <aside className="codex-sidebar">
       <div className="thread-list gemini-thread-list">
-        <header className="gemini-sidebar-heading"><strong><Sparkles size={16} />Gemini</strong><div><button className={`icon-button ${archived ? "active" : ""}`} aria-label={t(archived ? "gemini.showActive" : "gemini.showArchived")} onClick={() => { setArchived(!archived); onSelectThread(""); }}><Archive size={16} /></button><button className="icon-button" aria-label={t("gemini.newSession")} onClick={() => openNewSession()}><Plus size={18} /></button></div></header>
-        <input className="gemini-session-search" type="search" aria-label={t("gemini.searchSessions")} placeholder={t("gemini.searchSessions")} value={search} onChange={event => setSearch(event.target.value)} /><div className="thread-items">{threads.error ? <ErrorState error={threads.error} reload={threads.reload} /> : threads.loading ? <p className="gemini-hint">{t("common.loading")}</p> : groups.length ? groups.map(([id, group]) => <section className="thread-project" key={id}><div className="gemini-project-heading"><button type="button" className="thread-project-toggle" aria-expanded={!collapsed.has(id)} title={group.path} onClick={() => toggleGroup(id)}>{collapsed.has(id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}<Folder size={14} /><strong title={group.name}>{group.name}</strong><span>{group.threads.length}</span></button>{!archived && <button type="button" className="icon-button" aria-label={t("gemini.newSessionIn", { name: group.name })} title={t("gemini.newSessionIn", { name: group.name })} onClick={() => openNewSession(id)}><Plus size={16} /></button>}</div>{!collapsed.has(id) && group.threads.map(thread => <div key={thread.id} className={`thread ${active?.id === thread.id ? "active" : ""}`}><button className="thread-select" onClick={() => { onSelectThread(thread.id); setMobileView("conversation"); }}><span><strong>{thread.title}</strong><small>{relative(thread.updated_at)} · {t(`status.${thread.status}`)}</small></span></button><div className="thread-actions"><button className="icon-button" disabled={isActive(thread) || busy} aria-label={t("gemini.rename")} onClick={() => { setRename(thread); setTitle(thread.title); }}><Pencil size={13} /></button><button className="icon-button" disabled={isActive(thread) || busy} aria-label={t(thread.archived_at ? "gemini.restore" : "gemini.archive")} onClick={() => void mutate(thread, { archived: !thread.archived_at })}>{thread.archived_at ? <ArchiveRestore size={13} /> : <Archive size={13} />}</button><button className="icon-button danger" disabled={isActive(thread) || busy} aria-label={t("gemini.delete")} onClick={() => setDeleting(thread)}><Trash2 size={13} /></button></div></div>)}</section>) : <Empty icon={<MessageSquare size={24} />} text={t("gemini.noSessions")} />}</div>
+        <div className="panel-heading"><div><Sparkles size={18} /><h2>{t(archived ? "codex.archivedTasks" : "gemini.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${archived ? "active" : ""}`} aria-pressed={archived} aria-label={t(archived ? "gemini.showActive" : "gemini.showArchived")} onClick={() => { setArchived(!archived); onSelectThread(""); }}><Archive size={18} /></button>{!archived && <button className="icon-button" aria-label={t("gemini.newSession")} onClick={() => openNewSession()}><Plus size={18} /></button>}</div></div>
+        <input className="gemini-session-search" type="search" aria-label={t("gemini.searchSessions")} placeholder={t("gemini.searchSessions")} value={search} onChange={event => setSearch(event.target.value)} />
+        <div className="thread-items">{threads.error ? <ErrorState error={threads.error} reload={threads.reload} /> : threads.loading ? <p className="gemini-hint">{t("common.loading")}</p> : groups.length ? groups.map(([id, group]) => {
+          const heading = <button type="button" className="thread-project-toggle" aria-expanded={!collapsed.has(id)} title={`${t(collapsed.has(id) ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${group.path}`} onClick={() => toggleGroup(id)}>{collapsed.has(id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.name}</strong><span>{group.threads.length}</span></button>;
+          return <section className="thread-project" key={id}>
+            {archived ? <div className="thread-project-heading">{heading}</div> : <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.name })} actions={[{ id: "new-session", label: t("codex.createSessionHere"), icon: Plus, disabled: busy, onSelect: () => createSessionInWorkspace(id) }]}>{heading}</ContextMenu>}
+            {!collapsed.has(id) && <div className="project-threads">{group.threads.map(thread => <ContextMenu key={thread.id} className={`thread ${active?.id === thread.id ? "active" : ""}`} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}>
+              <button className="thread-select" onClick={() => { onSelectThread(thread.id); setMobileView("conversation"); }}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span></button>
+              <div className="thread-actions"><Status value={thread.status} /><button className="icon-button danger thread-delete" disabled={isActive(thread) || busy} aria-label={t("gemini.delete")} onClick={() => setDeleting(thread)}><Trash2 size={14} /></button></div>
+            </ContextMenu>)}</div>}
+          </section>;
+        }) : <Empty icon={<MessageSquare size={24} />} text={t("gemini.noSessions")} />}</div>
       </div>
       {active && <WorkspaceFilesPanel workspaceID={active.workspace_id} taskID={active.operation_id} taskStatus={active.status} realtime={realtime + tick} activePath={preview?.path ?? ""} activeMode={preview?.mode === "diff" ? "diff" : "file"} onOpenFile={value => { setPreview(value); setMobileView("conversation"); }} notify={notify} />}
     </aside>
