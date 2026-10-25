@@ -604,7 +604,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if updatedOperation.Status == "cancelled" {
 			return nil
 		}
-		if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.interrupt" {
+		if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "gemini.turn.interrupt" {
 			if err := g.completeGeminiOperation(ctx, operation, result); err != nil {
 				return err
 			}
@@ -901,7 +901,7 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				}
 			}
 		}
-		if op.Kind == "gemini.turn.start" {
+		if op.Kind == "gemini.turn.start" || op.Kind == "gemini.turn.rewrite" {
 			updated, statusErr := g.store.Operation(stream.Context(), op.ID)
 			if statusErr == nil && updated.Status == "cancelled" {
 				var command protocol.GeminiTurnCommand

@@ -745,7 +745,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.enqueueInventory(ctx)
-	case "gemini.turn.start":
+	case "gemini.turn.start", "gemini.turn.rewrite":
 		var command protocol.GeminiTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err

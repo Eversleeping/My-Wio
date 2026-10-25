@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, ArrowUp, Bot, ChevronDown, ChevronRight, Download, FileCode2, Folder, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, SquareTerminal, Trash2, UserRound } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, FileCode2, Folder, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, SquareTerminal, Trash2, UserRound, X } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, FileDiffPane, FilePreviewPane, message, WorkspaceFilesPanel, type FilePreviewSelection } from "../App";
 import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
@@ -150,11 +150,14 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
   const { t } = useI18n();
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const cursor = useRef(0);
+  const historyRevision = useRef(0);
   const [hasEarlier, setHasEarlier] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [editingEventID, setEditingEventID] = useState("");
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const [model, setModel] = useState(thread.model);
   const [mode, setMode] = useState(thread.approval_mode);
   const [busy, setBusy] = useState(false);
@@ -171,6 +174,15 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
       while (!controller.signal.aborted) {
         const next = await api<StreamEvent[]>(`/gemini/threads/${thread.id}/events${initial ? "" : `?after=${cursor.current}`}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
+        const rewritten = !initial && next.some(event => event.kind === "gemini.user.message" && (event.payload as { history_rewritten?: boolean })?.history_rewritten);
+        if (rewritten) {
+          const recent = await api<StreamEvent[]>(`/gemini/threads/${thread.id}/events`, { signal: controller.signal });
+          if (controller.signal.aborted) return;
+          historyRevision.current += 1;
+          setEvents(recent); setHasEarlier(recent.length === 500);
+          cursor.current = recent.at(-1)?.sequence ?? 0;
+          setError(""); break;
+        }
         merge(next);
         if (initial) setHasEarlier(next.length === 500);
         cursor.current = Math.max(cursor.current, next.at(-1)?.sequence ?? 0);
@@ -186,14 +198,18 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
     setHistoryBusy(true);
     const element = stream.current;
     const height = element?.scrollHeight ?? 0;
+    const revision = historyRevision.current;
     follow.current = false;
-    try { const next = await api<StreamEvent[]>(`/gemini/threads/${thread.id}/events?before=${events[0]?.sequence ?? 0}`); merge(next); setHasEarlier(next.length === 500); requestAnimationFrame(() => { if (element) element.scrollTop += element.scrollHeight - height; }); }
+    try { const next = await api<StreamEvent[]>(`/gemini/threads/${thread.id}/events?before=${events[0]?.sequence ?? 0}`); if (revision !== historyRevision.current) return; merge(next); setHasEarlier(next.length === 500); requestAnimationFrame(() => { if (element) element.scrollTop += element.scrollHeight - height; }); }
     catch (error) { notify(message(error)); } finally { setHistoryBusy(false); }
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (busy || running || !prompt.trim()) return;
     setBusy(true); setError("");
-    try { await post(`/gemini/threads/${thread.id}/turns`, { prompt, model: model.trim(), approval_mode: mode }); setPrompt(""); follow.current = true; onChanged(); setReload(value => value + 1); }
+    try {
+      await post(editingEventID ? `/gemini/threads/${thread.id}/events/${editingEventID}/rewrite` : `/gemini/threads/${thread.id}/turns`, { prompt, model: model.trim(), approval_mode: mode });
+      setPrompt(""); setEditingEventID(""); follow.current = true; onChanged(); setReload(value => value + 1);
+    }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
   const exportSession = async () => {
@@ -222,16 +238,17 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
   return <section className="session-panel gemini-session"><header className="session-header"><div><h2>{thread.title}</h2><span>{thread.server_name}<i />{thread.path}</span></div><Status value={thread.status} /><button className="icon-button" aria-label={t("gemini.newSessionHere")} title={t("gemini.newSessionHere")} onClick={onNewSession}><Plus size={16} /></button><button className="icon-button" aria-label={t("gemini.export")} title={t("gemini.export")} disabled={running || exporting} onClick={() => void exportSession()}>{exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}</button><button className="icon-button" aria-label={t("common.refresh")} onClick={() => { onChanged(); setReload(value => value + 1); }}><RefreshCw size={16} /></button></header>
-    <div className="gemini-stream" ref={stream} role="log" aria-label={t("gemini.conversation")} onScroll={() => { const el = stream.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
+    <div className="gemini-stream conversation-stream" ref={stream} role="log" aria-label={t("gemini.conversation")} onScroll={() => { const el = stream.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
       {hasEarlier && <button className="secondary-button" disabled={historyBusy} onClick={() => void earlier()}>{t("gemini.loadEarlier")}</button>}
       {!messages.length && <Empty icon={<Sparkles size={30} />} text={t("gemini.startPrompt")} />}
-      {messages.map(item => item.role === "tool" ? <details className="gemini-tool" key={item.id}><summary><SquareTerminal size={15} />{item.title || t("gemini.tool")}</summary><pre>{item.text}</pre></details> : item.role === "status" ? <p className="gemini-usage" key={item.id}>{item.text === "interrupted" ? t("status.interrupted") : item.stats ? t("gemini.usage", { input: String(item.stats.input_tokens ?? "—"), output: String(item.stats.output_tokens ?? "—"), tools: String(item.stats.tool_calls ?? "—") }) : item.text}</p> : <article className={`message ${item.role === "error" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Gemini"}</strong><time>{formatTime(item.time)}</time></header><MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} /></article>)}
+      {messages.map(item => item.role === "tool" ? <details className="gemini-tool" key={item.id}><summary><SquareTerminal size={15} />{item.title || t("gemini.tool")}</summary><pre>{item.text}</pre></details> : item.role === "status" ? <p className="gemini-usage" key={item.id}>{item.text === "interrupted" ? t("status.interrupted") : item.stats ? t("gemini.usage", { input: String(item.stats.input_tokens ?? "—"), output: String(item.stats.output_tokens ?? "—"), tools: String(item.stats.tool_calls ?? "—") }) : item.text}</p> : <article className={`message ${item.role === "error" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Gemini"}</strong><time>{formatTime(item.time)}</time></header><MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{item.role === "user" && <div className="message-actions"><button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(error => notify(message(error))); }}><Copy size={14} /></button>{!thread.archived_at && <button type="button" className="message-action" disabled={busy || running || thread.server_status !== "online" || !thread.rewrite_supported} title={t(thread.rewrite_supported ? "codex.editMessage" : "gemini.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} onClick={() => { setPrompt(item.text); setEditingEventID(item.id); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}</div>}</article>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "gemini.interrupting" : "gemini.working")}</p>}
     </div>
     <form className="composer gemini-composer" onSubmit={submit}>
+      {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} disabled={busy} onClick={() => { setEditingEventID(""); setPrompt(""); }}><X size={14} /></button></div>}
       {error && <ErrorBanner text={error} />}
       {thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}
-      {thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <><textarea aria-label={t("gemini.prompt")} placeholder={t("gemini.prompt")} value={prompt} disabled={running || busy} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><ModelOptions workspaceID={thread.workspace_id} model={model} mode={mode} setModel={setModel} setMode={setMode} disabled={running || busy} /><div className="gemini-composer-footer"><small>{t("gemini.composerHint")}</small>{running ? <button type="button" className="secondary-button danger" disabled={busy || thread.status === "interrupting"} onClick={() => void interrupt()}><Square size={14} />{t("gemini.interrupt")}</button> : <button className="primary-button" aria-label={t("gemini.send")} disabled={busy || !prompt.trim() || !model.trim() || thread.server_status !== "online"}>{busy ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={15} />}{t("gemini.send")}</button>}</div></>}
+      {thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <><textarea ref={promptRef} aria-label={t("gemini.prompt")} placeholder={t("gemini.prompt")} value={prompt} disabled={running || busy} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><ModelOptions workspaceID={thread.workspace_id} model={model} mode={mode} setModel={setModel} setMode={setMode} disabled={running || busy} /><div className="gemini-composer-footer"><small>{t("gemini.composerHint")}</small>{running ? <button type="button" className="secondary-button danger" disabled={busy || thread.status === "interrupting"} onClick={() => void interrupt()}><Square size={14} />{t("gemini.interrupt")}</button> : <button className="primary-button" aria-label={t("gemini.send")} disabled={busy || !prompt.trim() || !model.trim() || thread.server_status !== "online"}>{busy ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={15} />}{t("gemini.send")}</button>}</div></>}
     </form>
   </section>;
 }

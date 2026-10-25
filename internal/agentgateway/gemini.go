@@ -41,6 +41,19 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if payload.SessionID == "" || len(payload.SessionID) > 128 {
 			return errors.New("invalid Gemini session id")
 		}
+		operation, err := g.store.Operation(ctx, payload.OperationID)
+		if err != nil {
+			return err
+		}
+		if operation.Kind == "gemini.turn.rewrite" {
+			replacement, changed, err := g.store.CommitGeminiRewrite(ctx, thread.ID, payload.OperationID, payload.SessionID)
+			if err != nil {
+				return err
+			}
+			if changed {
+				g.hub.Publish(replacement)
+			}
+		}
 		_, err = g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE gemini_threads SET session_id=?,status=CASE WHEN status='interrupting' THEN status ELSE 'running' END,updated_at=? WHERE id=? AND operation_id=?`), payload.SessionID, time.Now().UTC(), thread.ID, payload.OperationID)
 		if err != nil {
 			return err

@@ -5,19 +5,29 @@ import GeminiPage from "./pages/GeminiPage";
 import { I18nProvider } from "./i18n";
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = []) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string } = {}) {
   window.localStorage.setItem("wio_language","en");
+  let eventLog = events;
+  const currentThread = {...thread, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     let body: unknown = [];
-    if (init.method === "POST") { requests.push({url,body:JSON.parse(String(init.body))}); body = {...thread,model,id:"thread-created"}; }
+    if (init.method === "POST") {
+      const input = JSON.parse(String(init.body)); requests.push({url,body:input}); body = {...currentThread,model,id:"thread-created"};
+      if (url.endsWith("/rewrite")) {
+        if (options.rewriteFailure) return new Response(JSON.stringify({error:"Native history unavailable; original conversation was kept"}),{status:409,headers:{"Content-Type":"application/json"}});
+        const target = url.split("/").at(-2);
+        const index = eventLog.findIndex(item => (item as {event_id:string}).event_id === target);
+        eventLog = [...eventLog.slice(0,index),{event_id:"replacement",stream_id:thread.id,sequence:100,kind:"gemini.user.message",occurred_at:thread.updated_at,payload:{text:input.prompt,operation_id:"rewrite",history_rewritten:true}},{event_id:"answer",stream_id:thread.id,sequence:101,kind:"gemini.message",occurred_at:thread.updated_at,payload:{role:"assistant",content:"Revised answer",operation_id:"rewrite"}}];
+      }
+    }
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
-    else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? events.slice(-500) : events.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
+    else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
     else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
-    else if (url.includes("/gemini/threads?") && selected) body = [{...thread,model}];
-    else if (url === "/api/gemini/threads/thread-1") body = {...thread,model};
+    else if (url.includes("/gemini/threads?") && selected) body = [{...currentThread,model}];
+    else if (url === "/api/gemini/threads/thread-1") body = {...currentThread,model};
     return new Response(JSON.stringify(body),{status:200,headers:{"Content-Type":"application/json"}});
   }));
   const onSelectThread = vi.fn();
@@ -186,4 +196,57 @@ test("exports all pages of a conversation rather than only the visible recent hi
   expect(clicked).toHaveBeenCalledOnce();
   expect(revokeURL).toHaveBeenCalledWith("blob:test-export");
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("after=500"))).toBe(true);
+});
+
+const rewriteEvents = [
+  {event_id:"keep",stream_id:thread.id,sequence:1,kind:"gemini.user.message",occurred_at:thread.updated_at,payload:{text:"Keep this earlier prompt",operation_id:"one"}},
+  {event_id:"edit",stream_id:thread.id,sequence:2,kind:"gemini.user.message",occurred_at:thread.updated_at,payload:{text:"Original prompt",operation_id:"two"}},
+  {event_id:"old-answer",stream_id:thread.id,sequence:3,kind:"gemini.message",occurred_at:thread.updated_at,payload:{role:"assistant",content:"Discard this later answer",operation_id:"two"}}
+];
+
+test("edits and resends at the selected message and replaces the stale tail",async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const {user,requests} = setup(true,"gemini-upstream-current","configured",rewriteEvents);
+  await screen.findByText("Discard this later answer");
+  await user.click(screen.getAllByRole("button",{name:"Edit and resend"})[1]);
+  const prompt = screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  expect(prompt).toHaveValue("Original prompt");
+  expect(screen.getByText("Editing an earlier message; later replies will be discarded")).toBeInTheDocument();
+  await user.clear(prompt); await user.type(prompt,"Updated prompt");
+  await user.click(screen.getByRole("button",{name:"Send"}));
+  await screen.findByText("Revised answer");
+  expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/events/edit/rewrite",body:{prompt:"Updated prompt",model:"gemini-upstream-current",approval_mode:"default"}});
+  expect(screen.getByText("Keep this earlier prompt")).toBeInTheDocument();
+  expect(screen.getByText("Updated prompt")).toBeInTheDocument();
+  expect(screen.queryByText("Original prompt")).not.toBeInTheDocument();
+  expect(screen.queryByText("Discard this later answer")).not.toBeInTheDocument();
+});
+
+test("cancels editing without changing conversation history",async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const {user,requests} = setup(true,"gemini-upstream-current","configured",rewriteEvents);
+  await screen.findByText("Discard this later answer");
+  await user.click(screen.getAllByRole("button",{name:"Edit and resend"})[1]);
+  await user.click(screen.getByRole("button",{name:"Cancel editing"}));
+  expect(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"})).toHaveValue("");
+  expect(screen.getByText("Discard this later answer")).toBeInTheDocument();
+  expect(requests).toEqual([]);
+});
+
+test("keeps the draft and original history when a rewrite is rejected",async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const {user} = setup(true,"gemini-upstream-current","configured",rewriteEvents,{rewriteFailure:true});
+  await screen.findByText("Discard this later answer");
+  await user.click(screen.getAllByRole("button",{name:"Edit and resend"})[1]);
+  await user.click(screen.getByRole("button",{name:"Send"}));
+  await screen.findByText("Native history unavailable; original conversation was kept");
+  expect(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"})).toHaveValue("Original prompt");
+  expect(screen.getByText("Discard this later answer")).toBeInTheDocument();
+  expect(screen.getByRole("button",{name:"Cancel editing"})).toBeInTheDocument();
+});
+
+test.each([{rewriteSupported:false},{status:"running"}])("blocks edits for unsupported or active Agents: %j",async options => {
+  setup(true,"gemini-upstream-current","configured",rewriteEvents,options);
+  await screen.findByText("Original prompt");
+  for (const button of screen.getAllByRole("button",{name:"Edit and resend"})) expect(button).toBeDisabled();
 });

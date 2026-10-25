@@ -152,7 +152,21 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiVersion+" or newer to use Gemini")
 		return
 	}
-	event, err := a.store.QueueGeminiTurn(r.Context(), thread, input.Prompt, input.Model, input.ApprovalMode)
+	editEventID := chi.URLParam(r, "eventID")
+	if editEventID != "" && !buildinfo.SupportsGeminiRewrite(server.AgentVersion) {
+		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiRewriteVersion+" or newer to edit Gemini history")
+		return
+	}
+	var event protocol.StreamEvent
+	if editEventID != "" {
+		event, err = a.store.QueueGeminiRewrite(r.Context(), thread, editEventID, input.Prompt, input.Model, input.ApprovalMode)
+	} else {
+		event, err = a.store.QueueGeminiTurn(r.Context(), thread, input.Prompt, input.Model, input.ApprovalMode)
+	}
+	if errors.Is(err, store.ErrInvalidEditTarget) {
+		writeError(w, 409, "this Gemini message has no saved native turn to rewind; original conversation was kept")
+		return
+	}
 	if errors.Is(err, store.ErrThreadActive) {
 		writeError(w, 409, "active or archived Gemini session cannot accept a turn")
 		return
@@ -161,9 +175,14 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "could not queue Gemini turn; check active workspace operations")
 		return
 	}
-	a.hub.Publish(event)
+	if editEventID != "" {
+		a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
+		a.auditGemini(r, "gemini.turn.rewrite", thread.ID)
+	} else {
+		a.hub.Publish(event)
+		a.auditGemini(r, "gemini.turn.start", thread.ID)
+	}
 	a.gateway.Wake(thread.ServerID)
-	a.auditGemini(r, "gemini.turn.start", thread.ID)
 	writeJSON(w, 202, map[string]bool{"ok": true})
 }
 

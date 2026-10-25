@@ -76,3 +76,11 @@ func TestSupportsExactDeploymentRollback(t *testing.T) {
 		}
 	}
 }
+
+func TestGeminiRewriteRequiresNewAgent(t *testing.T) {
+	for version, want := range map[string]bool{"0.2.65": false, "0.2.66": true, "0.3.0": true, "invalid": false} {
+		if SupportsGeminiRewrite(version) != want {
+			t.Fatalf("Gemini rewrite %s: want %v", version, want)
+		}
+	}
+}

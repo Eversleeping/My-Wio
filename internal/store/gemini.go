@@ -2,33 +2,39 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
 type GeminiThread struct {
-	ID           string     `db:"id" json:"id"`
-	WorkspaceID  string     `db:"workspace_id" json:"workspace_id"`
-	SessionID    string     `db:"session_id" json:"session_id"`
-	Title        string     `db:"title" json:"title"`
-	Model        string     `db:"model" json:"model"`
-	ApprovalMode string     `db:"approval_mode" json:"approval_mode"`
-	Status       string     `db:"status" json:"status"`
-	OperationID  string     `db:"operation_id" json:"operation_id"`
-	ArchivedAt   *time.Time `db:"archived_at" json:"archived_at"`
-	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`
-	Path         string     `db:"path" json:"path"`
-	ProjectID    string     `db:"project_id" json:"project_id"`
-	ProjectName  string     `db:"project_name" json:"project_name"`
-	ServerID     string     `db:"server_id" json:"server_id"`
-	ServerName   string     `db:"server_name" json:"server_name"`
-	ServerStatus string     `db:"server_status" json:"server_status"`
+	AgentVersion     string     `db:"agent_version" json:"-"`
+	RewriteSupported bool       `db:"-" json:"rewrite_supported"`
+	ID               string     `db:"id" json:"id"`
+	WorkspaceID      string     `db:"workspace_id" json:"workspace_id"`
+	SessionID        string     `db:"session_id" json:"session_id"`
+	Title            string     `db:"title" json:"title"`
+	Model            string     `db:"model" json:"model"`
+	ApprovalMode     string     `db:"approval_mode" json:"approval_mode"`
+	Status           string     `db:"status" json:"status"`
+	OperationID      string     `db:"operation_id" json:"operation_id"`
+	ArchivedAt       *time.Time `db:"archived_at" json:"archived_at"`
+	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time  `db:"updated_at" json:"updated_at"`
+	Path             string     `db:"path" json:"path"`
+	ProjectID        string     `db:"project_id" json:"project_id"`
+	ProjectName      string     `db:"project_name" json:"project_name"`
+	ServerID         string     `db:"server_id" json:"server_id"`
+	ServerName       string     `db:"server_name" json:"server_name"`
+	ServerStatus     string     `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,w.path,w.project_id,p.name AS project_name,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+const geminiThreadSelect = `SELECT t.*,s.agent_version,w.path,w.project_id,p.name AS project_name,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
  FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id`
 
 func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThread, error) {
@@ -38,12 +44,16 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 		condition = "t.archived_at IS NOT NULL"
 	}
 	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	for i := range out {
+		out[i].RewriteSupported = buildinfo.SupportsGeminiRewrite(out[i].AgentVersion)
+	}
 	return out, err
 }
 
 func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, error) {
 	var thread GeminiThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(geminiThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	thread.RewriteSupported = buildinfo.SupportsGeminiRewrite(thread.AgentVersion)
 	return thread, err
 }
 
@@ -60,6 +70,14 @@ func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode
 // QueueGeminiTurn claims the session, reserves the workspace and saves the user
 // message in one transaction, so concurrent sends cannot create duplicate turns.
 func (s *Store) QueueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode string) (protocol.StreamEvent, error) {
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "")
+}
+
+func (s *Store) QueueGeminiRewrite(ctx context.Context, thread GeminiThread, eventID, prompt, model, mode string) (protocol.StreamEvent, error) {
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID)
+}
+
+func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string) (protocol.StreamEvent, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return protocol.StreamEvent{}, err
@@ -91,14 +109,29 @@ func (s *Store) QueueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		return protocol.StreamEvent{}, ErrThreadActive
 	}
 	command := protocol.GeminiTurnCommand{ThreadID: thread.ID, Workspace: thread.Path, SessionID: thread.SessionID, Prompt: prompt, Model: model, ApprovalMode: mode}
+	if err := tx.GetContext(ctx, &command.SessionID, s.Q("SELECT session_id FROM gemini_threads WHERE id=?"), thread.ID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	kind := "gemini.turn.start"
+	if editEventID != "" {
+		target, err := geminiRewriteTarget(ctx, tx, s, thread.ID, editEventID)
+		if err != nil {
+			return protocol.StreamEvent{}, err
+		}
+		command.Rewrite = &target
+		kind = "gemini.turn.rewrite"
+	}
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at)
- VALUES(?,?,?,?,'gemini.turn.start',?,1,?,?)`), opID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, string(payload), "gemini:"+opID, now)
+ VALUES(?,?,?,?,?,?,1,?,?)`), opID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, kind, string(payload), "gemini:"+opID, now)
 	if err != nil {
 		return protocol.StreamEvent{}, err
+	}
+	if editEventID != "" {
+		return protocol.StreamEvent{}, tx.Commit()
 	}
 	message, _ := json.Marshal(map[string]string{"text": prompt, "operation_id": opID})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "gemini.user.message", OccurredAt: now, Payload: message}
@@ -212,4 +245,109 @@ func (s *Store) UpdateGeminiThread(ctx context.Context, id, title string, archiv
 func (s *Store) CompleteGeminiTurn(ctx context.Context, id, opID, status string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET status=CASE WHEN status='interrupting' THEN 'interrupted' ELSE ? END,updated_at=? WHERE id=? AND operation_id=?`), status, time.Now().UTC(), id, opID)
 	return err
+}
+
+// A native timestamp is saved verbatim in gemini.init. Select a turn using the
+// Agent's clock; control-plane timestamps are deliberately not compared to it.
+func geminiRewriteTarget(ctx context.Context, tx *sqlx.Tx, s *Store, threadID, eventID string) (protocol.GeminiRewriteTarget, error) {
+	var events []struct {
+		ID      string `db:"event_id"`
+		Kind    string `db:"kind"`
+		Payload string `db:"payload"`
+	}
+	if err := tx.SelectContext(ctx, &events, s.Q("SELECT event_id,kind,payload FROM events WHERE stream_id=? AND kind IN ('gemini.user.message','gemini.init') ORDER BY sequence"), threadID); err != nil {
+		return protocol.GeminiRewriteTarget{}, err
+	}
+	target := protocol.GeminiRewriteTarget{EventID: eventID}
+	operationID := ""
+	found := false
+	for _, event := range events {
+		var p struct {
+			OperationID string `json:"operation_id"`
+			Timestamp   string `json:"timestamp"`
+		}
+		if err := json.Unmarshal([]byte(event.Payload), &p); err != nil {
+			return target, err
+		}
+		if event.ID == eventID {
+			if event.Kind != "gemini.user.message" || p.OperationID == "" {
+				return target, ErrInvalidEditTarget
+			}
+			operationID = p.OperationID
+			found = true
+		}
+		if !found || event.Kind != "gemini.init" {
+			continue
+		}
+		if p.OperationID == operationID && target.StartedAt == "" {
+			target.StartedAt = p.Timestamp
+		} else if target.StartedAt != "" && p.OperationID != operationID {
+			target.Before = p.Timestamp
+			break
+		}
+	}
+	if !found || target.StartedAt == "" {
+		return target, ErrInvalidEditTarget
+	}
+	if _, err := time.Parse(time.RFC3339Nano, target.StartedAt); err != nil {
+		return target, ErrInvalidEditTarget
+	}
+	return target, nil
+}
+
+// Commit only after the CLI has loaded the retained prefix successfully. Until
+// then, queueing/failure/cancellation leave the original transcript untouched.
+func (s *Store) CommitGeminiRewrite(ctx context.Context, threadID, operationID, sessionID string) (protocol.StreamEvent, bool, error) {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	defer tx.Rollback()
+	var payload string
+	if err := tx.GetContext(ctx, &payload, s.Q("SELECT payload FROM agent_operations WHERE id=? AND kind='gemini.turn.rewrite'"), operationID); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	var command protocol.GeminiTurnCommand
+	if err := json.Unmarshal([]byte(payload), &command); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	if command.ThreadID != threadID || command.Rewrite == nil || sessionID == "" || sessionID == command.SessionID {
+		return protocol.StreamEvent{}, false, ErrInvalidEditTarget
+	}
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET session_id=?,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting')"), sessionID, time.Now().UTC(), threadID, operationID)
+	if err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count != 1 {
+		return protocol.StreamEvent{}, false, ErrThreadActive
+	}
+	replacementID := operationID + ":user"
+	var exists int
+	if err := tx.GetContext(ctx, &exists, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND event_id=?"), threadID, replacementID); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	if exists != 0 {
+		return protocol.StreamEvent{}, false, tx.Commit()
+	}
+	var sequence int64
+	if err := tx.GetContext(ctx, &sequence, s.Q("SELECT sequence FROM events WHERE stream_id=? AND event_id=? AND kind='gemini.user.message'"), threadID, command.Rewrite.EventID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = ErrInvalidEditTarget
+		}
+		return protocol.StreamEvent{}, false, err
+	}
+	var last int64
+	if err := tx.GetContext(ctx, &last, s.Q("SELECT COALESCE(MAX(sequence),0) FROM events WHERE stream_id=?"), threadID); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=? AND sequence>=?"), threadID, sequence); err != nil {
+		return protocol.StreamEvent{}, false, err
+	}
+	raw, _ := json.Marshal(map[string]any{"text": command.Prompt, "operation_id": operationID, "history_rewritten": true})
+	event := protocol.StreamEvent{EventID: replacementID, StreamID: threadID, Sequence: last + 1, Kind: "gemini.user.message", OccurredAt: time.Now().UTC(), Payload: raw}
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(raw)); err != nil {
+		return event, false, err
+	}
+	return event, true, tx.Commit()
 }

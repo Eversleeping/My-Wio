@@ -48,6 +48,9 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	if w := request("GET", "/api/workspaces/"+workspaces[0].ID+"/gemini/models", "", false); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
+	if w := request("POST", "/api/gemini/threads/missing/events/missing/rewrite", `{"prompt":"edit"}`, false); w.Code != 401 {
+		t.Fatalf("rewrite route bypassed authentication: %d", w.Code)
+	}
 	if w := request("GET", "/api/gemini/threads", "", false); w.Code != 401 {
 		t.Fatal(w.Code)
 	}

@@ -160,7 +160,14 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	// Keep prompts out of the process argument list. Piped input is documented
 	// headless mode and is handled as the complete prompt by Gemini CLI.
 	args := []string{"--output-format", "stream-json", "--model", command.Model, "--approval-mode", command.ApprovalMode}
-	if command.SessionID != "" {
+	if command.Rewrite != nil {
+		path, err := prepareRewrite(command, environment)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(path)
+		args = append(args, "--session-file", path)
+	} else if command.SessionID != "" {
 		args = append(args, "--resume", command.SessionID)
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
@@ -200,6 +207,13 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 		// The local user event is saved transactionally before dispatch.
 		if kind == "message" && payload["role"] == "user" {
 			continue
+		}
+		if kind == "init" && command.Rewrite != nil {
+			sessionID, _ := payload["session_id"].(string)
+			if sessionID == "" || sessionID == command.SessionID {
+				streamErr = errors.New("Gemini did not create a replacement context; original conversation was kept")
+				break
+			}
 		}
 		payload["operation_id"] = operationID
 		raw, _ := json.Marshal(payload)
