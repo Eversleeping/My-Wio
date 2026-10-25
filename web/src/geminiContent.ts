@@ -7,6 +7,15 @@ function record(value: unknown): Record<string, unknown> {
 }
 function readable(value: unknown): string { return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value, null, 2); }
 
+function count(...values: unknown[]): number | undefined {
+  return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0) as number | undefined;
+}
+
+function usage(value: unknown): Record<string, unknown> {
+  const stats = record(value);
+  return { input_tokens: count(stats.input_tokens, stats.input), output_tokens: count(stats.output_tokens, stats.output), tool_calls: count(stats.tool_calls) };
+}
+
 // JSONL assistant chunks have no message id. Merge only adjacent chunks from
 // the same turn; a tool event or a new user prompt starts a new message.
 export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
@@ -32,7 +41,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
     } else if (event.kind === "gemini.result") {
       assistant = undefined;
       if (p.error) messages.push({ ...base, role: "error", text: readable(record(p.error).message || p.error) });
-      if (p.stats) messages.push({ ...base, role: "status", text: "", stats: record(p.stats) });
+      if (p.stats) messages.push({ ...base, role: "status", text: "", stats: usage(p.stats) });
     } else if (event.kind === "gemini.turn.completed" && (p.status === "failed" || p.status === "interrupted")) {
       assistant = undefined;
       messages.push({ ...base, role: p.status === "failed" ? "error" : "status", text: p.status === "interrupted" ? "interrupted" : readable(p.message) });

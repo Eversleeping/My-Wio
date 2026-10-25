@@ -22,3 +22,16 @@ test("routes Gemini links and realtime events independently of Codex", () => {
   expect(locationFor("gemini", "session-1")).toContain("view=gemini&thread=session-1");
   expect(realtimeScopesForEvent({ kind: "gemini.message" })).toEqual(["gemini", "operations"]);
 });
+
+test("uses numeric CLI usage and safely handles already redacted history", () => {
+  const messages = geminiMessages([
+    event(1, "gemini.result", { stats: { input_tokens: 12, output_tokens: 0, tool_calls: 2 } }),
+    event(2, "gemini.result", { stats: { input_tokens: "[REDACTED]", input: 54, output_tokens: "[REDACTED]", tool_calls: 0 } }),
+    event(3, "gemini.result", { stats: { input_tokens: "secret", output_tokens: -2, output: 7, tool_calls: "secret" } })
+  ]);
+  expect(messages.map(item => item.stats)).toEqual([
+    { input_tokens: 12, output_tokens: 0, tool_calls: 2 },
+    { input_tokens: 54, output_tokens: undefined, tool_calls: 0 },
+    { input_tokens: undefined, output_tokens: 7, tool_calls: undefined }
+  ]);
+});

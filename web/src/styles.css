@@ -460,9 +460,12 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .gemini-thread-list { flex-basis: 44%; }
 .gemini-sidebar-heading { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .gemini-sidebar-heading > strong, .gemini-sidebar-heading > div { display: flex; align-items: center; gap: 7px; }
+.gemini-session-search { margin: 8px 10px; width: calc(100% - 20px); flex-shrink: 0; }
+.gemini-project-heading { display: flex; align-items: center; padding-right: 6px; }
+.gemini-project-heading .thread-project-toggle { flex: 1; min-width: 0; }
+.gemini-layout .gemini-thread-list:only-child { flex: 1; }
 .gemini-layout .thread-actions { gap: 0; padding-right: 2px; }
 .gemini-layout .thread-actions .icon-button { width: 23px; height: 28px; }
-.gemini-help { display: flex; align-items: center; justify-content: center; gap: 7px; flex-shrink: 0; padding: 12px; border-top: 1px solid var(--line); }
 .gemini-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .gemini-main > .file-preview-panel { flex: 1; }
 .gemini-conversation { min-height: 0; display: flex; flex: 1; }
@@ -472,7 +475,7 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .gemini-stream > .message { margin-bottom: 16px; }
 .gemini-tool { margin: 10px 0; border: 1px solid var(--line); border-radius: 6px; background: #f6f8f5; font-size: 12px; }
 .gemini-tool summary { display: flex; align-items: center; gap: 8px; padding: 10px; cursor: pointer; }
-.gemini-tool pre, .gemini-setup pre { max-height: 300px; overflow: auto; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gemini-tool pre { max-height: 300px; overflow: auto; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .gemini-usage, .gemini-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .gemini-hint { margin: 10px 12px; }
 .gemini-working { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
@@ -487,7 +490,6 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .gemini-welcome p { max-width: 420px; color: var(--muted); line-height: 1.7; }
 .gemini-preview-tabs { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .gemini-preview-tabs span { min-width: 0; display: flex; align-items: center; gap: 7px; overflow-wrap: anywhere; font-size: 12px; }
-.gemini-setup { display: grid; gap: 14px; line-height: 1.7; }
 .codex-sidebar { min-width: 0; display: flex; overflow: hidden; background: #fafbf9; border-right: 1px solid var(--line); flex-direction: column; }
 .thread-list { min-width: 0; min-height: 0; display: flex; overflow: hidden; flex: 0 0 var(--thread-list-height, 38%); flex-direction: column; }
 .sidebar-height-divider { height: 8px; flex: 0 0 8px; display: flex; align-items: center; justify-content: center; cursor: row-resize; touch-action: none; user-select: none; background: #edf1ed; outline-offset: -2px; }

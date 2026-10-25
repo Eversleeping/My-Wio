@@ -76,3 +76,30 @@ func TestRecoveryCodesAreHashed(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactJSONPreservesOnlyNumericUsageCounters(t *testing.T) {
+	raw := []byte(`{"stats":{"input_tokens":120,"output_tokens":0,"total_tokens":120,"cached_tokens":10,"models":{"gemini":{"input_tokens":120,"output_tokens":0}},"api_key":"secret"},"access_token":123,"token":"secret","nested":[{"input_tokens":"secret","output_tokens":{"api_key":"secret"},"total_tokens":-1}]}`)
+	var value map[string]any
+	redacted := RedactJSON(raw)
+	if err := json.Unmarshal(redacted, &value); err != nil {
+		t.Fatal(err)
+	}
+	stats := value["stats"].(map[string]any)
+	if stats["input_tokens"] != float64(120) || stats["output_tokens"] != float64(0) || stats["total_tokens"] != float64(120) || stats["cached_tokens"] != float64(10) || stats["api_key"] != "[REDACTED]" {
+		t.Fatalf("incorrect usage redaction: %s", redacted)
+	}
+	model := stats["models"].(map[string]any)["gemini"].(map[string]any)
+	if model["input_tokens"] != float64(120) || model["output_tokens"] != float64(0) {
+		t.Fatalf("model usage lost: %s", redacted)
+	}
+	for _, key := range []string{"access_token", "token"} {
+		if value[key] != "[REDACTED]" {
+			t.Fatalf("credential %s exposed", key)
+		}
+	}
+	for _, field := range value["nested"].([]any)[0].(map[string]any) {
+		if field != "[REDACTED]" {
+			t.Fatalf("unsafe counter value exposed: %s", redacted)
+		}
+	}
+}
