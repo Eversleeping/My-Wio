@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS agent_operations (
 CREATE INDEX IF NOT EXISTS operations_server_idx ON agent_operations(server_id, status, created_at);
 
 CREATE TABLE IF NOT EXISTS codex_scheduled_tasks (
+  thinking_level TEXT NOT NULL DEFAULT '',
   id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES codex_threads(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
@@ -479,6 +480,7 @@ CREATE INDEX IF NOT EXISTS alerts_status_idx ON alerts(status, opened_at);
 CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_log(occurred_at);
 
 CREATE TABLE IF NOT EXISTS gemini_threads (
+  thinking_level TEXT NOT NULL DEFAULT '',
   id TEXT PRIMARY KEY,
   pinned_at TIMESTAMP,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -507,6 +509,7 @@ CREATE TABLE IF NOT EXISTS server_gemini_credential_updates (
 );
 
 CREATE TABLE IF NOT EXISTS gemini_scheduled_tasks (
+  thinking_level TEXT NOT NULL DEFAULT '',
   id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES gemini_threads(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,

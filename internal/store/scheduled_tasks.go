@@ -10,6 +10,7 @@ import (
 )
 
 type ScheduledTask struct {
+	ThinkingLevel   string     `db:"thinking_level" json:"thinking_level"`
 	AgentKind       string     `db:"agent_kind" json:"agent_kind"`
 	ID              string     `db:"id" json:"id"`
 	ThreadID        string     `db:"thread_id" json:"thread_id"`
@@ -40,6 +41,7 @@ type ScheduledTask struct {
 }
 
 type ScheduledTaskInput struct {
+	ThinkingLevel   string
 	AgentKind       string
 	ThreadID        string
 	Name            string
@@ -52,7 +54,7 @@ type ScheduledTaskInput struct {
 	ApprovalMode    string
 }
 
-const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,st.id,st.thread_id,t.title thread_title,t.workspace_id,w.project_id,p.name project_name,
+const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,'' AS thinking_level,st.id,st.thread_id,t.title thread_title,t.workspace_id,w.project_id,p.name project_name,
 	st.server_id,s.name server_name,s.status server_status,t.codex_thread_id,w.path workspace_path,
 	st.name,st.prompt,st.schedule,st.timezone,st.enabled,st.model,st.reasoning_effort,st.approval_mode,
 	st.next_run_at,st.last_run_at,st.last_run_status,st.last_run_message,st.last_operation_id,st.created_at,st.updated_at
@@ -63,7 +65,7 @@ const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,st.id,st.thread_i
 	JOIN servers s ON s.id=st.server_id`
 
 var geminiScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'gemini' AS agent_kind"), "codex_scheduled_tasks", "gemini_scheduled_tasks"), "JOIN codex_threads", "JOIN gemini_threads")
-var scheduledTaskSelect = "SELECT * FROM (" + codexScheduledTaskSelect + " UNION ALL " + strings.ReplaceAll(geminiScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id") + ") st"
+var scheduledTaskSelect = "SELECT * FROM (" + codexScheduledTaskSelect + " UNION ALL " + strings.ReplaceAll(strings.ReplaceAll(geminiScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id"), "'' AS thinking_level", "st.thinking_level") + ") st"
 
 func scheduledTable(kind string) string {
 	if kind == "gemini" {
@@ -110,8 +112,8 @@ func (s *Store) CreateScheduledTask(ctx context.Context, input ScheduledTaskInpu
 	id := NewID()
 	now := time.Now().UTC()
 	_, err = s.DB.ExecContext(ctx, s.Q(`INSERT INTO `+scheduledTable(input.AgentKind)+`
-		(id,thread_id,server_id,name,prompt,schedule,timezone,enabled,model,reasoning_effort,approval_mode,next_run_at,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), id, threadID, serverID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, nextRunAt.UTC(), now, now)
+		(id,thread_id,server_id,name,prompt,schedule,timezone,enabled,model,reasoning_effort,approval_mode,thinking_level,next_run_at,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), id, threadID, serverID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, input.ThinkingLevel, nextRunAt.UTC(), now, now)
 	if err != nil {
 		return ScheduledTask{}, err
 	}
@@ -124,7 +126,7 @@ func (s *Store) UpdateScheduledTask(ctx context.Context, id string, input Schedu
 		return ScheduledTask{}, err
 	}
 	now := time.Now().UTC()
-	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE `+scheduledTable(input.AgentKind)+` SET thread_id=?,server_id=?,name=?,prompt=?,schedule=?,timezone=?,enabled=?,model=?,reasoning_effort=?,approval_mode=?,next_run_at=?,updated_at=? WHERE id=?`), threadID, serverID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, nextRunAt.UTC(), now, id)
+	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE `+scheduledTable(input.AgentKind)+` SET thread_id=?,server_id=?,name=?,prompt=?,schedule=?,timezone=?,enabled=?,model=?,reasoning_effort=?,approval_mode=?,thinking_level=?,next_run_at=?,updated_at=? WHERE id=?`), threadID, serverID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, input.ThinkingLevel, nextRunAt.UTC(), now, id)
 	if err != nil {
 		return ScheduledTask{}, err
 	}

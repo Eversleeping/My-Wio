@@ -11,6 +11,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/agentgateway"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/geminiapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/schedule"
 	"github.com/wio-platform/wio/internal/store"
@@ -157,7 +158,18 @@ func (r *Runner) enqueueGemini(ctx context.Context, task store.ScheduledTask, no
 	if mode == "" {
 		mode = thread.ApprovalMode
 	}
-	event, err := r.store.QueueGeminiTurn(ctx, thread, task.Prompt, model, mode)
+	level := task.ThinkingLevel
+	if level == "" {
+		level = thread.ThinkingLevel
+		if !geminiapi.ValidThinkingLevel(model, level) {
+			level = ""
+		}
+	}
+	if level != "" && !buildinfo.SupportsGeminiThinking(thread.AgentVersion) {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent to configure thinking", "", now)
+		return
+	}
+	event, err := r.store.QueueGeminiTurn(ctx, thread, task.Prompt, model, mode, level)
 	if err != nil {
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Gemini workspace is busy or unavailable", "", now)
 		return

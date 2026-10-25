@@ -10,11 +10,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/geminiapi"
 	"github.com/wio-platform/wio/internal/schedule"
 	"github.com/wio-platform/wio/internal/store"
 )
 
 type scheduledTaskRequest struct {
+	ThinkingLevel   *string `json:"thinking_level"`
 	AgentKind       *string `json:"agent_kind"`
 	ThreadID        *string `json:"thread_id"`
 	Name            *string `json:"name"`
@@ -123,6 +126,10 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 		}
 		return fallback
 	}
+	level := value(request.ThinkingLevel, "")
+	if existing != nil && request.ThinkingLevel == nil {
+		level = existing.ThinkingLevel
+	}
 	kind := value(request.AgentKind, "codex")
 	if existing != nil {
 		if request.AgentKind == nil {
@@ -196,6 +203,9 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	if utf8.RuneCountInString(model) > 128 {
 		return store.ScheduledTaskInput{}, errors.New("model is too long")
 	}
+	if kind == "codex" && level != "" {
+		return store.ScheduledTaskInput{}, errors.New("thinking_level is only supported for Gemini")
+	}
 	if kind == "gemini" && reasoning != "" {
 		return store.ScheduledTaskInput{}, errors.New("Gemini does not support Codex reasoning_effort")
 	}
@@ -206,8 +216,22 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 		return store.ScheduledTaskInput{}, errors.New("invalid approval_mode")
 	}
 	if kind == "gemini" {
-		if _, err := a.store.GeminiThread(r.Context(), threadID); err != nil {
+		thread, err := a.store.GeminiThread(r.Context(), threadID)
+		if err != nil {
 			return store.ScheduledTaskInput{}, errors.New("Gemini session not found")
+		}
+		selectedModel := model
+		if selectedModel == "" {
+			selectedModel = thread.Model
+		}
+		if !geminiapi.ValidThinkingLevel(selectedModel, level) {
+			return store.ScheduledTaskInput{}, errors.New("invalid Gemini thinking level for this model")
+		}
+		if level != "" {
+			server, e := a.store.Server(r.Context(), thread.ServerID)
+			if e != nil || !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
+				return store.ScheduledTaskInput{}, errors.New("update Gemini Agent to configure thinking")
+			}
 		}
 		if model != "" && !credentialModelPattern.MatchString(model) {
 			return store.ScheduledTaskInput{}, errors.New("invalid Gemini model")
@@ -218,5 +242,5 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 		}
 		return store.ScheduledTaskInput{}, errors.New("could not load Codex session")
 	}
-	return store.ScheduledTaskInput{AgentKind: kind, ThreadID: threadID, Name: name, Prompt: prompt, Schedule: expression, Timezone: timezone, Enabled: enabled, Model: model, ReasoningEffort: reasoning, ApprovalMode: approval}, nil
+	return store.ScheduledTaskInput{ThinkingLevel: level, AgentKind: kind, ThreadID: threadID, Name: name, Prompt: prompt, Schedule: expression, Timezone: timezone, Enabled: enabled, Model: model, ReasoningEffort: reasoning, ApprovalMode: approval}, nil
 }

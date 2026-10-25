@@ -163,7 +163,7 @@ func (s *Store) commitGeminiFork(ctx context.Context, tx *sqlx.Tx, c protocol.Ge
 		return nil
 	}
 	now := time.Now().UTC()
-	r, err := tx.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,session_id,title,model,approval_mode,status,created_at,updated_at) SELECT ?,?,?,?,model,approval_mode,'idle',?,? FROM gemini_threads WHERE id=? AND session_id=?`), c.TargetThreadID, c.WorkspaceID, nativeID, c.Title, now, now, c.SourceThreadID, c.SessionID)
+	r, err := tx.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,session_id,title,model,approval_mode,thinking_level,status,created_at,updated_at) SELECT ?,?,?,?,model,approval_mode,thinking_level,'idle',?,? FROM gemini_threads WHERE id=? AND session_id=?`), c.TargetThreadID, c.WorkspaceID, nativeID, c.Title, now, now, c.SourceThreadID, c.SessionID)
 	if err != nil {
 		return err
 	}

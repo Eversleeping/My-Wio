@@ -44,7 +44,7 @@ func TestScheduledTaskCRUD(t *testing.T) {
 	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Name != "Morning check" || created.Schedule != "0 9 * * 1-5" || created.NextRunAt.Before(time.Now().UTC()) {
+	if created.ThinkingLevel != "" || created.Name != "Morning check" || created.Schedule != "0 9 * * 1-5" || created.NextRunAt.Before(time.Now().UTC()) {
 		t.Fatalf("unexpected scheduled task: %#v", created)
 	}
 	listResponse := directJSONRequest(t, http.MethodGet, "/api/scheduled-tasks", nil, session, api.scheduledTasks)
@@ -81,7 +81,7 @@ func TestGeminiScheduledTaskCRUD(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "scheduled-task-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.2.67"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.2.69"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduled", Name: "scheduled"}}}); err != nil {
@@ -98,7 +98,7 @@ func TestGeminiScheduledTaskCRUD(t *testing.T) {
 	api := resourceTestAPI(database)
 	session := &store.Session{UserID: "test-user"}
 	createdResponse := directJSONRequest(t, http.MethodPost, "/api/scheduled-tasks", map[string]any{
-		"agent_kind": "gemini", "thread_id": thread.ID, "name": "Morning check", "prompt": "Review open issues", "schedule": "0 9 * * 1-5", "timezone": "Asia/Shanghai", "enabled": true,
+		"agent_kind": "gemini", "thread_id": thread.ID, "thinking_level": "high", "name": "Morning check", "prompt": "Review open issues", "schedule": "0 9 * * 1-5", "timezone": "Asia/Shanghai", "enabled": true,
 	}, session, api.createScheduledTask)
 	if createdResponse.Code != http.StatusCreated {
 		t.Fatalf("create returned %d: %s", createdResponse.Code, createdResponse.Body.String())
@@ -107,7 +107,7 @@ func TestGeminiScheduledTaskCRUD(t *testing.T) {
 	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Name != "Morning check" || created.Schedule != "0 9 * * 1-5" || created.NextRunAt.Before(time.Now().UTC()) {
+	if created.ThinkingLevel != "high" || created.Name != "Morning check" || created.Schedule != "0 9 * * 1-5" || created.NextRunAt.Before(time.Now().UTC()) {
 		t.Fatalf("unexpected scheduled task: %#v", created)
 	}
 	listResponse := directJSONRequest(t, http.MethodGet, "/api/scheduled-tasks", nil, session, api.scheduledTasks)

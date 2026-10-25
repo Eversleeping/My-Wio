@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.2.68"
+var Version = "0.2.69"
 
 const MinimumCLIManagementVersion = "0.2.61"
 
@@ -123,3 +123,9 @@ func SupportsGeminiRewrite(version string) bool { return atLeast(version, Minimu
 const MinimumGeminiForkVersion = "0.2.68"
 
 func SupportsGeminiFork(version string) bool { return atLeast(version, MinimumGeminiForkVersion) }
+
+const MinimumGeminiThinkingVersion = "0.2.69"
+
+func SupportsGeminiThinking(version string) bool {
+	return atLeast(version, MinimumGeminiThinkingVersion)
+}

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -95,7 +96,7 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.2.67", CodexReady: true}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.2.69", CodexReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduler", Name: "scheduler"}}}); err != nil {
@@ -105,7 +106,7 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 	if err != nil || len(workspaces) != 1 {
 		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
 	}
-	thread, err := database.CreateGeminiThread(ctx, workspaces[0].ID, "test-model", "default")
+	thread, err := database.CreateGeminiThread(ctx, workspaces[0].ID, "test-model", "default", "medium")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +139,10 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 		t.Fatalf("scheduled turn was not queued: %#v %v", operations, err)
 	}
 
+	var command protocol.GeminiTurnCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &command); err != nil || command.ThinkingLevel != "medium" {
+		t.Fatal("scheduled task lost session thinking level", err)
+	}
 	for _, state := range []string{"busy", "archived", "offline"} {
 		if state == "archived" {
 			database.CompleteGeminiTurn(ctx, thread.ID, thread.OperationID, "idle")

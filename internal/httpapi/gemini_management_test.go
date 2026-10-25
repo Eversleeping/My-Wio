@@ -14,7 +14,7 @@ func TestGeminiForkCopiesOnlyCompletedPrefixAndDoesNotChangeSource(t *testing.T)
 	db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.68"})
 	db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/fork", Name: "fork"}}})
 	workspaces, _ := db.ListWorkspaces(ctx)
-	source, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "flash", "default")
+	source, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "flash", "default", "low")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestGeminiForkCopiesOnlyCompletedPrefixAndDoesNotChangeSource(t *testing.T)
 		t.Fatal("branch copied future or changed source")
 	}
 	branch, _ := db.GeminiThread(ctx, target)
-	if branch.SessionID != "native-branch" || branch.WorkspaceID != source.WorkspaceID {
+	if branch.ThinkingLevel != "low" || branch.SessionID != "native-branch" || branch.WorkspaceID != source.WorkspaceID {
 		t.Fatal("branch lost native ID/workspace")
 	}
 	db.CompleteGeminiTurn(ctx, source.ID, op, "idle")

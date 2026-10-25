@@ -79,3 +79,11 @@
 - [官方 JSONL 事件类型](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/output/types.ts)
 
 - [Gemini CLI API key 与基础地址实现（v0.65.0）](https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/core/contentGenerator.ts)
+
+## 思考等级
+
+- 模型旁显示思考等级。`-minimal/-low/-medium/-high` 等上游模型名称后缀标为“模型预设”，例如 `gemini-3.8-flash-high` 显示“高（模型预设）”；此标签源于模型名称，不冒充响应返回的实际等级。固定预设不提供冲突等级，不虚构未从上游获取到的其他模型 ID。
+- 普通模型可选择模型默认或原生 minimal / low / medium / high；Gemini 3 Pro 仅提供 low / high。Gemini 2.5 使用 thinkingBudget，不能把等级字符串当作预算发送；auto 和图片模型暂不提供等级覆盖。自定义模型需由上游支持相应 thinkingLevel。
+- 明确选择等级需要 Agent 0.2.69+。通过 Gemini CLI 0.65.0 官方 `modelConfigs.customOverrides` 将 `generateContentConfig.thinkingConfig.thinkingLevel` 传给请求，不使用 Codex 的 reasoning_effort，也不通过提示词模拟。每轮建立私有临时系统配置，保留原系统管理设置、JSONC 内容语义和 system-defaults 路径，结束后删除临时文件。临时文件放在原系统配置所在目录（Linux 默认 `/etc/gemini-cli`），遵循 CLI 的管理员所有权和祖先目录权限检查；显式覆盖需要 Agent 具有相应管理权限，无法建立安全配置时返回错误，避免静默回退到默认等级。
+- 等级随会话保存；新会话、编辑重发、分支和 worktree 续聊保留设置。定时任务可指定等级或跟随会话。选择模型默认移除本页的覆盖，并不读取或伪造用户/系统配置中的最终默认值。
+- [CLI 配置文档](https://geminicli.com/docs/reference/configuration/#modelconfigs)、[0.65.0 官方模型配置实现](https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/services/modelConfigService.ts)。

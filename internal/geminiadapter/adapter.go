@@ -170,6 +170,11 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	} else if command.SessionID != "" {
 		args = append(args, "--resume", command.SessionID)
 	}
+	environment, cleanupThinking, err := thinkingEnvironment(environment, command.Model, command.ThinkingLevel, command.Workspace)
+	if err != nil {
+		return err
+	}
+	defer cleanupThinking()
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = command.Workspace
 	cmd.Env = environment
@@ -216,6 +221,9 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 			}
 		}
 		payload["operation_id"] = operationID
+		if kind == "init" {
+			payload["thinking_level"] = command.ThinkingLevel
+		}
 		raw, _ := json.Marshal(payload)
 		if err := a.emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: "gemini." + kind, Payload: raw}); err != nil {
 			streamErr = err

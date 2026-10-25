@@ -79,6 +79,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateGeminiThinking(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateProjectThreadPreferences(ctx, db, driver); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -2296,3 +2300,30 @@ func (s *Store) SaveMetrics(ctx context.Context, serverID string, m protocol.Met
 }
 
 func IsNotFound(err error) bool { return errors.Is(err, sql.ErrNoRows) }
+
+func migrateGeminiThinking(ctx context.Context, db *sqlx.DB, driver string) error {
+	for _, table := range []string{"gemini_threads", "gemini_scheduled_tasks", "codex_scheduled_tasks"} {
+		if driver == "pgx" {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN IF NOT EXISTS thinking_level TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		} else {
+			var columns []string
+			if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info(?)", table); err != nil {
+				return err
+			}
+			found := false
+			for _, column := range columns {
+				if column == "thinking_level" {
+					found = true
+				}
+			}
+			if !found {
+				if _, err := db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN thinking_level TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}

@@ -27,6 +27,7 @@ export interface WorkspaceChangesSnapshot { workspace_id: string; changes: Works
 export interface WorkspaceDiffPreview { workspace_id: string; path: string; content: string; additions: number; deletions: number; binary: boolean; truncated: boolean; status: "idle" | "loading" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
 export interface Thread { id: string; workspace_id: string; project_id: string; codex_thread_id: string; title: string; status: string; path: string; server_id: string; server_name: string; project_name: string; created_at: string; updated_at: string; pinned_at: string | null; archived_at: string | null; project_pinned_at: string | null; project_hidden_at: string | null }
 export interface GeminiThread {
+ thinking_level?: string; thinking_supported?: boolean;
   fork_supported: boolean;
   pinned_at?: string;
   project_pinned_at?: string;
@@ -35,6 +36,7 @@ export type CodexSnapshotState = "idle" | "loading" | "refreshing" | "succeeded"
 export interface CodexSnapshot<T> { status: CodexSnapshotState; supported: boolean; reason: string; codex_version: string; data: T | null; error: string; requested_at: string | null; updated_at: string | null }
 export interface CodexGoal { thread_id: string; objective: string; status: string; token_budget: number | null; tokens_used: number; time_used_seconds: number; created_at: number; updated_at: number }
 export interface ScheduledTask {
+ thinking_level?: string;
   agent_kind?: "codex" | "gemini";
   id: string;
   thread_id: string;

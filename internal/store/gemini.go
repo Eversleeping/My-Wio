@@ -13,29 +13,31 @@ import (
 )
 
 type GeminiThread struct {
-	AgentVersion     string     `db:"agent_version" json:"-"`
-	RewriteSupported bool       `db:"-" json:"rewrite_supported"`
-	ForkSupported    bool       `db:"-" json:"fork_supported"`
-	PinnedAt         *time.Time `db:"pinned_at" json:"pinned_at"`
-	ProjectPinnedAt  *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
-	ProjectHiddenAt  *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
-	ID               string     `db:"id" json:"id"`
-	WorkspaceID      string     `db:"workspace_id" json:"workspace_id"`
-	SessionID        string     `db:"session_id" json:"session_id"`
-	Title            string     `db:"title" json:"title"`
-	Model            string     `db:"model" json:"model"`
-	ApprovalMode     string     `db:"approval_mode" json:"approval_mode"`
-	Status           string     `db:"status" json:"status"`
-	OperationID      string     `db:"operation_id" json:"operation_id"`
-	ArchivedAt       *time.Time `db:"archived_at" json:"archived_at"`
-	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt        time.Time  `db:"updated_at" json:"updated_at"`
-	Path             string     `db:"path" json:"path"`
-	ProjectID        string     `db:"project_id" json:"project_id"`
-	ProjectName      string     `db:"project_name" json:"project_name"`
-	ServerID         string     `db:"server_id" json:"server_id"`
-	ServerName       string     `db:"server_name" json:"server_name"`
-	ServerStatus     string     `db:"server_status" json:"server_status"`
+	ThinkingLevel     string     `db:"thinking_level" json:"thinking_level"`
+	ThinkingSupported bool       `db:"-" json:"thinking_supported"`
+	AgentVersion      string     `db:"agent_version" json:"-"`
+	RewriteSupported  bool       `db:"-" json:"rewrite_supported"`
+	ForkSupported     bool       `db:"-" json:"fork_supported"`
+	PinnedAt          *time.Time `db:"pinned_at" json:"pinned_at"`
+	ProjectPinnedAt   *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
+	ProjectHiddenAt   *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
+	ID                string     `db:"id" json:"id"`
+	WorkspaceID       string     `db:"workspace_id" json:"workspace_id"`
+	SessionID         string     `db:"session_id" json:"session_id"`
+	Title             string     `db:"title" json:"title"`
+	Model             string     `db:"model" json:"model"`
+	ApprovalMode      string     `db:"approval_mode" json:"approval_mode"`
+	Status            string     `db:"status" json:"status"`
+	OperationID       string     `db:"operation_id" json:"operation_id"`
+	ArchivedAt        *time.Time `db:"archived_at" json:"archived_at"`
+	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
+	Path              string     `db:"path" json:"path"`
+	ProjectID         string     `db:"project_id" json:"project_id"`
+	ProjectName       string     `db:"project_name" json:"project_name"`
+	ServerID          string     `db:"server_id" json:"server_id"`
+	ServerName        string     `db:"server_name" json:"server_name"`
+	ServerStatus      string     `db:"server_status" json:"server_status"`
 }
 
 const geminiThreadSelect = `SELECT t.*,s.agent_version,w.path,w.project_id,p.name AS project_name,p.pinned_at AS project_pinned_at,p.hidden_at AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
@@ -49,6 +51,7 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 	}
 	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range out {
+		out[i].ThinkingSupported = buildinfo.SupportsGeminiThinking(out[i].AgentVersion)
 		out[i].ForkSupported = buildinfo.SupportsGeminiFork(out[i].AgentVersion)
 		out[i].RewriteSupported = buildinfo.SupportsGeminiRewrite(out[i].AgentVersion)
 	}
@@ -58,15 +61,20 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, error) {
 	var thread GeminiThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(geminiThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	thread.ThinkingSupported = buildinfo.SupportsGeminiThinking(thread.AgentVersion)
 	thread.ForkSupported = buildinfo.SupportsGeminiFork(thread.AgentVersion)
 	thread.RewriteSupported = buildinfo.SupportsGeminiRewrite(thread.AgentVersion)
 	return thread, err
 }
 
-func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode string) (GeminiThread, error) {
+func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode string, thinking ...string) (GeminiThread, error) {
+	level := ""
+	if len(thinking) > 0 {
+		level = thinking[0]
+	}
 	id := NewID()
-	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,model,approval_mode,created_at,updated_at)
- SELECT ?,w.id,?,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), id, model, mode, time.Now().UTC(), time.Now().UTC(), workspaceID)
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,model,approval_mode,thinking_level,created_at,updated_at)
+ SELECT ?,w.id,?,?,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), id, model, mode, level, time.Now().UTC(), time.Now().UTC(), workspaceID)
 	if err != nil {
 		return GeminiThread{}, err
 	}
@@ -75,15 +83,19 @@ func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode
 
 // QueueGeminiTurn claims the session, reserves the workspace and saves the user
 // message in one transaction, so concurrent sends cannot create duplicate turns.
-func (s *Store) QueueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode string) (protocol.StreamEvent, error) {
-	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "")
+func (s *Store) QueueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode string, thinking ...string) (protocol.StreamEvent, error) {
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "", thinking...)
 }
 
-func (s *Store) QueueGeminiRewrite(ctx context.Context, thread GeminiThread, eventID, prompt, model, mode string) (protocol.StreamEvent, error) {
-	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID)
+func (s *Store) QueueGeminiRewrite(ctx context.Context, thread GeminiThread, eventID, prompt, model, mode string, thinking ...string) (protocol.StreamEvent, error) {
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, thinking...)
 }
 
-func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string) (protocol.StreamEvent, error) {
+func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string, thinking ...string) (protocol.StreamEvent, error) {
+	level := thread.ThinkingLevel
+	if len(thinking) > 0 {
+		level = thinking[0]
+	}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return protocol.StreamEvent{}, err
@@ -102,8 +114,8 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		return protocol.StreamEvent{}, ErrGeminiCredentialsBusy
 	}
 	opID, now := NewID(), time.Now().UTC()
-	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET status='queued',operation_id=?,model=?,approval_mode=?,updated_at=?,title=CASE WHEN title='Gemini' THEN ? ELSE title END
- WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting')`), opID, model, mode, now, truncateGeminiTitle(prompt), thread.ID)
+	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET status='queued',operation_id=?,model=?,approval_mode=?,thinking_level=?,updated_at=?,title=CASE WHEN title='Gemini' THEN ? ELSE title END
+ WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting')`), opID, model, mode, level, now, truncateGeminiTitle(prompt), thread.ID)
 	if err != nil {
 		return protocol.StreamEvent{}, err
 	}
@@ -114,7 +126,7 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 	if count != 1 {
 		return protocol.StreamEvent{}, ErrThreadActive
 	}
-	command := protocol.GeminiTurnCommand{ThreadID: thread.ID, Workspace: thread.Path, SessionID: thread.SessionID, Prompt: prompt, Model: model, ApprovalMode: mode}
+	command := protocol.GeminiTurnCommand{ThreadID: thread.ID, Workspace: thread.Path, SessionID: thread.SessionID, Prompt: prompt, Model: model, ApprovalMode: mode, ThinkingLevel: level}
 	if err := tx.GetContext(ctx, &command.SessionID, s.Q("SELECT session_id FROM gemini_threads WHERE id=?"), thread.ID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
@@ -139,7 +151,7 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 	if editEventID != "" {
 		return protocol.StreamEvent{}, tx.Commit()
 	}
-	message, _ := json.Marshal(map[string]string{"text": prompt, "operation_id": opID})
+	message, _ := json.Marshal(map[string]string{"text": prompt, "operation_id": opID, "model": model, "thinking_level": level})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "gemini.user.message", OccurredAt: now, Payload: message}
 	err = tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), thread.ID)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/geminiapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -32,9 +33,10 @@ func (a *API) geminiThreads(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) createGeminiThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		WorkspaceID  string `json:"workspace_id"`
-		Model        string `json:"model"`
-		ApprovalMode string `json:"approval_mode"`
+		WorkspaceID   string `json:"workspace_id"`
+		ThinkingLevel string `json:"thinking_level"`
+		Model         string `json:"model"`
+		ApprovalMode  string `json:"approval_mode"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -45,11 +47,23 @@ func (a *API) createGeminiThread(w http.ResponseWriter, r *http.Request) {
 	if input.ApprovalMode == "" {
 		input.ApprovalMode = "default"
 	}
-	if !validGeminiOptions(input.Model, input.ApprovalMode) {
-		writeError(w, 400, "invalid Gemini model or approval mode")
+	if !validGeminiOptions(input.Model, input.ApprovalMode) || !geminiapi.ValidThinkingLevel(input.Model, input.ThinkingLevel) {
+		writeError(w, 400, "invalid Gemini model, thinking level or approval mode")
 		return
 	}
-	thread, err := a.store.CreateGeminiThread(r.Context(), input.WorkspaceID, input.Model, input.ApprovalMode)
+	if input.ThinkingLevel != "" {
+		workspace, err := a.store.Workspace(r.Context(), input.WorkspaceID)
+		if err != nil {
+			writeError(w, 400, "workspace not found")
+			return
+		}
+		server, err := a.store.Server(r.Context(), workspace.ServerID)
+		if err != nil || !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
+			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiThinkingVersion+" or newer to configure Gemini thinking")
+			return
+		}
+	}
+	thread, err := a.store.CreateGeminiThread(r.Context(), input.WorkspaceID, input.Model, input.ApprovalMode, input.ThinkingLevel)
 	if err != nil {
 		writeError(w, 400, "workspace not found or unavailable")
 		return
@@ -121,12 +135,17 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Prompt       string `json:"prompt"`
-		Model        string `json:"model"`
-		ApprovalMode string `json:"approval_mode"`
+		Prompt        string  `json:"prompt"`
+		ThinkingLevel *string `json:"thinking_level"`
+		Model         string  `json:"model"`
+		ApprovalMode  string  `json:"approval_mode"`
 	}
 	if !decodeJSONLimit(w, r, &input, 1<<20) {
 		return
+	}
+	level := thread.ThinkingLevel
+	if input.ThinkingLevel != nil {
+		level = *input.ThinkingLevel
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	if input.Model == "" {
@@ -134,6 +153,10 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.ApprovalMode == "" {
 		input.ApprovalMode = thread.ApprovalMode
+	}
+	if !geminiapi.ValidThinkingLevel(input.Model, level) {
+		writeError(w, 400, "invalid Gemini thinking level for this model")
+		return
 	}
 	if input.Prompt == "" || len(input.Prompt) > 256*1024 || !validGeminiOptions(input.Model, input.ApprovalMode) {
 		writeError(w, 400, "invalid prompt, model or approval mode")
@@ -152,6 +175,10 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiVersion+" or newer to use Gemini")
 		return
 	}
+	if level != "" && !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiThinkingVersion+" or newer to configure Gemini thinking")
+		return
+	}
 	editEventID := chi.URLParam(r, "eventID")
 	if editEventID != "" && !buildinfo.SupportsGeminiRewrite(server.AgentVersion) {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiRewriteVersion+" or newer to edit Gemini history")
@@ -159,9 +186,9 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	var event protocol.StreamEvent
 	if editEventID != "" {
-		event, err = a.store.QueueGeminiRewrite(r.Context(), thread, editEventID, input.Prompt, input.Model, input.ApprovalMode)
+		event, err = a.store.QueueGeminiRewrite(r.Context(), thread, editEventID, input.Prompt, input.Model, input.ApprovalMode, level)
 	} else {
-		event, err = a.store.QueueGeminiTurn(r.Context(), thread, input.Prompt, input.Model, input.ApprovalMode)
+		event, err = a.store.QueueGeminiTurn(r.Context(), thread, input.Prompt, input.Model, input.ApprovalMode, level)
 	}
 	if errors.Is(err, store.ErrInvalidEditTarget) {
 		writeError(w, 409, "this Gemini message has no saved native turn to rewind; original conversation was kept")

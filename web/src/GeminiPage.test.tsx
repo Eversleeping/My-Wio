@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import GeminiPage from "./pages/GeminiPage";
 import { I18nProvider } from "./i18n";
 
-const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
+const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
 function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
@@ -50,7 +50,7 @@ test("shows only fetched models and creates a session with a selected model",asy
   expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a model","Upstream · gemini-upstream-current","Custom model"]);
   await user.selectOptions(models,"gemini-upstream-current");
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test("switches an existing session model for the next turn",async () => {
@@ -60,7 +60,7 @@ test("switches an existing session model for the next turn",async () => {
   await user.selectOptions(models,"gemini-upstream-current");
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   await user.click(screen.getByRole("button",{name:"Send"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Hello",model:"gemini-upstream-current",approval_mode:"default"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Hello",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test("preserves and edits a custom model name",async () => {
@@ -120,7 +120,7 @@ test("starts a new independent session in the current project with its model pre
   expect(within(dialog).getByRole("combobox",{name:"Workspace"})).toHaveValue("workspace-1");
   expect(await within(dialog).findByRole("textbox",{name:"Model name"})).toHaveValue("gemini-upstream-current");
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test("hides projects without sessions but allows their first session through the global new button",async () => {
@@ -134,7 +134,7 @@ test("hides projects without sessions but allows their first session through the
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-2");
   await waitFor(() => expect(within(dialog).getByRole("button",{name:"New Gemini session"})).toBeEnabled());
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-2",model:"gemini-upstream-current",approval_mode:"default"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-2",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test.each(["button","right-click"])("creates a separate session directly from the Codex-style project menu via %s",async trigger => {
@@ -148,7 +148,7 @@ test.each(["button","right-click"])("creates a separate session directly from th
     menu.focus(); await user.keyboard("{Enter}");
   }
   await user.click(await screen.findByRole("menuitem",{name:"New session"}));
-  await waitFor(() => expect(requests).toEqual([{url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default"}}]));
+  await waitFor(() => expect(requests).toEqual([{url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}]));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(onSelectThread).toHaveBeenCalledWith("thread-created");
 });
@@ -217,7 +217,7 @@ test("edits and resends at the selected message and replaces the stale tail",asy
   await user.clear(prompt); await user.type(prompt,"Updated prompt");
   await user.click(screen.getByRole("button",{name:"Send"}));
   await screen.findByText("Revised answer");
-  expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/events/edit/rewrite",body:{prompt:"Updated prompt",model:"gemini-upstream-current",approval_mode:"default"}});
+  expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/events/edit/rewrite",body:{prompt:"Updated prompt",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}});
   expect(screen.getByText("Keep this earlier prompt")).toBeInTheDocument();
   expect(screen.getByText("Updated prompt")).toBeInTheDocument();
   expect(screen.queryByText("Original prompt")).not.toBeInTheDocument();
@@ -287,4 +287,22 @@ test("creates a Gemini scheduled task with Gemini approval options",async()=>{
  await user.type(within(dialog).getByRole("textbox",{name:"Prompt"}),"Review this project");
  await user.click(within(dialog).getByRole("button",{name:"Save"}));
  await waitFor(()=>expect(requests.some(r=>r.url==="/api/scheduled-tasks"&&(r.body as {agent_kind:string;approval_mode:string}).agent_kind==="gemini"&&(r.body as {approval_mode:string}).approval_mode==="default")).toBe(true));
+});
+
+
+test("displays the upstream model thinking preset without offering conflicting levels",async()=>{
+ setup(true,"gemini-3.8-flash-high");
+ const picker=await screen.findByRole("combobox",{name:"Thinking level"});
+ expect(picker).toBeDisabled();
+ expect(within(picker).getByRole("option",{name:"High (model preset)"})).toBeInTheDocument();
+ expect(within(picker).queryByRole("option",{name:"Low"})).not.toBeInTheDocument();
+});
+
+test("sends an explicitly selected native thinking level with the next turn",async()=>{
+ const {user,requests}=setup(true,"gemini-3-flash-preview");
+ const picker=await screen.findByRole("combobox",{name:"Thinking level"});
+ await user.selectOptions(picker,"medium");
+ await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Think carefully");
+ await user.click(screen.getByRole("button",{name:"Send"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Think carefully",model:"gemini-3-flash-preview",approval_mode:"default",thinking_level:"medium"}}));
 });

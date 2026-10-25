@@ -12,6 +12,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pquerna/otp v1.4.0
 	github.com/shirou/gopsutil/v4 v4.24.5
+	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	golang.org/x/crypto v0.25.0
 	golang.org/x/net v0.27.0
 	google.golang.org/grpc v1.65.0
