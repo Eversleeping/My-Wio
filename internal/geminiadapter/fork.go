@@ -81,6 +81,21 @@ func (a *Adapter) Fork(ctx context.Context, opID string, command protocol.Gemini
 	}
 	defer f.Close()
 	data := append(append(header, '\n'), body...)
+	// Resuming a native session appends $set records containing its identity.
+	// Those records override the header when Gemini loads JSONL, so establish
+	// the branch identity after all preserved records as well.
+	identity, err := json.Marshal(map[string]any{"$set": map[string]string{
+		"sessionId": id, "projectHash": hex.EncodeToString(hash[:]),
+		"startTime": now, "lastUpdated": now,
+	}})
+	if err != nil {
+		_ = os.Remove(dest)
+		return protocol.GeminiForkResult{}, err
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	data = append(append(data, identity...), '\n')
 	if _, err = f.Write(data); err == nil {
 		err = f.Sync()
 	}
