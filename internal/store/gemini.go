@@ -15,6 +15,10 @@ import (
 type GeminiThread struct {
 	AgentVersion     string     `db:"agent_version" json:"-"`
 	RewriteSupported bool       `db:"-" json:"rewrite_supported"`
+	ForkSupported    bool       `db:"-" json:"fork_supported"`
+	PinnedAt         *time.Time `db:"pinned_at" json:"pinned_at"`
+	ProjectPinnedAt  *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
+	ProjectHiddenAt  *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
 	ID               string     `db:"id" json:"id"`
 	WorkspaceID      string     `db:"workspace_id" json:"workspace_id"`
 	SessionID        string     `db:"session_id" json:"session_id"`
@@ -34,7 +38,7 @@ type GeminiThread struct {
 	ServerStatus     string     `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,s.agent_version,w.path,w.project_id,p.name AS project_name,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+const geminiThreadSelect = `SELECT t.*,s.agent_version,w.path,w.project_id,p.name AS project_name,p.pinned_at AS project_pinned_at,p.hidden_at AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
  FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id`
 
 func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThread, error) {
@@ -43,8 +47,9 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 	if archived {
 		condition = "t.archived_at IS NOT NULL"
 	}
-	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range out {
+		out[i].ForkSupported = buildinfo.SupportsGeminiFork(out[i].AgentVersion)
 		out[i].RewriteSupported = buildinfo.SupportsGeminiRewrite(out[i].AgentVersion)
 	}
 	return out, err
@@ -53,6 +58,7 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, error) {
 	var thread GeminiThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(geminiThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	thread.ForkSupported = buildinfo.SupportsGeminiFork(thread.AgentVersion)
 	thread.RewriteSupported = buildinfo.SupportsGeminiRewrite(thread.AgentVersion)
 	return thread, err
 }
@@ -172,6 +178,9 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) er
 	}
 	status := "interrupting"
 	if count == 1 {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
+			return err
+		}
 		status = "interrupted"
 	}
 	result, err = tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET status=?,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running')"), status, time.Now().UTC(), thread.ID, thread.OperationID)

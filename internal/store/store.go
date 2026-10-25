@@ -519,6 +519,9 @@ func migrateProjectThreadPreferences(ctx context.Context, db *sqlx.DB, driver st
 			ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`); err != nil {
 			return fmt.Errorf("migrate thread preferences: %w", err)
 		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE gemini_threads ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP`); err != nil {
+			return err
+		}
 		return nil
 	}
 	for _, table := range []struct {
@@ -527,6 +530,7 @@ func migrateProjectThreadPreferences(ctx context.Context, db *sqlx.DB, driver st
 	}{
 		{name: "projects", columns: []string{"pinned_at", "hidden_at"}},
 		{name: "codex_threads", columns: []string{"pinned_at", "archived_at"}},
+		{name: "gemini_threads", columns: []string{"pinned_at"}},
 	} {
 		var columns []string
 		if err := db.SelectContext(ctx, &columns, "SELECT name FROM pragma_table_info(?)", table.name); err != nil {

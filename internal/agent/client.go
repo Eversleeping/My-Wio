@@ -435,11 +435,48 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 		}
+	} else if envelope.Kind == "gemini.thread.fork" {
+		var command protocol.GeminiForkCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var root string
+			root, err = scanner.ResolveWorkspaceRoot(command.SourceWorkspace, c.inventoryRoots())
+			if err == nil && root != command.SourceWorkspace {
+				err = errors.New("Gemini source path changed")
+			}
+			if err == nil {
+				_, err = scanner.ResolveWorkspaceRoot(command.Workspace, c.inventoryRoots())
+			}
+			if err == nil {
+				var fork protocol.GeminiForkResult
+				fork, err = c.gemini.Fork(ctx, envelope.OperationID, command)
+				if err == nil {
+					resultData, err = json.Marshal(fork)
+				}
+			}
+		}
 	} else if envelope.Kind == "git.worktree.create" {
 		var command protocol.GitWorktreeCreateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitWorktreeCreateResult
 			result, err = gitworktree.Create(ctx, command, c.inventoryRoots())
+			if err == nil && command.GeminiFork != nil {
+				sourceRoot, rootErr := scanner.ResolveWorkspaceRoot(command.SourcePath, c.inventoryRoots())
+				if rootErr != nil || sourceRoot != command.GeminiFork.SourceWorkspace || command.GeminiFork.Workspace != result.Path {
+					err = errors.New("invalid Gemini worktree paths")
+				} else {
+					var fork protocol.GeminiForkResult
+					fork, err = c.gemini.Fork(ctx, envelope.OperationID, *command.GeminiFork)
+					result.GeminiSessionID = fork.SessionID
+				}
+				if err != nil {
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					cleanupErr := gitworktree.Remove(cleanupCtx, command.SourcePath, result.Path, command.Branch, c.inventoryRoots())
+					cancel()
+					if cleanupErr != nil {
+						err = fmt.Errorf("Gemini fork failed: %v; worktree cleanup: %w", err, cleanupErr)
+					}
+				}
+			}
 			if err == nil && command.TargetThreadID != "" {
 				forkCommand := protocol.ForkThreadCommand{SourceThreadID: command.SourceThreadID, TargetThreadID: command.TargetThreadID, CodexThread: command.CodexThread, WorkspaceID: command.TargetWorkspaceID, Workspace: result.Path, Title: command.Title}
 				var fork protocol.ForkThreadResult

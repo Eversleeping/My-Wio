@@ -209,6 +209,7 @@ func (a *API) updateGeminiThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Title    *string `json:"title"`
 		Archived *bool   `json:"archived"`
+		Pinned   *bool   `json:"pinned"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -224,9 +225,20 @@ func (a *API) updateGeminiThread(w http.ResponseWriter, r *http.Request) {
 	if input.Archived != nil {
 		archived = *input.Archived
 	}
-	if err := a.store.UpdateGeminiThread(r.Context(), thread.ID, title, archived); err != nil {
+	if err := func() error {
+		if input.Title == nil && input.Archived == nil {
+			return nil
+		}
+		return a.store.UpdateGeminiThread(r.Context(), thread.ID, title, archived)
+	}(); err != nil {
 		writeError(w, 409, "finish or interrupt the Gemini turn first")
 		return
+	}
+	if input.Pinned != nil {
+		if err := a.store.PinGeminiThread(r.Context(), thread.ID, *input.Pinned); err != nil {
+			writeError(w, 500, "could not pin Gemini session")
+			return
+		}
 	}
 	a.auditGemini(r, "gemini.thread.update", thread.ID)
 	a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")

@@ -24,3 +24,19 @@ type GeminiRewriteTarget struct {
 	StartedAt string `json:"started_at"`
 	Before    string `json:"before,omitempty"`
 }
+
+// GeminiForkCommand snapshots native history without invoking the model.
+type GeminiForkCommand struct {
+	SourceThreadID  string               `json:"source_thread_id"`
+	TargetThreadID  string               `json:"target_thread_id"`
+	SessionID       string               `json:"session_id"`
+	SourceWorkspace string               `json:"source_workspace"`
+	WorkspaceID     string               `json:"workspace_id"`
+	Workspace       string               `json:"workspace"`
+	Title           string               `json:"title"`
+	CutoffSequence  int64                `json:"cutoff_sequence"`
+	Before          *GeminiRewriteTarget `json:"before,omitempty"`
+}
+type GeminiForkResult struct {
+	SessionID string `json:"session_id"`
+}

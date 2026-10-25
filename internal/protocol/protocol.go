@@ -183,24 +183,26 @@ type ProjectRemoteResult struct {
 }
 
 type GitWorktreeCreateCommand struct {
-	SourceWorkspaceID string `json:"source_workspace_id"`
-	TargetWorkspaceID string `json:"target_workspace_id"`
-	ProjectID         string `json:"project_id"`
-	SourcePath        string `json:"source_path"`
-	TargetPath        string `json:"target_path"`
-	Branch            string `json:"branch"`
-	BaseRef           string `json:"base_ref,omitempty"`
-	SourceThreadID    string `json:"source_thread_id,omitempty"`
-	TargetThreadID    string `json:"target_thread_id,omitempty"`
-	CodexThread       string `json:"codex_thread_id,omitempty"`
-	Title             string `json:"title,omitempty"`
+	GeminiFork        *GeminiForkCommand `json:"gemini_fork,omitempty"`
+	SourceWorkspaceID string             `json:"source_workspace_id"`
+	TargetWorkspaceID string             `json:"target_workspace_id"`
+	ProjectID         string             `json:"project_id"`
+	SourcePath        string             `json:"source_path"`
+	TargetPath        string             `json:"target_path"`
+	Branch            string             `json:"branch"`
+	BaseRef           string             `json:"base_ref,omitempty"`
+	SourceThreadID    string             `json:"source_thread_id,omitempty"`
+	TargetThreadID    string             `json:"target_thread_id,omitempty"`
+	CodexThread       string             `json:"codex_thread_id,omitempty"`
+	Title             string             `json:"title,omitempty"`
 }
 
 type GitWorktreeCreateResult struct {
-	Path        string `json:"path"`
-	Branch      string `json:"branch"`
-	CommitSHA   string `json:"commit_sha"`
-	CodexThread string `json:"codex_thread_id,omitempty"`
+	GeminiSessionID string `json:"gemini_session_id,omitempty"`
+	Path            string `json:"path"`
+	Branch          string `json:"branch"`
+	CommitSHA       string `json:"commit_sha"`
+	CodexThread     string `json:"codex_thread_id,omitempty"`
 }
 
 type GitWorktreeCleanupCommand struct {

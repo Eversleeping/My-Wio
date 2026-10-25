@@ -563,6 +563,20 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				result.Status, result.Message = "failed", "could not persist fork: "+err.Error()
 			}
 		}
+		if operation.Kind == "gemini.thread.fork" && result.Status == "succeeded" {
+			var command protocol.GeminiForkCommand
+			var fork protocol.GeminiForkResult
+			if err = json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+				return err
+			}
+			if err = json.Unmarshal(result.Data, &fork); err != nil {
+				result.Status = "failed"
+				result.Message = "invalid Gemini branch result"
+			} else if e := g.store.CommitGeminiFork(ctx, command, fork.SessionID); e != nil {
+				result.Status = "failed"
+				result.Message = "could not save Gemini branch: " + e.Error()
+			}
+		}
 		if operation.Kind == "git.worktree.create" && result.Status == "succeeded" {
 			var command protocol.GitWorktreeCreateCommand
 			if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
@@ -596,6 +610,24 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		if err != nil {
 			return err
+		}
+		if operation.Kind == "gemini.thread.fork" || operation.Kind == "git.worktree.create" {
+			var command protocol.GeminiForkCommand
+			if operation.Kind == "gemini.thread.fork" {
+				_ = json.Unmarshal([]byte(operation.Payload), &command)
+			} else {
+				var w protocol.GitWorktreeCreateCommand
+				_ = json.Unmarshal([]byte(operation.Payload), &w)
+				if w.GeminiFork != nil {
+					command = *w.GeminiFork
+				}
+			}
+			if command.SourceThreadID != "" {
+				if err = g.store.CompleteGeminiTurn(ctx, command.SourceThreadID, operation.ID, "idle"); err != nil {
+					return err
+				}
+				_ = g.publish(ctx, protocol.StreamEvent{StreamID: command.SourceThreadID, Kind: "gemini.thread.updated", Payload: json.RawMessage(`{}`)})
+			}
 		}
 		updatedOperation, statusErr := g.store.Operation(ctx, result.OperationID)
 		if statusErr != nil {

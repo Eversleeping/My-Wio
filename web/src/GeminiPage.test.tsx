@@ -8,7 +8,7 @@ const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",
 function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -16,6 +16,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     let body: unknown = [];
     if (init.method === "POST") {
       const input = JSON.parse(String(init.body)); requests.push({url,body:input}); body = {...currentThread,model,id:"thread-created"};
+      if (url.endsWith("/fork")) body={operation_id:"fork-op",target_thread_id:"forked-thread"};
       if (url.endsWith("/rewrite")) {
         if (options.rewriteFailure) return new Response(JSON.stringify({error:"Native history unavailable; original conversation was kept"}),{status:409,headers:{"Content-Type":"application/json"}});
         const target = url.split("/").at(-2);
@@ -23,6 +24,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
         eventLog = [...eventLog.slice(0,index),{event_id:"replacement",stream_id:thread.id,sequence:100,kind:"gemini.user.message",occurred_at:thread.updated_at,payload:{text:input.prompt,operation_id:"rewrite",history_rewritten:true}},{event_id:"answer",stream_id:thread.id,sequence:101,kind:"gemini.message",occurred_at:thread.updated_at,payload:{role:"assistant",content:"Revised answer",operation_id:"rewrite"}}];
       }
     }
+    else if (url === "/api/operations/fork-op") body={status:"succeeded"};
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
     else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
     else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
@@ -249,4 +251,40 @@ test.each([{rewriteSupported:false},{status:"running"}])("blocks edits for unsup
   setup(true,"gemini-upstream-current","configured",rewriteEvents,options);
   await screen.findByText("Original prompt");
   for (const button of screen.getAllByRole("button",{name:"Edit and resend"})) expect(button).toBeDisabled();
+});
+
+
+test("offers Gemini project management and task utilities", async()=>{
+ const {user}=setup(true);
+ await user.click(await screen.findByRole("button",{name:"Workspace menu for Project · project"}));
+ const projectMenu=screen.getByRole("menu");
+ for(const name of ["Pin project","Rename project","Create permanent worktree","Archive all project tasks","Hide project"]) expect(within(projectMenu).getByRole("menuitem",{name})).toBeEnabled();
+ await user.keyboard("{Escape}");
+ await user.click(screen.getByRole("button",{name:"Task menu for Gemini"}));
+ const taskMenu=screen.getByRole("menu");
+ for(const name of ["Pin task","Create scheduled task","Continue in new task","Continue in new worktree","Copy working directory","Copy Wio session ID","Copy Gemini session ID","Copy deep link","Open in new window"]) expect(within(taskMenu).getByRole("menuitem",{name})).toBeEnabled();
+});
+
+test("branches a completed Gemini reply into an independent task",async()=>{
+ const events=[{event_id:"reply-1",sequence:1,stream_id:"thread-1",kind:"gemini.message",occurred_at:thread.updated_at,payload:{role:"assistant",content:"Completed answer",operation_id:"op1"}},{event_id:"result-1",sequence:2,stream_id:"thread-1",kind:"gemini.result",occurred_at:thread.updated_at,payload:{status:"success",operation_id:"op1"}}];
+ const {user,requests,onSelectThread}=setup(true,"gemini-upstream-current","configured",events);
+ await screen.findByText("Completed answer");
+ const article=screen.getByText("Completed answer").closest("article")!;
+ await user.click(within(article).getByRole("button",{name:"Message actions"}));
+ await user.click(screen.getByRole("menuitem",{name:"Branch to new chat"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/fork",body:{event_id:"reply-1"}}));
+ await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("forked-thread"));
+});
+
+test("creates a Gemini scheduled task with Gemini approval options",async()=>{
+ const {user,requests}=setup(true);
+ await user.click(await screen.findByRole("button",{name:"Task menu for Gemini"}));
+ await user.click(screen.getByRole("menuitem",{name:"Create scheduled task"}));
+ const dialog=screen.getByRole("dialog");
+ expect(within(dialog).getByRole("combobox",{name:"Agent"})).toHaveValue("gemini");
+ expect(within(dialog).queryByRole("combobox",{name:"Reasoning effort"})).not.toBeInTheDocument();
+ await user.type(within(dialog).getByRole("textbox",{name:"Name"}),"Gemini review");
+ await user.type(within(dialog).getByRole("textbox",{name:"Prompt"}),"Review this project");
+ await user.click(within(dialog).getByRole("button",{name:"Save"}));
+ await waitFor(()=>expect(requests.some(r=>r.url==="/api/scheduled-tasks"&&(r.body as {agent_kind:string;approval_mode:string}).agent_kind==="gemini"&&(r.body as {approval_mode:string}).approval_mode==="default")).toBe(true));
 });

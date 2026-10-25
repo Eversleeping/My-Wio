@@ -21,20 +21,29 @@ const maxRewriteSessionBytes = 64 * 1024 * 1024
 // the official --session-file loader interpret JSONL patches, rewinds and chat
 // compression, rather than reimplementing Gemini's evolving history loader.
 func prepareRewrite(command protocol.GeminiTurnCommand, environment []string) (string, error) {
-	if command.Rewrite == nil || command.SessionID == "" {
-		return "", errors.New("Gemini rewrite requires saved native history")
+	path, _, err := prepareNativeHistory(command, environment)
+	return path, err
+}
+
+func prepareNativeHistory(command protocol.GeminiTurnCommand, environment []string) (string, string, error) {
+	if command.SessionID == "" {
+		return "", "", errors.New("Gemini rewrite requires saved native history")
 	}
-	started, err := time.Parse(time.RFC3339Nano, command.Rewrite.StartedAt)
-	if err != nil {
-		return "", errors.New("invalid Gemini rewrite boundary")
-	}
-	var before time.Time
-	if command.Rewrite.Before != "" {
-		before, err = time.Parse(time.RFC3339Nano, command.Rewrite.Before)
-		if err != nil || !before.After(started) {
-			return "", errors.New("invalid Gemini rewrite end boundary")
+	var started, before time.Time
+	if command.Rewrite != nil {
+		var err error
+		started, err = time.Parse(time.RFC3339Nano, command.Rewrite.StartedAt)
+		if err != nil {
+			return "", "", errors.New("invalid Gemini history boundary")
+		}
+		if command.Rewrite.Before != "" {
+			before, err = time.Parse(time.RFC3339Nano, command.Rewrite.Before)
+			if err != nil || !before.After(started) {
+				return "", "", errors.New("invalid Gemini history end boundary")
+			}
 		}
 	}
+
 	home, _ := os.UserHomeDir()
 	for _, entry := range environment {
 		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
@@ -47,7 +56,7 @@ func prepareRewrite(command protocol.GeminiTurnCommand, environment []string) (s
 		}
 	}
 	if home == "" {
-		return "", errors.New("Gemini home directory unavailable")
+		return "", "", errors.New("Gemini home directory unavailable")
 	}
 	runtime := filepath.Join(home, ".gemini")
 	for _, entry := range environment {
@@ -58,11 +67,12 @@ func prepareRewrite(command protocol.GeminiTurnCommand, environment []string) (s
 	root := filepath.Join(runtime, "tmp")
 	projects, err := os.ReadDir(root)
 	if err != nil {
-		return "", errors.New("Gemini native session history unavailable")
+		return "", "", errors.New("Gemini native session history unavailable")
 	}
 	hash := sha256.Sum256([]byte(command.Workspace))
 	projectHash := hex.EncodeToString(hash[:])
 	var prefix []byte
+	var sourceChats string
 	found := false
 	for _, project := range projects {
 		if !project.IsDir() || project.Type()&os.ModeSymlink != 0 {
@@ -99,21 +109,22 @@ func prepareRewrite(command protocol.GeminiTurnCommand, environment []string) (s
 				continue
 			}
 			if err != nil {
-				return "", err
+				return "", "", err
 			}
 			if found {
-				return "", errors.New("ambiguous Gemini native session history")
+				return "", "", errors.New("ambiguous Gemini native session history")
 			}
 			prefix = data
+			sourceChats = chats
 			found = true
 		}
 	}
 	if !found {
-		return "", errors.New("saved Gemini session or message not found; original conversation was kept")
+		return "", "", errors.New("saved Gemini session or message not found; original conversation was kept")
 	}
 	file, err := os.CreateTemp("", "wio-gemini-rewrite-*.jsonl")
 	if err != nil {
-		return "", errors.New("could not prepare Gemini conversation prefix")
+		return "", "", errors.New("could not prepare Gemini conversation prefix")
 	}
 	name := file.Name()
 	if _, err = file.Write(prefix); err == nil {
@@ -125,9 +136,9 @@ func prepareRewrite(command protocol.GeminiTurnCommand, environment []string) (s
 	}
 	if err != nil {
 		_ = os.Remove(name)
-		return "", errors.New("could not save Gemini conversation prefix")
+		return "", "", errors.New("could not save Gemini conversation prefix")
 	}
-	return name, nil
+	return name, sourceChats, nil
 }
 
 type nativeMessage struct {
@@ -159,6 +170,28 @@ func rewritePrefix(raw []byte, sessionID, projectHash string, started, before ti
 		LastUpdated string            `json:"lastUpdated"`
 	}
 	trimmed := bytes.TrimSpace(raw)
+	if started.IsZero() {
+		var full map[string]json.RawMessage
+		if json.Unmarshal(trimmed, &full) == nil && full["messages"] != nil {
+			if json.Unmarshal(trimmed, &document) != nil || document.SessionID != sessionID || document.ProjectHash != projectHash {
+				return nil, false, nil
+			}
+			delete(full, "messages")
+			header, _ := json.Marshal(full)
+			out := append(header, '\n')
+			for _, m := range document.Messages {
+				out = append(out, m...)
+				out = append(out, '\n')
+			}
+			return out, true, nil
+		}
+		header, _, _ := bytes.Cut(raw, []byte("\n"))
+		if json.Unmarshal(header, &document) != nil || document.SessionID != sessionID || document.ProjectHash != projectHash {
+			return nil, false, nil
+		}
+		return append([]byte(nil), raw...), true, nil
+	}
+
 	// Legacy JSON sessions are converted to the official JSONL import format.
 	if json.Unmarshal(trimmed, &document) == nil && document.Messages != nil {
 		if document.SessionID != sessionID || document.ProjectHash != projectHash {
@@ -194,7 +227,17 @@ func rewritePrefix(raw []byte, sessionID, projectHash string, started, before ti
 			return nil, true, errors.New("could not read Gemini native history; original conversation was kept")
 		}
 		if match {
-			return append([]byte(nil), raw[:offset]...), true, nil
+			prefix := append([]byte(nil), raw[:offset]...)
+			head, body, _ := bytes.Cut(prefix, []byte("\n"))
+			var metadata map[string]json.RawMessage
+			if err := json.Unmarshal(head, &metadata); err != nil {
+				return nil, true, err
+			}
+			delete(metadata, "summary")
+			delete(metadata, "memoryScratchpad")
+			delete(metadata, "directories")
+			head, _ = json.Marshal(metadata)
+			return append(append(head, '\n'), body...), true, nil
 		}
 		offset += len(line)
 	}

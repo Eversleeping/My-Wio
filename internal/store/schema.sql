@@ -480,6 +480,7 @@ CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_log(occurred_at);
 
 CREATE TABLE IF NOT EXISTS gemini_threads (
   id TEXT PRIMARY KEY,
+  pinned_at TIMESTAMP,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   session_id TEXT NOT NULL DEFAULT '',
   title TEXT NOT NULL DEFAULT 'Gemini',
@@ -504,3 +505,27 @@ CREATE TABLE IF NOT EXISTS server_gemini_credential_updates (
  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
  profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS gemini_scheduled_tasks (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES gemini_threads(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  model TEXT NOT NULL DEFAULT '',
+  reasoning_effort TEXT NOT NULL DEFAULT '',
+  approval_mode TEXT NOT NULL DEFAULT 'default',
+  next_run_at TIMESTAMP NOT NULL,
+  last_run_at TIMESTAMP,
+  last_run_status TEXT NOT NULL DEFAULT '',
+  last_run_message TEXT NOT NULL DEFAULT '',
+  last_operation_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS gemini_scheduled_tasks_due_idx ON gemini_scheduled_tasks(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS gemini_scheduled_tasks_thread_idx ON gemini_scheduled_tasks(thread_id);

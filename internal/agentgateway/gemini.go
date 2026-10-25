@@ -104,6 +104,13 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 	if err := g.store.CompleteGeminiTurn(ctx, command.ThreadID, op.ID, status); err != nil {
 		return err
 	}
+	scheduledStatus := result.Status
+	if status == "interrupted" {
+		scheduledStatus = "cancelled"
+	}
+	if err := g.store.MarkScheduledTaskByOperation(ctx, op.ID, scheduledStatus, result.Message); err != nil {
+		return err
+	}
 	raw, _ := json.Marshal(map[string]string{"status": status, "message": result.Message, "operation_id": op.ID})
 	return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":completed", StreamID: command.ThreadID, Kind: "gemini.turn.completed", Payload: security.RedactJSON(raw)})
 }

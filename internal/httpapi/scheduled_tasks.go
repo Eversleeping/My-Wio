@@ -15,6 +15,7 @@ import (
 )
 
 type scheduledTaskRequest struct {
+	AgentKind       *string `json:"agent_kind"`
 	ThreadID        *string `json:"thread_id"`
 	Name            *string `json:"name"`
 	Prompt          *string `json:"prompt"`
@@ -29,7 +30,7 @@ type scheduledTaskRequest struct {
 func (a *API) scheduledTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := a.store.ListScheduledTasks(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list scheduled Codex tasks")
+		writeError(w, http.StatusInternalServerError, "could not list scheduled tasks")
 		return
 	}
 	writeJSON(w, http.StatusOK, tasks)
@@ -56,22 +57,22 @@ func (a *API) createScheduledTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create scheduled Codex task")
+		writeError(w, http.StatusInternalServerError, "could not create scheduled task")
 		return
 	}
 	session := currentSession(r)
-	_ = a.store.Audit(r.Context(), session.UserID, "codex.schedule.create", "scheduled_task", task.ID, map[string]string{"thread_id": task.ThreadID}, clientIP(r))
+	_ = a.store.Audit(r.Context(), session.UserID, task.AgentKind+".schedule.create", "scheduled_task", task.ID, map[string]string{"thread_id": task.ThreadID}, clientIP(r))
 	writeJSON(w, http.StatusCreated, task)
 }
 
 func (a *API) updateScheduledTask(w http.ResponseWriter, r *http.Request) {
 	task, err := a.store.ScheduledTask(r.Context(), chi.URLParam(r, "taskID"))
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "scheduled Codex task not found")
+		writeError(w, http.StatusNotFound, "scheduled task not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load scheduled Codex task")
+		writeError(w, http.StatusInternalServerError, "could not load scheduled task")
 		return
 	}
 	var request scheduledTaskRequest
@@ -90,27 +91,27 @@ func (a *API) updateScheduledTask(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := a.store.UpdateScheduledTask(r.Context(), task.ID, input, next)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "scheduled Codex task not found")
+		writeError(w, http.StatusNotFound, "scheduled task not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not update scheduled Codex task")
+		writeError(w, http.StatusInternalServerError, "could not update scheduled task")
 		return
 	}
 	session := currentSession(r)
-	_ = a.store.Audit(r.Context(), session.UserID, "codex.schedule.update", "scheduled_task", task.ID, nil, clientIP(r))
+	_ = a.store.Audit(r.Context(), session.UserID, updated.AgentKind+".schedule.update", "scheduled_task", task.ID, nil, clientIP(r))
 	writeJSON(w, http.StatusOK, updated)
 }
 
 func (a *API) deleteScheduledTask(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "taskID")
 	if err := a.store.DeleteScheduledTask(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "scheduled Codex task not found")
+		writeError(w, http.StatusNotFound, "scheduled task not found")
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not delete scheduled Codex task")
+		writeError(w, http.StatusInternalServerError, "could not delete scheduled task")
 	} else {
 		session := currentSession(r)
-		_ = a.store.Audit(r.Context(), session.UserID, "codex.schedule.delete", "scheduled_task", id, nil, clientIP(r))
+		_ = a.store.Audit(r.Context(), session.UserID, "schedule.delete", "scheduled_task", id, nil, clientIP(r))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -121,6 +122,17 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 			return strings.TrimSpace(*next)
 		}
 		return fallback
+	}
+	kind := value(request.AgentKind, "codex")
+	if existing != nil {
+		if request.AgentKind == nil {
+			kind = existing.AgentKind
+		} else if kind != existing.AgentKind {
+			return store.ScheduledTaskInput{}, errors.New("scheduled Agent kind cannot be changed")
+		}
+	}
+	if kind != "codex" && kind != "gemini" {
+		return store.ScheduledTaskInput{}, errors.New("invalid Agent kind")
 	}
 	threadID := value(request.ThreadID, "")
 	name := value(request.Name, "")
@@ -156,6 +168,9 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 			approval = existing.ApprovalMode
 		}
 	}
+	if kind == "gemini" && existing == nil && request.ApprovalMode == nil {
+		approval = "default"
+	}
 	if timezone == "" {
 		timezone = "UTC"
 	}
@@ -181,17 +196,27 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	if utf8.RuneCountInString(model) > 128 {
 		return store.ScheduledTaskInput{}, errors.New("model is too long")
 	}
+	if kind == "gemini" && reasoning != "" {
+		return store.ScheduledTaskInput{}, errors.New("Gemini does not support Codex reasoning_effort")
+	}
 	if reasoning != "" && !validReasoningEffort(reasoning) {
 		return store.ScheduledTaskInput{}, errors.New("invalid reasoning_effort")
 	}
-	if approval != "on-request" && approval != "untrusted" && approval != "never" {
+	if (kind == "codex" && approval != "on-request" && approval != "untrusted" && approval != "never") || (kind == "gemini" && approval != "default" && approval != "auto_edit") {
 		return store.ScheduledTaskInput{}, errors.New("invalid approval_mode")
 	}
-	if _, err := a.store.Thread(r.Context(), threadID); err != nil {
+	if kind == "gemini" {
+		if _, err := a.store.GeminiThread(r.Context(), threadID); err != nil {
+			return store.ScheduledTaskInput{}, errors.New("Gemini session not found")
+		}
+		if model != "" && !credentialModelPattern.MatchString(model) {
+			return store.ScheduledTaskInput{}, errors.New("invalid Gemini model")
+		}
+	} else if _, err := a.store.Thread(r.Context(), threadID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return store.ScheduledTaskInput{}, errors.New("Codex session not found")
 		}
 		return store.ScheduledTaskInput{}, errors.New("could not load Codex session")
 	}
-	return store.ScheduledTaskInput{ThreadID: threadID, Name: name, Prompt: prompt, Schedule: expression, Timezone: timezone, Enabled: enabled, Model: model, ReasoningEffort: reasoning, ApprovalMode: approval}, nil
+	return store.ScheduledTaskInput{AgentKind: kind, ThreadID: threadID, Name: name, Prompt: prompt, Schedule: expression, Timezone: timezone, Enabled: enabled, Model: model, ReasoningEffort: reasoning, ApprovalMode: approval}, nil
 }

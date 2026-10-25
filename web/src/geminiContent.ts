@@ -49,3 +49,16 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
   }
   return messages;
 }
+
+// Only the last assistant block in a successful completed turn can be branched.
+export function geminiForkTargets(events: StreamEvent[]): Set<string> {
+ const targets=new Set<string>(); let operation="", last="", adjacent=false;
+ for(const event of events){
+  const p=record(event.payload), op=readable(p.operation_id);
+  if(op!==operation){operation=op;last="";adjacent=false;}
+  if(event.kind==="gemini.message"&&p.role==="assistant") {if(!adjacent || p.delta!==true) last=event.event_id;adjacent=true;}
+  else if(event.kind==="gemini.result"){if(p.status==="success"&&last)targets.add(last);adjacent=false;}
+  else if(event.kind!=="gemini.init"){adjacent=false;}
+ }
+ return targets;
+}

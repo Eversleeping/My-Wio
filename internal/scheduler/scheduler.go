@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/agentgateway"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/schedule"
 	"github.com/wio-platform/wio/internal/store"
@@ -67,6 +68,10 @@ func (r *Runner) tick(ctx context.Context) {
 }
 
 func (r *Runner) enqueue(ctx context.Context, task store.ScheduledTask, now time.Time) {
+	if task.AgentKind == "gemini" {
+		r.enqueueGemini(ctx, task, now)
+		return
+	}
 	if task.ServerStatus != "online" {
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "server is offline", "", now)
 		return
@@ -128,4 +133,39 @@ func normalizedApprovalMode(value string) string {
 		return value
 	}
 	return "on-request"
+}
+
+func (r *Runner) enqueueGemini(ctx context.Context, task store.ScheduledTask, now time.Time) {
+	thread, err := r.store.GeminiThread(ctx, task.ThreadID)
+	if err != nil {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "Gemini session no longer exists", "", now)
+		return
+	}
+	if thread.ServerStatus != "online" || thread.ArchivedAt != nil || thread.Status == "queued" || thread.Status == "running" || thread.Status == "interrupting" {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Gemini session is offline, archived or active", "", now)
+		return
+	}
+	if !buildinfo.SupportsGemini(thread.AgentVersion) {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent first", "", now)
+		return
+	}
+	model := task.Model
+	if model == "" {
+		model = thread.Model
+	}
+	mode := task.ApprovalMode
+	if mode == "" {
+		mode = thread.ApprovalMode
+	}
+	event, err := r.store.QueueGeminiTurn(ctx, thread, task.Prompt, model, mode)
+	if err != nil {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Gemini workspace is busy or unavailable", "", now)
+		return
+	}
+	var p struct {
+		OperationID string `json:"operation_id"`
+	}
+	_ = json.Unmarshal(event.Payload, &p)
+	_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "queued", "", p.OperationID, now)
+	r.gateway.Wake(thread.ServerID)
 }

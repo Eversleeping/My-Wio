@@ -1,12 +1,13 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, FileCode2, Folder, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, SquareTerminal, Trash2, UserRound, X } from "lucide-react";
+import { Archive, ArchiveRestore, GitFork, MoreHorizontal, Pin, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, FileCode2, Folder, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, SquareTerminal, Trash2, UserRound, X } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, FileDiffPane, FilePreviewPane, message, WorkspaceFilesPanel, type FilePreviewSelection } from "../App";
+import { useGeminiManagement } from "./geminiManagement";
 import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DialogActions } from "../components/Dialog";
 import { Empty, ErrorState, Status } from "../components/PageUI";
-import { geminiMessages } from "../geminiContent";
+import { geminiForkTargets, geminiMessages } from "../geminiContent";
 import { formatTime } from "../format";
 import { useI18n } from "../i18n";
 import MarkdownContent from "../MarkdownContent";
@@ -38,13 +39,14 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
   const selected = useData<GeminiThread>(selectedThreadID ? `/gemini/threads/${selectedThreadID}` : null, dependency);
   const active = threads.data?.find(thread => thread.id === selectedThreadID) ?? selected.data;
   useEffect(() => { const timer = window.setInterval(() => { if (!document.hidden) setTick(value => value + 1); }, 5000); return () => clearInterval(timer); }, []);
-  useEffect(() => { if (!selectedThreadID && threads.data?.length) onSelectThread(threads.data[0].id, true); }, [onSelectThread, selectedThreadID, threads.data]);
+  useEffect(() => { if (!selectedThreadID) { const first=threads.data?.find(thread=>!thread.project_hidden_at);if(first) onSelectThread(first.id,true); } }, [onSelectThread, selectedThreadID, threads.data]);
   useEffect(() => { if (selected.data) setArchived(Boolean(selected.data.archived_at)); }, [selected.data?.id, selected.data?.archived_at]);
   useEffect(() => { setPreview(null); if (selectedThreadID) setMobileView("conversation"); }, [selectedThreadID]);
   const groups = useMemo(() => {
     const result = new Map<string, { name: string; path: string; threads: GeminiThread[] }>();
     const byID = new Map((workspaces.data ?? []).map(workspace => [workspace.id, workspace]));
     for (const thread of threads.data ?? []) {
+      if (thread.project_hidden_at) continue;
       const workspace = byID.get(thread.workspace_id);
       const path = workspace?.path || thread.path;
       const identity = [workspace?.display_name?.trim(), workspace?.branch?.trim(), path.split(/[\\/]/).filter(Boolean).at(-1)].find(value => value && value !== thread.project_name);
@@ -53,7 +55,7 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
       group.threads.push(thread); result.set(thread.workspace_id, group);
     }
     const query = search.trim().toLocaleLowerCase();
-    return [...result.entries()].flatMap(([id, group]) => {
+    return [...result.entries()].sort(([,a],[,b]) => Number(!a.threads[0].project_pinned_at) - Number(!b.threads[0].project_pinned_at) || (b.threads[0].project_pinned_at ?? "").localeCompare(a.threads[0].project_pinned_at ?? "")).flatMap(([id, group]) => {
       if (!query || `${group.name} ${group.path}`.toLocaleLowerCase().includes(query)) return [[id, group] as const];
       const matching = group.threads.filter(thread => `${thread.title} ${thread.server_name} ${thread.id} ${thread.session_id ?? ""}`.toLocaleLowerCase().includes(query));
       return matching.length ? [[id, { ...group, threads: matching }] as const] : [];
@@ -65,6 +67,7 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
   };
   const toggleGroup = (id: string) => setCollapsed(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const refresh = () => { threads.reload(); selected.reload(); setTick(value => value + 1); };
+  const management = useGeminiManagement({ workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify });
   const mutate = async (thread: GeminiThread, values: unknown) => {
     setBusy(true);
     try { await patch(`/gemini/threads/${thread.id}`, values); setRename(null); refresh(); }
@@ -80,10 +83,15 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
       setArchived(false); onSelectThread(created.id); refresh();
     } catch (error) { notify(message(error)); } finally { setBusy(false); }
   };
-  const threadMenuActions = (thread: GeminiThread): ContextMenuAction[] => [
+  const threadMenuActions = (thread: GeminiThread): ContextMenuAction[] => {
+    const actions=management.threadActions(thread);
+    return [
+    ...actions.filter(action=>action.id==="pin"),
     { id: "rename", label: t("gemini.rename"), icon: Pencil, disabled: isActive(thread) || busy, onSelect: () => { setRename(thread); setTitle(thread.title); } },
-    { id: "archive", label: t(thread.archived_at ? "gemini.restore" : "gemini.archive"), icon: thread.archived_at ? ArchiveRestore : Archive, disabled: isActive(thread) || busy, onSelect: () => mutate(thread, { archived: !thread.archived_at }) }
-  ];
+    ...actions.filter(action=>["schedule","fork","fork-worktree"].includes(action.id)),
+    { id: "archive", label: t(thread.archived_at ? "gemini.restore" : "gemini.archive"), icon: thread.archived_at ? ArchiveRestore : Archive, disabled: isActive(thread) || busy, onSelect: () => mutate(thread, { archived: !thread.archived_at }) },
+    ...actions.filter(action=>!["pin","schedule","fork","fork-worktree"].includes(action.id))
+  ]; };
   const deleteThread = async () => {
     if (!deleting) return;
     setBusy(true);
@@ -100,9 +108,9 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
         <div className="thread-items">{threads.error ? <ErrorState error={threads.error} reload={threads.reload} /> : threads.loading ? <p className="gemini-hint">{t("common.loading")}</p> : groups.length ? groups.map(([id, group]) => {
           const heading = <button type="button" className="thread-project-toggle" aria-expanded={!collapsed.has(id)} title={`${t(collapsed.has(id) ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${group.path}`} onClick={() => toggleGroup(id)}>{collapsed.has(id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.name}</strong><span>{group.threads.length}</span></button>;
           return <section className="thread-project" key={id}>
-            {archived ? <div className="thread-project-heading">{heading}</div> : <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.name })} actions={[{ id: "new-session", label: t("codex.createSessionHere"), icon: Plus, disabled: busy, onSelect: () => createSessionInWorkspace(id) }]}>{heading}</ContextMenu>}
+            {archived ? <div className="thread-project-heading">{heading}</div> : <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.name })} actions={[{ id: "new-session", label: t("codex.createSessionHere"), icon: Plus, disabled: busy, onSelect: () => createSessionInWorkspace(id) }, ...management.projectActions(group.threads[0])]}>{heading}</ContextMenu>}
             {!collapsed.has(id) && <div className="project-threads">{group.threads.map(thread => <ContextMenu key={thread.id} className={`thread ${active?.id === thread.id ? "active" : ""}`} label={t("codex.threadMenu", { name: thread.title })} actions={threadMenuActions(thread)}>
-              <button className="thread-select" onClick={() => { onSelectThread(thread.id); setMobileView("conversation"); }}><span><strong>{thread.title}</strong><small>{thread.server_name}</small></span></button>
+              <button className="thread-select" onClick={() => { onSelectThread(thread.id); setMobileView("conversation"); }}><span><strong>{thread.pinned_at && <Pin size={12} />}{thread.title}</strong><small>{thread.server_name}</small></span></button>
               <div className="thread-actions"><Status value={thread.status} /><button className="icon-button danger thread-delete" disabled={isActive(thread) || busy} aria-label={t("gemini.delete")} onClick={() => setDeleting(thread)}><Trash2 size={14} /></button></div>
             </ContextMenu>)}</div>}
           </section>;
@@ -112,9 +120,10 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
     </aside>
     <div className="gemini-main">{active ? <>
       {preview && <div className="gemini-preview-tabs"><button className="secondary-button" onClick={() => setPreview(null)}><MessageSquare size={15} />{t("gemini.conversation")}</button><span><FileCode2 size={14} />{preview.path}</span></div>}
-      <div className={preview ? "gemini-conversation-hidden" : "gemini-conversation"}><GeminiSession key={active.id} thread={active} realtime={dependency} notify={notify} onChanged={refresh} onNewSession={() => openNewSession(active.workspace_id)} onOpenFile={setPreview} /></div>
+      <div className={preview ? "gemini-conversation-hidden" : "gemini-conversation"}><GeminiSession key={active.id} thread={active} realtime={dependency} notify={notify} onChanged={refresh} onNewSession={() => openNewSession(active.workspace_id)} onOpenFile={setPreview} onFork={eventID => void management.fork(active, eventID)} /></div>
       {preview && (preview.mode === "diff" ? <FileDiffPane workspaceID={active.workspace_id} selection={preview} realtime={realtime + tick} onClose={() => setPreview(null)} writable notify={notify} /> : <FilePreviewPane workspaceID={active.workspace_id} selection={preview} realtime={realtime + tick} onClose={() => setPreview(null)} writable />)}
     </> : selectedThreadID && selected.error ? <ErrorState error={selected.error} reload={selected.reload} /> : <div className="gemini-welcome"><Sparkles size={40} /><h2>{t("gemini.welcome")}</h2><p>{t("gemini.intro")}</p><button className="primary-button" onClick={() => openNewSession()}><Plus size={17} />{t("gemini.newSession")}</button></div>}</div>
+    {management.dialogs}
     <Dialog open={createOpen} title={t("gemini.newSession")} onClose={() => setCreateOpen(false)}><CreateGeminiSession initialWorkspaceID={newWorkspaceID} initialModel={newModel} initialMode={newMode} workspaces={workspaces.data ?? []} error={workspaces.error} onRetry={workspaces.reload} onCreated={thread => { setArchived(false); onSelectThread(thread.id); setCreateOpen(false); refresh(); }} /></Dialog>
     <Dialog open={Boolean(rename)} title={t("gemini.rename")} onClose={() => { if (!busy) setRename(null); }}><form onSubmit={event => { event.preventDefault(); if (rename) void mutate(rename, { title }); }}><Field label={t("gemini.title")}><input autoFocus required maxLength={180} value={title} onChange={event => setTitle(event.target.value)} /></Field><DialogActions><button className="primary-button" disabled={busy || !title.trim()}>{t("common.save")}</button></DialogActions></form></Dialog>
     <ConfirmDialog open={Boolean(deleting)} danger title={t("gemini.delete")} impact={t("gemini.deleteConfirm", { title: deleting?.title ?? "" })} confirmLabel={t("common.delete")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setDeleting(null)} onConfirm={deleteThread} />
@@ -146,7 +155,7 @@ function CreateGeminiSession({ initialWorkspaceID, initialModel, initialMode, wo
   return <form onSubmit={submit}>{error && <ErrorState error={error} reload={onRetry} />}<Field label={t("gemini.workspace")}><select required disabled={busy} value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); setModel(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{workspaces.filter(workspace => workspace.status === "ready").map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><ModelOptions key={workspaceID} autoSelect workspaceID={workspaceID} model={model} mode={mode} setModel={setModel} setMode={setMode} disabled={busy} /><p className="gemini-hint">{t("gemini.permissionsHelp")}</p>{failure && <ErrorBanner text={failure} />}<DialogActions><button className="primary-button" disabled={busy || !workspaceID || !model.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("gemini.newSession")}</button></DialogActions></form>;
 }
 
-function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOpenFile }: { thread: GeminiThread; realtime: string; notify: (text: string) => void; onChanged: () => void; onNewSession: () => void; onOpenFile: (value: FilePreviewSelection) => void }) {
+function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOpenFile, onFork }: { thread: GeminiThread; realtime: string; notify: (text: string) => void; onChanged: () => void; onNewSession: () => void; onOpenFile: (value: FilePreviewSelection) => void; onFork: (eventID?: string) => void }) {
   const { t } = useI18n();
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const cursor = useRef(0);
@@ -166,6 +175,7 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
   const follow = useRef(true);
   const running = isActive(thread);
   const messages = useMemo(() => geminiMessages(events), [events]);
+  const forkTargets = useMemo(() => geminiForkTargets(events), [events]);
   const merge = (incoming: StreamEvent[]) => setEvents(current => [...new Map([...current, ...incoming].map(event => [event.event_id, event])).values()].sort((a, b) => a.sequence - b.sequence));
   useEffect(() => {
     const controller = new AbortController();
@@ -237,11 +247,11 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
     try { await post(`/gemini/threads/${thread.id}/interrupt`, {}); onChanged(); }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
-  return <section className="session-panel gemini-session"><header className="session-header"><div><h2>{thread.title}</h2><span>{thread.server_name}<i />{thread.path}</span></div><Status value={thread.status} /><button className="icon-button" aria-label={t("gemini.newSessionHere")} title={t("gemini.newSessionHere")} onClick={onNewSession}><Plus size={16} /></button><button className="icon-button" aria-label={t("gemini.export")} title={t("gemini.export")} disabled={running || exporting} onClick={() => void exportSession()}>{exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}</button><button className="icon-button" aria-label={t("common.refresh")} onClick={() => { onChanged(); setReload(value => value + 1); }}><RefreshCw size={16} /></button></header>
+  return <section className="session-panel gemini-session"><header className="session-header"><div><h2>{thread.title}</h2><span>{thread.server_name}<i />{thread.path}</span></div><Status value={thread.status} /><ContextMenu label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.continueInNewTask"), icon: GitFork, disabled: running || busy || !thread.fork_supported || !thread.session_id || Boolean(thread.archived_at) || thread.server_status !== "online", onSelect: () => onFork() }]}>{null}</ContextMenu><button className="icon-button" aria-label={t("gemini.newSessionHere")} title={t("gemini.newSessionHere")} onClick={onNewSession}><Plus size={16} /></button><button className="icon-button" aria-label={t("gemini.export")} title={t("gemini.export")} disabled={running || exporting} onClick={() => void exportSession()}>{exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}</button><button className="icon-button" aria-label={t("common.refresh")} onClick={() => { onChanged(); setReload(value => value + 1); }}><RefreshCw size={16} /></button></header>
     <div className="gemini-stream conversation-stream" ref={stream} role="log" aria-label={t("gemini.conversation")} onScroll={() => { const el = stream.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
       {hasEarlier && <button className="secondary-button" disabled={historyBusy} onClick={() => void earlier()}>{t("gemini.loadEarlier")}</button>}
       {!messages.length && <Empty icon={<Sparkles size={30} />} text={t("gemini.startPrompt")} />}
-      {messages.map(item => item.role === "tool" ? <details className="gemini-tool" key={item.id}><summary><SquareTerminal size={15} />{item.title || t("gemini.tool")}</summary><pre>{item.text}</pre></details> : item.role === "status" ? <p className="gemini-usage" key={item.id}>{item.text === "interrupted" ? t("status.interrupted") : item.stats ? t("gemini.usage", { input: String(item.stats.input_tokens ?? "—"), output: String(item.stats.output_tokens ?? "—"), tools: String(item.stats.tool_calls ?? "—") }) : item.text}</p> : <article className={`message ${item.role === "error" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Gemini"}</strong><time>{formatTime(item.time)}</time></header><MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{item.role === "user" && <div className="message-actions"><button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(error => notify(message(error))); }}><Copy size={14} /></button>{!thread.archived_at && <button type="button" className="message-action" disabled={busy || running || thread.server_status !== "online" || !thread.rewrite_supported} title={t(thread.rewrite_supported ? "codex.editMessage" : "gemini.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} onClick={() => { setPrompt(item.text); setEditingEventID(item.id); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}</div>}</article>)}
+      {messages.map(item => item.role === "tool" ? <details className="gemini-tool" key={item.id}><summary><SquareTerminal size={15} />{item.title || t("gemini.tool")}</summary><pre>{item.text}</pre></details> : item.role === "status" ? <p className="gemini-usage" key={item.id}>{item.text === "interrupted" ? t("status.interrupted") : item.stats ? t("gemini.usage", { input: String(item.stats.input_tokens ?? "—"), output: String(item.stats.output_tokens ?? "—"), tools: String(item.stats.tool_calls ?? "—") }) : item.text}</p> : <article className={`message ${item.role === "error" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Gemini"}</strong><time>{formatTime(item.time)}</time></header><MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{item.role === "user" && <div className="message-actions"><button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(error => notify(message(error))); }}><Copy size={14} /></button>{!thread.archived_at && <button type="button" className="message-action" disabled={busy || running || thread.server_status !== "online" || !thread.rewrite_supported} title={t(thread.rewrite_supported ? "codex.editMessage" : "gemini.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} onClick={() => { setPrompt(item.text); setEditingEventID(item.id); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}</div>}{item.role === "assistant" && <div className="message-actions"><ContextMenu className="message-menu" label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.branchToNewChat"), icon: GitFork, disabled: running || busy || !forkTargets.has(item.id) || !thread.fork_supported || Boolean(thread.archived_at) || thread.server_status !== "online", onSelect: () => onFork(item.id) }]}>{null}</ContextMenu></div>}</article>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "gemini.interrupting" : "gemini.working")}</p>}
     </div>
     <form className="composer gemini-composer" onSubmit={submit}>

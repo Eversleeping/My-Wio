@@ -291,6 +291,15 @@ func (s *Store) CommitGitWorktree(ctx context.Context, command protocol.GitWorkt
 	if err != nil {
 		return err
 	}
+	if command.GeminiFork != nil {
+		if command.GeminiFork.WorkspaceID != command.TargetWorkspaceID || command.GeminiFork.SourceWorkspace != command.SourcePath || command.GeminiFork.Workspace != result.Path {
+			return errors.New("Gemini worktree result mismatch")
+		}
+		if err = s.commitGeminiFork(ctx, tx, *command.GeminiFork, result.GeminiSessionID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	if command.TargetThreadID == "" {
 		return tx.Commit()
 	}

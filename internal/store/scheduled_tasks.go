@@ -10,6 +10,7 @@ import (
 )
 
 type ScheduledTask struct {
+	AgentKind       string     `db:"agent_kind" json:"agent_kind"`
 	ID              string     `db:"id" json:"id"`
 	ThreadID        string     `db:"thread_id" json:"thread_id"`
 	ThreadTitle     string     `db:"thread_title" json:"thread_title"`
@@ -39,6 +40,7 @@ type ScheduledTask struct {
 }
 
 type ScheduledTaskInput struct {
+	AgentKind       string
 	ThreadID        string
 	Name            string
 	Prompt          string
@@ -50,7 +52,7 @@ type ScheduledTaskInput struct {
 	ApprovalMode    string
 }
 
-const scheduledTaskSelect = `SELECT st.id,st.thread_id,t.title thread_title,t.workspace_id,w.project_id,p.name project_name,
+const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,st.id,st.thread_id,t.title thread_title,t.workspace_id,w.project_id,p.name project_name,
 	st.server_id,s.name server_name,s.status server_status,t.codex_thread_id,w.path workspace_path,
 	st.name,st.prompt,st.schedule,st.timezone,st.enabled,st.model,st.reasoning_effort,st.approval_mode,
 	st.next_run_at,st.last_run_at,st.last_run_status,st.last_run_message,st.last_operation_id,st.created_at,st.updated_at
@@ -59,6 +61,31 @@ const scheduledTaskSelect = `SELECT st.id,st.thread_id,t.title thread_title,t.wo
 	JOIN workspaces w ON w.id=t.workspace_id
 	JOIN projects p ON p.id=w.project_id
 	JOIN servers s ON s.id=st.server_id`
+
+var geminiScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'gemini' AS agent_kind"), "codex_scheduled_tasks", "gemini_scheduled_tasks"), "JOIN codex_threads", "JOIN gemini_threads")
+var scheduledTaskSelect = "SELECT * FROM (" + codexScheduledTaskSelect + " UNION ALL " + strings.ReplaceAll(geminiScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id") + ") st"
+
+func scheduledTable(kind string) string {
+	if kind == "gemini" {
+		return "gemini_scheduled_tasks"
+	}
+	return "codex_scheduled_tasks"
+}
+func (s *Store) scheduledTableForID(ctx context.Context, id string) (string, error) {
+	task, err := s.ScheduledTask(ctx, id)
+	return scheduledTable(task.AgentKind), err
+}
+func (s *Store) scheduledThread(ctx context.Context, kind, id string) (string, string, error) {
+	if kind == "gemini" {
+		t, e := s.GeminiThread(ctx, id)
+		return t.ID, t.ServerID, e
+	}
+	if kind != "" && kind != "codex" {
+		return "", "", errors.New("invalid scheduled Agent kind")
+	}
+	t, e := s.Thread(ctx, id)
+	return t.ID, t.ServerID, e
+}
 
 func (s *Store) ListScheduledTasks(ctx context.Context) ([]ScheduledTask, error) {
 	rows := make([]ScheduledTask, 0)
@@ -73,7 +100,7 @@ func (s *Store) ScheduledTask(ctx context.Context, id string) (ScheduledTask, er
 }
 
 func (s *Store) CreateScheduledTask(ctx context.Context, input ScheduledTaskInput, nextRunAt time.Time) (ScheduledTask, error) {
-	thread, err := s.Thread(ctx, input.ThreadID)
+	threadID, serverID, err := s.scheduledThread(ctx, input.AgentKind, input.ThreadID)
 	if err != nil {
 		return ScheduledTask{}, err
 	}
@@ -82,9 +109,9 @@ func (s *Store) CreateScheduledTask(ctx context.Context, input ScheduledTaskInpu
 	}
 	id := NewID()
 	now := time.Now().UTC()
-	_, err = s.DB.ExecContext(ctx, s.Q(`INSERT INTO codex_scheduled_tasks
+	_, err = s.DB.ExecContext(ctx, s.Q(`INSERT INTO `+scheduledTable(input.AgentKind)+`
 		(id,thread_id,server_id,name,prompt,schedule,timezone,enabled,model,reasoning_effort,approval_mode,next_run_at,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), id, thread.ID, thread.ServerID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, nextRunAt.UTC(), now, now)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), id, threadID, serverID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, nextRunAt.UTC(), now, now)
 	if err != nil {
 		return ScheduledTask{}, err
 	}
@@ -92,12 +119,12 @@ func (s *Store) CreateScheduledTask(ctx context.Context, input ScheduledTaskInpu
 }
 
 func (s *Store) UpdateScheduledTask(ctx context.Context, id string, input ScheduledTaskInput, nextRunAt time.Time) (ScheduledTask, error) {
-	thread, err := s.Thread(ctx, input.ThreadID)
+	threadID, serverID, err := s.scheduledThread(ctx, input.AgentKind, input.ThreadID)
 	if err != nil {
 		return ScheduledTask{}, err
 	}
 	now := time.Now().UTC()
-	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE codex_scheduled_tasks SET thread_id=?,server_id=?,name=?,prompt=?,schedule=?,timezone=?,enabled=?,model=?,reasoning_effort=?,approval_mode=?,next_run_at=?,updated_at=? WHERE id=?`), thread.ID, thread.ServerID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, nextRunAt.UTC(), now, id)
+	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE `+scheduledTable(input.AgentKind)+` SET thread_id=?,server_id=?,name=?,prompt=?,schedule=?,timezone=?,enabled=?,model=?,reasoning_effort=?,approval_mode=?,next_run_at=?,updated_at=? WHERE id=?`), threadID, serverID, input.Name, input.Prompt, input.Schedule, input.Timezone, boolInt(input.Enabled), input.Model, input.ReasoningEffort, input.ApprovalMode, nextRunAt.UTC(), now, id)
 	if err != nil {
 		return ScheduledTask{}, err
 	}
@@ -112,7 +139,11 @@ func (s *Store) UpdateScheduledTask(ctx context.Context, id string, input Schedu
 }
 
 func (s *Store) DeleteScheduledTask(ctx context.Context, id string) error {
-	result, err := s.DB.ExecContext(ctx, s.Q("DELETE FROM codex_scheduled_tasks WHERE id=?"), id)
+	table, err := s.scheduledTableForID(ctx, id)
+	if err != nil {
+		return err
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q("DELETE FROM "+table+" WHERE id=?"), id)
 	if err != nil {
 		return err
 	}
@@ -138,7 +169,11 @@ func (s *Store) DueScheduledTasks(ctx context.Context, now time.Time, limit int)
 // ClaimScheduledTask advances next_run_at only if the task is still due at the
 // time it was read. This makes multiple control-plane workers harmless.
 func (s *Store) ClaimScheduledTask(ctx context.Context, id string, expected, next time.Time) (bool, error) {
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_scheduled_tasks SET next_run_at=?,updated_at=? WHERE id=? AND enabled=1 AND next_run_at<=?"), next.UTC(), time.Now().UTC(), id, expected.UTC().Add(time.Nanosecond))
+	table, err := s.scheduledTableForID(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE "+table+" SET next_run_at=?,updated_at=? WHERE id=? AND enabled=1 AND next_run_at<=?"), next.UTC(), time.Now().UTC(), id, expected.UTC().Add(time.Nanosecond))
 	if err != nil {
 		return false, err
 	}
@@ -147,7 +182,11 @@ func (s *Store) ClaimScheduledTask(ctx context.Context, id string, expected, nex
 }
 
 func (s *Store) MarkScheduledTaskRun(ctx context.Context, id, status, message, operationID string, at time.Time) error {
-	_, err := s.DB.ExecContext(ctx, s.Q(`UPDATE codex_scheduled_tasks SET last_run_at=?,last_run_status=?,last_run_message=?,last_operation_id=?,updated_at=? WHERE id=?`), at.UTC(), status, message, operationID, time.Now().UTC(), id)
+	table, err := s.scheduledTableForID(ctx, id)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, s.Q(`UPDATE `+table+` SET last_run_at=?,last_run_status=?,last_run_message=?,last_operation_id=?,updated_at=? WHERE id=?`), at.UTC(), status, message, operationID, time.Now().UTC(), id)
 	return err
 }
 
@@ -155,8 +194,12 @@ func (s *Store) MarkScheduledTaskByOperation(ctx context.Context, operationID, s
 	if strings.TrimSpace(operationID) == "" {
 		return nil
 	}
-	_, err := s.DB.ExecContext(ctx, s.Q(`UPDATE codex_scheduled_tasks SET last_run_status=?,last_run_message=?,updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')`), status, message, time.Now().UTC(), operationID)
-	return err
+	for _, table := range []string{"codex_scheduled_tasks", "gemini_scheduled_tasks"} {
+		if _, err := s.DB.ExecContext(ctx, s.Q("UPDATE "+table+" SET last_run_status=?,last_run_message=?,updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), status, message, time.Now().UTC(), operationID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) MarkScheduledTaskByThread(ctx context.Context, threadID, status, message string) error {
