@@ -202,6 +202,7 @@ func assertPostgresMigrationAndStorage(t *testing.T, database *Store, exerciseSt
 		"servers":             {"managed_roots"},
 		"credential_profiles": {"commit_name", "commit_email"},
 		"codex_threads":       {"pinned_at", "archived_at"},
+		"metric_rollups":      {"memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes"},
 	} {
 		var columns []string
 		if err := database.DB.SelectContext(ctx, &columns, "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1", table); err != nil {
@@ -242,6 +243,7 @@ func assertPostgresMigrationAndStorage(t *testing.T, database *Store, exerciseSt
 	}
 
 	const networkBytes = uint64(1 << 40)
+	assertMetricCapacityStorage(t, database, "legacy-server")
 	if err := database.SaveMetrics(ctx, "legacy-server", protocol.Metrics{CPUPercent: 1, MemoryPercent: 2, DiskPercent: 3, Load1: 4, NetRxBytes: networkBytes, NetTxBytes: networkBytes + 1}); err != nil {
 		t.Fatal(err)
 	}

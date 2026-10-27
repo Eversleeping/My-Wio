@@ -82,7 +82,7 @@ export interface Deployment { id: string; target_id: string; operation_id: strin
 export interface DeploymentEvent { id: string; deployment_id: string; status: string; message: string; content: string; occurred_at: string }
 export interface DeploymentDetail { deployment: Deployment; events: DeploymentEvent[] | null }
 export interface Alert { id: string; server_id: string; kind: string; severity: string; title: string; detail: string; status: string; server_name: string; opened_at: string; resolved_at: string | null; acknowledged_at: string | null }
-export interface Metric { server_id: string; bucket_at: string; cpu_percent: number; memory_percent: number; disk_percent: number; load_1: number; net_rx_bytes: number; net_tx_bytes: number }
+export interface Metric { server_id: string; bucket_at: string; cpu_percent: number; memory_percent: number; disk_percent: number; memory_used_bytes?: number; memory_total_bytes?: number; disk_used_bytes?: number; disk_total_bytes?: number; load_1: number; net_rx_bytes: number; net_tx_bytes: number }
 export interface OperationMetricAggregate { count: number; average_ms: number; p95_ms: number; max_ms: number }
 export interface OperationMetrics { server_id: string; since: string; updated_at: string; total: number; queued: number; delivered: number; running: number; succeeded: number; failed: number; cancelled: number; queue_wait: OperationMetricAggregate; delivery: OperationMetricAggregate; execution: OperationMetricAggregate }
 export interface AuditEntry { id: string; action: string; resource_type: string; resource_id: string; detail: unknown; ip_address: string; occurred_at: string }

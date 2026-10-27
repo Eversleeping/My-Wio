@@ -42,12 +42,16 @@ type Heartbeat struct {
 }
 
 type Metrics struct {
-	CPUPercent    float64 `json:"cpu_percent"`
-	MemoryPercent float64 `json:"memory_percent"`
-	DiskPercent   float64 `json:"disk_percent"`
-	Load1         float64 `json:"load_1"`
-	NetRxBytes    uint64  `json:"net_rx_bytes"`
-	NetTxBytes    uint64  `json:"net_tx_bytes"`
+	CPUPercent       float64 `json:"cpu_percent"`
+	MemoryPercent    float64 `json:"memory_percent"`
+	DiskPercent      float64 `json:"disk_percent"`
+	MemoryUsedBytes  uint64  `json:"memory_used_bytes"`
+	MemoryTotalBytes uint64  `json:"memory_total_bytes"`
+	DiskUsedBytes    uint64  `json:"disk_used_bytes"`
+	DiskTotalBytes   uint64  `json:"disk_total_bytes"`
+	Load1            float64 `json:"load_1"`
+	NetRxBytes       uint64  `json:"net_rx_bytes"`
+	NetTxBytes       uint64  `json:"net_tx_bytes"`
 }
 
 type Repository struct {

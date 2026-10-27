@@ -50,8 +50,8 @@ export function MonitoringPage({ realtime }: { realtime: number }) {
       <div className="monitor-header"><div><strong>{activeServer?.name ?? t("server.none")}</strong><ServerInformation server={activeServer} className="monitor-server-information" /><small>{latest ? t("monitor.lastSample", { time: formatDate(latest.bucket_at) }) : t("monitor.awaitingData")}</small></div><div className="monitor-header-meta"><span>{t("monitor.samples", { count: String(metrics.data?.length ?? 0) })}</span><Status value={activeServer?.status ?? "offline"} /></div></div>
       <div className="metric-summary-grid">
         <MetricStat icon={<Cpu size={17} />} label={t("monitor.cpu")} value={formatPercent(latest?.cpu_percent)} detail={t("monitor.peak", { value: formatPercent(metricPeak(metrics.data, point => point.cpu_percent)) })} tone="green" />
-        <MetricStat icon={<MemoryStick size={17} />} label={t("monitor.memory")} value={formatPercent(latest?.memory_percent)} detail={t("monitor.peak", { value: formatPercent(metricPeak(metrics.data, point => point.memory_percent)) })} tone="cyan" />
-        <MetricStat icon={<HardDrive size={17} />} label={t("monitor.disk")} value={formatPercent(latest?.disk_percent)} detail={t("monitor.peak", { value: formatPercent(metricPeak(metrics.data, point => point.disk_percent)) })} tone="amber" />
+        <CapacityStat icon={<MemoryStick size={17} />} label={t("monitor.memory")} used={latest?.memory_used_bytes} total={latest?.memory_total_bytes} percent={latest?.memory_percent} peak={metricPeak(metrics.data, point => point.memory_percent)} tone="cyan" />
+        <CapacityStat icon={<HardDrive size={17} />} label={t("monitor.disk")} used={latest?.disk_used_bytes} total={latest?.disk_total_bytes} percent={latest?.disk_percent} peak={metricPeak(metrics.data, point => point.disk_percent)} tone="amber" />
         <MetricStat icon={<Gauge size={17} />} label={t("monitor.load1")} value={formatDecimal(latest?.load_1)} detail={t("monitor.peak", { value: formatDecimal(metricPeak(metrics.data, point => point.load_1)) })} tone="violet" />
         <MetricStat icon={<ArrowDownToLine size={17} />} label={t("monitor.networkIn")} value={formatByteRate(latestNetwork?.rx)} detail={t("monitor.peak", { value: formatByteRate(metricPeak(rawNetwork, point => point.rx)) })} tone="blue" />
         <MetricStat icon={<ArrowUpFromLine size={17} />} label={t("monitor.networkOut")} value={formatByteRate(latestNetwork?.tx)} detail={t("monitor.peak", { value: formatByteRate(metricPeak(rawNetwork, point => point.tx)) })} tone="red" />
@@ -75,8 +75,16 @@ export function MonitoringPage({ realtime }: { realtime: number }) {
   </div>;
 }
 
-function MetricStat({ icon, label, value, detail, tone }: { icon: ReactNode; label: string; value: string; detail: string; tone: string }) {
-  return <div className={`metric-stat ${tone}`}><span className="metric-stat-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span>{detail}</span></div></div>;
+function MetricStat({ icon, label, value, detail, tone, capacity = false }: { icon: ReactNode; label: string; value: string; detail: string; tone: string; capacity?: boolean }) {
+  const { t } = useI18n();
+  return <div className={`metric-stat ${tone}`}><span className="metric-stat-icon">{icon}</span><div><small>{label}</small><strong className={capacity ? "metric-capacity" : undefined} title={capacity ? `${t("monitor.usedTotal")}: ${value}` : undefined}>{value}</strong><span title={detail}>{detail}</span></div></div>;
+}
+
+function CapacityStat({ icon, label, used, total, percent, peak, tone }: { icon: ReactNode; label: string; used?: number; total?: number; percent?: number; peak?: number; tone: string }) {
+  const { t } = useI18n();
+  const capacity = formatCapacity(used, total);
+  const peakText = t("monitor.peak", { value: formatPercent(peak) });
+  return <MetricStat icon={icon} label={label} value={capacity ?? formatPercent(percent)} detail={capacity ? `${formatPercent(percent)} · ${peakText}` : peakText} tone={tone} capacity={capacity !== null} />;
 }
 
 function formatLatency(value?: number) {
@@ -155,6 +163,13 @@ function niceMaximum(value: number) {
 }
 
 function formatPercent(value?: number) { return Number.isFinite(value) ? `${value!.toFixed(1)}%` : "-"; }
+function formatCapacity(used?: number, total?: number): string | null {
+  if (!Number.isFinite(used) || !Number.isFinite(total) || used! < 0 || total! <= 0) return null;
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  const unit = Math.min(units.length - 1, Math.floor(Math.log2(total!) / 10));
+  const scale = 1024 ** unit;
+  return `${(used! / scale).toFixed(unit === 0 ? 0 : 1)} / ${(total! / scale).toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 function formatDecimal(value?: number) { return Number.isFinite(value) ? value!.toFixed(value! >= 10 ? 1 : 2) : "-"; }
 function formatByteRate(value?: number) { if (!Number.isFinite(value)) return "-"; const units = ["B/s", "KB/s", "MB/s", "GB/s"]; let scaled = Math.max(0, value!); let unit = 0; while (scaled >= 1024 && unit < units.length - 1) { scaled /= 1024; unit++; } return `${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)} ${units[unit]}`; }
 function formatAxisTime(value: string, span: number) { return new Intl.DateTimeFormat(currentLocale(), span > 24 * 60 * 60 * 1000 ? { month: "short", day: "numeric", hour: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }

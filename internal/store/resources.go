@@ -1295,19 +1295,23 @@ func (s *Store) ListAlerts(ctx context.Context) ([]Alert, error) {
 }
 
 type MetricPoint struct {
-	ServerID      string    `db:"server_id" json:"server_id"`
-	BucketAt      time.Time `db:"bucket_at" json:"bucket_at"`
-	CPUPercent    float64   `db:"cpu_percent" json:"cpu_percent"`
-	MemoryPercent float64   `db:"memory_percent" json:"memory_percent"`
-	DiskPercent   float64   `db:"disk_percent" json:"disk_percent"`
-	Load1         float64   `db:"load_1" json:"load_1"`
-	NetRxBytes    uint64    `db:"net_rx_bytes" json:"net_rx_bytes"`
-	NetTxBytes    uint64    `db:"net_tx_bytes" json:"net_tx_bytes"`
+	ServerID         string    `db:"server_id" json:"server_id"`
+	BucketAt         time.Time `db:"bucket_at" json:"bucket_at"`
+	CPUPercent       float64   `db:"cpu_percent" json:"cpu_percent"`
+	MemoryPercent    float64   `db:"memory_percent" json:"memory_percent"`
+	DiskPercent      float64   `db:"disk_percent" json:"disk_percent"`
+	MemoryUsedBytes  uint64    `db:"memory_used_bytes" json:"memory_used_bytes"`
+	MemoryTotalBytes uint64    `db:"memory_total_bytes" json:"memory_total_bytes"`
+	DiskUsedBytes    uint64    `db:"disk_used_bytes" json:"disk_used_bytes"`
+	DiskTotalBytes   uint64    `db:"disk_total_bytes" json:"disk_total_bytes"`
+	Load1            float64   `db:"load_1" json:"load_1"`
+	NetRxBytes       uint64    `db:"net_rx_bytes" json:"net_rx_bytes"`
+	NetTxBytes       uint64    `db:"net_tx_bytes" json:"net_tx_bytes"`
 }
 
 func (s *Store) Metrics(ctx context.Context, serverID string, since time.Time) ([]MetricPoint, error) {
 	var out []MetricPoint
-	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT server_id,bucket_at,cpu_percent,memory_percent,disk_percent,load_1,net_rx_bytes,net_tx_bytes FROM metric_rollups WHERE server_id=? AND bucket_at>=? ORDER BY bucket_at`), serverID, since)
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT server_id,bucket_at,cpu_percent,memory_percent,disk_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,load_1,net_rx_bytes,net_tx_bytes FROM metric_rollups WHERE server_id=? AND bucket_at>=? ORDER BY bucket_at`), serverID, since)
 	return out, err
 }
 

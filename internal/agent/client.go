@@ -1014,9 +1014,13 @@ func (c *Client) enqueueMetrics(ctx context.Context) error {
 	}
 	if memory != nil {
 		metric.MemoryPercent = memory.UsedPercent
+		metric.MemoryUsedBytes = memory.Used
+		metric.MemoryTotalBytes = memory.Total
 	}
 	if usage != nil {
 		metric.DiskPercent = usage.UsedPercent
+		metric.DiskUsedBytes = usage.Used
+		metric.DiskTotalBytes = usage.Total
 	}
 	if average != nil {
 		metric.Load1 = average.Load1

@@ -865,6 +865,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .metric-stat > div { min-width: 0; display: grid; gap: 2px; }
 .metric-stat small, .metric-stat span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .metric-stat strong { font-size: 18px; }
+.metric-stat strong.metric-capacity { font-size: 15px; overflow-wrap: anywhere; }
 .metric-stat.green .metric-stat-icon { color: #168f68; }
 .metric-stat.cyan .metric-stat-icon { color: #1684a3; }
 .metric-stat.amber .metric-stat-icon { color: #b87312; }

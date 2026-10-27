@@ -138,6 +138,10 @@ func Open(databaseURL string) (*Store, error) {
 			return nil, fmt.Errorf("migrate metric counters: %w", err)
 		}
 	}
+	if err := migrateMetricCapacity(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{DB: db, driver: driver}, nil
 }
 
@@ -2295,7 +2299,23 @@ func (s *Store) CommitThreadRewrite(ctx context.Context, threadID, codexThreadID
 
 func (s *Store) SaveMetrics(ctx context.Context, serverID string, m protocol.Metrics) error {
 	now := time.Now().UTC().Truncate(time.Minute)
-	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO metric_rollups(server_id,bucket_at,resolution,cpu_percent,memory_percent,disk_percent,load_1,net_rx_bytes,net_tx_bytes,samples) VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(server_id,bucket_at,resolution) DO UPDATE SET cpu_percent=(metric_rollups.cpu_percent*metric_rollups.samples+excluded.cpu_percent)/(metric_rollups.samples+1),memory_percent=(metric_rollups.memory_percent*metric_rollups.samples+excluded.memory_percent)/(metric_rollups.samples+1),disk_percent=(metric_rollups.disk_percent*metric_rollups.samples+excluded.disk_percent)/(metric_rollups.samples+1),load_1=(metric_rollups.load_1*metric_rollups.samples+excluded.load_1)/(metric_rollups.samples+1),net_rx_bytes=excluded.net_rx_bytes,net_tx_bytes=excluded.net_tx_bytes,samples=metric_rollups.samples+1`), serverID, now, "minute", m.CPUPercent, m.MemoryPercent, m.DiskPercent, m.Load1, m.NetRxBytes, m.NetTxBytes)
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO metric_rollups(
+		server_id,bucket_at,resolution,cpu_percent,memory_percent,disk_percent,
+		memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,
+		load_1,net_rx_bytes,net_tx_bytes,samples) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+		ON CONFLICT(server_id,bucket_at,resolution) DO UPDATE SET
+		cpu_percent=(metric_rollups.cpu_percent*metric_rollups.samples+excluded.cpu_percent)/(metric_rollups.samples+1),
+		memory_percent=(metric_rollups.memory_percent*metric_rollups.samples+excluded.memory_percent)/(metric_rollups.samples+1),
+		disk_percent=(metric_rollups.disk_percent*metric_rollups.samples+excluded.disk_percent)/(metric_rollups.samples+1),
+		memory_used_bytes=CASE WHEN excluded.memory_total_bytes>0 THEN excluded.memory_used_bytes ELSE metric_rollups.memory_used_bytes END,
+		memory_total_bytes=CASE WHEN excluded.memory_total_bytes>0 THEN excluded.memory_total_bytes ELSE metric_rollups.memory_total_bytes END,
+		disk_used_bytes=CASE WHEN excluded.disk_total_bytes>0 THEN excluded.disk_used_bytes ELSE metric_rollups.disk_used_bytes END,
+		disk_total_bytes=CASE WHEN excluded.disk_total_bytes>0 THEN excluded.disk_total_bytes ELSE metric_rollups.disk_total_bytes END,
+		load_1=(metric_rollups.load_1*metric_rollups.samples+excluded.load_1)/(metric_rollups.samples+1),
+		net_rx_bytes=excluded.net_rx_bytes,net_tx_bytes=excluded.net_tx_bytes,samples=metric_rollups.samples+1`),
+		serverID, now, "minute", m.CPUPercent, m.MemoryPercent, m.DiskPercent,
+		m.MemoryUsedBytes, m.MemoryTotalBytes, m.DiskUsedBytes, m.DiskTotalBytes,
+		m.Load1, m.NetRxBytes, m.NetTxBytes)
 	return err
 }
 
