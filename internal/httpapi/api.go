@@ -107,6 +107,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/gemini/threads/{threadID}/events", api.geminiEvents)
 			private.Post("/gemini/threads/{threadID}/turns", api.startGeminiTurn)
 			private.Post("/gemini/threads/{threadID}/events/{eventID}/rewrite", api.startGeminiTurn)
+			private.Post("/gemini/threads/{threadID}/questions/{requestID}/answer", api.answerGeminiQuestion)
 			private.Post("/gemini/threads/{threadID}/interrupt", api.interruptGeminiTurn)
 			private.Patch("/gemini/threads/{threadID}", api.updateGeminiThread)
 			private.Delete("/gemini/threads/{threadID}", api.deleteGeminiThread)

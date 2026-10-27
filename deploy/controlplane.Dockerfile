@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o
 FROM node:22-alpine
 ARG CODEX_VERSION=0.144.4
 ARG GEMINI_VERSION=0.65.0
-RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose git tzdata \
+RUN apk add --no-cache bash ca-certificates docker-cli docker-cli-compose git tzdata \
     && npm install --global --omit=dev @openai/codex@${CODEX_VERSION} @google/gemini-cli@${GEMINI_VERSION} \
     && mkdir -p /var/lib/wio-agent/projects \
     && chmod 700 /var/lib/wio-agent

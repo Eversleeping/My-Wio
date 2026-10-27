@@ -14,6 +14,7 @@ import (
 
 type GeminiThread struct {
 	ThinkingLevel     string     `db:"thinking_level" json:"thinking_level"`
+	InputSupported    bool       `db:"-" json:"input_supported"`
 	ThinkingSupported bool       `db:"-" json:"thinking_supported"`
 	AgentVersion      string     `db:"agent_version" json:"-"`
 	RewriteSupported  bool       `db:"-" json:"rewrite_supported"`
@@ -51,6 +52,7 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 	}
 	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range out {
+		out[i].InputSupported = buildinfo.SupportsGeminiInput(out[i].AgentVersion)
 		out[i].ThinkingSupported = buildinfo.SupportsGeminiThinking(out[i].AgentVersion)
 		out[i].ForkSupported = buildinfo.SupportsGeminiFork(out[i].AgentVersion)
 		out[i].RewriteSupported = buildinfo.SupportsGeminiRewrite(out[i].AgentVersion)
@@ -61,6 +63,7 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, error) {
 	var thread GeminiThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(geminiThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	thread.InputSupported = buildinfo.SupportsGeminiInput(thread.AgentVersion)
 	thread.ThinkingSupported = buildinfo.SupportsGeminiThinking(thread.AgentVersion)
 	thread.ForkSupported = buildinfo.SupportsGeminiFork(thread.AgentVersion)
 	thread.RewriteSupported = buildinfo.SupportsGeminiRewrite(thread.AgentVersion)
@@ -84,14 +87,19 @@ func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode
 // QueueGeminiTurn claims the session, reserves the workspace and saves the user
 // message in one transaction, so concurrent sends cannot create duplicate turns.
 func (s *Store) QueueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode string, thinking ...string) (protocol.StreamEvent, error) {
-	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "", thinking...)
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "", nil, thinking...)
 }
 
 func (s *Store) QueueGeminiRewrite(ctx context.Context, thread GeminiThread, eventID, prompt, model, mode string, thinking ...string) (protocol.StreamEvent, error) {
-	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, thinking...)
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, nil, thinking...)
 }
 
-func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string, thinking ...string) (protocol.StreamEvent, error) {
+// QueueGeminiInput shares the transactional lock and native rewrite path.
+func (s *Store) QueueGeminiInput(ctx context.Context, thread GeminiThread, eventID, prompt, model, mode, thinking string, images []protocol.TurnImage) (protocol.StreamEvent, error) {
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, images, thinking)
+}
+
+func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, thinking ...string) (protocol.StreamEvent, error) {
 	level := thread.ThinkingLevel
 	if len(thinking) > 0 {
 		level = thinking[0]
@@ -130,6 +138,15 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 	if err := tx.GetContext(ctx, &command.SessionID, s.Q("SELECT session_id FROM gemini_threads WHERE id=?"), thread.ID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
+	var agentVersion string
+	if err := tx.GetContext(ctx, &agentVersion, s.Q("SELECT agent_version FROM servers WHERE id=?"), thread.ServerID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	command.Interactive = buildinfo.SupportsGeminiInput(agentVersion)
+	if len(images) > 0 && !command.Interactive {
+		return protocol.StreamEvent{}, errors.New("update Agent to support Gemini images")
+	}
+	command.Images = images
 	kind := "gemini.turn.start"
 	if editEventID != "" {
 		target, err := geminiRewriteTarget(ctx, tx, s, thread.ID, editEventID)
@@ -151,7 +168,7 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 	if editEventID != "" {
 		return protocol.StreamEvent{}, tx.Commit()
 	}
-	message, _ := json.Marshal(map[string]string{"text": prompt, "operation_id": opID, "model": model, "thinking_level": level})
+	message, _ := json.Marshal(map[string]any{"text": prompt, "operation_id": opID, "model": model, "thinking_level": level, "images": images})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "gemini.user.message", OccurredAt: now, Payload: message}
 	err = tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), thread.ID)
 	if err != nil {
@@ -165,6 +182,9 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 }
 
 func truncateGeminiTitle(prompt string) string {
+	if prompt == "" {
+		return "Gemini"
+	}
 	chars := []rune(prompt)
 	if len(chars) > 60 {
 		chars = chars[:60]
@@ -365,7 +385,7 @@ func (s *Store) CommitGeminiRewrite(ctx context.Context, threadID, operationID, 
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=? AND sequence>=?"), threadID, sequence); err != nil {
 		return protocol.StreamEvent{}, false, err
 	}
-	raw, _ := json.Marshal(map[string]any{"text": command.Prompt, "operation_id": operationID, "history_rewritten": true})
+	raw, _ := json.Marshal(map[string]any{"text": command.Prompt, "operation_id": operationID, "history_rewritten": true, "images": command.Images})
 	event := protocol.StreamEvent{EventID: replacementID, StreamID: threadID, Sequence: last + 1, Kind: "gemini.user.message", OccurredAt: time.Now().UTC(), Payload: raw}
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(raw)); err != nil {
 		return event, false, err

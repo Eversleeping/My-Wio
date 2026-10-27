@@ -1,6 +1,7 @@
 import type { StreamEvent } from "./types";
+import type { Question } from "./components/UserInputPrompt";
 
-export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status"; text: string; time: string; title?: string; stats?: Record<string, unknown> };
+export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status" | "question"; text: string; time: string; title?: string; stats?: Record<string, unknown>; images?: { data_url: string }[]; operationID?: string; questions?: Question[]; answers?: Record<string, string> };
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -27,7 +28,14 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
     const op = readable(p.operation_id);
     if (op !== operation) { assistant = undefined; operation = op; }
     const base = { id: event.event_id, time: event.occurred_at };
-    if (event.kind === "gemini.user.message") { assistant = undefined; messages.push({ ...base, role: "user", text: readable(p.text) }); }
+    if (event.kind === "gemini.user.message") { assistant = undefined; messages.push({ ...base, role: "user", text: readable(p.text), images: Array.isArray(p.images) ? p.images.filter((image): image is {data_url:string} => typeof image?.data_url === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(image.data_url)) : [] }); }
+    else if (event.kind === "gemini.question") {
+      assistant = undefined;
+      messages.push({ ...base, role: "question", text: "", operationID: op, questions: Array.isArray(p.questions) ? p.questions as Question[] : [] });
+    } else if (event.kind === "gemini.question.answered") {
+      const question = messages.find(item => item.id === p.request_id && item.role === "question");
+      if (question) question.answers = Object.fromEntries(Object.entries(record(p.answers)).map(([id, value]) => [id, readable((record(value).answers as unknown[])?.[0])]));
+    }
     else if (event.kind === "gemini.message" && p.role === "assistant") {
       const text = readable(p.content);
       if (assistant && p.delta === true) assistant.text += text;

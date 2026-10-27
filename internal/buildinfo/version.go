@@ -5,7 +5,11 @@ import (
 	"strings"
 )
 
-var Version = "0.2.72"
+var Version = "0.2.73"
+
+const MinimumGeminiInputVersion = "0.2.73"
+
+func SupportsGeminiInput(version string) bool { return atLeast(version, MinimumGeminiInputVersion) }
 
 const MinimumCLIManagementVersion = "0.2.61"
 

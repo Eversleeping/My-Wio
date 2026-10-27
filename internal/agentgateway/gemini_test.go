@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -15,6 +16,9 @@ import (
 func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	db, server := gatewayTestServer(t, "gemini")
 	ctx := context.Background()
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.73"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/gemini", Name: "gemini"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +43,29 @@ func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	current, _ := db.GeminiThread(ctx, thread.ID)
 	if current.SessionID != "native-session" || current.Status != "running" {
 		t.Fatalf("session binding: %+v", current)
+	}
+	// A question uses its stable request id across the gateway and survives
+	// credential redaction. Answer completion must not release the waiting turn.
+	questionPayload, _ := json.Marshal(map[string]any{"operation_id": thread.OperationID, "questions": []any{map[string]any{"id": "choice", "question": "Which?", "isOther": true}}})
+	questionRaw, _ := json.Marshal(protocol.StreamEvent{EventID: "question-id", StreamID: thread.ID, Kind: "gemini.question", Payload: questionPayload})
+	if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "gemini_event", PayloadJSON: questionRaw}); err != nil {
+		t.Fatal(err)
+	}
+	questionEvents, _ := db.Events(ctx, thread.ID, 0, 500)
+	if last := questionEvents[len(questionEvents)-1]; last.EventID != "question-id" || strings.Contains(string(last.Payload), "[REDACTED]") {
+		t.Fatalf("question corrupted: %+v", last)
+	}
+	answerID, err := db.QueueGeminiAnswer(ctx, thread.ID, "question-id", map[string]protocol.UserInputAnswer{"choice": {Answers: []string{"Blue"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answerResult, _ := json.Marshal(protocol.OperationResult{OperationID: answerID, Status: "succeeded"})
+	if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: answerResult}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ = db.GeminiThread(ctx, thread.ID)
+	if current.OperationID != thread.OperationID || current.Status != "running" {
+		t.Fatal("answer completed original turn")
 	}
 	if err := db.MarkDelivered(ctx, thread.OperationID); err != nil {
 		t.Fatal(err)

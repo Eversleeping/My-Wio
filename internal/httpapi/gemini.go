@@ -139,12 +139,13 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Prompt        string  `json:"prompt"`
-		ThinkingLevel *string `json:"thinking_level"`
-		Model         string  `json:"model"`
-		ApprovalMode  string  `json:"approval_mode"`
+		Images        []protocol.TurnImage `json:"images"`
+		Prompt        string               `json:"prompt"`
+		ThinkingLevel *string              `json:"thinking_level"`
+		Model         string               `json:"model"`
+		ApprovalMode  string               `json:"approval_mode"`
 	}
-	if !decodeJSONLimit(w, r, &input, 1<<20) {
+	if !decodeJSONLimit(w, r, &input, 6<<20) {
 		return
 	}
 	level := thread.ThinkingLevel
@@ -162,8 +163,8 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid Gemini thinking level for this model")
 		return
 	}
-	if input.Prompt == "" || len(input.Prompt) > 256*1024 || !validGeminiOptions(input.Model, input.ApprovalMode) {
-		writeError(w, 400, "invalid prompt, model or approval mode")
+	if (input.Prompt == "" && len(input.Images) == 0) || !validTurnImages(input.Images) || len(input.Prompt) > 256*1024 || !validGeminiOptions(input.Model, input.ApprovalMode) {
+		writeError(w, 400, "invalid prompt, images, model or approval mode")
 		return
 	}
 	if thread.ServerStatus != "online" {
@@ -187,17 +188,17 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiThinkingVersion+" or newer to configure Gemini thinking")
 		return
 	}
+	if len(input.Images) > 0 && !buildinfo.SupportsGeminiInput(server.AgentVersion) {
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiInputVersion+" or newer to send Gemini images")
+		return
+	}
 	editEventID := chi.URLParam(r, "eventID")
 	if editEventID != "" && !buildinfo.SupportsGeminiRewrite(server.AgentVersion) {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiRewriteVersion+" or newer to edit Gemini history")
 		return
 	}
 	var event protocol.StreamEvent
-	if editEventID != "" {
-		event, err = a.store.QueueGeminiRewrite(r.Context(), thread, editEventID, input.Prompt, input.Model, input.ApprovalMode, level)
-	} else {
-		event, err = a.store.QueueGeminiTurn(r.Context(), thread, input.Prompt, input.Model, input.ApprovalMode, level)
-	}
+	event, err = a.store.QueueGeminiInput(r.Context(), thread, editEventID, input.Prompt, input.Model, input.ApprovalMode, level, input.Images)
 	if errors.Is(err, store.ErrInvalidEditTarget) {
 		writeError(w, 409, "this Gemini message has no saved native turn to rewind; original conversation was kept")
 		return
@@ -234,6 +235,26 @@ func (a *API) interruptGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	a.auditGemini(r, "gemini.turn.interrupt", thread.ID)
 	a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
 	writeJSON(w, 202, map[string]bool{"ok": true})
+}
+
+func (a *API) answerGeminiQuestion(w http.ResponseWriter, r *http.Request) {
+	thread, ok := a.loadGeminiThread(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Answers map[string]protocol.UserInputAnswer `json:"answers"`
+	}
+	if !decodeJSONLimit(w, r, &input, 128<<10) {
+		return
+	}
+	id, err := a.store.QueueGeminiAnswer(r.Context(), thread.ID, chi.URLParam(r, "requestID"), input.Answers)
+	if err != nil {
+		writeError(w, 409, err.Error())
+		return
+	}
+	a.gateway.Wake(thread.ServerID)
+	writeJSON(w, 202, map[string]string{"operation_id": id})
 }
 
 func (a *API) updateGeminiThread(w http.ResponseWriter, r *http.Request) {

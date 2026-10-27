@@ -76,7 +76,9 @@ func NewClient(config Config, log *slog.Logger) *Client {
 		return client.queue("event", event, true)
 	})
 	client.gemini = geminiadapter.New(effectiveGeminiPath(config.StateDir), func(event protocol.StreamEvent) error {
-		event.EventID = uuid.NewString()
+		if event.EventID == "" {
+			event.EventID = uuid.NewString()
+		}
 		return client.queue("gemini_event", event, true)
 	})
 	if err := client.loadGeminiCredentials(); err != nil {
@@ -793,6 +795,12 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		}
 		command.Workspace = root
 		return c.gemini.RunInTrustedWorkspace(ctx, envelope.OperationID, command)
+	case "gemini.question.answer":
+		var command protocol.GeminiAnswerCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.gemini.Answer(command)
 	case "gemini.turn.interrupt":
 		var command protocol.GeminiInterruptCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

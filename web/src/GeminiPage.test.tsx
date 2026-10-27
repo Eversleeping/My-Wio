@@ -1,14 +1,17 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { compressImage } from "./imageCompression";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import GeminiPage from "./pages/GeminiPage";
 import { I18nProvider } from "./i18n";
 
+vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
+
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; inputSupported?: boolean; answerFailure?: boolean } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, input_supported:options.inputSupported ?? true,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -16,6 +19,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     let body: unknown = [];
     if (init.method === "POST") {
       const input = JSON.parse(String(init.body)); requests.push({url,body:input}); body = {...currentThread,model,id:"thread-created"};
+      if (url.endsWith("/answer")) body={operation_id:"answer-op"};
       if (url.endsWith("/fork")) body={operation_id:"fork-op",target_thread_id:"forked-thread"};
       if (url.endsWith("/rewrite")) {
         if (options.rewriteFailure) return new Response(JSON.stringify({error:"Native history unavailable; original conversation was kept"}),{status:409,headers:{"Content-Type":"application/json"}});
@@ -24,6 +28,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
         eventLog = [...eventLog.slice(0,index),{event_id:"replacement",stream_id:thread.id,sequence:100,kind:"gemini.user.message",occurred_at:thread.updated_at,payload:{text:input.prompt,operation_id:"rewrite",history_rewritten:true}},{event_id:"answer",stream_id:thread.id,sequence:101,kind:"gemini.message",occurred_at:thread.updated_at,payload:{role:"assistant",content:"Revised answer",operation_id:"rewrite"}}];
       }
     }
+    else if (url === "/api/operations/answer-op") body={status:options.answerFailure ? "failed" : "succeeded",result:"Question expired"};
     else if (url === "/api/operations/fork-op") body={status:"succeeded"};
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
     else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
@@ -320,4 +325,48 @@ test("sends an explicitly selected native thinking level with the next turn",asy
  await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Think carefully");
  await user.click(screen.getByRole("button",{name:"Send"}));
  await waitFor(()=>expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Think carefully",model:"gemini-3-flash-preview",approval_mode:"default",thinking_level:"medium"}}));
+});
+
+const pastedImage = "data:image/png;base64,c21hbGwtcG5n";
+test("pastes an image, sends it without text and keeps its history preview", async () => {
+  vi.mocked(compressImage).mockResolvedValue(pastedImage);
+  const { user, requests } = setup(true);
+  const prompt = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
+  const file = new File(["image"], "clipboard.png", { type: "image/png" });
+  fireEvent.paste(prompt, { clipboardData: { items: [{ type: "image/png", getAsFile: () => file }] } });
+  await waitFor(() => expect(document.querySelector(".composer-images img")).toHaveAttribute("src", pastedImage));
+  expect(compressImage).toHaveBeenCalledWith(file, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  await user.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"",images:[{data_url:pastedImage}]}}));
+  expect(document.querySelector(".composer-images")).not.toBeInTheDocument();
+});
+
+test("preserves image attachments when editing an earlier message", async () => {
+  const events=[{event_id:"with-image",sequence:1,kind:"gemini.user.message",occurred_at:thread.updated_at,payload:{text:"Inspect it",images:[{data_url:pastedImage}],operation_id:"old"}}];
+  const { user, requests }=setup(true,"auto","configured",events);
+  await user.click(await screen.findByRole("button",{name:"Edit and resend"}));
+  expect(document.querySelector(".composer-images img")).toHaveAttribute("src",pastedImage);
+  await user.click(screen.getByRole("button",{name:"Send"}));
+  await waitFor(()=>expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/events/with-image/rewrite",body:{images:[{data_url:pastedImage}]}}));
+});
+
+const interactiveQuestion = {event_id:"question-1",sequence:1,kind:"gemini.question",occurred_at:thread.updated_at,payload:{operation_id:"op1",questions:[{id:"color",header:"Color",question:"Which color?",isOther:true,options:[{label:"Blue",description:"Ocean"},{label:"Green",description:"Forest"}]}]}};
+test("waits for an explicit answer and confirms Agent delivery", async () => {
+  const {user,requests}=setup(true,"auto","configured",[interactiveQuestion],{status:"running"});
+  const card=await screen.findByRole("region",{name:"Gemini needs your input"});
+  const submit=within(card).getByRole("button",{name:"Submit answers"});expect(submit).toBeDisabled();expect(requests).toHaveLength(0);
+  await user.click(within(card).getByRole("radio",{name:"Blue Ocean"}));await user.click(submit);
+  await waitFor(()=>expect(requests[0]).toEqual({url:"/api/gemini/threads/thread-1/questions/question-1/answer",body:{answers:{color:{answers:["Blue"]}}}}));
+  expect(await within(card).findByRole("button",{name:"Answers sent"})).toBeDisabled();
+});
+
+test.each(["idle","interrupting"])("expires question cards when the turn is %s", async status => {
+  setup(true,"auto","configured",[interactiveQuestion],{status});
+  expect(await screen.findByRole("radio",{name:"Blue Ocean"})).toBeDisabled();
+});
+
+test("shows answer delivery failure without marking the answer sent", async () => {
+  const {user}=setup(true,"auto","configured",[interactiveQuestion],{status:"running",answerFailure:true});
+  await user.click(await screen.findByRole("radio",{name:"Blue Ocean"}));await user.click(screen.getByRole("button",{name:"Submit answers"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Question expired");expect(screen.queryByRole("button",{name:"Answers sent"})).not.toBeInTheDocument();
 });

@@ -58,7 +58,7 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if err != nil {
 			return err
 		}
-	case "gemini.message", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result":
+	case "gemini.message", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered":
 	default:
 		return errors.New("unsupported Gemini event")
 	}

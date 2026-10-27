@@ -15,7 +15,7 @@ export function UserInputPrompt({ item, onDecided }: { item: Approval; onDecided
   }} />;
 }
 
-export function QuestionForm({ questions, onSubmit, answers = {}, readOnly = false }: { questions: Question[]; onSubmit: (values: Record<string, string>) => Promise<void>; answers?: Record<string, string>; readOnly?: boolean }) {
+export function QuestionForm({ questions, onSubmit, answers = {}, readOnly = false, heading }: { questions: Question[]; onSubmit: (values: Record<string, string>) => Promise<void>; answers?: Record<string, string>; readOnly?: boolean; heading?: string }) {
   const { t } = useI18n();
   const instanceID = useId();
   const [values, setValues] = useState<Record<string, string>>({});
@@ -24,6 +24,7 @@ export function QuestionForm({ questions, onSubmit, answers = {}, readOnly = fal
   const [error, setError] = useState("");
   const answered = sent || (questions.length > 0 && questions.every(question => answers[question.id] !== undefined));
   const disabled = busy || answered || readOnly;
+  const questionLabel = heading ?? t("codex.userQuestion");
   const valueFor = (id: string) => answers[id] ?? values[id] ?? "";
   const valid = questions.length > 0 && questions.every(question => valueFor(question.id).trim());
   const submit = async () => {
@@ -35,8 +36,8 @@ export function QuestionForm({ questions, onSubmit, answers = {}, readOnly = fal
     } catch (failure) { setError(failure instanceof Error ? failure.message : t("codex.answerFailed")); }
     finally { setBusy(false); }
   };
-  return <section className={`user-input-prompt${answered ? " answered" : ""}`} aria-label={t("codex.userQuestion")}>
-    <div className="question-heading"><MessageCircleQuestion size={15} aria-hidden="true" /><strong>{t(answered ? "codex.questionAnswered" : "codex.userQuestion")}</strong></div>
+  return <section className={`user-input-prompt${answered ? " answered" : ""}`} aria-label={questionLabel}>
+    <div className="question-heading"><MessageCircleQuestion size={15} aria-hidden="true" /><strong>{answered ? t("codex.questionAnswered") : questionLabel}</strong></div>
     {questions.map(question => <fieldset key={question.id} disabled={disabled}>
       <legend className={questions.length === 1 && /^\d+$/.test(question.header) ? "question-number-only" : undefined}>{question.header}</legend><p className="question-text">{question.question}</p>
       {!!question.options?.length && <div className="question-options">{question.options.map(option => <label className={`user-input-option${valueFor(question.id) === option.label ? " selected" : ""}`} key={option.label}>

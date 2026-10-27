@@ -45,6 +45,10 @@ func init() {
 	if mode == "" {
 		return
 	}
+	if mode == "acp" {
+		fakeACPCLI()
+		os.Exit(0)
+	}
 	stdin, _ := io.ReadAll(os.Stdin)
 	thinkingSettings, _ := os.ReadFile(filepath.Join(os.Getenv("GEMINI_CLI_HOME"), ".gemini", "settings.json"))
 	if len(thinkingSettings) == 0 {

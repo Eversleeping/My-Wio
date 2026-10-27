@@ -35,3 +35,17 @@ test("uses numeric CLI usage and safely handles already redacted history", () =>
     { input_tokens: undefined, output_tokens: 7, tool_calls: undefined }
   ]);
 });
+
+
+test("reconstructs question answers and image attachments after refresh", () => {
+  const image={data_url:"data:image/png;base64,eA=="};
+  const messages=geminiMessages([
+    event(1,"gemini.user.message",{text:"",images:[image,{data_url:"javascript:alert(1)"}],operation_id:"op"}),
+    event(2,"gemini.question",{questions:[{id:"q",question:"Which?"}],operation_id:"op"}),
+    event(3,"gemini.question.answered",{request_id:"2",answers:{q:{answers:["Blue"]}},operation_id:"op"}),
+    event(4,"gemini.message",{role:"assistant",content:"Continued",delta:true,operation_id:"op"})
+  ]);
+  expect(messages[0].images).toEqual([image]);
+  expect(messages[1]).toMatchObject({role:"question",operationID:"op",answers:{q:"Blue"}});
+  expect(messages[2].text).toBe("Continued");
+});
