@@ -802,7 +802,11 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		command.Workspace = root
-		return c.gemini.RunInTrustedWorkspace(ctx, envelope.OperationID, command)
+		environment, err := c.geminiGitEnvironment(ctx)
+		if err != nil {
+			return err
+		}
+		return c.gemini.RunInTrustedWorkspaceWithEnvironment(ctx, envelope.OperationID, command, environment)
 	case "gemini.question.answer":
 		var command protocol.GeminiAnswerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

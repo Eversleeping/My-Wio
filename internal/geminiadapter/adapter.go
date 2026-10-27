@@ -109,7 +109,7 @@ func (a *Adapter) Interrupt(operationID string) {
 }
 
 func (a *Adapter) Run(parent context.Context, operationID string, command protocol.GeminiTurnCommand) error {
-	return a.run(parent, operationID, command, false)
+	return a.run(parent, operationID, command, false, nil)
 }
 
 // RunInTrustedWorkspace is for a user-selected workspace whose canonical path
@@ -117,10 +117,14 @@ func (a *Adapter) Run(parent context.Context, operationID string, command protoc
 // to this CLI process; it does not change the user's persistent trust decisions
 // or the requested tool approval mode.
 func (a *Adapter) RunInTrustedWorkspace(parent context.Context, operationID string, command protocol.GeminiTurnCommand) error {
-	return a.run(parent, operationID, command, true)
+	return a.run(parent, operationID, command, true, nil)
 }
 
-func (a *Adapter) run(parent context.Context, operationID string, command protocol.GeminiTurnCommand, trustedWorkspace bool) error {
+func (a *Adapter) RunInTrustedWorkspaceWithEnvironment(parent context.Context, operationID string, command protocol.GeminiTurnCommand, environment []string) error {
+	return a.run(parent, operationID, command, true, environment)
+}
+
+func (a *Adapter) run(parent context.Context, operationID string, command protocol.GeminiTurnCommand, trustedWorkspace bool, extraEnvironment []string) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	a.mu.Lock()
@@ -130,6 +134,7 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	}
 	executable := a.command
 	overrides := append([]string(nil), a.environment...)
+	overrides = append(overrides, extraEnvironment...)
 	if trustedWorkspace {
 		overrides = append(overrides, "GEMINI_CLI_TRUST_WORKSPACE=true")
 	}
