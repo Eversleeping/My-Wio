@@ -484,10 +484,10 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .gemini-working { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .gemini-options { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1fr); gap: 12px; }
 .gemini-options .field { min-width: 0; margin: 8px 0; }
+.gemini-options.with-actions { grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1fr) auto; }
+.gemini-options-actions { grid-column: 4; grid-row: 1; align-self: end; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .gemini-composer { border-top: 1px solid var(--line); }
 .gemini-composer textarea { max-height: 160px; resize: vertical; }
-.gemini-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.gemini-composer-footer small { color: var(--muted); font-size: 11px; }
 .gemini-welcome { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 30px; text-align: center; }
 .gemini-welcome > svg { color: var(--green); }
 .gemini-welcome p { max-width: 420px; color: var(--muted); line-height: 1.7; }
@@ -914,6 +914,9 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .gemini-layout .gemini-thread-list { flex: 1; }
   .gemini-stream { padding: 12px; }
   .gemini-options { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .gemini-options.with-actions { grid-template-columns: minmax(0, 1fr) auto; }
+  .gemini-options.with-actions > .field:not(:first-child) { grid-column: 1 / -1; }
+  .gemini-options-actions { grid-column: 2; }
   .gemini-session .session-header { gap: 6px; padding: 8px; }
   .sidebar { transform: translateX(-100%); transition: transform .2s ease; }
   .sidebar.open { transform: translateX(0); }
