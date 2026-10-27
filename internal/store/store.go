@@ -1260,7 +1260,12 @@ func (s *Store) UpdateProjectDetails(ctx context.Context, id string, name, descr
 	}
 	sets = append(sets, "updated_at=?")
 	args = append(args, now, id)
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE projects SET "+strings.Join(sets, ",")+" WHERE id=?"), args...)
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE projects SET "+strings.Join(sets, ",")+" WHERE id=?"), args...)
 	if err != nil {
 		return Project{}, err
 	}
@@ -1270,6 +1275,16 @@ func (s *Store) UpdateProjectDetails(ctx context.Context, id string, name, descr
 	}
 	if rows == 0 {
 		return Project{}, sql.ErrNoRows
+	}
+	// The project management page provides the global recovery path for hidden
+	// projects, including server-specific hides made from the session sidebar.
+	if hidden != nil && !*hidden {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE project_server_preferences SET hidden_at=NULL WHERE project_id=?"), id); err != nil {
+			return Project{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Project{}, err
 	}
 	return s.Project(ctx, id)
 }

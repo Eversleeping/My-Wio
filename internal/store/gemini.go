@@ -41,8 +41,8 @@ type GeminiThread struct {
 	ServerStatus      string     `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,s.agent_version,w.path,w.project_id,p.name AS project_name,p.pinned_at AS project_pinned_at,p.hidden_at AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
- FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id`
+const geminiThreadSelect = `SELECT t.*,s.agent_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+ FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id` + projectServerJoin
 
 func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThread, error) {
 	out := []GeminiThread{}
@@ -50,7 +50,7 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 	if archived {
 		condition = "t.archived_at IS NOT NULL"
 	}
-	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN ps.pinned_at IS NULL THEN 1 ELSE 0 END,ps.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range out {
 		out[i].InputSupported = buildinfo.SupportsGeminiInput(out[i].AgentVersion)
 		out[i].ThinkingSupported = buildinfo.SupportsGeminiThinking(out[i].AgentVersion)

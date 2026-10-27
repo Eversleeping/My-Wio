@@ -520,7 +520,9 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .project-hidden-row { opacity: .74; }
 .thread-project-toggle { width: 100%; height: 38px; display: flex; align-items: center; gap: 6px; padding: 0 10px; color: #536067; background: #f3f5f2; border: 0; border-radius: 0; text-align: left; }
 .thread-project-toggle:hover { color: var(--ink); background: #ecefeb; }
-.thread-project-toggle strong { min-width: 0; overflow: hidden; flex: 1; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.thread-project-toggle strong { min-width: 0; overflow: hidden; flex: 1; display: flex; align-items: baseline; font-size: 11px; white-space: nowrap; }
+.thread-project-toggle strong > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.thread-project-toggle strong small { flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; margin-left: 5px; color: var(--muted); font-size: 10px; font-weight: 400; }
 .thread-project-toggle > span { min-width: 20px; padding: 2px 5px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 9px; font-size: 9px; text-align: center; }
 .thread { width: 100%; min-height: 69px; display: flex; align-items: stretch; justify-content: space-between; gap: 4px; color: var(--ink); background: transparent; border: 0; border-top: 1px solid #e8ebe7; text-align: left; }
 .project-threads .thread:first-child { border-top: 0; }

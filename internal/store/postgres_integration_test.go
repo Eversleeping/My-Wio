@@ -109,6 +109,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertCodexSnapshotTimeoutAndRetry(t, scans)
 	assertMessageForkCopiesOnlySelectedHistory(t, scans)
 	assertGeminiCredentialBindingsAndReplay(t, scans)
+	assertProjectServerPreferencesIsolation(t, scans)
 }
 
 func availablePostgresPort(t *testing.T) uint32 {

@@ -13,12 +13,16 @@ func (a *API) archiveGeminiProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "project not found")
 		return
 	}
-	n, err := a.store.ArchiveGeminiProject(r.Context(), id)
+	serverID, ok := a.projectServerScope(w, r, id)
+	if !ok {
+		return
+	}
+	n, err := a.store.ArchiveGeminiProject(r.Context(), id, serverID)
 	if err != nil {
 		writeError(w, 500, "could not archive Gemini sessions")
 		return
 	}
-	a.auditGemini(r, "gemini.project.archive", id)
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "gemini.project.archive", "project", id, map[string]any{"archived": n, "server_id": serverID}, clientIP(r))
 	a.publishGeminiChange(r, id, "gemini.thread.updated")
 	writeJSON(w, 200, map[string]int64{"archived": n})
 }

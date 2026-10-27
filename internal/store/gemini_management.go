@@ -20,8 +20,14 @@ func (s *Store) PinGeminiThread(ctx context.Context, id string, pinned bool) err
 	return err
 }
 
-func (s *Store) ArchiveGeminiProject(ctx context.Context, projectID string) (int64, error) {
-	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?)`), time.Now().UTC(), time.Now().UTC(), projectID)
+func (s *Store) ArchiveGeminiProject(ctx context.Context, projectID string, serverOption ...string) (int64, error) {
+	scope := ""
+	args := []any{time.Now().UTC(), time.Now().UTC(), projectID}
+	if len(serverOption) > 0 && serverOption[0] != "" {
+		scope = " AND server_id=?"
+		args = append(args, serverOption[0])
+	}
+	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`)`), args...)
 	if err != nil {
 		return 0, err
 	}

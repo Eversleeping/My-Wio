@@ -105,10 +105,10 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
   const [threadAction, setThreadAction] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [pendingThread, setPendingThread] = useState<Thread | null>(null);
-  const [renameTarget, setRenameTarget] = useState<{ kind: "project" | "thread"; id: string; name: string } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ kind: "project" | "thread"; id: string; name: string; serverID?: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
-  const [worktreeTarget, setWorktreeTarget] = useState<{ kind: "project"; projectID: string; projectName: string } | { kind: "thread"; thread: Thread } | null>(null);
+  const [worktreeTarget, setWorktreeTarget] = useState<{ kind: "project"; projectID: string; projectName: string; serverID: string; workspaceID: string } | { kind: "thread"; thread: Thread } | null>(null);
   const [worktreeForm, setWorktreeForm] = useState({ workspace_id: "", branch: "", path: "", base_ref: "HEAD" });
   const [worktreeBusy, setWorktreeBusy] = useState(false);
   const [worktreeError, setWorktreeError] = useState("");
@@ -153,14 +153,14 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
   const openFile = (selection: FilePreviewSelection) => { setPreview(selection); setActivePane("preview"); setMobileView("conversation"); };
   const copyValue = async (value: string, success: string) => { try { await copyText(value); notify(success); } catch (error) { notify(message(error)); } };
   const deepLink = (threadID: string) => `${window.location.origin}${locationFor("codex", threadID)}`;
-  const beginRename = (kind: "project" | "thread", id: string, name: string) => { setRenameTarget({ kind, id, name }); setRenameValue(name); };
+  const beginRename = (kind: "project" | "thread", id: string, name: string, serverID?: string) => { setRenameTarget({ kind, id, name, serverID }); setRenameValue(name); };
   const submitRename = async (event: FormEvent) => {
     event.preventDefault();
     const value = renameValue.trim();
     if (!renameTarget || !value || renameBusy) return;
     setRenameBusy(true);
     try {
-      if (renameTarget.kind === "project") await patch<Project>(`/projects/${renameTarget.id}`, { name: value });
+      if (renameTarget.kind === "project") await patch<Project>(`/projects/${renameTarget.id}`, { name: value, server_id: renameTarget.serverID });
       else await patch<Thread>(`/threads/${renameTarget.id}`, { title: value });
       threads.reload();
       notify(t(renameTarget.kind === "project" ? "codex.projectRenamed" : "codex.threadRenamed"));
@@ -183,8 +183,8 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
     if (threadAction) return;
     setThreadAction(`project:${group.projectID}`);
     try {
-      const result = await post<{ archived: number }>(`/projects/${group.projectID}/threads/archive`, {});
-      if (active?.project_id === group.projectID) selectThread(visibleThreads.find(item => item.project_id !== group.projectID)?.id ?? "");
+      const result = await post<{ archived: number }>(`/projects/${group.projectID}/threads/archive?server_id=${encodeURIComponent(group.serverID)}`, {});
+      if (active?.project_id === group.projectID && active.server_id === group.serverID) selectThread(visibleThreads.find(item => item.project_id !== group.projectID || item.server_id !== group.serverID)?.id ?? "");
       reloadThreadLists();
       notify(t("codex.projectThreadsArchived", { count: result.archived }));
       setCodexConfirmation(null);
@@ -194,8 +194,8 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
     if (threadAction) return;
     setThreadAction(`hide:${group.projectID}`);
     try {
-      await patch<Project>(`/projects/${group.projectID}`, { hidden: true });
-      if (active?.project_id === group.projectID) selectThread(visibleThreads.find(thread => thread.project_id !== group.projectID)?.id ?? "");
+      await patch<Project>(`/projects/${group.projectID}`, { hidden: true, server_id: group.serverID });
+      if (active?.project_id === group.projectID && active.server_id === group.serverID) selectThread(visibleThreads.find(thread => thread.project_id !== group.projectID || thread.server_id !== group.serverID)?.id ?? "");
       threads.reload();
       notify(t("codex.projectHidden"));
       setCodexConfirmation(null);
@@ -230,10 +230,10 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
       notify(t("codex.sessionCreated"));
     } catch (error) { notify(message(error)); } finally { setThreadAction(""); }
   };
-  const openWorktreeDialog = (target: { kind: "project"; projectID: string; projectName: string } | { kind: "thread"; thread: Thread }) => {
-    const candidates = target.kind === "project" ? (workspaces.data ?? []).filter(workspace => workspace.project_id === target.projectID) : (workspaces.data ?? []).filter(workspace => workspace.id === target.thread.workspace_id);
+  const openWorktreeDialog = (target: { kind: "project"; projectID: string; projectName: string; serverID: string; workspaceID: string } | { kind: "thread"; thread: Thread }) => {
+    const candidates = target.kind === "project" ? (workspaces.data ?? []).filter(workspace => workspace.project_id === target.projectID && workspace.server_id === target.serverID) : (workspaces.data ?? []).filter(workspace => workspace.id === target.thread.workspace_id);
     setWorktreeTarget(target);
-    setWorktreeForm({ workspace_id: candidates[0]?.id ?? "", branch: "", path: "", base_ref: "HEAD" });
+    setWorktreeForm({ workspace_id: (target.kind === "project" ? candidates.find(workspace => workspace.id === target.workspaceID)?.id : undefined) ?? candidates[0]?.id ?? "", branch: "", path: "", base_ref: "HEAD" });
     setWorktreeError("");
   };
   const closeWorktreeDialog = () => { if (!worktreeBusy) { setWorktreeTarget(null); setWorktreeError(""); } };
@@ -264,9 +264,9 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
   };
   const projectMenuActions = (group: ThreadGroup): ContextMenuAction[] => [
     ...(!showArchived ? [{ id: "new-session", label: t("codex.createSessionHere"), icon: Plus, disabled: threadAction !== "", onSelect: () => createSessionInWorkspace(group) } satisfies ContextMenuAction] : []),
-    { id: "pin", label: t(group.pinnedAt ? "codex.unpinProject" : "codex.pinProject"), icon: group.pinnedAt ? PinOff : Pin, onSelect: async () => { try { await patch<Project>(`/projects/${group.projectID}`, { pinned: !group.pinnedAt }); threads.reload(); notify(t(group.pinnedAt ? "codex.projectUnpinned" : "codex.projectPinned")); } catch (error) { notify(message(error)); } } },
-    { id: "rename", label: t("codex.renameProject"), icon: Pencil, onSelect: () => beginRename("project", group.projectID, group.projectName) },
-    ...(!showArchived ? [{ id: "create-worktree", label: t("codex.createPermanentWorktree"), icon: GitBranch, disabled: threadAction !== "" || !(workspaces.data ?? []).some(workspace => workspace.project_id === group.projectID), onSelect: () => openWorktreeDialog({ kind: "project", projectID: group.projectID, projectName: group.projectName }) } satisfies ContextMenuAction] : []),
+    { id: "pin", label: t(group.pinnedAt ? "codex.unpinProject" : "codex.pinProject"), icon: group.pinnedAt ? PinOff : Pin, onSelect: async () => { try { await patch<Project>(`/projects/${group.projectID}`, { pinned: !group.pinnedAt, server_id: group.serverID }); threads.reload(); notify(t(group.pinnedAt ? "codex.projectUnpinned" : "codex.projectPinned")); } catch (error) { notify(message(error)); } } },
+    { id: "rename", label: t("codex.renameProject"), icon: Pencil, onSelect: () => beginRename("project", group.projectID, group.projectName, group.serverID) },
+    ...(!showArchived ? [{ id: "create-worktree", label: t("codex.createPermanentWorktree"), icon: GitBranch, disabled: threadAction !== "" || !(workspaces.data ?? []).some(workspace => workspace.project_id === group.projectID && workspace.server_id === group.serverID), onSelect: () => openWorktreeDialog({ kind: "project", projectID: group.projectID, projectName: group.projectName, serverID: group.serverID, workspaceID: group.workspaceID }) } satisfies ContextMenuAction] : []),
     ...(!showArchived ? [{ id: "archive-tasks", label: t("codex.archiveProjectThreads"), icon: Archive, danger: true, separatorBefore: true, disabled: threadAction !== "", onSelect: () => setCodexConfirmation({ type: "archive-project", group }) } satisfies ContextMenuAction] : []),
     { id: "hide", label: t("codex.hideProject"), icon: EyeOff, danger: true, separatorBefore: true, disabled: threadAction !== "", onSelect: () => setCodexConfirmation({ type: "hide-project", group }) }
   ];
@@ -309,8 +309,8 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
       const collapsed = collapsedWorkspaces.has(group.workspaceID);
       return <section className="thread-project" key={group.workspaceID}>
         <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.label })} actions={projectMenuActions(group)}>
-          <button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={`${t(collapsed ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${group.path}`} onClick={() => toggleWorkspace(group.workspaceID)}>
-            {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong>{group.label}</strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span>
+          <button type="button" className="thread-project-toggle" aria-expanded={!collapsed} title={`${t(collapsed ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${group.serverName} · ${group.path}`} onClick={() => toggleWorkspace(group.workspaceID)}>
+            {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong><span>{group.label}</span><small>{group.serverName}</small></strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span>
           </button>
         </ContextMenu>
         {!collapsed && <div className="project-threads">{group.threads.map(thread => {
@@ -325,7 +325,7 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { setPendingThread(thread); selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
-    <Dialog open={worktreeTarget !== null} title={t(worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")} onClose={closeWorktreeDialog}><form onSubmit={submitWorktree}>{worktreeError && <ErrorBanner text={worktreeError} />}<p className="security-notice">{t(worktreeTarget?.kind === "thread" ? "codex.continueWorktreeDescription" : "codex.createWorktreeDescription")}</p>{worktreeTarget?.kind === "project" && <Field label={t("codex.sourceWorkspace")}><select value={worktreeForm.workspace_id} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, workspace_id: event.target.value })} required><option value="">{t("codex.selectWorkspaceOption")}</option>{(workspaces.data ?? []).filter(workspace => workspace.project_id === worktreeTarget.projectID).map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.server_name} · {workspace.branch || t("project.detached")} · {workspace.path}</option>)}</select></Field>}<div className="form-grid"><Field label={t("codex.worktreeBranch")}><input autoFocus value={worktreeForm.branch} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, branch: event.target.value })} placeholder="feature/my-change" required /></Field><Field label={t("codex.worktreeBaseRef")}><input value={worktreeForm.base_ref} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, base_ref: event.target.value })} placeholder="HEAD" required /></Field></div><Field label={t("codex.worktreePath")}><input value={worktreeForm.path} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, path: event.target.value })} placeholder={t("codex.worktreePathPlaceholder")} /></Field><DialogActions><button type="button" className="secondary-button" disabled={worktreeBusy} onClick={closeWorktreeDialog}>{t("common.cancel")}</button><button className="primary-button" disabled={worktreeBusy || !worktreeForm.workspace_id || !worktreeForm.branch.trim()}>{worktreeBusy ? <LoaderCircle className="spin" size={16} /> : worktreeTarget?.kind === "thread" ? <GitFork size={16} /> : <GitBranch size={16} />}{t(worktreeBusy ? "codex.creatingWorktree" : worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")}</button></DialogActions></form></Dialog>
+    <Dialog open={worktreeTarget !== null} title={t(worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")} onClose={closeWorktreeDialog}><form onSubmit={submitWorktree}>{worktreeError && <ErrorBanner text={worktreeError} />}<p className="security-notice">{t(worktreeTarget?.kind === "thread" ? "codex.continueWorktreeDescription" : "codex.createWorktreeDescription")}</p>{worktreeTarget?.kind === "project" && <Field label={t("codex.sourceWorkspace")}><select value={worktreeForm.workspace_id} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, workspace_id: event.target.value })} required><option value="">{t("codex.selectWorkspaceOption")}</option>{(workspaces.data ?? []).filter(workspace => workspace.project_id === worktreeTarget.projectID && workspace.server_id === worktreeTarget.serverID).map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.server_name} · {workspace.branch || t("project.detached")} · {workspace.path}</option>)}</select></Field>}<div className="form-grid"><Field label={t("codex.worktreeBranch")}><input autoFocus value={worktreeForm.branch} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, branch: event.target.value })} placeholder="feature/my-change" required /></Field><Field label={t("codex.worktreeBaseRef")}><input value={worktreeForm.base_ref} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, base_ref: event.target.value })} placeholder="HEAD" required /></Field></div><Field label={t("codex.worktreePath")}><input value={worktreeForm.path} disabled={worktreeBusy} onChange={event => setWorktreeForm({ ...worktreeForm, path: event.target.value })} placeholder={t("codex.worktreePathPlaceholder")} /></Field><DialogActions><button type="button" className="secondary-button" disabled={worktreeBusy} onClick={closeWorktreeDialog}>{t("common.cancel")}</button><button className="primary-button" disabled={worktreeBusy || !worktreeForm.workspace_id || !worktreeForm.branch.trim()}>{worktreeBusy ? <LoaderCircle className="spin" size={16} /> : worktreeTarget?.kind === "thread" ? <GitFork size={16} /> : <GitBranch size={16} />}{t(worktreeBusy ? "codex.creatingWorktree" : worktreeTarget?.kind === "thread" ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")}</button></DialogActions></form></Dialog>
     <ScheduledTaskDialog open={scheduledThread !== null} initialThreadID={scheduledThread?.id} lockThread threads={scheduledThread ? [scheduledThread] : []} notify={notify} onClose={() => setScheduledThread(null)} onSaved={() => undefined} />
     <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : approvals.map(item => isUserInputRequest(item) ? <UserInputPrompt key={item.id} item={item} onDecided={reloadApprovals} /> : <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={reloadApprovals} notify={notify} /></div>)}</div></Dialog>
     {codexConfirmation?.type === "archive-project" ? <ConfirmDialog open danger title={t("codex.archiveProjectThreads")} impact={t("codex.confirmArchiveProject", { name: codexConfirmation.group.projectName })} confirmLabel={t("codex.archiveProjectThreads")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={threadAction !== ""} onClose={() => setCodexConfirmation(null)} onConfirm={() => archiveProjectThreads(codexConfirmation.group)} /> : codexConfirmation?.type === "hide-project" ? <ConfirmDialog open danger title={t("codex.hideProject")} impact={t("codex.confirmHideProject", { name: codexConfirmation.group.projectName })} confirmLabel={t("codex.hideProject")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={threadAction !== ""} onClose={() => setCodexConfirmation(null)} onConfirm={() => hideProject(codexConfirmation.group)} /> : codexConfirmation?.type === "delete-thread" ? <ConfirmDialog open danger title={t("codex.deleteSession")} impact={t("codex.confirmDeleteSession", { title: codexConfirmation.thread.title })} confirmLabel={t("codex.deleteSession")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={deletingThread !== ""} onClose={() => setCodexConfirmation(null)} onConfirm={() => deleteSession(codexConfirmation.thread)} /> : null}

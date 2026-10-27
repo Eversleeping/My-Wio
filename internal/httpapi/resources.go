@@ -597,6 +597,7 @@ func (a *API) retryProjectCreation(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
 	var input struct {
+		ServerID      *string `json:"server_id"`
 		Name          *string `json:"name"`
 		Description   *string `json:"description"`
 		DefaultBranch *string `json:"default_branch"`
@@ -640,7 +641,19 @@ func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
 		input.DefaultBranch = &branch
 	}
 	projectID := chi.URLParam(r, "projectID")
-	project, err := a.store.UpdateProjectDetails(r.Context(), projectID, input.Name, input.Description, input.DefaultBranch, input.Pinned, input.Hidden, input.Archived)
+	var project store.Project
+	var err error
+	if input.ServerID != nil {
+		serverID := strings.TrimSpace(*input.ServerID)
+		if serverID == "" || input.Description != nil || input.DefaultBranch != nil || input.Archived != nil {
+			writeError(w, http.StatusBadRequest, "server project preferences require server_id and only support name, pinned and hidden")
+			return
+		}
+		input.ServerID = &serverID
+		project, err = a.store.UpdateProjectServerPreferences(r.Context(), projectID, serverID, input.Name, input.Pinned, input.Hidden)
+	} else {
+		project, err = a.store.UpdateProjectDetails(r.Context(), projectID, input.Name, input.Description, input.DefaultBranch, input.Pinned, input.Hidden, input.Archived)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
@@ -650,6 +663,9 @@ func (a *API) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail := map[string]any{}
+	if input.ServerID != nil {
+		detail["server_id"] = *input.ServerID
+	}
 	if input.Name != nil {
 		detail["name"] = *input.Name
 	}
@@ -1725,13 +1741,17 @@ func (a *API) archiveProjectThreads(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load project")
 		return
 	}
-	count, err := a.store.ArchiveProjectThreads(r.Context(), projectID)
+	serverID, ok := a.projectServerScope(w, r, projectID)
+	if !ok {
+		return
+	}
+	count, err := a.store.ArchiveProjectThreads(r.Context(), projectID, serverID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not archive project sessions")
 		return
 	}
 	session := currentSession(r)
-	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.archive_project", "project", projectID, map[string]int64{"archived": count}, clientIP(r))
+	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.archive_project", "project", projectID, map[string]any{"archived": count, "server_id": serverID}, clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]int64{"archived": count})
 }
 

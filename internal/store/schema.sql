@@ -85,6 +85,15 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE UNIQUE INDEX IF NOT EXISTS projects_remote_unique ON projects(normalized_remote) WHERE normalized_remote <> '';
 
+CREATE TABLE IF NOT EXISTS project_server_preferences (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  pinned_at TIMESTAMP,
+  hidden_at TIMESTAMP,
+  PRIMARY KEY(project_id, server_id)
+);
+
 CREATE TABLE IF NOT EXISTS project_remotes (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

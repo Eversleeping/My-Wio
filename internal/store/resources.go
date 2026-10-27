@@ -42,6 +42,8 @@ type ThreadPage struct {
 	HasMore bool
 }
 
+const codexThreadSelect = `SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,` + projectServerName + ` project_name,t.pinned_at,t.archived_at,` + projectServerPin + ` project_pinned_at,` + projectServerHidden + ` project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id` + projectServerJoin
+
 func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Thread, error) {
 	var out []Thread
 	archived := ""
@@ -54,7 +56,7 @@ func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Th
 	} else if archived == "all" {
 		filter = ""
 	}
-	err := s.DB.SelectContext(ctx, &out, `SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.pinned_at,t.archived_at,p.pinned_at project_pinned_at,p.hidden_at project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id`+filter+` ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC`)
+	err := s.DB.SelectContext(ctx, &out, codexThreadSelect+filter+` ORDER BY CASE WHEN (`+projectServerPin+`) IS NULL THEN 1 ELSE 0 END,project_pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC`)
 	return out, err
 }
 
@@ -75,7 +77,7 @@ func (s *Store) ListThreadsPage(ctx context.Context, archived string, limit, off
 		filter = ""
 	}
 	items := make([]Thread, 0, limit+1)
-	err := s.DB.SelectContext(ctx, &items, s.Q(`SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.pinned_at,t.archived_at,p.pinned_at project_pinned_at,p.hidden_at project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id`+filter+` ORDER BY CASE WHEN p.pinned_at IS NULL THEN 1 ELSE 0 END,p.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC,t.id DESC LIMIT ? OFFSET ?`), limit+1, offset)
+	err := s.DB.SelectContext(ctx, &items, s.Q(codexThreadSelect+filter+` ORDER BY CASE WHEN (`+projectServerPin+`) IS NULL THEN 1 ELSE 0 END,project_pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC,t.id DESC LIMIT ? OFFSET ?`), limit+1, offset)
 	if err != nil {
 		return ThreadPage{}, err
 	}
@@ -89,7 +91,7 @@ func (s *Store) ListThreadsPage(ctx context.Context, archived string, limit, off
 
 func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
 	var out Thread
-	err := s.DB.GetContext(ctx, &out, s.Q(`SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,p.name project_name,t.pinned_at,t.archived_at,p.pinned_at project_pinned_at,p.hidden_at project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id WHERE t.id=?`), id)
+	err := s.DB.GetContext(ctx, &out, s.Q(codexThreadSelect+` WHERE t.id=?`), id)
 	return out, err
 }
 
@@ -207,9 +209,14 @@ func (s *Store) UpdateThread(ctx context.Context, id string, title *string, pinn
 	return s.Thread(ctx, id)
 }
 
-func (s *Store) ArchiveProjectThreads(ctx context.Context, projectID string) (int64, error) {
-	now := time.Now().UTC()
-	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE codex_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?) AND status NOT IN ('queued','running')`), now, now, projectID)
+func (s *Store) ArchiveProjectThreads(ctx context.Context, projectID string, serverOption ...string) (int64, error) {
+	scope := ""
+	args := []any{time.Now().UTC(), time.Now().UTC(), projectID}
+	if len(serverOption) > 0 && serverOption[0] != "" {
+		scope = " AND server_id=?"
+		args = append(args, serverOption[0])
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE codex_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`) AND status NOT IN ('queued','running')`), args...)
 	if err != nil {
 		return 0, err
 	}
