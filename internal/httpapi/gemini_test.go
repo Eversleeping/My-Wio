@@ -10,9 +10,80 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
+
+func TestGeminiYoloPersistsAndDispatchesWithoutApprovals(t *testing.T) {
+	ctx := context.Background()
+	db := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, db, "yolo-agent")
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.71"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/yolo", Name: "yolo"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := db.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("workspaces: %+v %v", workspaces, err)
+	}
+	api := resourceTestAPI(db)
+	input := map[string]string{"workspace_id": workspaces[0].ID, "model": "flash", "approval_mode": "yolo"}
+	create := func() *httptest.ResponseRecorder {
+		return directJSONRequest(t, "POST", "/api/gemini/threads", input, &store.Session{UserID: "test-user"}, api.createGeminiThread)
+	}
+	if w := create(); w.Code != 409 || !strings.Contains(w.Body.String(), buildinfo.MinimumGeminiYoloVersion) {
+		t.Fatalf("old Agent accepted yolo: %d %s", w.Code, w.Body.String())
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiYoloVersion}); err != nil {
+		t.Fatal(err)
+	}
+	w := create()
+	if w.Code != 201 {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var thread store.GeminiThread
+	if err := json.Unmarshal(w.Body.Bytes(), &thread); err != nil || thread.ApprovalMode != "yolo" {
+		t.Fatalf("yolo not saved: %+v %v", thread, err)
+	}
+	path := "/api/gemini/threads/" + thread.ID + "/turns"
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.71"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := threadResourceRequest(t, "POST", path, thread.ID, map[string]string{"prompt": "old agent"}, api.startGeminiTurn); w.Code != 409 {
+		t.Fatalf("old Agent accepted inherited yolo: %d %s", w.Code, w.Body.String())
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiYoloVersion}); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"", "default", "yolo"} {
+		w := threadResourceRequest(t, "POST", path, thread.ID, map[string]string{"prompt": "run commands", "approval_mode": mode}, api.startGeminiTurn)
+		if w.Code != 202 {
+			t.Fatalf("turn: %d %s", w.Code, w.Body.String())
+		}
+		current, err := db.GeminiThread(ctx, thread.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := db.Operation(ctx, current.OperationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var command protocol.GeminiTurnCommand
+		want := mode
+		if want == "" {
+			want = "yolo"
+		}
+		if err := json.Unmarshal([]byte(op.Payload), &command); err != nil || command.ApprovalMode != want || current.ApprovalMode != want {
+			t.Fatalf("approval mode lost: %+v %+v %v", current, command, err)
+		}
+		if err := db.InterruptGeminiTurn(ctx, current); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	ctx := context.Background()
@@ -57,7 +128,7 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	if w := request("POST", "/api/gemini/threads", `{"workspace_id":"missing"}`, true); w.Code != 400 {
 		t.Fatal(w.Code)
 	}
-	for _, options := range []string{`"model":"--help"`, `"approval_mode":"yolo"`} {
+	for _, options := range []string{`"model":"--help"`, `"approval_mode":"invalid"`} {
 		if w := request("POST", "/api/gemini/threads", `{"workspace_id":"`+workspaces[0].ID+`",`+options+`}`, true); w.Code != 400 {
 			t.Fatalf("options accepted: %s", w.Body.String())
 		}

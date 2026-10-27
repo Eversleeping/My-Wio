@@ -16,7 +16,7 @@ import (
 )
 
 func validGeminiOptions(model, mode string) bool {
-	if !credentialModelPattern.MatchString(model) || (mode != "default" && mode != "auto_edit") {
+	if !credentialModelPattern.MatchString(model) || (mode != "default" && mode != "auto_edit" && mode != "yolo") {
 		return false
 	}
 	return true
@@ -51,14 +51,18 @@ func (a *API) createGeminiThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid Gemini model, thinking level or approval mode")
 		return
 	}
-	if input.ThinkingLevel != "" {
+	if input.ThinkingLevel != "" || input.ApprovalMode == "yolo" {
 		workspace, err := a.store.Workspace(r.Context(), input.WorkspaceID)
 		if err != nil {
 			writeError(w, 400, "workspace not found")
 			return
 		}
 		server, err := a.store.Server(r.Context(), workspace.ServerID)
-		if err != nil || !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
+		if input.ApprovalMode == "yolo" && (err != nil || !buildinfo.SupportsGeminiYolo(server.AgentVersion)) {
+			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals")
+			return
+		}
+		if err != nil || (input.ThinkingLevel != "" && !buildinfo.SupportsGeminiThinking(server.AgentVersion)) {
 			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiThinkingVersion+" or newer to configure Gemini thinking")
 			return
 		}
@@ -173,6 +177,10 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if !buildinfo.SupportsGemini(server.AgentVersion) {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiVersion+" or newer to use Gemini")
+		return
+	}
+	if input.ApprovalMode == "yolo" && !buildinfo.SupportsGeminiYolo(server.AgentVersion) {
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals")
 		return
 	}
 	if level != "" && !buildinfo.SupportsGeminiThinking(server.AgentVersion) {

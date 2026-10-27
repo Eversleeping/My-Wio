@@ -53,14 +53,27 @@ test("shows only fetched models and creates a session with a selected model",asy
   await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
+test("creates a session with never approve selected",async () => {
+  const {user,requests} = setup();
+  await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
+  const dialog = screen.getByRole("dialog");
+  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
+  await within(dialog).findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Tool permissions"}),"yolo");
+  expect(within(dialog).getByRole("option",{name:"Never approve"})).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}}));
+});
+
 test("switches an existing session model for the next turn",async () => {
   const {user,requests} = setup(true);
   const models = await screen.findByRole("combobox",{name:"Gemini model"});
   await within(models).findByRole("option",{name:"Upstream · gemini-upstream-current"});
   await user.selectOptions(models,"gemini-upstream-current");
+  await user.selectOptions(screen.getByRole("combobox",{name:"Tool permissions"}),"yolo");
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   await user.click(screen.getByRole("button",{name:"Send"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Hello",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Hello",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}}));
 });
 
 test("preserves and edits a custom model name",async () => {
@@ -215,9 +228,10 @@ test("edits and resends at the selected message and replaces the stale tail",asy
   expect(prompt).toHaveValue("Original prompt");
   expect(screen.getByText("Editing an earlier message; later replies will be discarded")).toBeInTheDocument();
   await user.clear(prompt); await user.type(prompt,"Updated prompt");
+  await user.selectOptions(screen.getByRole("combobox",{name:"Tool permissions"}),"yolo");
   await user.click(screen.getByRole("button",{name:"Send"}));
   await screen.findByText("Revised answer");
-  expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/events/edit/rewrite",body:{prompt:"Updated prompt",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}});
+  expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/events/edit/rewrite",body:{prompt:"Updated prompt",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}});
   expect(screen.getByText("Keep this earlier prompt")).toBeInTheDocument();
   expect(screen.getByText("Updated prompt")).toBeInTheDocument();
   expect(screen.queryByText("Original prompt")).not.toBeInTheDocument();
@@ -283,10 +297,11 @@ test("creates a Gemini scheduled task with Gemini approval options",async()=>{
  const dialog=screen.getByRole("dialog");
  expect(within(dialog).getByRole("combobox",{name:"Agent"})).toHaveValue("gemini");
  expect(within(dialog).queryByRole("combobox",{name:"Reasoning effort"})).not.toBeInTheDocument();
+ await user.selectOptions(within(dialog).getByRole("combobox",{name:"Tool permissions"}),"yolo");
  await user.type(within(dialog).getByRole("textbox",{name:"Name"}),"Gemini review");
  await user.type(within(dialog).getByRole("textbox",{name:"Prompt"}),"Review this project");
  await user.click(within(dialog).getByRole("button",{name:"Save"}));
- await waitFor(()=>expect(requests.some(r=>r.url==="/api/scheduled-tasks"&&(r.body as {agent_kind:string;approval_mode:string}).agent_kind==="gemini"&&(r.body as {approval_mode:string}).approval_mode==="default")).toBe(true));
+ await waitFor(()=>expect(requests.some(r=>r.url==="/api/scheduled-tasks"&&(r.body as {agent_kind:string;approval_mode:string}).agent_kind==="gemini"&&(r.body as {approval_mode:string}).approval_mode==="yolo")).toBe(true));
 });
 
 

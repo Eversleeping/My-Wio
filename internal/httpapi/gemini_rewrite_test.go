@@ -3,9 +3,11 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"github.com/wio-platform/wio/internal/protocol"
 	"strings"
 	"testing"
+
+	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T) {
@@ -52,8 +54,15 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE gemini_threads SET session_id='native' WHERE id=?"), thread.ID); err != nil {
 		t.Fatal(err)
 	}
-	if response := rewriteResourceRequest(t, thread.ID, event.EventID, map[string]string{"prompt": "replacement", "approval_mode": "yolo"}, api.startGeminiTurn); response.Code != 400 {
-		t.Fatal("unsafe mode accepted")
+	if response := rewriteResourceRequest(t, thread.ID, event.EventID, map[string]string{"prompt": "replacement", "approval_mode": "invalid"}, api.startGeminiTurn); response.Code != 400 {
+		t.Fatal("invalid mode accepted")
+	}
+	body["approval_mode"] = "yolo"
+	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, api.startGeminiTurn); response.Code != 409 || !strings.Contains(response.Body.String(), buildinfo.MinimumGeminiYoloVersion) {
+		t.Fatalf("old Agent accepted yolo rewrite: %d %s", response.Code, response.Body.String())
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiYoloVersion}); err != nil {
+		t.Fatal(err)
 	}
 	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, api.startGeminiTurn); response.Code != 202 {
 		t.Fatalf("rewrite: %d %s", response.Code, response.Body.String())
@@ -61,6 +70,14 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	current, _ = db.GeminiThread(ctx, thread.ID)
 	if !current.RewriteSupported || current.Status != "queued" {
 		t.Fatalf("missing capability/claim: %+v", current)
+	}
+	op, err := db.Operation(ctx, current.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command protocol.GeminiTurnCommand
+	if err := json.Unmarshal([]byte(op.Payload), &command); err != nil || command.ApprovalMode != "yolo" || command.Rewrite == nil {
+		t.Fatalf("rewrite lost approval mode: %+v %v", command, err)
 	}
 	events, _ := db.Events(ctx, thread.ID, 0, 500)
 	if len(events) < 2 || events[0].EventID != event.EventID {

@@ -212,13 +212,16 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	if reasoning != "" && !validReasoningEffort(reasoning) {
 		return store.ScheduledTaskInput{}, errors.New("invalid reasoning_effort")
 	}
-	if (kind == "codex" && approval != "on-request" && approval != "untrusted" && approval != "never") || (kind == "gemini" && approval != "default" && approval != "auto_edit") {
+	if (kind == "codex" && approval != "on-request" && approval != "untrusted" && approval != "never") || (kind == "gemini" && approval != "default" && approval != "auto_edit" && approval != "yolo") {
 		return store.ScheduledTaskInput{}, errors.New("invalid approval_mode")
 	}
 	if kind == "gemini" {
 		thread, err := a.store.GeminiThread(r.Context(), threadID)
 		if err != nil {
 			return store.ScheduledTaskInput{}, errors.New("Gemini session not found")
+		}
+		if approval == "yolo" && !buildinfo.SupportsGeminiYolo(thread.AgentVersion) {
+			return store.ScheduledTaskInput{}, errors.New("update Gemini Agent to " + buildinfo.MinimumGeminiYoloVersion + " or newer to use Gemini without approvals")
 		}
 		selectedModel := model
 		if selectedModel == "" {

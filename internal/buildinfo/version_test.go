@@ -2,6 +2,14 @@ package buildinfo
 
 import "testing"
 
+func TestGeminiYoloRequiresNewAgent(t *testing.T) {
+	for version, want := range map[string]bool{"0.2.71": false, "0.2.72": true, "v0.3.0": true, "invalid": false} {
+		if got := SupportsGeminiYolo(version); got != want {
+			t.Errorf("SupportsGeminiYolo(%q)=%v, want %v", version, got, want)
+		}
+	}
+}
+
 func TestCLIManagementRequiresNewAgent(t *testing.T) {
 	for version, want := range map[string]bool{"0.2.60": false, "0.2.61": true, "0.3.0": true, "invalid": false} {
 		if SupportsCLIManagement(version) != want {

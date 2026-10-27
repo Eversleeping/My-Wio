@@ -154,7 +154,7 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	a.active[operationID] = cancel
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); delete(a.active, operationID); a.mu.Unlock() }()
-	if command.ApprovalMode != "default" && command.ApprovalMode != "auto_edit" {
+	if command.ApprovalMode != "default" && command.ApprovalMode != "auto_edit" && command.ApprovalMode != "yolo" {
 		return errors.New("invalid Gemini approval mode")
 	}
 	// Keep prompts out of the process argument list. Piped input is documented

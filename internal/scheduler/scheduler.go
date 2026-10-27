@@ -158,6 +158,10 @@ func (r *Runner) enqueueGemini(ctx context.Context, task store.ScheduledTask, no
 	if mode == "" {
 		mode = thread.ApprovalMode
 	}
+	if mode == "yolo" && !buildinfo.SupportsGeminiYolo(thread.AgentVersion) {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals", "", now)
+		return
+	}
 	level := task.ThinkingLevel
 	if level == "" {
 		level = thread.ThinkingLevel

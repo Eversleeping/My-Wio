@@ -84,7 +84,7 @@ func TestWorkspaceTrustIsProcessScopedAndPreservesApprovalMode(t *testing.T) {
 	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	a := New(binary, func(protocol.StreamEvent) error { return nil })
-	for _, mode := range []string{"default", "auto_edit"} {
+	for _, mode := range []string{"default", "auto_edit", "yolo"} {
 		command := protocol.GeminiTurnCommand{Workspace: t.TempDir(), Model: "flash", ApprovalMode: mode, Prompt: "test"}
 		for _, trusted := range []bool{true, false} {
 			run := a.Run
