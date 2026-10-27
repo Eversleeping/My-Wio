@@ -246,6 +246,22 @@ func (c *Client) periodic(ctx context.Context) {
 	}
 }
 
+func operationContext(parent context.Context, kind string) (context.Context, context.CancelFunc) {
+	// Gemini turns run synchronously until inference and all tools finish, and
+	// can also wait for user input. Their lifetime follows explicit interruption
+	// or Agent shutdown, rather than the maintenance-operation deadline.
+	if kind == "gemini.turn.start" || kind == "gemini.turn.rewrite" {
+		return context.WithCancel(parent)
+	}
+	timeout := 10 * time.Minute
+	if strings.HasPrefix(kind, "deploy.") {
+		timeout = time.Hour
+	} else if kind == "agent.update" || kind == "codex.update" {
+		timeout = 30 * time.Minute
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
 func (c *Client) handleOperation(parent context.Context, envelope *protocol.ControlEnvelope) {
 	if envelope.OperationID == "" {
 		return
@@ -277,15 +293,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	}
 	c.seen[envelope.OperationID] = execution
 	c.seenMu.Unlock()
-	timeout := 10 * time.Minute
-	if strings.HasPrefix(envelope.Kind, "deploy.") {
-		timeout = time.Hour
-	} else if envelope.Kind == "agent.update" {
-		timeout = 30 * time.Minute
-	} else if envelope.Kind == "codex.update" {
-		timeout = 30 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := operationContext(parent, envelope.Kind)
 	defer cancel()
 	if err := c.queue("operation_started", protocol.OperationStarted{OperationID: envelope.OperationID}, true); err != nil {
 		c.log.Warn("could not queue operation start", "operation_id", envelope.OperationID, "error", err)

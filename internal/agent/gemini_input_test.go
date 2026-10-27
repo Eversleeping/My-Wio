@@ -95,3 +95,63 @@ func TestGeminiQuestionEventIdentitySurvivesAgentDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGeminiLongTurnCanBeInterruptedWhileWaitingForInput(t *testing.T) {
+	t.Setenv("WIO_AGENT_GEMINI_INPUT_CHILD", "1")
+	for _, mode := range []string{"parent-cancel", "user-interrupt"} {
+		t.Run(mode, func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			root := t.TempDir()
+			client := NewClient(Config{StateDir: t.TempDir(), ScanRoots: []string{root}, CloneRoot: root}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			executable, _ := os.Executable()
+			if err := client.gemini.ReconfigureCommand(executable, func() error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			command, _ := json.Marshal(protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: root, Prompt: "Question please", Model: "flash", ApprovalMode: "default"})
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				client.handleOperation(parent, &protocol.ControlEnvelope{Kind: "gemini.turn.start", OperationID: "turn", PayloadJSON: command})
+			}()
+			var question protocol.StreamEvent
+			deadline := time.NewTimer(5 * time.Second)
+			defer deadline.Stop()
+			for question.Kind != "gemini.question" {
+				select {
+				case envelope := <-client.outbound:
+					if envelope.Kind == "gemini_event" {
+						_ = json.Unmarshal(envelope.PayloadJSON, &question)
+					}
+				case <-deadline.C:
+					t.Fatal("turn did not request input")
+				}
+			}
+			if mode == "parent-cancel" {
+				cancel()
+			} else {
+				interrupt, _ := json.Marshal(protocol.GeminiInterruptCommand{ThreadID: "thread", OperationID: "turn"})
+				if err := client.execute(parent, &protocol.ControlEnvelope{Kind: "gemini.turn.interrupt", PayloadJSON: interrupt}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case <-done:
+			case <-deadline.C:
+				t.Fatal("cancelled turn kept running")
+			}
+			client.seenMu.Lock()
+			result := client.seen["turn"].result
+			client.seenMu.Unlock()
+			if result.Status != "failed" || result.Message != context.Canceled.Error() {
+				t.Fatalf("cancelled turn did not finish: %#v", result)
+			}
+			if err := client.gemini.Answer(protocol.GeminiAnswerCommand{ThreadID: "thread", OperationID: "turn", RequestID: question.EventID, Answers: map[string]protocol.UserInputAnswer{"q": {Answers: []string{"Yes"}}}}); err == nil {
+				t.Fatal("cancelled question still accepted an answer")
+			}
+			if err := client.gemini.ReconfigureCommand(executable, func() error { return nil }); err != nil {
+				t.Fatal("cancelled turn did not release adapter")
+			}
+		})
+	}
+}
