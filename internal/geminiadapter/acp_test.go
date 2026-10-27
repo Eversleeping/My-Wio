@@ -65,6 +65,14 @@ func fakeACPCLI() {
 			if !bytes.Contains(body, []byte("Yes")) {
 				os.Exit(3)
 			}
+			notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "shell-call", "title": "printf ACP_SHELL_OUTPUT", "status": "in_progress", "content": []any{}})
+			// Model CLI 0.65's ACP conversion: terminal-format results are
+			// discarded, while child-process output is delivered as text.
+			output := []any{}
+			if os.Getenv("GEMINI_PTY_INFO") == "child_process" {
+				output = append(output, map[string]any{"type": "content", "content": map[string]string{"type": "text", "text": "ACP_SHELL_OUTPUT"}})
+			}
+			notify(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "shell-call", "title": "printf ACP_SHELL_OUTPUT", "status": "completed", "content": output})
 			notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "continued"}})
 			result = map[string]any{"stopReason": "end_turn", "usage": map[string]int{"inputTokens": 37, "outputTokens": 4}}
 		}
@@ -74,6 +82,7 @@ func fakeACPCLI() {
 
 func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_PTY_INFO", "node-pty")
 	record := filepath.Join(t.TempDir(), "prompt.json")
 	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
 	executable, _ := os.Executable()
@@ -118,6 +127,15 @@ func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 				if e.Kind == "gemini.question" && bytes.Contains(e.Payload, []byte("isSecret")) {
 					t.Fatal("false secret flag will be corrupted by redaction")
 				}
+			}
+			var shellOutput bool
+			for _, e := range events {
+				if e.Kind == "gemini.tool_result" && bytes.Contains(e.Payload, []byte(`"text":"ACP_SHELL_OUTPUT"`)) {
+					shellOutput = true
+				}
+			}
+			if !shellOutput {
+				t.Fatalf("ACP shell output was lost: %s", transcript)
 			}
 			if len(a.questions) != 0 {
 				t.Fatal(fmt.Sprintf("pending questions leaked: %d", len(a.questions)))

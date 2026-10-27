@@ -58,7 +58,10 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 
 	cmd := exec.CommandContext(ctx, executable, "--acp", "--model", model, "--approval-mode", command.ApprovalMode)
 	cmd.Dir = command.Workspace
-	cmd.Env = environment
+	// Gemini 0.65's ACP converter drops AnsiOutput from PTY-backed shell
+	// results. Use its native child-process mode so results remain plain text.
+	// This only affects this ACP process, preserving account shell settings.
+	cmd.Env = append(environment, "GEMINI_PTY_INFO=child_process")
 	configureProcess(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
