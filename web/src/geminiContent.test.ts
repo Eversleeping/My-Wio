@@ -23,6 +23,36 @@ test("routes Gemini links and realtime events independently of Codex", () => {
   expect(realtimeScopesForEvent({ kind: "gemini.message" })).toEqual(["gemini", "operations"]);
 });
 
+test("pairs ACP tool calls and results by operation and ID while retaining input and plain output", () => {
+  const block = (text: string) => [{ type: "content", content: { type: "text", text } }];
+  const messages = geminiMessages([
+    event(1, "gemini.tool_use", { tool_id: "read_file__call_1", tool_name: "README.md", parameters: block("Read file"), operation_id: "op1" }),
+    event(2, "gemini.tool_use", { tool_id: "read_file__call_2", tool_name: "README.md", parameters: [], operation_id: "op1" }),
+    event(3, "gemini.tool_result", { tool_id: "read_file__call_2", output: block("second file"), status: "completed", operation_id: "op1" }),
+    event(4, "gemini.message", { role: "assistant", content: "Working", operation_id: "op1" }),
+    event(5, "gemini.tool_result", { tool_id: "read_file__call_1", output: block("first file"), status: "completed", operation_id: "op1" }),
+    event(6, "gemini.tool_use", { tool_id: "read_file__call_1", tool_name: "README.md", parameters: {}, operation_id: "op2" }),
+    event(7, "gemini.tool_result", { tool_id: "read_file__call_1", error: "Permission denied", status: "error", operation_id: "op2" }),
+  ]);
+  expect(messages).toHaveLength(4);
+  expect(messages[0]).toMatchObject({ id: "1", title: "README.md", toolInput: "Read file", toolOutput: "first file", toolStatus: "completed" });
+  expect(messages[1]).toMatchObject({ id: "2", toolOutput: "second file" });
+  expect(messages[3]).toMatchObject({ id: "6", toolOutput: "Permission denied", toolStatus: "error" });
+});
+
+test("keeps legacy calls, orphan results and missing-ID records visible", () => {
+  const messages = geminiMessages([
+    event(1, "gemini.tool_use", { tool_id: "t1", tool_name: "read_file", parameters: { path: "README.md" } }),
+    event(2, "gemini.tool_result", { tool_id: "t1", status: "success", output: "contents" }),
+    event(3, "gemini.tool_result", { tool_id: "orphan", status: "failed", output: "missing file" }),
+    event(4, "gemini.tool_use", { tool_name: "no ID" }),
+    event(5, "gemini.tool_result", { tool_name: "no ID", status: "success", output: "done" }),
+  ]);
+  expect(messages).toHaveLength(4);
+  expect(messages[0]).toMatchObject({ title: "read_file", toolName: "read_file", toolInput: '{\n  "path": "README.md"\n}', toolOutput: "contents", toolStatus: "success" });
+  expect(messages[1]).toMatchObject({ toolOutput: "missing file", toolStatus: "failed" });
+});
+
 test("uses numeric CLI usage and safely handles already redacted history", () => {
   const messages = geminiMessages([
     event(1, "gemini.result", { stats: { input_tokens: 12, output_tokens: 0, tool_calls: 2 } }),

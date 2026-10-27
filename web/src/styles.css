@@ -469,6 +469,15 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .gemini-stream > .message { margin-bottom: 16px; }
 .gemini-tool { flex: 0 0 auto; margin: 10px 0; border: 1px solid var(--line); border-radius: 6px; background: #f6f8f5; font-size: 12px; }
 .gemini-tool summary { display: flex; align-items: center; gap: 8px; padding: 10px; cursor: pointer; }
+.gemini-tool summary::-webkit-details-marker { display: none; }
+.gemini-tool summary > svg { flex-shrink: 0; }
+.gemini-tool-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.gemini-tool-status { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.gemini-tool-status.failed { color: var(--red); }
+.gemini-tool[open] .gemini-tool-chevron { transform: rotate(90deg); }
+.gemini-tool section { padding: 0 12px 10px; }
+.gemini-tool section > strong { color: var(--muted); font-size: 11px; }
+.gemini-tool section pre { margin: 4px 0 0; padding: 0; }
 .gemini-tool pre { max-height: 300px; overflow: auto; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .gemini-usage, .gemini-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .gemini-hint { margin: 10px 12px; }

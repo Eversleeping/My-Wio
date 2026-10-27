@@ -1,12 +1,20 @@
 import type { StreamEvent } from "./types";
 import type { Question } from "./components/UserInputPrompt";
 
-export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status" | "question"; text: string; time: string; title?: string; stats?: Record<string, unknown>; images?: { data_url: string }[]; operationID?: string; questions?: Question[]; answers?: Record<string, string> };
+export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status" | "question"; text: string; time: string; title?: string; toolName?: string; toolInput?: string; toolOutput?: string; toolStatus?: string; stats?: Record<string, unknown>; images?: { data_url: string }[]; operationID?: string; questions?: Question[]; answers?: Record<string, string> };
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 function readable(value: unknown): string { return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value, null, 2); }
+
+// ACP wraps display text in content blocks; legacy JSONL emits strings/objects.
+function toolText(value: unknown): string {
+  if (Array.isArray(value) && value.every(block => record(block).type === "content" && record(record(block).content).type === "text")) {
+    return value.map(block => readable(record(record(block).content).text)).join("\n");
+  }
+  return readable(value);
+}
 
 function count(...values: unknown[]): number | undefined {
   return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0) as number | undefined;
@@ -21,6 +29,7 @@ function usage(value: unknown): Record<string, unknown> {
 // the same turn; a tool event or a new user prompt starts a new message.
 export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
   const messages: GeminiMessage[] = [];
+  const tools = new Map<string, GeminiMessage>();
   let assistant: GeminiMessage | undefined;
   let operation = "";
   for (const event of events) {
@@ -42,7 +51,24 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
       else { assistant = { ...base, role: "assistant", text }; messages.push(assistant); }
     } else if (event.kind === "gemini.tool_use" || event.kind === "gemini.tool_result") {
       assistant = undefined;
-      messages.push({ ...base, role: "tool", title: readable(p.tool_name || p.tool_id), text: readable(p.parameters ?? p.output ?? p.error ?? p.status) });
+      // IDs are scoped to an operation. Never coalesce by display title: two
+      // identical commands can be separate, intentional executions.
+      const key = p.tool_id ? JSON.stringify([op, p.tool_id]) : "";
+      let tool = key ? tools.get(key) : undefined;
+      if (!tool) {
+        tool = { ...base, role: "tool", text: "", title: readable(p.tool_name || p.tool_id), toolName: typeof p.tool_name === "string" && /^[a-z_]+$/.test(p.tool_name) ? p.tool_name : readable(p.tool_id || p.tool_name) };
+        messages.push(tool);
+        if (key) tools.set(key, tool);
+      }
+      if (p.tool_name) tool.title = readable(p.tool_name);
+      if (event.kind === "gemini.tool_use") {
+        tool.toolInput = toolText(p.parameters);
+        tool.toolStatus ??= "running";
+      } else {
+        tool.toolOutput = toolText(p.output ?? p.error);
+        tool.toolStatus = readable(p.status || (p.error ? "failed" : "completed"));
+      }
+      tool.text = tool.toolOutput ?? tool.toolInput ?? "";
     } else if (event.kind === "gemini.error") {
       assistant = undefined;
       messages.push({ ...base, role: "error", text: readable(p.message) });

@@ -43,6 +43,29 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
+test("renders one expandable tool record per call with separate parameters and output", async () => {
+  const events = [
+    { kind: "gemini.tool_use", payload: { tool_id: "read_file__call_1", tool_name: "README.md", parameters: [{type:"content",content:{type:"text",text:"Read instructions"}}] } },
+    { kind: "gemini.tool_result", payload: { tool_id: "read_file__call_1", tool_name: "README.md", status: "completed", output: [{type:"content",content:{type:"text",text:"File contents"}}] } },
+    { kind: "gemini.tool_use", payload: { tool_id: "run_shell_command__call_2", tool_name: "printf hello", parameters: [] } },
+    { kind: "gemini.tool_result", payload: { tool_id: "run_shell_command__call_2", status: "failed", output: "Command failed" } },
+  ].map((e, index) => ({...e, event_id:String(index),stream_id:thread.id,sequence:index + 1,occurred_at:thread.updated_at,payload:{...e.payload,operation_id:"op1"}}));
+  const { user } = setup(true, "auto", "configured", events);
+  const title = await screen.findByText("README.md");
+  expect(screen.getAllByText("README.md")).toHaveLength(1);
+  const tool = title.closest("details")!;
+  expect(within(tool).getByText("Completed")).toBeInTheDocument();
+  expect(tool.querySelector(".lucide-file-text")).toBeTruthy();
+  await user.click(title);
+  expect(tool).toHaveAttribute("open");
+  expect(within(tool).getByText("Parameters")).toBeVisible();
+  expect(within(tool).getByText("Read instructions")).toBeVisible();
+  expect(within(tool).getByText("File contents")).toBeVisible();
+  const failed = screen.getByText("printf hello").closest("details")!;
+  expect(within(failed).getByText("Failed")).toBeInTheDocument();
+  expect(failed.querySelector(".lucide-square-terminal")).toBeTruthy();
+});
+
 test("shows only fetched models and creates a session with a selected model",async () => {
   const {user,requests} = setup();
   await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
