@@ -7,10 +7,10 @@ import { I18nProvider } from "./i18n";
 
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
-test.each(["codex", "gemini"])("%s pins same-repository projects independently by server", async kind => {
+test.each(["codex", "gemini"])("%s scopes project pins and hidden-project recovery by server", async kind => {
   window.localStorage.setItem("wio_language", "en");
   const now = "2026-10-28T00:00:00Z";
-  let threads = ["a", "b"].map(id => ({ id: `thread-${id}`, workspace_id: `workspace-${id}`, project_id: "shared-project", server_id: `server-${id}`, server_name: `Server ${id.toUpperCase()}`, server_status: "online", project_name: "same", path: "/srv/same", title: `Task ${id}`, status: "idle", codex_thread_id: `native-${id}`, session_id: `native-${id}`, model: "flash", approval_mode: "default", operation_id: "", archived_at: null, pinned_at: null, project_pinned_at: null as string | null, project_hidden_at: null, created_at: now, updated_at: now, fork_supported: true, rewrite_supported: true }));
+  let threads = ["a", "b"].map(id => ({ id: `thread-${id}`, workspace_id: `workspace-${id}`, project_id: "shared-project", server_id: `server-${id}`, server_name: `Server ${id.toUpperCase()}`, server_status: "online", project_name: "same", path: "/srv/same", title: `Task ${id}`, status: "idle", codex_thread_id: `native-${id}`, session_id: `native-${id}`, model: "flash", approval_mode: "default", operation_id: "", archived_at: null, pinned_at: null, project_pinned_at: null as string | null, project_hidden_at: null as string | null, created_at: now, updated_at: now, fork_supported: true, rewrite_supported: true }));
   const requests: { url: string; body: Record<string, unknown> }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(String(input), window.location.origin);
@@ -18,9 +18,10 @@ test.each(["codex", "gemini"])("%s pins same-repository projects independently b
     if (init.method === "PATCH") {
       const patch = JSON.parse(String(init.body));
       requests.push({ url: url.pathname, body: patch });
-      threads = threads.map(thread => thread.server_id === patch.server_id ? { ...thread, project_pinned_at: patch.pinned ? now : null } : thread);
+      threads = threads.map(thread => thread.server_id === patch.server_id ? { ...thread, ...("pinned" in patch ? { project_pinned_at: patch.pinned ? now : null } : {}), ...("hidden" in patch ? { project_hidden_at: patch.hidden ? now : null } : {}) } : thread);
       body = {};
-    } else if (url.pathname === "/api/threads") body = { items: url.searchParams.get("archived") === "true" ? [] : threads, has_more: false, next: null };
+    } else if (url.pathname === "/api/projects/hidden") body = threads.filter(thread => thread.project_hidden_at).map(thread => ({ project_id: thread.project_id, server_id: thread.server_id, project_name: thread.project_name, server_name: thread.server_name, hidden_at: now }));
+    else if (url.pathname === "/api/threads") body = { items: url.searchParams.get("archived") === "true" ? [] : threads, has_more: false, next: null };
     else if (url.pathname === "/api/gemini/threads") body = url.searchParams.get("archived") === "true" ? [] : threads;
     else if (url.pathname === "/api/workspaces") body = threads.map(thread => ({ id: thread.workspace_id, project_id: thread.project_id, server_id: thread.server_id, server_name: thread.server_name, project_name: "same", path: "/srv/same", branch: "main", status: "ready", management_mode: "managed" }));
     else if (url.pathname.endsWith("/gemini/models")) body = { configured: true, models: [{ id: "flash", name: "flash" }] };
@@ -29,7 +30,8 @@ test.each(["codex", "gemini"])("%s pins same-repository projects independently b
     return new Response(JSON.stringify(body), { status: 200 });
   }));
   const shared = { realtime: 0, notify: vi.fn(), selectedThreadID: "", onSelectThread: vi.fn() };
-  const { container } = render(<I18nProvider>{kind === "codex" ? <CodexPage {...shared} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} /> : <GeminiPage {...shared} />}</I18nProvider>);
+  const page = (realtime = 0) => <I18nProvider>{kind === "codex" ? <CodexPage {...shared} realtime={realtime} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} /> : <GeminiPage {...shared} realtime={realtime} />}</I18nProvider>;
+  const { container, rerender } = render(page());
   await waitFor(() => expect(container.querySelectorAll(".thread-project")).toHaveLength(2));
   const group = (server: string) => Array.from(container.querySelectorAll<HTMLElement>(".thread-project")).find(item => item.querySelector(".thread-project-toggle small")?.textContent === server)!;
   const user = userEvent.setup();
@@ -45,4 +47,18 @@ test.each(["codex", "gemini"])("%s pins same-repository projects independently b
   await user.click(screen.getByRole("menuitem", { name: "Pin project" }));
   await waitFor(() => expect(group("Server B").querySelector(".pinned-icon")).toBeTruthy());
   expect(group("Server A").querySelector(".pinned-icon")).toBeNull();
+  threads = threads.map(thread => ({ ...thread, project_hidden_at: now }));
+  rerender(page(1));
+  await waitFor(() => expect(container.querySelectorAll(".thread-project")).toHaveLength(0));
+  await user.click(screen.getByRole("button", { name: "Hidden projects" }));
+  const dialog = await screen.findByRole("dialog", { name: "Hidden projects" });
+  const serverA = await within(dialog).findByText("Server A");
+  expect(within(dialog).getByText("Server B")).toBeInTheDocument();
+  await user.click(within(serverA.closest(".hidden-project-row") as HTMLElement).getByRole("button", { name: "Show project" }));
+  await waitFor(() => expect(container.querySelectorAll(".thread-project")).toHaveLength(1));
+  expect(group("Server A")).toBeTruthy();
+  expect(group("Server B")).toBeUndefined();
+  await waitFor(() => expect(within(dialog).queryByText("Server A")).toBeNull());
+  expect(within(dialog).getByText("Server B")).toBeInTheDocument();
+  expect(requests.at(-1)).toEqual({ url: "/api/projects/shared-project", body: { server_id: "server-a", hidden: false } });
 });

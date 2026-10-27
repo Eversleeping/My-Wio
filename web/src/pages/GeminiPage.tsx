@@ -10,6 +10,7 @@ import { Dialog, ErrorBanner, Field, FileDiffPane, FilePreviewPane, message, Wor
 import { useGeminiManagement } from "./geminiManagement";
 import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { HiddenProjectsButton } from "../components/HiddenProjectsButton";
 import { DialogActions } from "../components/Dialog";
 import { Empty, ErrorState, Status } from "../components/PageUI";
 import { geminiForkTargets, geminiMessages } from "../geminiContent";
@@ -109,7 +110,7 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
     <div className="gemini-mobile-tabs">{["sessions", "files", "conversation"].map(view => <button key={view} className={mobileView === view ? "active" : ""} onClick={() => setMobileView(view)}>{t(`gemini.${view}`)}</button>)}</div>
     <aside className="codex-sidebar">
       <div className="thread-list gemini-thread-list">
-        <div className="panel-heading"><div><Sparkles size={18} /><h2>{t(archived ? "codex.archivedTasks" : "gemini.sessions")}</h2></div><div className="row-actions"><button className={`icon-button ${archived ? "active" : ""}`} aria-pressed={archived} aria-label={t(archived ? "gemini.showActive" : "gemini.showArchived")} onClick={() => { setArchived(!archived); onSelectThread(""); }}><Archive size={18} /></button>{!archived && <button className="icon-button" aria-label={t("gemini.newSession")} onClick={() => openNewSession()}><Plus size={18} /></button>}</div></div>
+        <div className="panel-heading"><div><Sparkles size={18} /><h2>{t(archived ? "codex.archivedTasks" : "gemini.sessions")}</h2></div><div className="row-actions"><HiddenProjectsButton realtime={dependency} onRestored={refresh} notify={notify} /><button className={`icon-button ${archived ? "active" : ""}`} aria-pressed={archived} aria-label={t(archived ? "gemini.showActive" : "gemini.showArchived")} onClick={() => { setArchived(!archived); onSelectThread(""); }}><Archive size={18} /></button>{!archived && <button className="icon-button" aria-label={t("gemini.newSession")} onClick={() => openNewSession()}><Plus size={18} /></button>}</div></div>
         <input className="gemini-session-search" type="search" aria-label={t("gemini.searchSessions")} placeholder={t("gemini.searchSessions")} value={search} onChange={event => setSearch(event.target.value)} />
         <div className="thread-items">{threads.error ? <ErrorState error={threads.error} reload={threads.reload} /> : threads.loading ? <p className="gemini-hint">{t("common.loading")}</p> : groups.length ? groups.map(([id, group]) => {
           const heading = <button type="button" className="thread-project-toggle" aria-expanded={!collapsed.has(id)} title={`${t(collapsed.has(id) ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${group.threads[0].server_name} · ${group.path}`} onClick={() => toggleGroup(id)}>{collapsed.has(id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong><span>{group.name}</span><small>{group.threads[0].server_name}</small></strong>{group.threads[0].project_pinned_at && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span></button>;

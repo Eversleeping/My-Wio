@@ -76,9 +76,26 @@ func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode
 		level = thinking[0]
 	}
 	id := NewID()
-	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,model,approval_mode,thinking_level,created_at,updated_at)
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return GeminiThread{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,model,approval_mode,thinking_level,created_at,updated_at)
  SELECT ?,w.id,?,?,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), id, model, mode, level, time.Now().UTC(), time.Now().UTC(), workspaceID)
 	if err != nil {
+		return GeminiThread{}, err
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return GeminiThread{}, err
+		}
+		return GeminiThread{}, sql.ErrNoRows
+	}
+	if err := s.showProjectForNewThread(ctx, tx, workspaceID); err != nil {
+		return GeminiThread{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return GeminiThread{}, err
 	}
 	return s.GeminiThread(ctx, id)

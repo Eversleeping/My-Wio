@@ -7,6 +7,15 @@ import (
 	"strings"
 )
 
+func (a *API) hiddenServerProjects(w http.ResponseWriter, r *http.Request) {
+	items, err := a.store.HiddenServerProjects(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list hidden server projects")
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
 func (a *API) projectServerScope(w http.ResponseWriter, r *http.Request, projectID string) (string, bool) {
 	values, supplied := r.URL.Query()["server_id"]
 	if !supplied {

@@ -518,6 +518,11 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .thread-project-heading .context-menu-button { margin: auto 4px auto 0; }
 .pinned-icon { flex: 0 0 auto; color: #b27b23; }
 .project-hidden-row { opacity: .74; }
+.hidden-project-list { display: grid; gap: 10px; max-height: 60vh; overflow-y: auto; }
+.hidden-project-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.hidden-project-row > div { min-width: 0; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.hidden-project-row small { color: var(--muted); }
+.hidden-project-row > button { flex-shrink: 0; }
 .thread-project-toggle { width: 100%; height: 38px; display: flex; align-items: center; gap: 6px; padding: 0 10px; color: #536067; background: #f3f5f2; border: 0; border-radius: 0; text-align: left; }
 .thread-project-toggle:hover { color: var(--ink); background: #ecefeb; }
 .thread-project-toggle strong { min-width: 0; overflow: hidden; flex: 1; display: flex; align-items: baseline; font-size: 11px; white-space: nowrap; }

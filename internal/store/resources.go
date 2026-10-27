@@ -100,8 +100,19 @@ func (s *Store) CreateThread(ctx context.Context, workspaceID, title string) (Th
 		title = "New session"
 	}
 	id := NewID()
-	_, err := s.DB.ExecContext(ctx, s.Q("INSERT INTO codex_threads(id,workspace_id,title) VALUES(?,?,?)"), id, workspaceID, title)
+	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
+		return Thread{}, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO codex_threads(id,workspace_id,title) VALUES(?,?,?)"), id, workspaceID, title)
+	if err != nil {
+		return Thread{}, err
+	}
+	if err := s.showProjectForNewThread(ctx, tx, workspaceID); err != nil {
+		return Thread{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Thread{}, err
 	}
 	return s.Thread(ctx, id)

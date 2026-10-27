@@ -110,6 +110,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertMessageForkCopiesOnlySelectedHistory(t, scans)
 	assertGeminiCredentialBindingsAndReplay(t, scans)
 	assertProjectServerPreferencesIsolation(t, scans)
+	assertHiddenServerProjectsRecovery(t, scans)
 }
 
 func availablePostgresPort(t *testing.T) uint32 {

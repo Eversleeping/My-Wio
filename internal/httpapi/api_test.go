@@ -69,6 +69,13 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 	if session.Code != http.StatusOK {
 		t.Fatalf("session returned %d: %s", session.Code, session.Body.String())
 	}
+	hidden := requestJSON(t, handler, http.MethodGet, "/api/projects/hidden", nil, cookies[0])
+	if hidden.Code != http.StatusOK || strings.TrimSpace(hidden.Body.String()) != "[]" {
+		t.Fatalf("hidden projects route returned %d: %s", hidden.Code, hidden.Body.String())
+	}
+	if anonymous := requestJSON(t, handler, http.MethodGet, "/api/projects/hidden", nil, nil); anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous hidden projects request returned %d", anonymous.Code)
+	}
 	logoutWithoutCSRF := requestJSON(t, handler, http.MethodPost, "/api/auth/logout", nil, cookies[0])
 	if logoutWithoutCSRF.Code != http.StatusForbidden {
 		t.Fatalf("mutation without CSRF returned %d", logoutWithoutCSRF.Code)

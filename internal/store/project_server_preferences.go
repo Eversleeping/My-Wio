@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // An absent row inherits legacy project preferences. A present row can explicitly
@@ -21,6 +23,32 @@ const projectServerJoin = ` LEFT JOIN (
 const projectServerName = `COALESCE(NULLIF(ps.name,''),p.name)`
 const projectServerPin = `ps.pinned_at`
 const projectServerHidden = `ps.hidden_at`
+
+type HiddenServerProject struct {
+	ProjectID   string    `db:"project_id" json:"project_id"`
+	ServerID    string    `db:"server_id" json:"server_id"`
+	ProjectName string    `db:"project_name" json:"project_name"`
+	ServerName  string    `db:"server_name" json:"server_name"`
+	HiddenAt    time.Time `db:"hidden_at" json:"hidden_at"`
+}
+
+func (s *Store) HiddenServerProjects(ctx context.Context) ([]HiddenServerProject, error) {
+	out := []HiddenServerProject{}
+	err := s.DB.SelectContext(ctx, &out, `SELECT DISTINCT w.project_id,w.server_id,`+projectServerName+` AS project_name,s.name AS server_name,ps.hidden_at
+	 FROM workspaces w JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id`+projectServerJoin+`
+	 WHERE s.revoked_at IS NULL AND ps.hidden_at IS NOT NULL ORDER BY s.name,project_name,w.project_id`)
+	return out, err
+}
+
+// Creating a session is an explicit request to show this server's project again.
+// Run in the creation transaction so a failed insert cannot change visibility.
+func (s *Store) showProjectForNewThread(ctx context.Context, tx *sqlx.Tx, workspaceID string) error {
+	_, err := tx.ExecContext(ctx, s.Q(`INSERT INTO project_server_preferences(project_id,server_id,pinned_at,hidden_at)
+	 SELECT w.project_id,w.server_id,ps.pinned_at,NULL FROM workspaces w JOIN projects p ON p.id=w.project_id`+projectServerJoin+`
+	 WHERE w.id=? AND ps.hidden_at IS NOT NULL
+	 ON CONFLICT(project_id,server_id) DO UPDATE SET hidden_at=NULL`), workspaceID)
+	return err
+}
 
 func (s *Store) ProjectOnServer(ctx context.Context, projectID, serverID string) (Project, error) {
 	project, err := s.Project(ctx, projectID)

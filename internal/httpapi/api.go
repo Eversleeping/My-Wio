@@ -131,6 +131,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/servers/{serverID}/operation-metrics", api.operationMetrics)
 			private.Get("/projects", api.projects)
 			private.Post("/projects", api.createProject)
+			private.Get("/projects/hidden", api.hiddenServerProjects)
 			private.Get("/projects/{projectID}", api.projectDetail)
 			private.Patch("/projects/{projectID}", api.updateProject)
 			private.Get("/projects/{projectID}/operations", api.projectOperations)

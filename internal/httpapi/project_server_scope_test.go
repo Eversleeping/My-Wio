@@ -62,6 +62,28 @@ func TestProjectSidebarActionsRequireAndRespectServerScope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, server := range []store.Server{a, b} {
+		if code := patch(map[string]any{"server_id": server.ID, "hidden": true}); code != http.StatusOK {
+			t.Fatalf("hide returned %d", code)
+		}
+	}
+	response := directJSONRequest(t, http.MethodGet, "/api/projects/hidden", nil, nil, api.hiddenServerProjects)
+	var hidden []store.HiddenServerProject
+	if err := json.Unmarshal(response.Body.Bytes(), &hidden); err != nil || response.Code != http.StatusOK || len(hidden) != 2 {
+		t.Fatalf("hidden project list: %d %s %v", response.Code, response.Body.String(), err)
+	}
+	for _, item := range hidden {
+		if item.ProjectID != projectID || item.ProjectName != "same" || item.ServerName == "" || (item.ServerID != a.ID && item.ServerID != b.ID) {
+			t.Fatalf("invalid hidden project: %#v", item)
+		}
+	}
+	if code := patch(map[string]any{"server_id": a.ID, "hidden": false}); code != http.StatusOK {
+		t.Fatalf("restore returned %d", code)
+	}
+	response = directJSONRequest(t, http.MethodGet, "/api/projects/hidden", nil, nil, api.hiddenServerProjects)
+	if err := json.Unmarshal(response.Body.Bytes(), &hidden); err != nil || len(hidden) != 1 || hidden[0].ServerID != b.ID {
+		t.Fatalf("restore crossed server boundary: %s %v", response.Body.String(), err)
+	}
 	for _, handler := range []http.HandlerFunc{api.archiveProjectThreads, api.archiveGeminiProject} {
 		for _, query := range []string{"?server_id=", "?server_id=" + a.ID + "&server_id=" + b.ID, "?server_id=missing"} {
 			response := projectResourceRequest(t, http.MethodPost, "/api/projects/"+projectID+"/threads/archive"+query, projectID, map[string]any{}, handler)
