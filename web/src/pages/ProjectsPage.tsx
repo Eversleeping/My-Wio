@@ -54,12 +54,14 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const [workspaceGitStatus, setWorkspaceGitStatus] = useState(initialFilters.workspaceGitStatus);
   const projects = useData<Project[]>(resourcePath("/projects", { name: projectName, server_id: projectServerID, status: projectStatus }), realtime);
   const workspaces = useData<Workspace[]>(resourcePath("/workspaces", { path: workspacePath, server_id: workspaceServerID, git_status: workspaceGitStatus }), realtime);
+  const hiddenProjects = useData<Pick<Workspace, "project_id" | "server_id">[]>("/projects/hidden", realtime);
   const servers = useData<Server[]>("/servers", realtime);
   const [dialog, setDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [createError, setCreateError] = useState("");
   const [form, setForm] = useState(newCreateProjectFormValue());
-  const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" | "restore" } | null>(null);
+  const [projectAction, setProjectAction] = useState<{ id: string; kind: "retry" } | null>(null);
+  const [restoringWorkspaceID, setRestoringWorkspaceID] = useState<string | null>(null);
   const [detailProjectID, setDetailProjectID] = useState<string | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailError, setDetailError] = useState("");
@@ -153,13 +155,14 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
     } catch (err) { setProjectDeletionError(message(err)); }
     finally { setProjectDeletionBusy(false); }
   };
-  const restoreProject = async (project: Project) => {
-    setProjectAction({ id: project.id, kind: "restore" });
+  const restoreWorkspaceProject = async (workspace: Workspace) => {
+    setRestoringWorkspaceID(workspace.id);
     try {
-      await patch<Project>(`/projects/${project.id}`, { hidden: false });
+      await patch<Project>(`/projects/${workspace.project_id}`, { server_id: workspace.server_id, hidden: false });
       projects.reload();
+      hiddenProjects.reload();
       notify(t("project.restored"));
-    } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
+    } catch (err) { notify(message(err)); } finally { setRestoringWorkspaceID(null); }
   };
   const saveProjectDetails = async (value: ProjectEditValue) => {
     if (!detailProjectID) return;
@@ -168,6 +171,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
     try {
       await patch(`/projects/${detailProjectID}`, { name: value.name.trim(), description: value.description.trim(), default_branch: value.defaultBranch.trim(), pinned: value.pinned, hidden: value.hidden, archived: value.archived });
       projects.reload();
+      hiddenProjects.reload();
       detail.reload();
       setDetailProjectID(null);
       notify(t("project.saved"));
@@ -285,12 +289,12 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
         const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id);
         const blankFailure = project.status === "failed" || project.status === "partial";
         const retryAvailable = blankFailure || targetServer?.status === "online";
-        return <><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{project.hidden_at && <button className="secondary-button small" disabled={projectAction !== null} onClick={() => void restoreProject(project)}>{action === "restore" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}{failed && <button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button>}<button className="icon-button danger" disabled={projectAction !== null || projectDeletionBusy} title={t("project.deleteTitle")} onClick={() => void openProjectDeletion(project)}><Trash2 size={15} /></button></>;
+        return <><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{failed && <button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button>}<button className="icon-button danger" disabled={projectAction !== null || projectDeletionBusy} title={t("project.deleteTitle")} onClick={() => void openProjectDeletion(project)}><Trash2 size={15} /></button></>;
       }} />
     </Section>
     <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>
       <div className="resource-filter-bar"><label><span>{t("project.filterPath")}</span><input value={workspacePath} onChange={event => setWorkspacePath(event.target.value)} placeholder={t("project.filterPathPlaceholder")} /></label><label><span>{t("project.filterServer")}</span><select value={workspaceServerID} onChange={event => setWorkspaceServerID(event.target.value)}><option value="">{t("project.filterAllServers")}</option>{(servers.data ?? []).map(server => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label><label><span>{t("project.filterGitStatus")}</span><select value={workspaceGitStatus} onChange={event => setWorkspaceGitStatus(event.target.value)}><option value="">{t("project.filterAllStatuses")}</option><option value="clean">{t("project.gitClean")}</option><option value="dirty">{t("project.gitDirty")}</option><option value="error">{t("project.gitStatusError")}</option></select></label></div>
-      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <><button className="icon-button" title={t("project.viewGit")} onClick={() => openWorkspaceGit(workspace.id)}><GitBranch size={15} /></button><button className="icon-button" title={t("project.workspaceManage")} onClick={() => openWorkspaceManager(workspace)}><Settings size={15} /></button></>} />
+      <WorkspaceTable workspaces={workspaces.data ?? []} labels={workspaceLabels} slots={{ DataTable, Status }} formatCommit={shortSHA} renderActions={workspace => <><button className="icon-button" title={t("project.viewGit")} onClick={() => openWorkspaceGit(workspace.id)}><GitBranch size={15} /></button><button className="icon-button" title={t("project.workspaceManage")} onClick={() => openWorkspaceManager(workspace)}><Settings size={15} /></button>{hiddenProjects.data?.some(project => project.project_id === workspace.project_id && project.server_id === workspace.server_id) && <button className="secondary-button small" disabled={restoringWorkspaceID !== null} onClick={() => void restoreWorkspaceProject(workspace)}>{restoringWorkspaceID === workspace.id ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("project.restore")}</button>}</>} />
     </Section>
     <CreateProjectDialog open={dialog} value={form} servers={serverOptions} labels={labels} slots={{ Dialog, Field, DialogActions }} busy={busy} error={createError} onChange={setForm} onClose={close} onSubmit={submit} />
     <ProjectDetailsDialog open={detailProjectID !== null} detail={detail.data} loading={detail.loading} busy={detailBusy} error={detailError || detail.error} labels={detailLabels} slots={{ Dialog, Field, DialogActions }} onClose={() => { if (!detailBusy) setDetailProjectID(null); }} onSubmit={saveProjectDetails} />
