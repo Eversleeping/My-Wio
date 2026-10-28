@@ -220,7 +220,7 @@ test("manages Codex updates through the shared AI Agent dialog and keeps failure
   expect(screen.queryByTitle("Update Codex CLI to 0.145.0")).not.toBeInTheDocument();
   await user.click(manager);
   const dialog = await screen.findByRole("dialog");
-  await user.click(await within(dialog).findByRole("button",{name:/Codex CLI/}));
+  await user.click(await within(dialog).findByRole("button",{name:"Switch Codex version"}));
   const install = await within(dialog).findByRole("button",{name:"Switch Codex to 0.145.0"});
   await user.click(install);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("Codex update failed");

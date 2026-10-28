@@ -6,10 +6,51 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
 var ErrCLIInstallBusy = errors.New("finish active turns and AI CLI installations on this server first")
+
+type CLIActiveThread struct {
+	ID     string `db:"id" json:"id"`
+	Title  string `db:"title" json:"title"`
+	Status string `db:"status" json:"status"`
+}
+
+type CLIBlockingOperation struct {
+	ID     string `db:"id" json:"id"`
+	Kind   string `db:"kind" json:"kind"`
+	Status string `db:"status" json:"status"`
+}
+
+type CLIInstallBlockers struct {
+	ActiveThreads      []CLIActiveThread      `json:"active_threads"`
+	BlockingOperations []CLIBlockingOperation `json:"blocking_operations"`
+}
+
+func (b CLIInstallBlockers) Busy() bool {
+	return len(b.ActiveThreads) != 0 || len(b.BlockingOperations) != 0
+}
+
+func (s *Store) CLIInstallBlockers(ctx context.Context, serverID, kind string) (CLIInstallBlockers, error) {
+	return s.cliInstallBlockers(ctx, s.DB, serverID, kind)
+}
+
+func (s *Store) cliInstallBlockers(ctx context.Context, query sqlx.QueryerContext, serverID, kind string) (CLIInstallBlockers, error) {
+	out := CLIInstallBlockers{ActiveThreads: []CLIActiveThread{}, BlockingOperations: []CLIBlockingOperation{}}
+	table := "codex_threads"
+	if kind == "gemini" {
+		table = "gemini_threads"
+	} else if kind != "codex" {
+		return out, errors.New("unsupported AI CLI")
+	}
+	if err := sqlx.SelectContext(ctx, query, &out.BlockingOperations, s.Q("SELECT id,kind,status FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','gemini.credentials.configure') AND status IN ('queued','delivered','running') ORDER BY created_at,id"), serverID); err != nil {
+		return out, err
+	}
+	err := sqlx.SelectContext(ctx, query, &out.ActiveThreads, s.Q("SELECT t.id,t.title,t.status FROM "+table+" t JOIN workspaces w ON w.id=t.workspace_id WHERE w.server_id=? AND t.status IN ('queued','running','interrupting') ORDER BY t.updated_at,t.id"), serverID)
+	return out, err
+}
 
 // Lock the server row so concurrent installation requests cannot both queue.
 func (s *Store) QueueCLIInstall(ctx context.Context, serverID string, command protocol.CLIInstallCommand) (string, error) {
@@ -28,21 +69,11 @@ func (s *Store) QueueCLIInstall(ctx context.Context, serverID string, command pr
 	if count, err := result.RowsAffected(); err != nil || count != 1 {
 		return "", errors.New("server unavailable")
 	}
-	var active int
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT count(*) FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','gemini.credentials.configure') AND status IN ('queued','delivered','running')"), serverID); err != nil {
+	blockers, err := s.cliInstallBlockers(ctx, tx, serverID, command.Kind)
+	if err != nil {
 		return "", err
 	}
-	if active != 0 {
-		return "", ErrCLIInstallBusy
-	}
-	table := "codex_threads"
-	if command.Kind == "gemini" {
-		table = "gemini_threads"
-	}
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT count(*) FROM "+table+" t JOIN workspaces w ON w.id=t.workspace_id WHERE w.server_id=? AND t.status IN ('queued','running','interrupting')"), serverID); err != nil {
-		return "", err
-	}
-	if active != 0 {
+	if blockers.Busy() {
 		return "", ErrCLIInstallBusy
 	}
 	payload, err := json.Marshal(command)

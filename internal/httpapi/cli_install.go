@@ -19,6 +19,7 @@ type serverCLI struct {
 	Ready     bool             `json:"ready"`
 	Supported bool             `json:"supported"`
 	Operation *store.Operation `json:"operation,omitempty"`
+	store.CLIInstallBlockers
 }
 
 func (a *API) cliChecker(kind string) *codexcli.ReleaseChecker {
@@ -47,6 +48,11 @@ func (a *API) serverCLIs(w http.ResponseWriter, r *http.Request) {
 		{Kind: "gemini", Version: server.GeminiVersion, Ready: server.GeminiReady != 0, Supported: supported},
 	}
 	for i := range items {
+		items[i].CLIInstallBlockers, err = a.store.CLIInstallBlockers(r.Context(), server.ID, items[i].Kind)
+		if err != nil {
+			writeError(w, 500, "could not load CLI activity")
+			return
+		}
 		items[i].Operation, err = a.store.LatestCLIInstall(r.Context(), server.ID, items[i].Kind)
 		if err != nil {
 			writeError(w, 500, "could not load CLI installation status")
@@ -141,7 +147,7 @@ func (a *API) installServerCLI(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.store.QueueCLIInstall(r.Context(), server.ID, protocol.CLIInstallCommand{Kind: kind, Version: version})
 	if errors.Is(err, store.ErrCLIInstallBusy) {
-		writeError(w, 409, err.Error())
+		writeJSON(w, 409, map[string]string{"error": err.Error(), "code": "cli_install_busy"})
 		return
 	}
 	if err != nil {

@@ -51,6 +51,8 @@ func TestCLIInstallAndStatusPreserveExplicitVersion(t *testing.T) {
 	}
 	if w := cliRequest(a, s.ID, "gemini", `{"version":"0.64.0"}`); w.Code != 409 {
 		t.Fatalf("duplicate queue: %d %s", w.Code, w.Body)
+	} else if !strings.Contains(w.Body.String(), `"code":"cli_install_busy"`) {
+		t.Fatalf("busy response has no translatable error code: %s", w.Body)
 	}
 	ops, err := db.PendingOperations(context.Background(), s.ID)
 	if err != nil || len(ops) != 1 {
@@ -71,6 +73,11 @@ func TestCLIInstallAndStatusPreserveExplicitVersion(t *testing.T) {
 	var statuses []serverCLI
 	if err := json.Unmarshal(w.Body.Bytes(), &statuses); err != nil || len(statuses) != 2 || statuses[1].Operation == nil || statuses[1].Version != "0.65.0" || !statuses[1].Ready {
 		t.Fatalf("statuses: %#v %v", statuses, err)
+	}
+	for _, status := range statuses {
+		if len(status.BlockingOperations) != 1 || status.BlockingOperations[0].ID != ops[0].ID || len(status.ActiveThreads) != 0 {
+			t.Fatalf("installation blockers were not exposed: %#v", status)
+		}
 	}
 }
 
@@ -120,5 +127,33 @@ func TestCLIInstallRejectsActiveGeminiTurns(t *testing.T) {
 	}
 	if _, err := db.QueueCLIInstall(ctx, s.ID, protocol.CLIInstallCommand{Kind: "gemini", Version: "0.65.0"}); err != store.ErrCLIInstallBusy {
 		t.Fatalf("active Gemini turn allowed installation: %v", err)
+	}
+	blockers, err := db.CLIInstallBlockers(ctx, s.ID, "gemini")
+	if err != nil || len(blockers.ActiveThreads) != 1 || blockers.ActiveThreads[0].ID != thread.ID || blockers.ActiveThreads[0].Status != "queued" || len(blockers.BlockingOperations) != 0 {
+		t.Fatalf("could not identify the blocking Gemini conversation: %#v %v", blockers, err)
+	}
+	codex, err := db.CLIInstallBlockers(ctx, s.ID, "codex")
+	if err != nil || codex.Busy() {
+		t.Fatalf("Gemini conversation blocked Codex: %#v %v", codex, err)
+	}
+	other := enrollResourceTestServer(t, db, "cli-other-server")
+	foreign, err := db.CLIInstallBlockers(ctx, other.ID, "gemini")
+	if err != nil || foreign.Busy() {
+		t.Fatalf("conversation blocked another server: %#v %v", foreign, err)
+	}
+	// A conversation ending must unblock switching without erasing install history.
+	thread, err = db.GeminiThread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompleteGeminiTurn(ctx, thread.ID, thread.OperationID, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := db.CLIInstallBlockers(ctx, s.ID, "gemini")
+	if err != nil || cleared.Busy() {
+		t.Fatalf("ended conversation still blocks switching: %#v %v", cleared, err)
+	}
+	if _, err := db.QueueCLIInstall(ctx, s.ID, protocol.CLIInstallCommand{Kind: "gemini", Version: "0.65.0"}); err != nil {
+		t.Fatalf("could not switch after conversation ended: %v", err)
 	}
 }

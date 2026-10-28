@@ -1071,13 +1071,23 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 }
 .server-cli-manager { display: grid; gap: 16px; }
 .server-cli-manager > p { margin: 0; }
-.server-cli-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.server-cli-card { display: grid; gap: 10px; padding: 18px; text-align: left; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
-.server-cli-card.selected { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
-.server-cli-card > span, .server-cli-card > small { display: flex; align-items: center; gap: 6px; min-height: 20px; }
-.server-cli-card code { overflow-wrap: anywhere; }
-.server-cli-refresh { display: flex; align-items: end; padding-bottom: 16px; }
-@media (max-width: 600px) { .server-cli-list { grid-template-columns: 1fr; } .server-cli-refresh { padding-bottom: 0; } .server-cli-manager .dialog-actions { flex-wrap: wrap; } }
+.server-cli-list { display: grid; list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; }
+.server-cli-entry + .server-cli-entry { border-top: 1px solid var(--line); }
+.server-cli-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(80px, 1fr) minmax(110px, 1.3fr) auto; align-items: center; gap: 16px; padding: 16px; }
+.server-cli-row > strong, .server-cli-row > code { min-width: 0; overflow-wrap: anywhere; }
+.server-cli-state { display: grid; gap: 4px; min-width: 0; }
+.server-cli-state > span { display: flex; align-items: center; gap: 5px; }
+.server-cli-state > small { font-size: 11px; }
+.server-cli-options { display: grid; gap: 12px; padding: 0 16px 16px; }
+.server-cli-options p { margin: 0; }
+.server-cli-version-form { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
+.server-cli-version-form .field { flex: 1; min-width: 180px; margin: 0; }
+.server-cli-blockers { padding: 12px; border-radius: 6px; background: var(--canvas); }
+.server-cli-blockers ul { display: grid; gap: 6px; margin: 8px 0 0; padding-left: 18px; }
+.server-cli-blockers li { overflow-wrap: anywhere; }
+.server-cli-blockers li > span { margin-left: 8px; font-size: 11px; }
+.server-cli-notice { font-size: 12px; line-height: 1.6; }
+@media (max-width: 600px) { .server-cli-row { grid-template-columns: minmax(64px, 1fr) minmax(53px, .8fr) minmax(72px, 1.2fr) auto; gap: 6px; padding: 12px 8px; font-size: 11px; } .server-cli-row .small { padding: 6px 8px; font-size: 11px; } .server-cli-state > small { font-size: 10px; } .server-cli-options { padding: 0 10px 12px; } .server-cli-version-form > button { flex: 1; justify-content: center; } .server-cli-version-form .field { flex-basis: 100%; } }
 
 .gemini-settings-help { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 
