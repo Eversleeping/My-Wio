@@ -1,9 +1,46 @@
 import { expect, test } from "vitest";
-import { geminiMessages } from "./geminiContent";
+import { geminiMessages, groupGeminiMessages, type GeminiMessage } from "./geminiContent";
 import { locationFor, realtimeScopesForEvent } from "./App";
 import type { StreamEvent } from "./types";
 
 function event(sequence: number, kind: string, payload: unknown): StreamEvent { return { event_id: String(sequence), stream_id: "session", sequence, kind, payload, occurred_at: "2026-10-24T00:00:00Z" }; }
+
+test("groups tool calls between replies once, including running calls and their original timestamps", () => {
+  const events = [
+    event(1, "gemini.message", { role: "assistant", content: "Starting", operation_id: "op1" }),
+    event(2, "gemini.tool_use", { tool_id: "read_file__1", operation_id: "op1" }),
+    { ...event(3, "gemini.tool_use", { tool_id: "run_shell_command__2", operation_id: "op1" }), occurred_at: "2026-10-24T00:00:05Z" },
+  ];
+  const running = groupGeminiMessages(geminiMessages(events));
+  expect(running[1]).toMatchObject({ role: "commandGroup", id: "2", items: [{ id: "2", toolStatus: "running" }, { id: "3", toolStatus: "running" }] });
+  const messages = geminiMessages([...events,
+    event(4, "gemini.message", { role: "assistant", content: "Finished", operation_id: "op1" }),
+    event(5, "gemini.tool_result", { tool_id: "run_shell_command__2", status: "failed", output: "error", operation_id: "op1" }),
+    event(6, "gemini.tool_result", { tool_id: "read_file__1", status: "completed", output: "contents", operation_id: "op1" }),
+    event(7, "gemini.tool_use", { tool_id: "run_shell_command__3", operation_id: "op1" }),
+  ]);
+  const grouped = groupGeminiMessages(messages);
+  expect(grouped.map(item => item.role)).toEqual(["assistant", "commandGroup", "assistant", "commandGroup"]);
+  expect(grouped[1]).toMatchObject({ id: "2", items: [
+    { id: "2", time: "2026-10-24T00:00:00Z", toolStatus: "completed" },
+    { id: "3", time: "2026-10-24T00:00:05Z", toolStatus: "failed" },
+  ] });
+  expect(messages).toHaveLength(5);
+});
+
+test.each(["assistant", "user", "question", "error", "status"] as const)("does not group commands across a %s message", role => {
+  const tool: GeminiMessage = { id: "1", role: "tool", text: "", time: "2026-10-24T00:00:00Z", operationID: "op1" };
+  const items = groupGeminiMessages([tool, { ...tool, id: "2", role }, { ...tool, id: "3" }]);
+  expect(items.map(item => item.role)).toEqual(["commandGroup", role, "commandGroup"]);
+});
+
+test("does not group adjacent tools from different turns", () => {
+  const items = groupGeminiMessages(geminiMessages([
+    event(1, "gemini.tool_use", { tool_id: "same", operation_id: "op1" }),
+    event(2, "gemini.tool_use", { tool_id: "same", operation_id: "op2" }),
+  ]));
+  expect(items).toMatchObject([{ role: "commandGroup", items: [{ id: "1" }] }, { role: "commandGroup", items: [{ id: "2" }] }]);
+});
 
 test("merges assistant deltas but preserves tool boundaries and later turns", () => {
   const messages = geminiMessages([

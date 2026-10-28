@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import GeminiPage from "./pages/GeminiPage";
 import { I18nProvider } from "./i18n";
+import { formatTime } from "./format";
 
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
@@ -51,11 +52,18 @@ test("renders one expandable tool record per call with separate parameters and o
     { kind: "gemini.tool_result", payload: { tool_id: "run_shell_command__call_2", status: "failed", output: "Command failed" } },
   ].map((e, index) => ({...e, event_id:String(index),stream_id:thread.id,sequence:index + 1,occurred_at:thread.updated_at,payload:{...e.payload,operation_id:"op1"}}));
   const { user } = setup(true, "auto", "configured", events);
+  const groupTitle = await screen.findByText("Ran 2 commands");
+  const group = groupTitle.closest("details")!;
+  expect(group).not.toHaveAttribute("open");
+  await user.click(groupTitle);
+  expect(group).toHaveAttribute("open");
   const title = await screen.findByText("README.md");
   expect(screen.getAllByText("README.md")).toHaveLength(1);
   const tool = title.closest("details")!;
   expect(within(tool).getByText("Completed")).toBeInTheDocument();
   expect(tool.querySelector(".lucide-file-text")).toBeTruthy();
+  expect(tool.querySelector("time")).toHaveAttribute("datetime", thread.updated_at);
+  expect(tool.querySelector("time")).toHaveTextContent(formatTime(thread.updated_at));
   await user.click(title);
   expect(tool).toHaveAttribute("open");
   expect(within(tool).getByText("Parameters")).toBeVisible();
@@ -64,6 +72,30 @@ test("renders one expandable tool record per call with separate parameters and o
   const failed = screen.getByText("printf hello").closest("details")!;
   expect(within(failed).getByText("Failed")).toBeInTheDocument();
   expect(failed.querySelector(".lucide-square-terminal")).toBeTruthy();
+  expect(failed.querySelector("time")).toHaveTextContent(formatTime(thread.updated_at));
+  await user.click(groupTitle);
+  expect(group).not.toHaveAttribute("open");
+});
+
+test("renders separate collapsed command groups around Gemini replies", async () => {
+  const events = [
+    { kind: "gemini.message", payload: { role: "assistant", content: "Starting" } },
+    { kind: "gemini.tool_use", payload: { tool_id: "run_shell_command__1", tool_name: "pwd" } },
+    { kind: "gemini.tool_use", payload: { tool_id: "run_shell_command__2", tool_name: "ls" } },
+    { kind: "gemini.message", payload: { role: "assistant", content: "Next step" } },
+    { kind: "gemini.tool_use", payload: { tool_id: "run_shell_command__3", tool_name: "git status" } },
+  ].map((e, index) => ({ ...e, event_id: String(index), stream_id: thread.id, sequence: index + 1, occurred_at: `2026-10-25T00:00:0${index}Z`, payload: { ...e.payload, operation_id: "op1" } }));
+  const { user } = setup(true, "auto", "configured", events);
+  const first = (await screen.findByText("Ran 2 commands")).closest("details")!;
+  const second = screen.getByText("Ran 1 commands").closest("details")!;
+  expect(first).not.toHaveAttribute("open");
+  expect(second).not.toHaveAttribute("open");
+  await user.click(within(first).getByText("Ran 2 commands"));
+  expect(within(first).getByText("pwd")).toBeVisible();
+  expect(within(first).getByText("ls")).toBeVisible();
+  expect(second).not.toHaveAttribute("open");
+  expect(first.querySelectorAll("time")).toHaveLength(2);
+  expect(first.querySelectorAll("time")[1]).toHaveTextContent(formatTime(events[2].occurred_at));
 });
 
 test("shows only fetched models and creates a session with a selected model",async () => {

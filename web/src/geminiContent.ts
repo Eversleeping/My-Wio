@@ -3,6 +3,20 @@ import type { Question } from "./components/UserInputPrompt";
 
 export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status" | "question"; text: string; time: string; title?: string; toolName?: string; toolInput?: string; toolOutput?: string; toolStatus?: string; stats?: Record<string, unknown>; images?: { data_url: string }[]; operationID?: string; questions?: Question[]; answers?: Record<string, string> };
 
+export type GeminiDisplayItem = GeminiMessage | { id: string; role: "commandGroup"; items: GeminiMessage[] };
+
+// Group the display only: exports and tool/result pairing keep the flat history.
+export function groupGeminiMessages(messages: GeminiMessage[]): GeminiDisplayItem[] {
+  const result: GeminiDisplayItem[] = [];
+  for (const item of messages) {
+    const previous = result.at(-1);
+    if (item.role !== "tool") result.push(item);
+    else if (previous?.role === "commandGroup" && previous.items[0].operationID === item.operationID) previous.items.push(item);
+    else result.push({ id: item.id, role: "commandGroup", items: [item] });
+  }
+  return result;
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -36,7 +50,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
     const p = record(event.payload);
     const op = readable(p.operation_id);
     if (op !== operation) { assistant = undefined; operation = op; }
-    const base = { id: event.event_id, time: event.occurred_at };
+    const base = { id: event.event_id, time: event.occurred_at, operationID: op };
     if (event.kind === "gemini.user.message") { assistant = undefined; messages.push({ ...base, role: "user", text: readable(p.text), images: Array.isArray(p.images) ? p.images.filter((image): image is {data_url:string} => typeof image?.data_url === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(image.data_url)) : [] }); }
     else if (event.kind === "gemini.question") {
       assistant = undefined;
