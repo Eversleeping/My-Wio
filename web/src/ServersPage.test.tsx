@@ -35,6 +35,14 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+test("displays the Codex version without the CLI prefix", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === "/api/servers" ? [{ ...server, codex_version: "codex-cli 0.165.0" }] : []))));
+  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  expect(await screen.findByText("0.165.0")).toBeInTheDocument();
+  expect(screen.queryByText("codex-cli 0.165.0")).not.toBeInTheDocument();
+});
+
 test("shows automatic dependency setup and retries an incomplete enrollment as SSH repair", async () => {
   window.localStorage.setItem("wio_language", "en");
   const requests: string[] = [];
@@ -221,10 +229,12 @@ test("manages Codex updates through the shared AI Agent dialog and keeps failure
   await user.click(manager);
   const dialog = await screen.findByRole("dialog");
   await user.click(await within(dialog).findByRole("button",{name:"Switch Codex version"}));
-  const install = await within(dialog).findByRole("button",{name:"Switch Codex to 0.145.0"});
-  await user.click(install);
+  const confirmation = await screen.findByRole("dialog", { name: "Confirm Codex version change" });
+  await user.click(within(confirmation).getByRole("button",{name:"Switch Codex to 0.145.0"}));
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("Codex update failed");
-  await user.click(install);
+  await user.click(within(dialog).getByRole("button", { name: "Switch Codex version" }));
+  const retry = await screen.findByRole("dialog", { name: "Confirm Codex version change" });
+  await user.click(within(retry).getByRole("button",{name:"Switch Codex to 0.145.0"}));
   await waitFor(() => expect(notify).toHaveBeenCalledWith("Codex 0.145.0 installation queued"));
   expect(attempts).toBe(2);
   expect(requests.some(url => url.endsWith("/codex-update"))).toBe(false);

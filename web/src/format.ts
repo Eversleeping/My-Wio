@@ -1,5 +1,9 @@
 import { currentLocale } from "./i18n";
 
+export function formatCLIVersion(value: string) {
+  return value.trim().replace(/^codex-cli\s+/i, "").replace(/^v(?=\d)/, "");
+}
+
 export function shortSHA(value: string) {
   return value ? value.slice(0, 8) : "-";
 }
