@@ -3,9 +3,9 @@ import { useI18n } from "../i18n";
 
 export const sidebarHeightKey = "wio_codex_sidebar_height";
 export const clampSidebarHeight = (value: number) => Math.min(80, Math.max(20, value));
-export function readSidebarHeight() {
+export function readSidebarHeight(storageKey = sidebarHeightKey) {
   try {
-    const stored = localStorage.getItem(sidebarHeightKey);
+    const stored = localStorage.getItem(storageKey);
     const value = stored === null ? 38 : Number(stored);
     return Number.isFinite(value) ? clampSidebarHeight(value) : 38;
   } catch { return 38; }

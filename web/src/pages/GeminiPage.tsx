@@ -3,7 +3,7 @@ import { MessageImages } from "../components/MessageImages";
 import { compressImage } from "../imageCompression";
 import { GeminiQuestion } from "../components/GeminiQuestion";
 import { GeminiThinkingPicker, compatibleGeminiThinking } from "../components/GeminiThinkingPicker";
-import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ImagePlus, Archive, ArchiveRestore, GitFork, MoreHorizontal, Pin, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, FileCode2, Folder, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, Trash2, UserRound, X } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, FileDiffPane, FilePreviewPane, message, WorkspaceFilesPanel, type FilePreviewSelection } from "../App";
@@ -11,6 +11,7 @@ import { useGeminiManagement } from "./geminiManagement";
 import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HiddenProjectsButton } from "../components/HiddenProjectsButton";
+import { SidebarHeightDivider, readSidebarHeight } from "../components/SidebarHeightDivider";
 import { DialogActions } from "../components/Dialog";
 import { Empty, ErrorState, Status } from "../components/PageUI";
 import { geminiForkTargets, geminiMessages, groupGeminiMessages } from "../geminiContent";
@@ -22,9 +23,14 @@ import { useData } from "../useData";
 
 type Props = { realtime: number; notify: (text: string) => void; selectedThreadID: string; onSelectThread: (id: string, replace?: boolean) => void };
 const isActive = (thread?: GeminiThread) => Boolean(thread && ["queued", "running", "interrupting"].includes(thread.status));
+const sidebarHeightKey = "wio_gemini_sidebar_height";
 
 export default function GeminiPage({ realtime, notify, selectedThreadID, onSelectThread }: Props) {
   const { t } = useI18n();
+  const [sidebarHeight, setSidebarHeight] = useState(() => readSidebarHeight(sidebarHeightKey));
+  useEffect(() => {
+    try { localStorage.setItem(sidebarHeightKey, String(sidebarHeight)); } catch { /* Resizing still works when storage is unavailable. */ }
+  }, [sidebarHeight]);
   const [tick, setTick] = useState(0);
   const [archived, setArchived] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -108,7 +114,7 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
 
   return <div className={`codex-layout gemini-layout gemini-mobile-${mobileView}`}>
     <div className="gemini-mobile-tabs">{["sessions", "files", "conversation"].map(view => <button key={view} className={mobileView === view ? "active" : ""} onClick={() => setMobileView(view)}>{t(`gemini.${view}`)}</button>)}</div>
-    <aside className="codex-sidebar">
+    <aside className="codex-sidebar" style={{ "--thread-list-height": `${sidebarHeight}%` } as CSSProperties}>
       <div className="thread-list gemini-thread-list">
         <div className="panel-heading"><div><Sparkles size={18} /><h2>{t(archived ? "codex.archivedTasks" : "gemini.sessions")}</h2></div><div className="row-actions"><HiddenProjectsButton realtime={dependency} onRestored={refresh} notify={notify} /><button className={`icon-button ${archived ? "active" : ""}`} aria-pressed={archived} aria-label={t(archived ? "gemini.showActive" : "gemini.showArchived")} onClick={() => { setArchived(!archived); onSelectThread(""); }}><Archive size={18} /></button>{!archived && <button className="icon-button" aria-label={t("gemini.newSession")} onClick={() => openNewSession()}><Plus size={18} /></button>}</div></div>
         <input className="gemini-session-search" type="search" aria-label={t("gemini.searchSessions")} placeholder={t("gemini.searchSessions")} value={search} onChange={event => setSearch(event.target.value)} />
@@ -123,6 +129,7 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
           </section>;
         }) : <Empty icon={<MessageSquare size={24} />} text={t("gemini.noSessions")} />}</div>
       </div>
+      {active && <SidebarHeightDivider value={sidebarHeight} onChange={setSidebarHeight} />}
       {active && <WorkspaceFilesPanel workspaceID={active.workspace_id} taskID={active.operation_id} taskStatus={active.status} realtime={realtime + tick} activePath={preview?.path ?? ""} activeMode={preview?.mode === "diff" ? "diff" : "file"} onOpenFile={value => { setPreview(value); setMobileView("conversation"); }} notify={notify} />}
     </aside>
     <div className="gemini-main">{active ? <>
