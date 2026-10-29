@@ -232,6 +232,11 @@ td code { font-size: 12px; }
 .workspace-manager { display: flex; flex-direction: column; overflow: hidden; }
 .workspace-git-dialog > .dialog-actions, .workspace-manager > .dialog-actions { flex: 0 0 auto; }
 .field { display: grid; gap: 6px; margin-bottom: 13px; }
+.ssh-command-field { display: grid; gap: 6px; margin-bottom: 13px; }
+.ssh-command-input { display: flex; gap: 8px; }
+.ssh-command-input input { flex: 1; min-width: 0; }
+.ssh-command-input button { flex: 0 0 auto; }
+.ssh-command-field > p { font-size: 12px; line-height: 1.6; }
 .field > span, .field > label, .label { color: #61676e; font-size: 11px; font-weight: 680; text-transform: uppercase; }
 input, select, textarea { width: 100%; min-height: 38px; padding: 8px 10px; color: var(--ink); background: #fff; border: 1px solid #cfd3d0; border-radius: 5px; outline: none; }
 textarea { resize: vertical; line-height: 1.5; }

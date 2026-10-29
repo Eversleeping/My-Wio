@@ -96,7 +96,11 @@ func (input sshConnectionInput) target() sshbootstrap.Target {
 		PrivateKey:           input.PrivateKey,
 		PrivateKeyPassphrase: input.PrivateKeyPassphrase,
 	}
-	if target.AuthMethod == "password" {
+	if target.AuthMethod == "none" {
+		target.Password = ""
+		target.PrivateKey = ""
+		target.PrivateKeyPassphrase = ""
+	} else if target.AuthMethod == "password" {
 		target.PrivateKey = ""
 		target.PrivateKeyPassphrase = ""
 	} else if target.AuthMethod == "private_key" {

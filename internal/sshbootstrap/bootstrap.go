@@ -647,6 +647,10 @@ func normalizeTarget(target Target) (Target, error) {
 		return Target{}, ErrInvalidTarget
 	}
 	switch target.AuthMethod {
+	case "none":
+		target.Password = ""
+		target.PrivateKey = ""
+		target.PrivateKeyPassphrase = ""
 	case "password":
 		if target.Password == "" || len(target.Password) > 4096 {
 			return Target{}, ErrInvalidTarget
@@ -702,7 +706,6 @@ func connect(ctx context.Context, target Target, expectedFingerprint string) (*s
 	mismatch := false
 	configuration := &ssh.ClientConfig{
 		User:    target.User,
-		Auth:    []ssh.AuthMethod{auth},
 		Timeout: 12 * time.Second,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			keyInfo = hostKeyInfo{Fingerprint: ssh.FingerprintSHA256(key), Type: key.Type()}
@@ -712,6 +715,9 @@ func connect(ctx context.Context, target Target, expectedFingerprint string) (*s
 			}
 			return nil
 		},
+	}
+	if auth != nil {
+		configuration.Auth = []ssh.AuthMethod{auth}
 	}
 	address := net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
 	connection, err := (&net.Dialer{Timeout: 12 * time.Second}).DialContext(ctx, "tcp", address)
@@ -780,6 +786,11 @@ func probeHostKey(ctx context.Context, target HostTarget) (HostKeyResult, error)
 }
 
 func authentication(target Target) (ssh.AuthMethod, error) {
+	if target.AuthMethod == "none" {
+		// SSH always attempts the none method first. An empty method list lets
+		// an already-authorized gateway accept it without inventing credentials.
+		return nil, nil
+	}
 	if target.AuthMethod == "password" {
 		return ssh.Password(target.Password), nil
 	}

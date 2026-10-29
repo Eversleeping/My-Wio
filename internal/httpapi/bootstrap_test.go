@@ -69,6 +69,16 @@ func TestProbeServerSSHOnlyRequiresHost(t *testing.T) {
 	}
 }
 
+func TestSSHConnectionInputWithoutExtraCredentials(t *testing.T) {
+	target := (sshConnectionInput{Host: "ssh.instabox.sh", Port: 2222, User: "ibssh_example", AuthMethod: "none", Password: "unused", PrivateKey: "unused", PrivateKeyPassphrase: "unused"}).target()
+	if target.Host != "ssh.instabox.sh" || target.Port != 2222 || target.User != "ibssh_example" || target.AuthMethod != "none" {
+		t.Fatal("pre-authorized connection fields were not preserved")
+	}
+	if target.Password != "" || target.PrivateKey != "" || target.PrivateKeyPassphrase != "" {
+		t.Fatal("unused authentication credentials were not cleared")
+	}
+}
+
 func TestBootstrapServerSSHDoesNotEchoSecrets(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	fake := &fakeServerBootstrapper{installResult: sshbootstrap.InstallResult{ServerID: "server-id", Hostname: "node-1", Architecture: "arm64"}}

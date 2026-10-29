@@ -43,6 +43,73 @@ test("displays the Codex version without the CLI prefix", async () => {
   expect(screen.queryByText("codex-cli 0.165.0")).not.toBeInTheDocument();
 });
 
+test("enrolls a pre-authorized SSH command through the existing fingerprint flow without extra credentials", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    if (init.method === "POST") requests.push({ url, body: JSON.parse(String(init.body)) });
+    if (url.endsWith("/bootstrap-stream")) return new Response(JSON.stringify({ type: "complete", result: { server_id: server.id, hostname: "container", architecture: "amd64", warnings: [] } }) + "\n");
+    const data = url.endsWith("/ssh/probe") ? { fingerprint: "SHA256:test", key_type: "ssh-ed25519" } : url === "/api/servers" ? [server] : url === "/api/credential-profiles" ? [{ id: "codex", kind: "codex", name: "Codex", model: "gpt-6.1-sol" }] : [];
+    return new Response(JSON.stringify(data));
+  }));
+  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Enroll server" }));
+  const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  expect(within(dialog).getByRole("combobox", { name: "Authentication" })).toHaveValue("private_key");
+  await user.type(within(dialog).getByRole("textbox", { name: "Server name" }), "SSH container");
+  await user.click(within(dialog).getByRole("textbox", { name: "SSH connection command (optional)" }));
+  await user.paste("ssh -p 2222 ibssh_example@ssh.instabox.sh");
+  await user.click(within(dialog).getByRole("button", { name: "Fill connection fields" }));
+  expect(within(dialog).getByRole("textbox", { name: "SSH host or IP" })).toHaveValue("ssh.instabox.sh");
+  expect(within(dialog).getByRole("spinbutton", { name: "SSH port" })).toHaveValue(2222);
+  expect(within(dialog).getByRole("textbox", { name: "SSH user" })).toHaveValue("ibssh_example");
+  expect(within(dialog).getByRole("combobox", { name: "Authentication" })).toHaveValue("none");
+  expect(within(dialog).queryByLabelText("SSH password")).not.toBeInTheDocument();
+  expect(within(dialog).queryByLabelText("Private key file")).not.toBeInTheDocument();
+  expect(requests).toEqual([]);
+  await user.click(within(dialog).getByRole("button", { name: "Check fingerprint" }));
+  expect(requests).toEqual([{ url: "/api/servers/ssh/probe", body: { host: "ssh.instabox.sh", port: 2222 } }]);
+  expect(await within(dialog).findByText("SHA256:test")).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "Confirm and install" }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/servers/ssh/bootstrap-stream", body: expect.objectContaining({ host: "ssh.instabox.sh", port: 2222, user: "ibssh_example", auth_method: "none", password: "", private_key: "", private_key_passphrase: "", host_key_fingerprint: "SHA256:test" }) }));
+});
+
+test("keeps manual credentials and fields editable and leaves them untouched when command parsing fails", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const posts: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    if (init.method === "POST") posts.push(String(input));
+    return new Response("[]");
+  }));
+  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Enroll server" }));
+  const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  await user.selectOptions(within(dialog).getByRole("combobox", { name: "Authentication" }), "password");
+  await user.type(within(dialog).getByLabelText("SSH password"), "existing-test-password");
+  const command = within(dialog).getByRole("textbox", { name: "SSH connection command (optional)" });
+  await user.type(command, "ssh -p2222 ubuntu@host.example.com{Enter}");
+  expect(within(dialog).getByRole("combobox", { name: "Authentication" })).toHaveValue("password");
+  expect(within(dialog).getByLabelText("SSH password")).toHaveValue("existing-test-password");
+  const host = within(dialog).getByRole("textbox", { name: "SSH host or IP" });
+  await user.clear(host);
+  await user.type(host, "manual.example.com");
+  await user.clear(command);
+  await user.type(command, "ssh -J gateway other@ignored.example.com");
+  await user.click(within(dialog).getByRole("button", { name: "Fill connection fields" }));
+  expect(within(dialog).getByRole("alert")).toHaveTextContent("Could not read this SSH command");
+  expect(host).toHaveValue("manual.example.com");
+  expect(within(dialog).getByRole("spinbutton", { name: "SSH port" })).toHaveValue(2222);
+  expect(within(dialog).getByRole("textbox", { name: "SSH user" })).toHaveValue("ubuntu");
+  expect(posts).toEqual([]);
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await user.click(screen.getByRole("button", { name: "Enroll server" }));
+  expect(screen.getByRole("textbox", { name: "SSH connection command (optional)" })).toHaveValue("");
+  expect(screen.getByRole("combobox", { name: "Authentication" })).toHaveValue("private_key");
+});
+
 test("shows automatic dependency setup and retries an incomplete enrollment as SSH repair", async () => {
   window.localStorage.setItem("wio_language", "en");
   const requests: string[] = [];

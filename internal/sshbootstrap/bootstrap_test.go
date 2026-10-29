@@ -37,6 +37,64 @@ func TestNormalizeTargetAndArchitecture(t *testing.T) {
 	}
 }
 
+func TestNormalizeTargetWithoutExtraCredentials(t *testing.T) {
+	target, err := normalizeTarget(Target{Host: "ssh.instabox.sh", Port: 2222, User: "ibssh_example", AuthMethod: "none", Password: "unused", PrivateKey: "unused", PrivateKeyPassphrase: "unused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Host != "ssh.instabox.sh" || target.Port != 2222 || target.User != "ibssh_example" || target.Password != "" || target.PrivateKey != "" || target.PrivateKeyPassphrase != "" {
+		t.Fatal("connection fields were lost or unused credentials retained")
+	}
+	for _, method := range []string{"password", "private_key", "unknown", ""} {
+		_, err := normalizeTarget(Target{Host: "ssh.instabox.sh", Port: 2222, User: "ibssh_example", AuthMethod: method})
+		if !errors.Is(err, ErrInvalidTarget) {
+			t.Fatalf("missing credentials or invalid method accepted: %s", method)
+		}
+	}
+}
+
+func TestConnectWithoutExtraCredentials(t *testing.T) {
+	host, port := startTestSSHServer(t)
+	client, info, err := connect(context.Background(), Target{Host: host, Port: port, User: "ibssh_example", AuthMethod: "none"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if info.Fingerprint == "" {
+		t.Fatal("missing host key fingerprint")
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := session.Run("true"); err != nil {
+		t.Fatalf("authorized SSH connection could not run a command: %v", err)
+	}
+}
+
+func TestConnectWithoutExtraCredentialsStillChecksFingerprint(t *testing.T) {
+	host, port := startTestSSHServer(t)
+	_, _, err := connect(context.Background(), Target{Host: host, Port: port, User: "ibssh_example", AuthMethod: "none"}, "SHA256:wrong")
+	if !errors.Is(err, ErrHostKeyMismatch) {
+		t.Fatalf("wrong fingerprint was not rejected: %v", err)
+	}
+}
+
+func TestConnectWithoutExtraCredentialsCannotBypassRequiredAuthentication(t *testing.T) {
+	host, port := startTestSSHServer(t, func(configuration *ssh.ServerConfig) {
+		configuration.NoClientAuth = false
+		configuration.PasswordCallback = func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+			return nil, errors.New("password required")
+		}
+	})
+	client, _, err := connect(context.Background(), Target{Host: host, Port: port, User: "ibssh_example", AuthMethod: "none"}, "")
+	if err == nil {
+		client.Close()
+		t.Fatal("connected to a server requiring a password without credentials")
+	}
+}
+
 func TestValidateInstallRequest(t *testing.T) {
 	request := InstallRequest{
 		Target:              Target{Host: "192.0.2.10", Port: 22, User: "root", AuthMethod: "password", Password: "ssh-password"},
@@ -293,7 +351,7 @@ func TestConnectClearsHandshakeDeadline(t *testing.T) {
 	}
 }
 
-func startTestSSHServer(t *testing.T) (string, int) {
+func startTestSSHServer(t *testing.T, configure ...func(*ssh.ServerConfig)) (string, int) {
 	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -304,6 +362,9 @@ func startTestSSHServer(t *testing.T) (string, int) {
 		t.Fatal(err)
 	}
 	configuration := &ssh.ServerConfig{NoClientAuth: true}
+	for _, apply := range configure {
+		apply(configuration)
+	}
 	configuration.AddHostKey(signer)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
