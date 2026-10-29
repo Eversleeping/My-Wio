@@ -49,11 +49,15 @@ func fakeACPCLI() {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "OLD_REPLAY_MUST_NOT_APPEAR"}})
 				notify(map[string]string{"sessionUpdate": "available_commands_update"})
+				// Command availability does not fence asynchronous history replay.
+				for _, status := range []string{"completed", "failed"} {
+					notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "OLD_REPLAY_" + status, "title": "Shell", "status": status, "content": []any{}})
+				}
 				continue
 			}
 		case "session/prompt":
 			_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), msg.Params, 0600)
-			notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "bridge-call", "title": "wio_ask_user()", "status": "in_progress", "content": []any{}})
+			notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "bridge-call", "title": "wio_ask_user()", "status": "pending", "content": []any{}})
 			request, _ := http.NewRequest("POST", bridge.URL, strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wio_ask_user","arguments":{"questions":[{"id":"q","question":"Continue?"}]}}}`))
 			request.Header.Set("Authorization", bridge.Headers[0].Value)
 			response, err := http.DefaultClient.Do(request)
@@ -66,6 +70,10 @@ func fakeACPCLI() {
 				os.Exit(3)
 			}
 			notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "shell-call", "title": "printf ACP_SHELL_OUTPUT", "status": "in_progress", "content": []any{}})
+			// Replay can also arrive after a genuine call has started.
+			if os.Getenv("WIO_GEMINI_TEST_RESUME") == "1" {
+				notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "OLD_REPLAY_LATE", "title": "ReadFile", "status": "completed", "content": []any{}})
+			}
 			// Model CLI 0.65's ACP conversion: terminal-format results are
 			// discarded, while child-process output is delivered as text.
 			output := []any{}
@@ -73,6 +81,8 @@ func fakeACPCLI() {
 				output = append(output, map[string]any{"type": "content", "content": map[string]string{"type": "text", "text": "ACP_SHELL_OUTPUT"}})
 			}
 			notify(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "shell-call", "title": "printf ACP_SHELL_OUTPUT", "status": "completed", "content": output})
+			// Validation errors can arrive without a tool_call; keep them visible.
+			notify(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "invalid-call", "status": "failed", "content": []any{}})
 			notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "continued"}})
 			result = map[string]any{"stopReason": "end_turn", "usage": map[string]int{"inputTokens": 37, "outputTokens": 4}}
 		}
@@ -88,6 +98,9 @@ func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 	executable, _ := os.Executable()
 	for _, session := range []string{"", "native-acp"} {
 		t.Run("session-"+session, func(t *testing.T) {
+			if session != "" {
+				t.Setenv("WIO_GEMINI_TEST_RESUME", "1")
+			}
 			var events []protocol.StreamEvent
 			var a *Adapter
 			a = New(executable, func(e protocol.StreamEvent) error {
@@ -120,7 +133,7 @@ func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 				t.Fatalf("image not native ACP input: %s", raw)
 			}
 			transcript, _ := json.Marshal(events)
-			if bytes.Contains(transcript, []byte("OLD_REPLAY")) || !bytes.Contains(transcript, []byte("continued")) || !bytes.Contains(transcript, []byte(`"input_tokens":37`)) {
+			if bytes.Contains(transcript, []byte("OLD_REPLAY")) || !bytes.Contains(transcript, []byte("continued")) || !bytes.Contains(transcript, []byte(`"input_tokens":37`)) || !bytes.Contains(transcript, []byte(`"tool_calls":2`)) || !bytes.Contains(transcript, []byte("invalid-call")) {
 				t.Fatalf("incorrect events: %s", transcript)
 			}
 			for _, e := range events {

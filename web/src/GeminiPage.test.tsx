@@ -44,6 +44,37 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
+test("resuming hides 25 replayed commands and shows the 29 actual completed commands", async () => {
+  const events: Array<Record<string, unknown>> = [];
+  const append = (kind: string, operation_id: string, payload: Record<string, unknown>) => events.push({
+    event_id: String(events.length + 1), sequence: events.length + 1, stream_id: thread.id,
+    occurred_at: thread.updated_at, kind, payload: { ...payload, operation_id },
+  });
+  append("gemini.init", "old", { session_id: "native-1" });
+  for (let i = 0; i < 25; i++) {
+    append("gemini.tool_use", "old", { tool_id: `read_file__call_${i}`, tool_name: `old-${i}.ts`, parameters: [] });
+    append("gemini.tool_result", "old", { tool_id: `read_file__call_${i}`, status: "completed", output: [] });
+  }
+  append("gemini.user.message", "op1", { text: "Continue" });
+  append("gemini.init", "op1", { session_id: "native-1" });
+  for (let i = 0; i < 25; i++) append("gemini.tool_use", "op1", { tool_id: `read_file__call_${i}`, tool_name: "ReadFile", parameters: [] });
+  for (let i = 25; i < 54; i++) {
+    append("gemini.tool_use", "op1", { tool_id: `read_file__call_${i}`, tool_name: `new-${i}.ts`, parameters: [] });
+    append("gemini.tool_result", "op1", { tool_id: `read_file__call_${i}`, status: "completed", output: [] });
+  }
+  const { user } = setup(true, "auto", "configured", events, { status: "running" });
+  const title = await screen.findByText("Ran 29 commands");
+  expect(screen.queryByText("Ran 54 commands")).not.toBeInTheDocument();
+  expect(screen.queryByText("ReadFile")).not.toBeInTheDocument();
+  await user.click(title);
+  const group = title.closest("details")!;
+  expect(within(group).getAllByText("Completed")).toHaveLength(29);
+  expect(group.querySelectorAll(".gemini-tool-status.running")).toHaveLength(0);
+  expect(group.querySelectorAll("time")).toHaveLength(29);
+  // Tool completion does not mean the model's turn has completed.
+  expect(screen.getByRole("button", { name: "Interrupt" })).toBeEnabled();
+});
+
 test("renders one expandable tool record per call with separate parameters and output", async () => {
   const events = [
     { kind: "gemini.tool_use", payload: { tool_id: "read_file__call_1", tool_name: "README.md", parameters: [{type:"content",content:{type:"text",text:"Read instructions"}}] } },

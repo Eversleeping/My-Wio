@@ -5,6 +5,52 @@ import type { StreamEvent } from "./types";
 
 function event(sequence: number, kind: string, payload: unknown): StreamEvent { return { event_id: String(sequence), stream_id: "session", sequence, kind, payload, occurred_at: "2026-10-24T00:00:00Z" }; }
 
+function replayFixture(): StreamEvent[] {
+  const output = [{ type: "content", content: { type: "text", text: "file contents" } }];
+  return [
+    event(1, "gemini.init", { operation_id: "old", session_id: "native" }),
+    event(2, "gemini.tool_use", { operation_id: "old", tool_id: "read_file__call_1", tool_name: "README.md", parameters: [] }),
+    event(3, "gemini.tool_result", { operation_id: "old", tool_id: "read_file__call_1", status: "completed", output }),
+    event(4, "gemini.turn.completed", { operation_id: "old", status: "interrupted" }),
+    event(5, "gemini.user.message", { operation_id: "new", text: "Continue" }),
+    event(6, "gemini.init", { operation_id: "new", session_id: "native" }),
+    event(7, "gemini.tool_use", { operation_id: "new", tool_id: "read_file__call_1", tool_name: "ReadFile", parameters: output }),
+  ];
+}
+
+test("hides legacy ACP history snapshots without changing original calls or timestamps", () => {
+  const events = replayFixture();
+  const before = JSON.stringify(events);
+  const messages = geminiMessages([...events,
+    event(8, "gemini.tool_use", { operation_id: "new", tool_id: "read_file__call_2", tool_name: "README.md", parameters: [] }),
+    event(9, "gemini.tool_result", { operation_id: "new", tool_id: "read_file__call_2", status: "completed", output: "new contents" }),
+    event(10, "gemini.result", { operation_id: "new", status: "success", stats: { tool_calls: 2, input_tokens: 30 } }),
+  ]);
+  expect(messages.filter(m => m.role === "tool")).toMatchObject([
+    { id: "2", time: events[1].occurred_at, toolStatus: "completed", toolOutput: "file contents" },
+    { id: "8", toolStatus: "completed", toolOutput: "new contents" },
+  ]);
+  expect(JSON.stringify(events)).toBe(before);
+  expect(messages.at(-1)?.stats).toMatchObject({ tool_calls: 1, input_tokens: 30 });
+});
+
+test.each(["new result", "different session", "different content", "real title", "explicit status", "after live call", "missing previous result"])("preserves possible real executions: %s", scenario => {
+  let events = replayFixture();
+  const replay = events[6].payload as Record<string, unknown>;
+  if (scenario === "new result") events.push(event(8, "gemini.tool_result", { operation_id: "new", tool_id: "read_file__call_1", status: "failed", output: "new error" }));
+  if (scenario === "different session") events[5].payload = { operation_id: "new", session_id: "other" };
+  if (scenario === "different content") replay.parameters = [];
+  if (scenario === "real title") replay.tool_name = "README.md";
+  if (scenario === "explicit status") replay.status = "pending";
+  if (scenario === "after live call") events.splice(6, 0, event(20, "gemini.tool_use", { operation_id: "new", tool_id: "other", parameters: [] }));
+  if (scenario === "missing previous result") events = events.filter(e => e.sequence !== 3);
+  expect(geminiMessages(events).some(m => m.id === "7")).toBe(true);
+});
+
+test("respects terminal status on a full tool snapshot", () => {
+  expect(geminiMessages([event(1, "gemini.tool_use", { tool_id: "t", status: "failed" })])[0].toolStatus).toBe("failed");
+});
+
 test("groups tool calls between replies once, including running calls and their original timestamps", () => {
   const events = [
     event(1, "gemini.message", { role: "assistant", content: "Starting", operation_id: "op1" }),

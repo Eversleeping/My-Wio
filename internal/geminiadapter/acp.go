@@ -115,6 +115,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		return a.emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: "gemini." + kind, Payload: raw})
 	}
 	replay := true
+	resuming := command.SessionID != ""
 	var sequence int
 	toolCalls := 0
 	// Requests are sequential; server-initiated requests are answered concurrently
@@ -162,8 +163,18 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							err = emit("message", map[string]any{"role": "assistant", "content": c.Text, "delta": true})
 						}
 					case "tool_call":
+						// Gemini 0.65/0.66 streamHistory emits terminal tool_call
+						// snapshots asynchronously, including AFTER available_commands_update
+						// and interleaved with the next prompt. Live executions start
+						// pending/in_progress and end with tool_call_update instead.
+						if resuming && (u.Status == "completed" || u.Status == "failed") {
+							continue
+						}
 						toolCalls++
-						err = emit("tool_use", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "parameters": json.RawMessage(u.Content)})
+						err = emit("tool_use", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "status": u.Status, "parameters": json.RawMessage(u.Content)})
+						if err == nil && (u.Status == "completed" || u.Status == "failed") {
+							err = emit("tool_result", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "status": u.Status, "output": json.RawMessage(u.Content)})
+						}
 					case "tool_call_update":
 						if u.Status == "completed" || u.Status == "failed" {
 							err = emit("tool_result", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "status": u.Status, "output": json.RawMessage(u.Content)})
@@ -262,9 +273,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		if _, err = call("session/load", params); err != nil {
 			return err
 		}
-		// Gemini 0.65 streams history asynchronously, even after replying to
-		// session/load. Its scheduled command update follows that replay. Wait
-		// for this fence before attributing any chunks to the new turn.
+		// Discard the initial history burst until commands are ready. This is
+		// NOT a history-complete fence: terminal tool snapshots can arrive
+		// later, so the notification handler filters those throughout resume.
 		if err = drainACPHistory(ctx, messages, readError); err != nil {
 			return err
 		}

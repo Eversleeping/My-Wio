@@ -39,16 +39,65 @@ function usage(value: unknown): Record<string, unknown> {
   return { input_tokens: count(stats.input_tokens, stats.input), output_tokens: count(stats.output_tokens, stats.output), tool_calls: count(stats.tool_calls) };
 }
 
+// Older agents lost the terminal status on ACP history snapshots. Hide only
+// the recognizable replay prefix: same native session, same previously finished
+// call ID, generic historical title, and input exactly equal to its old output.
+// A result in the new operation always wins, preserving genuine re-executions.
+function legacyReplayEvents(events: StreamEvent[]): Set<string> {
+  const hidden = new Set<string>();
+  const results = new Set<string>();
+  const sessions = new Map<string, string>();
+  const previous = new Map<string, unknown>();
+  const prefixes = new Set<string>();
+  const key = (op: unknown, id: unknown) => JSON.stringify([op, id]);
+  const titles: Record<string, string> = { run_shell_command: "Shell", read_file: "ReadFile", grep_search: "SearchText", list_directory: "ReadFolder" };
+  for (const event of events) {
+    const p = record(event.payload);
+    if (event.kind === "gemini.tool_result") results.add(key(p.operation_id, p.tool_id));
+  }
+  for (const event of events) {
+    const p = record(event.payload), op = readable(p.operation_id);
+    if (event.kind === "gemini.init" && op && typeof p.session_id === "string") {
+      sessions.set(op, p.session_id);
+      prefixes.add(op);
+    }
+    const session = sessions.get(op), id = readable(p.tool_id);
+    if (!session || !id) {
+      if (["gemini.message", "gemini.question", "gemini.result", "gemini.turn.completed"].includes(event.kind)) prefixes.delete(op);
+      continue;
+    }
+    const nativeKey = key(session, id);
+    if (event.kind === "gemini.tool_result") {
+      previous.set(nativeKey, p.output);
+      prefixes.delete(op);
+    } else if (event.kind === "gemini.tool_use") {
+      const historicalTitle = titles[id.split("__")[0]];
+      if (prefixes.has(op) && p.status === undefined && historicalTitle && p.tool_name === historicalTitle
+        && Array.isArray(p.parameters) && previous.has(nativeKey)
+        && JSON.stringify(p.parameters) === JSON.stringify(previous.get(nativeKey))
+        && !results.has(key(op, p.tool_id))) hidden.add(event.event_id);
+      else prefixes.delete(op);
+    }
+  }
+  return hidden;
+}
+
 // JSONL assistant chunks have no message id. Merge only adjacent chunks from
 // the same turn; a tool event or a new user prompt starts a new message.
 export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
   const messages: GeminiMessage[] = [];
   const tools = new Map<string, GeminiMessage>();
+  const replayEvents = legacyReplayEvents(events);
+  const replayCounts = new Map<string, number>();
   let assistant: GeminiMessage | undefined;
   let operation = "";
   for (const event of events) {
     const p = record(event.payload);
     const op = readable(p.operation_id);
+    if (replayEvents.has(event.event_id)) {
+      replayCounts.set(op, (replayCounts.get(op) ?? 0) + 1);
+      continue;
+    }
     if (op !== operation) { assistant = undefined; operation = op; }
     const base = { id: event.event_id, time: event.occurred_at, operationID: op };
     if (event.kind === "gemini.user.message") { assistant = undefined; messages.push({ ...base, role: "user", text: readable(p.text), images: Array.isArray(p.images) ? p.images.filter((image): image is {data_url:string} => typeof image?.data_url === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(image.data_url)) : [] }); }
@@ -77,7 +126,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
       if (p.tool_name) tool.title = readable(p.tool_name);
       if (event.kind === "gemini.tool_use") {
         tool.toolInput = toolText(p.parameters);
-        tool.toolStatus ??= "running";
+        tool.toolStatus ??= readable(p.status) || "running";
       } else {
         tool.toolOutput = toolText(p.output ?? p.error);
         tool.toolStatus = readable(p.status || (p.error ? "failed" : "completed"));
@@ -89,7 +138,12 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
     } else if (event.kind === "gemini.result") {
       assistant = undefined;
       if (p.error) messages.push({ ...base, role: "error", text: readable(record(p.error).message || p.error) });
-      if (p.stats) messages.push({ ...base, role: "status", text: "", stats: usage(p.stats) });
+      if (p.stats) {
+        const stats = usage(p.stats);
+        const replays = replayCounts.get(op) ?? 0;
+        if (typeof stats.tool_calls === "number" && stats.tool_calls >= replays) stats.tool_calls -= replays;
+        messages.push({ ...base, role: "status", text: "", stats });
+      }
     } else if (event.kind === "gemini.turn.completed" && (p.status === "failed" || p.status === "interrupted")) {
       assistant = undefined;
       messages.push({ ...base, role: p.status === "failed" ? "error" : "status", text: p.status === "interrupted" ? "interrupted" : readable(p.message) });
