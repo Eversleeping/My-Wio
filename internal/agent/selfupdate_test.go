@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -45,6 +47,21 @@ func TestStageAgentUpdateDownloadsAndVerifiesPackage(t *testing.T) {
 	if manifest.Version != command.Version || manifest.State != "pending" || !samePath(path, resolved) {
 		t.Fatalf("unexpected update manifest: %#v path=%q", manifest, resolved)
 	}
+	// The reservation must survive staging until exec; a rejected duplicate
+	// updater must not clear it in the result-delivery/restart window.
+	if !client.agentUpdatePending() {
+		t.Fatal("update reservation released before activation")
+	}
+	if _, err := client.stageAgentUpdate(context.Background(), command); err == nil || !client.agentUpdatePending() {
+		t.Fatal("duplicate updater cleared the active reservation")
+	}
+	for _, kind := range []string{"gemini.turn.start", "gemini.turn.rewrite", "codex.turn.start", "codex.turn.rewrite"} {
+		payload, _ := json.Marshal(protocol.GeminiTurnCommand{})
+		err := client.execute(context.Background(), &protocol.ControlEnvelope{Kind: kind, PayloadJSON: payload})
+		if err == nil || !strings.Contains(err.Error(), "update is in progress") {
+			t.Fatalf("%s allowed during pending update: %v", kind, err)
+		}
+	}
 }
 
 func TestStageAgentUpdateRejectsChecksumMismatch(t *testing.T) {
@@ -61,8 +78,30 @@ func TestStageAgentUpdateRejectsChecksumMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a checksum mismatch")
 	}
+	if client.agentUpdatePending() {
+		t.Fatal("failed update left the Agent blocked")
+	}
 	if _, statErr := os.Stat(filepath.Join(stateDir, "updates", "current.json")); !os.IsNotExist(statErr) {
 		t.Fatalf("invalid package created a current manifest: %v", statErr)
+	}
+}
+
+func TestStageAgentUpdateRejectsActiveGeminiExecution(t *testing.T) {
+	for _, kind := range []string{"gemini.turn.start", "gemini.turn.rewrite", "gemini.thread.fork", "git.worktree.create"} {
+		t.Run(kind, func(t *testing.T) {
+			done := make(chan struct{})
+			client := &Client{seen: map[string]*operationExecution{"running": {kind: kind, done: done}}}
+			if _, err := client.stageAgentUpdate(context.Background(), protocol.AgentUpdateCommand{}); err == nil || !strings.Contains(err.Error(), "active Gemini") {
+				t.Fatalf("active execution did not prevent update: %v", err)
+			}
+			if client.agentUpdatePending() {
+				t.Fatal("rejected update reserved the Agent")
+			}
+			close(done)
+			if _, err := client.stageAgentUpdate(context.Background(), protocol.AgentUpdateCommand{}); err == nil || strings.Contains(err.Error(), "active Gemini") {
+				t.Fatalf("completed execution still prevents update validation: %v", err)
+			}
+		})
 	}
 }
 

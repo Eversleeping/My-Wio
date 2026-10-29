@@ -29,7 +29,30 @@ type agentUpdateManifest struct {
 	State   string `json:"state"`
 }
 
-func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpdateCommand) (string, error) {
+func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpdateCommand) (restartPath string, updateErr error) {
+	c.seenMu.Lock()
+	if c.updatePending {
+		c.seenMu.Unlock()
+		return "", errors.New("an Agent update is already in progress")
+	}
+	for _, execution := range c.seen {
+		if execution.kind != "gemini.turn.start" && execution.kind != "gemini.turn.rewrite" && execution.kind != "gemini.thread.fork" && execution.kind != "git.worktree.create" {
+			continue
+		}
+		select {
+		case <-execution.done:
+		default:
+			c.seenMu.Unlock()
+			return "", errors.New("finish or interrupt active Gemini tasks before updating the Agent")
+		}
+	}
+	c.updatePending = true
+	c.seenMu.Unlock()
+	defer func() {
+		if updateErr != nil || restartPath == "" {
+			c.releaseAgentUpdate()
+		}
+	}()
 	if strings.TrimSpace(command.Version) == "" {
 		return "", errors.New("Agent update version is required")
 	}
@@ -76,6 +99,18 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 		return "", err
 	}
 	return targetPath, nil
+}
+
+func (c *Client) agentUpdatePending() bool {
+	c.seenMu.Lock()
+	defer c.seenMu.Unlock()
+	return c.updatePending
+}
+
+func (c *Client) releaseAgentUpdate() {
+	c.seenMu.Lock()
+	c.updatePending = false
+	c.seenMu.Unlock()
 }
 
 func agentUpdateURL(controlURL, packageURL string) (string, error) {

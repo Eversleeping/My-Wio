@@ -149,6 +149,7 @@ func TestGeminiNativeSteering(t *testing.T) {
 	requests := 0
 	delivered := false
 	toolPaired := false
+	shellSucceeded := false
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(r.URL.Path, "countTokens") {
@@ -168,11 +169,12 @@ func TestGeminiNativeSteering(t *testing.T) {
 		}
 		if bytes.Contains(body, []byte("functionResponse")) {
 			toolPaired = true
+			shellSucceeded = bytes.Contains(body, []byte("tool finished"))
 		}
 		mu.Unlock()
 		var part any = map[string]any{"text": "Steered successfully"}
 		if n == 1 {
-			part = map[string]any{"functionCall": map[string]any{"name": "run_shell_command", "args": map[string]any{"command": "node -e \"setTimeout(() => console.log('tool finished'), 200)\"", "description": "Wait briefly"}}}
+			part = map[string]any{"functionCall": map[string]any{"name": "run_shell_command", "args": map[string]any{"command": "node -e \"console.log('tool finished')\" | node -e \"process.stdin.pipe(process.stdout)\"", "description": "Run a shell pipeline"}}}
 		}
 		result := map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"role": "model", "parts": []any{part}}, "finishReason": "STOP"}}, "usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5}, "modelVersion": "gemini-2.5-flash"}
 		raw, _ := json.Marshal(result)
@@ -182,7 +184,12 @@ func TestGeminiNativeSteering(t *testing.T) {
 	defer model.Close()
 	var a *Adapter
 	var ready, steered atomic.Bool
+	var questions atomic.Int32
 	a = New(cli, func(e protocol.StreamEvent) error {
+		if e.Kind == "gemini.question" {
+			questions.Add(1)
+			return fmt.Errorf("YOLO shell pipeline unexpectedly requested approval")
+		}
 		if e.Kind == "gemini.steer.ready" {
 			ready.Store(true)
 		}
@@ -205,7 +212,7 @@ func TestGeminiNativeSteering(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if requests < 2 || !steered.Load() || !delivered || !toolPaired {
-		t.Fatalf("real CLI path: requests=%d steered=%v delivered=%v toolPaired=%v", requests, steered.Load(), delivered, toolPaired)
+	if requests < 2 || !steered.Load() || !delivered || !toolPaired || !shellSucceeded || questions.Load() != 0 {
+		t.Fatalf("real CLI path: requests=%d steered=%v delivered=%v toolPaired=%v shellSucceeded=%v questions=%d", requests, steered.Load(), delivered, toolPaired, shellSucceeded, questions.Load())
 	}
 }

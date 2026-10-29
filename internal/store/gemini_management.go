@@ -45,6 +45,13 @@ func (s *Store) QueueGeminiFork(ctx context.Context, thread GeminiThread, eventI
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), thread.ServerID); err != nil {
 		return "", "", err
 	}
+	var updating int
+	if err = tx.GetContext(ctx, &updating, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind='agent.update' AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
+		return "", "", err
+	}
+	if updating != 0 {
+		return "", "", ErrGeminiCredentialsBusy
+	}
 	opID, targetID := NewID(), NewID()
 	r, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET operation_id=?,status='queued' WHERE id=? AND session_id<>'' AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting')`), opID, thread.ID)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/store"
 )
 
 func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
@@ -141,5 +142,89 @@ func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	plan, err := db.WorkspaceDeletionPlan(ctx, workspaces[0].ID, false)
 	if err != nil || plan.ThreadCount != 2 || plan.CanRemoveRecord {
 		t.Fatalf("Gemini sessions missing from workspace deletion plan: %+v %v", plan, err)
+	}
+}
+
+func TestGeminiInterruptOnlyReleasesWorkspaceAfterConfirmedStop(t *testing.T) {
+	for _, test := range []struct {
+		name, resultStatus, target, wantStatus string
+		stopped                                bool
+	}{
+		{"legacy-ack", "succeeded", "", "interrupting", false},
+		{"wrong-target", "succeeded", "another-operation", "interrupting", true},
+		{"missing-owner", "failed", "", "running", false},
+		{"confirmed-exit", "succeeded", "current", "interrupted", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, server := gatewayTestServer(t, "stop-"+test.name)
+			ctx := context.Background()
+			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.80", GeminiVersion: "0.66.0"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/gemini", Name: "gemini"}}}); err != nil {
+				t.Fatal(err)
+			}
+			workspaces, _ := db.ListWorkspaces(ctx)
+			thread, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "auto", "yolo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.QueueGeminiTurn(ctx, thread, "first", "auto", "yolo"); err != nil {
+				t.Fatal(err)
+			}
+			thread, _ = db.GeminiThread(ctx, thread.ID)
+			if err := db.MarkDelivered(ctx, thread.OperationID); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.InterruptGeminiTurn(ctx, thread); err != nil {
+				t.Fatal(err)
+			}
+			operations, _ := db.PendingOperations(ctx, server.ID)
+			var interrupt store.Operation
+			for _, operation := range operations {
+				if operation.Kind == "gemini.turn.interrupt" {
+					interrupt = operation
+				}
+			}
+			if interrupt.ID == "" {
+				t.Fatal("interrupt was not queued")
+			}
+			g := New(db, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			target := test.target
+			if target == "current" {
+				target = thread.OperationID
+			}
+			confirmation, _ := json.Marshal(protocol.GeminiInterruptResult{OperationID: target, Stopped: test.stopped})
+			raw, _ := json.Marshal(protocol.OperationResult{OperationID: interrupt.ID, Status: test.resultStatus, Data: confirmation, Message: "stop result"})
+			if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: raw}); err != nil {
+				t.Fatal(err)
+			}
+			current, _ := db.GeminiThread(ctx, thread.ID)
+			if current.Status != test.wantStatus {
+				t.Fatalf("status=%s, want %s", current.Status, test.wantStatus)
+			}
+			other, _ := db.CreateGeminiThread(ctx, workspaces[0].ID, "auto", "default")
+			_, queueErr := db.QueueGeminiTurn(ctx, other, "second", "auto", "default")
+			if test.stopped && target == thread.OperationID {
+				if queueErr != nil {
+					t.Fatalf("confirmed exit did not release workspace: %v", queueErr)
+				}
+				original, _ := db.Operation(ctx, thread.OperationID)
+				if original.Status != "cancelled" {
+					t.Fatalf("original operation left active: %+v", original)
+				}
+				// A delayed original result must not undo interrupted status.
+				late, _ := json.Marshal(protocol.OperationResult{OperationID: thread.OperationID, Status: "failed", Message: "context canceled"})
+				if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: late}); err != nil {
+					t.Fatal(err)
+				}
+				current, _ = db.GeminiThread(ctx, thread.ID)
+				if current.Status != "interrupted" {
+					t.Fatal("late result changed completed interruption")
+				}
+			} else if queueErr == nil {
+				t.Fatal("unverified stop released workspace")
+			}
+		})
 	}
 }

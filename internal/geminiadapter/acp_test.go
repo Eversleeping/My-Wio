@@ -17,6 +17,15 @@ import (
 )
 
 func fakeACPCLI() {
+	mode := "default"
+	for i, arg := range os.Args {
+		if arg == "--approval-mode" && i+1 < len(os.Args) {
+			mode = os.Args[i+1]
+		}
+	}
+	if override := os.Getenv("WIO_GEMINI_TEST_MODE_OVERRIDE"); override != "" {
+		mode = override
+	}
 	decoder := json.NewDecoder(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
 	var bridge struct {
@@ -44,7 +53,7 @@ func fakeACPCLI() {
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			_ = json.Unmarshal(p.Servers[0], &bridge)
-			result = map[string]any{"sessionId": "native-acp"}
+			result = map[string]any{"sessionId": "native-acp", "modes": map[string]string{"currentModeId": mode}}
 			if msg.Method == "session/load" {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "OLD_REPLAY_MUST_NOT_APPEAR"}})
@@ -57,6 +66,16 @@ func fakeACPCLI() {
 			}
 		case "session/prompt":
 			_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), msg.Params, 0600)
+			if os.Getenv("WIO_GEMINI_TEST_PERMISSION") == "1" {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": "permission-rpc", "method": "session/request_permission", "params": map[string]any{"toolCall": map[string]any{"toolCallId": "shell-permission", "title": "test command", "content": []any{}}, "options": []any{map[string]string{"optionId": "persist", "name": "Allow for this session", "kind": "allow_always"}, map[string]string{"optionId": "once", "name": "Allow", "kind": "allow_once"}, map[string]string{"optionId": "reject", "name": "Reject", "kind": "reject_once"}}}})
+				var answer acpMessage
+				if decoder.Decode(&answer) != nil {
+					return
+				}
+				_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), answer.Result, 0600)
+				result = map[string]any{"stopReason": "end_turn"}
+				break
+			}
 			notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "bridge-call", "title": "wio_ask_user()", "status": "pending", "content": []any{}})
 			request, _ := http.NewRequest("POST", bridge.URL, strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wio_ask_user","arguments":{"questions":[{"id":"q","question":"Continue?"}]}}}`))
 			request.Header.Set("Authorization", bridge.Headers[0].Value)

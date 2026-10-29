@@ -214,9 +214,10 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							}
 							_ = json.Unmarshal(msg.Params, &p)
 							outcome := map[string]string{"outcome": "cancelled"}
-							// Only our randomly named, question-only bridge can be auto-approved.
+							// ACP asks the client for confirmation even in YOLO mode.
+							// Use a one-time grant so this turn cannot change saved policy.
 							bridgeCall := strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_ask_user") && strings.HasPrefix(p.ToolCall.Title, "wio_ask_user(")
-							if bridgeCall {
+							if bridgeCall || command.ApprovalMode == "yolo" {
 								for _, o := range p.Options {
 									if o.Kind == "allow_once" {
 										outcome = map[string]string{"outcome": "selected", "optionId": o.ID}
@@ -234,7 +235,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 								answers, err := a.ask(ctx, op, command.ThreadID, []protocol.UserInputQuestion{q})
 								if err == nil {
 									for _, o := range p.Options {
-										if o.Name == answers["permission"].Answers[0] {
+										if answer := answers["permission"].Answers; len(answer) > 0 && o.Name == answer[0] {
 											outcome = map[string]string{"outcome": "selected", "optionId": o.ID}
 											break
 										}
@@ -269,6 +270,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		command.SessionID = fork.SessionID
 	}
 	params := map[string]any{"cwd": command.Workspace, "mcpServers": []any{bridge}}
+	var sessionResult json.RawMessage
 	sessionID := command.SessionID
 	if sessionID == "" {
 		raw, err := call("session/new", params)
@@ -279,10 +281,11 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 			SessionID string `json:"sessionId"`
 		}
 		_ = json.Unmarshal(raw, &result)
+		sessionResult = raw
 		sessionID = result.SessionID
 	} else {
 		params["sessionId"] = sessionID
-		if _, err = call("session/load", params); err != nil {
+		if sessionResult, err = call("session/load", params); err != nil {
 			return err
 		}
 		// Discard the initial history burst until commands are ready. This is
@@ -294,6 +297,19 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	}
 	if sessionID == "" {
 		return errors.New("Gemini ACP did not return a session identifier")
+	}
+	// Do not silently show YOLO when CLI trust or administrator settings chose
+	// a different mode. Official ACP returns the effective mode for new/load.
+	var state struct {
+		Modes *struct {
+			Current string `json:"currentModeId"`
+		} `json:"modes"`
+	}
+	if json.Unmarshal(sessionResult, &state) != nil {
+		return errors.New("invalid Gemini session configuration")
+	}
+	if (state.Modes == nil && command.ApprovalMode == "yolo") || (state.Modes != nil && state.Modes.Current != command.ApprovalMode) {
+		return errors.New("Gemini CLI did not accept the requested approval mode; check workspace trust and administrator settings")
 	}
 	if err = emit("init", map[string]any{"session_id": sessionID, "model": command.Model, "thinking_level": command.ThinkingLevel, "timestamp": time.Now().UTC().Truncate(time.Millisecond).Format(time.RFC3339Nano)}); err != nil {
 		return err

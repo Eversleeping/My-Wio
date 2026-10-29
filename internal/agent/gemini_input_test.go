@@ -131,8 +131,13 @@ func TestGeminiLongTurnCanBeInterruptedWhileWaitingForInput(t *testing.T) {
 				cancel()
 			} else {
 				interrupt, _ := json.Marshal(protocol.GeminiInterruptCommand{ThreadID: "thread", OperationID: "turn"})
-				if err := client.execute(parent, &protocol.ControlEnvelope{Kind: "gemini.turn.interrupt", PayloadJSON: interrupt}); err != nil {
-					t.Fatal(err)
+				client.handleOperation(parent, &protocol.ControlEnvelope{Kind: "gemini.turn.interrupt", OperationID: "stop", PayloadJSON: interrupt})
+				client.seenMu.Lock()
+				result := client.seen["stop"].result
+				client.seenMu.Unlock()
+				var confirmation protocol.GeminiInterruptResult
+				if result.Status != "succeeded" || json.Unmarshal(result.Data, &confirmation) != nil || !confirmation.Stopped || confirmation.OperationID != "turn" {
+					t.Fatalf("interrupt did not confirm process exit: %+v", result)
 				}
 			}
 			select {
@@ -153,5 +158,40 @@ func TestGeminiLongTurnCanBeInterruptedWhileWaitingForInput(t *testing.T) {
 				t.Fatal("cancelled turn did not release adapter")
 			}
 		})
+	}
+}
+
+func TestGeminiInterruptRequiresOwnedExecutionOrCompletedReceipt(t *testing.T) {
+	client := NewClient(Config{StateDir: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := client.interruptGeminiAndWait(context.Background(), "orphan"); err == nil {
+		t.Fatal("unknown execution was reported stopped after an Agent restart")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	client.seen["starting"] = &operationExecution{kind: "gemini.turn.start", cancel: cancel, done: done}
+	ack := make(chan error, 1)
+	go func() { ack <- client.interruptGeminiAndWait(context.Background(), "starting") }()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("a turn not yet registered in the adapter could not be cancelled")
+	}
+	select {
+	case <-ack:
+		t.Fatal("interruption confirmed before execution cleanup")
+	default:
+	}
+	close(done)
+	if err := <-ack; err != nil {
+		t.Fatal(err)
+	}
+	if err := client.interruptGeminiAndWait(context.Background(), "starting"); err != nil {
+		t.Fatal("just-completed execution was not recognized", err)
+	}
+	if err := client.saveOperationResult(protocol.OperationResult{OperationID: "finished", Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.interruptGeminiAndWait(context.Background(), "finished"); err != nil {
+		t.Fatal("persisted completion was not recognized", err)
 	}
 }

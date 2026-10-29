@@ -24,6 +24,11 @@ type GeminiSteerCommand struct {
 	Prompt      string `json:"prompt"`
 }
 
+type GeminiInterruptResult struct {
+	OperationID string `json:"operation_id"`
+	Stopped     bool   `json:"stopped"`
+}
+
 type GeminiAnswerCommand struct {
 	ThreadID    string                     `json:"thread_id"`
 	OperationID string                     `json:"operation_id"`

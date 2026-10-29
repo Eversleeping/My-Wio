@@ -79,12 +79,33 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":rejected", StreamID: command.ThreadID, Kind: "gemini.steer.rejected", Payload: security.RedactJSON(raw)})
 	}
 	if op.Kind == "gemini.turn.interrupt" {
-		if result.Status == "succeeded" {
-			return nil
-		}
 		var command protocol.GeminiInterruptCommand
 		if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
 			return err
+		}
+		if result.Status == "succeeded" {
+			var confirmed protocol.GeminiInterruptResult
+			if json.Unmarshal(result.Data, &confirmed) != nil || !confirmed.Stopped || confirmed.OperationID != command.OperationID {
+				// Legacy Agents only acknowledge dispatch; their turn result must
+				// still arrive before it is safe to release the workspace.
+				return nil
+			}
+			thread, err := g.store.GeminiThread(ctx, command.ThreadID)
+			if err != nil {
+				return err
+			}
+			if thread.OperationID != command.OperationID || thread.Status != "interrupting" {
+				return nil
+			}
+			original, err := g.store.Operation(ctx, command.OperationID)
+			if err != nil {
+				return err
+			}
+			stopped := protocol.OperationResult{OperationID: command.OperationID, Status: "cancelled", Message: "Gemini process terminated"}
+			if err = g.store.CompleteOperation(ctx, stopped); err != nil {
+				return err
+			}
+			return g.completeGeminiOperation(ctx, original, stopped)
 		}
 		// A failed interrupt must not leave the session permanently locked.
 		_, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE gemini_threads SET status='running' WHERE id=? AND operation_id=? AND status='interrupting'"), command.ThreadID, command.OperationID)

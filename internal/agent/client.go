@@ -50,6 +50,7 @@ type Client struct {
 	deployer           *deployer.Deployer
 	seenMu             sync.Mutex
 	seen               map[string]*operationExecution
+	updatePending      bool
 	codexPathMu        sync.RWMutex
 	codexPath          string
 	cliInstallMu       sync.Mutex
@@ -60,6 +61,8 @@ type Client struct {
 }
 
 type operationExecution struct {
+	kind        string
+	cancel      context.CancelFunc
 	done        chan struct{}
 	result      protocol.OperationResult
 	completedAt time.Time
@@ -282,7 +285,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		}
 		return
 	}
-	execution = &operationExecution{done: make(chan struct{})}
+	execution = &operationExecution{kind: envelope.Kind, done: make(chan struct{})}
 	if result, found, err := c.loadOperationResult(envelope.OperationID); found || err != nil {
 		c.seenMu.Unlock()
 		if err != nil {
@@ -291,10 +294,11 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		_ = c.queue("operation_result", result, true)
 		return
 	}
-	c.seen[envelope.OperationID] = execution
-	c.seenMu.Unlock()
 	ctx, cancel := operationContext(parent, envelope.Kind)
 	defer cancel()
+	execution.cancel = cancel
+	c.seen[envelope.OperationID] = execution
+	c.seenMu.Unlock()
 	if err := c.queue("operation_started", protocol.OperationStarted{OperationID: envelope.OperationID}, true); err != nil {
 		c.log.Warn("could not queue operation start", "operation_id", envelope.OperationID, "error", err)
 	}
@@ -302,10 +306,22 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	var resultData json.RawMessage
 	refreshInventory := false
 	var err error
-	if envelope.Kind == "agent.update" {
+	if (envelope.Kind == "gemini.thread.fork" || envelope.Kind == "git.worktree.create") && c.agentUpdatePending() {
+		err = errors.New("Agent update is in progress; retry the task after it reconnects")
+	} else if envelope.Kind == "agent.update" {
 		var command protocol.AgentUpdateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			restartPath, err = c.stageAgentUpdate(ctx, command)
+		}
+	} else if envelope.Kind == "gemini.turn.interrupt" {
+		var command protocol.GeminiInterruptCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
+			err = c.interruptGeminiAndWait(stopContext, command.OperationID)
+			stopCancel()
+			if err == nil {
+				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
+			}
 		}
 	} else if envelope.Kind == "workspace.files" {
 		var command protocol.WorkspaceFilesCommand
@@ -558,6 +574,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	if err == nil && restartPath != "" {
 		time.Sleep(750 * time.Millisecond)
 		if restartErr := activateStagedUpdate(c.config.StateDir, restartPath); restartErr != nil {
+			c.releaseAgentUpdate()
 			c.log.Error("could not restart into Agent update", "operation_id", envelope.OperationID, "error", restartErr)
 			failure := protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: truncate(restartErr.Error(), 8192)}
 			_ = c.saveOperationResult(failure)
@@ -793,6 +810,9 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		}
 		return c.enqueueInventory(ctx)
 	case "gemini.turn.start", "gemini.turn.rewrite":
+		if c.agentUpdatePending() {
+			return errors.New("Agent update is in progress; retry the task after it reconnects")
+		}
 		var command protocol.GeminiTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
@@ -813,26 +833,31 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.gemini.Answer(command)
+	case "gemini.turn.interrupt":
+		var command protocol.GeminiInterruptCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.interruptGeminiAndWait(ctx, command.OperationID)
 	case "gemini.turn.steer":
 		var command protocol.GeminiSteerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.gemini.Steer(command)
-	case "gemini.turn.interrupt":
-		var command protocol.GeminiInterruptCommand
-		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
-			return err
-		}
-		c.gemini.Interrupt(command.OperationID)
-		return nil
 	case "codex.turn.start":
+		if c.agentUpdatePending() {
+			return errors.New("Agent update is in progress; retry the task after it reconnects")
+		}
 		var command protocol.StartTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.codex.StartTurn(ctx, command)
 	case "codex.turn.rewrite":
+		if c.agentUpdatePending() {
+			return errors.New("Agent update is in progress; retry the task after it reconnects")
+		}
 		var command protocol.RewriteTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err

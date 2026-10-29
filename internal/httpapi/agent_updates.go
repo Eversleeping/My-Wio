@@ -57,7 +57,11 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "an Agent update is already queued")
 		return
 	}
-	operationID, err := a.store.QueueOperation(r.Context(), server.ID, "agent.update", command, "agent-update:"+server.ID+":"+command.Version+":"+store.NewID())
+	operationID, err := a.store.QueueAgentUpdate(r.Context(), server.ID, command)
+	if errors.Is(err, store.ErrAgentUpdateBusy) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Agent update")
 		return

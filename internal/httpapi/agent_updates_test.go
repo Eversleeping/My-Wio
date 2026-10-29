@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -54,6 +55,58 @@ func TestUpdateAgentQueuesVerifiedPackageCommand(t *testing.T) {
 	duplicate := agentUpdateRequest(t, api, server.ID, &store.Session{UserID: "test-user"})
 	if duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate Agent update returned %d: %s", duplicate.Code, duplicate.Body.String())
+	}
+}
+
+func TestAgentUpdateDoesNotRestartActiveAIWork(t *testing.T) {
+	db := openBootstrapTestStore(t)
+	s := enrollResourceTestServer(t, db, "busy-update")
+	ctx := context.Background()
+	if err := db.Heartbeat(ctx, s.ID, protocol.Heartbeat{AgentVersion: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertInventory(ctx, s.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/ai", Name: "ai"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, _ := db.ListWorkspaces(ctx)
+	gemini, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "auto", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, err := db.CreateThread(ctx, workspaces[0].ID, "Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assetDir, "wio-agent-linux-amd64"), []byte("test-update"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(db)
+	api.agentUpdates = agentupdate.New(assetDir)
+	for _, target := range []struct{ table, id string }{{"gemini_threads", gemini.ID}, {"codex_threads", codex.ID}} {
+		for _, status := range []string{"queued", "running", "interrupting"} {
+			if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE "+target.table+" SET status=? WHERE id=?"), status, target.id); err != nil {
+				t.Fatal(err)
+			}
+			response := agentUpdateRequest(t, api, s.ID, &store.Session{UserID: "test-user"})
+			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "active AI tasks") {
+				t.Fatalf("%s/%s allowed restart: %d %s", target.table, status, response.Code, response.Body)
+			}
+		}
+		if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE "+target.table+" SET status='idle' WHERE id=?"), target.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := agentUpdateRequest(t, api, s.ID, &store.Session{UserID: "test-user"})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("idle server rejected update: %d %s", response.Code, response.Body)
+	}
+	if _, err := db.QueueGeminiTurn(ctx, gemini, "during upgrade", "auto", "default"); err == nil {
+		t.Fatal("Gemini task accepted while restart was queued")
+	}
+	current, _ := db.GeminiThread(ctx, gemini.ID)
+	if current.Status != "idle" {
+		t.Fatal("rejected turn changed session status")
 	}
 }
 
