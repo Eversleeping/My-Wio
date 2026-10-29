@@ -16,7 +16,7 @@ import (
 func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	db, server := gatewayTestServer(t, "gemini")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.73"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.79", GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/gemini", Name: "gemini"}}}); err != nil {
@@ -66,6 +66,30 @@ func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	current, _ = db.GeminiThread(ctx, thread.ID)
 	if current.OperationID != thread.OperationID || current.Status != "running" {
 		t.Fatal("answer completed original turn")
+	}
+	readyPayload, _ := json.Marshal(map[string]string{"operation_id": thread.OperationID})
+	readyRaw, _ := json.Marshal(protocol.StreamEvent{EventID: thread.OperationID + ":steer-ready", StreamID: thread.ID, Kind: "gemini.steer.ready", Payload: readyPayload})
+	if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "gemini_event", PayloadJSON: readyRaw}); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"succeeded", "failed"} {
+		_, steerID, err := db.QueueGeminiSteer(ctx, thread.ID, thread.OperationID, "steer-"+status, "Focus on tests")
+		if err != nil {
+			t.Fatal(err)
+		}
+		steerResult, _ := json.Marshal(protocol.OperationResult{OperationID: steerID, Status: status, Message: "delivery result"})
+		if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: steerResult}); err != nil {
+			t.Fatal(err)
+		}
+		current, _ = db.GeminiThread(ctx, thread.ID)
+		if current.OperationID != thread.OperationID || current.Status != "running" {
+			t.Fatalf("steer %s completed original turn", status)
+		}
+	}
+	steerEvents, _ := db.Events(ctx, thread.ID, 0, 500)
+	last := steerEvents[len(steerEvents)-1]
+	if last.Kind != "gemini.steer.rejected" || !strings.Contains(string(last.Payload), "steer-failed") {
+		t.Fatalf("missing delivery failure: %+v", last)
 	}
 	if err := db.MarkDelivered(ctx, thread.OperationID); err != nil {
 		t.Fatal(err)

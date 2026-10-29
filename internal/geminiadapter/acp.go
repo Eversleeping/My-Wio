@@ -33,6 +33,10 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		return err
 	}
 	blocks := []any{}
+	if len(command.SteeringContext) > 0 {
+		prior, _ := json.Marshal(command.SteeringContext)
+		blocks = append(blocks, map[string]string{"type": "text", "text": "User updates delivered during the preceding task (retained for continuity):\n" + string(prior)})
+	}
 	if command.Prompt != "" {
 		blocks = append(blocks, map[string]string{"type": "text", "text": command.Prompt})
 	}
@@ -55,6 +59,14 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		return err
 	}
 	defer closeBridge()
+	if command.Steering {
+		var closeSteering func()
+		environment, closeSteering, err = a.startSteering(ctx, op, command.ThreadID, environment)
+		if err != nil {
+			return fmt.Errorf("prepare Gemini steering: %w", err)
+		}
+		defer closeSteering()
+	}
 
 	cmd := exec.CommandContext(ctx, executable, "--acp", "--model", model, "--approval-mode", command.ApprovalMode)
 	cmd.Dir = command.Workspace

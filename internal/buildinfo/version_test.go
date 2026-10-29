@@ -2,6 +2,24 @@ package buildinfo
 
 import "testing"
 
+func TestGeminiSteeringRequiresBothCompatibleVersions(t *testing.T) {
+	for _, test := range []struct {
+		agent, cli string
+		want       bool
+	}{
+		{"0.2.79", "0.66.0", true},
+		{"0.3.0", "0.67.0", true},
+		{"0.2.78", "0.66.0", false},
+		{"0.2.79", "0.65.0", false},
+		{"dev", "0.66.0", false},
+		{"0.2.79", "", false},
+	} {
+		if got := SupportsGeminiSteering(test.agent, test.cli); got != test.want {
+			t.Errorf("SupportsGeminiSteering(%q,%q)=%v, want %v", test.agent, test.cli, got, test.want)
+		}
+	}
+}
+
 func TestGeminiYoloRequiresNewAgent(t *testing.T) {
 	for version, want := range map[string]bool{"0.2.71": false, "0.2.72": true, "v0.3.0": true, "invalid": false} {
 		if got := SupportsGeminiYolo(version); got != want {

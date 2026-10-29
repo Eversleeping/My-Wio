@@ -663,7 +663,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if updatedOperation.Status == "cancelled" {
 			return nil
 		}
-		if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "gemini.turn.interrupt" {
+		if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "gemini.turn.interrupt" || operation.Kind == "gemini.turn.steer" {
 			if err := g.completeGeminiOperation(ctx, operation, result); err != nil {
 				return err
 			}

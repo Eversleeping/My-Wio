@@ -5,6 +5,20 @@ import type { StreamEvent } from "./types";
 
 function event(sequence: number, kind: string, payload: unknown): StreamEvent { return { event_id: String(sequence), stream_id: "session", sequence, kind, payload, occurred_at: "2026-10-24T00:00:00Z" }; }
 
+test("restores Gemini steering delivery status and marks undelivered updates after completion",()=>{
+  const messages=geminiMessages([
+    event(1,"gemini.steer.queued",{operation_id:"a",request_id:"1",text:"Focus"}),
+    event(2,"gemini.steer.applied",{operation_id:"a",request_id:"1"}),
+    event(3,"gemini.steer.queued",{operation_id:"a",request_id:"2",text:"Late"}),
+    event(4,"gemini.steer.queued",{operation_id:"a",request_id:"3",text:"Rejected"}),
+    event(5,"gemini.steer.rejected",{operation_id:"a",request_id:"3"}),
+    event(6,"gemini.turn.completed",{operation_id:"a",status:"idle"}),
+    event(7,"gemini.steer.queued",{operation_id:"b",request_id:"1",text:"Next"}),
+  ]);
+  expect(messages.map(m=>m.steerStatus)).toEqual(["applied","missed","failed","queued"]);
+  expect(messages.map(m=>m.text)).toEqual(["Focus","Late","Rejected","Next"]);
+});
+
 function replayFixture(): StreamEvent[] {
   const output = [{ type: "content", content: { type: "text", text: "file contents" } }];
   return [

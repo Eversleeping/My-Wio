@@ -13,6 +13,9 @@ import (
 )
 
 type GeminiThread struct {
+	SteerSupported    bool       `db:"-" json:"steer_supported"`
+	SteerReady        bool       `db:"-" json:"steer_ready"`
+	CLIVersion        string     `db:"gemini_version" json:"-"`
 	ThinkingLevel     string     `db:"thinking_level" json:"thinking_level"`
 	InputSupported    bool       `db:"-" json:"input_supported"`
 	ThinkingSupported bool       `db:"-" json:"thinking_supported"`
@@ -41,7 +44,7 @@ type GeminiThread struct {
 	ServerStatus      string     `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,s.agent_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+const geminiThreadSelect = `SELECT t.*,s.agent_version,s.gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
  FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id` + projectServerJoin
 
 func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThread, error) {
@@ -52,6 +55,7 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 	}
 	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN ps.pinned_at IS NULL THEN 1 ELSE 0 END,ps.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range out {
+		out[i].SteerSupported = buildinfo.SupportsGeminiSteering(out[i].AgentVersion, out[i].CLIVersion)
 		out[i].InputSupported = buildinfo.SupportsGeminiInput(out[i].AgentVersion)
 		out[i].ThinkingSupported = buildinfo.SupportsGeminiThinking(out[i].AgentVersion)
 		out[i].ForkSupported = buildinfo.SupportsGeminiFork(out[i].AgentVersion)
@@ -64,6 +68,12 @@ func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, erro
 	var thread GeminiThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(geminiThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	thread.InputSupported = buildinfo.SupportsGeminiInput(thread.AgentVersion)
+	thread.SteerSupported = buildinfo.SupportsGeminiSteering(thread.AgentVersion, thread.CLIVersion)
+	if err == nil && thread.SteerSupported && thread.Status == "running" {
+		var count int
+		err = s.DB.GetContext(ctx, &count, s.Q("SELECT count(*) FROM events WHERE stream_id=? AND event_id=? AND kind='gemini.steer.ready'"), id, thread.OperationID+":steer-ready")
+		thread.SteerReady = count > 0
+	}
 	thread.ThinkingSupported = buildinfo.SupportsGeminiThinking(thread.AgentVersion)
 	thread.ForkSupported = buildinfo.SupportsGeminiFork(thread.AgentVersion)
 	thread.RewriteSupported = buildinfo.SupportsGeminiRewrite(thread.AgentVersion)
@@ -164,6 +174,7 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		return protocol.StreamEvent{}, errors.New("update Agent to support Gemini images")
 	}
 	command.Images = images
+	command.Steering = thread.SteerSupported
 	kind := "gemini.turn.start"
 	if editEventID != "" {
 		target, err := geminiRewriteTarget(ctx, tx, s, thread.ID, editEventID)
@@ -172,6 +183,18 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		}
 		command.Rewrite = &target
 		kind = "gemini.turn.rewrite"
+	}
+	if command.Steering {
+		cutoff := int64(0)
+		if editEventID != "" {
+			if err := tx.GetContext(ctx, &cutoff, s.Q("SELECT sequence FROM events WHERE stream_id=? AND event_id=?"), thread.ID, editEventID); err != nil {
+				return protocol.StreamEvent{}, err
+			}
+		}
+		command.SteeringContext, err = s.geminiSteeringContext(ctx, tx, thread.ID, cutoff)
+		if err != nil {
+			return protocol.StreamEvent{}, err
+		}
 	}
 	payload, err := json.Marshal(command)
 	if err != nil {

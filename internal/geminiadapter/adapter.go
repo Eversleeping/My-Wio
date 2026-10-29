@@ -26,6 +26,7 @@ type Adapter struct {
 	environment  []string
 	defaultModel string
 	questions    map[string]*pendingQuestion
+	steering     map[string]*steeringTurn
 }
 
 // Apply persistent API settings only between turns. The reservation also

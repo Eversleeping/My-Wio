@@ -3,16 +3,25 @@ package protocol
 // GeminiTurnCommand runs a headless Gemini CLI turn in an existing workspace.
 // Authentication stays on the Agent host; credentials never enter this payload.
 type GeminiTurnCommand struct {
-	Interactive   bool                 `json:"interactive,omitempty"`
-	Images        []TurnImage          `json:"images,omitempty"`
-	ThinkingLevel string               `json:"thinking_level,omitempty"`
-	ThreadID      string               `json:"thread_id"`
-	Workspace     string               `json:"workspace"`
-	SessionID     string               `json:"session_id"`
-	Prompt        string               `json:"prompt"`
-	Model         string               `json:"model"`
-	ApprovalMode  string               `json:"approval_mode"`
-	Rewrite       *GeminiRewriteTarget `json:"rewrite,omitempty"`
+	Steering        bool                 `json:"steering,omitempty"`
+	SteeringContext []string             `json:"steering_context,omitempty"`
+	Interactive     bool                 `json:"interactive,omitempty"`
+	Images          []TurnImage          `json:"images,omitempty"`
+	ThinkingLevel   string               `json:"thinking_level,omitempty"`
+	ThreadID        string               `json:"thread_id"`
+	Workspace       string               `json:"workspace"`
+	SessionID       string               `json:"session_id"`
+	Prompt          string               `json:"prompt"`
+	Model           string               `json:"model"`
+	ApprovalMode    string               `json:"approval_mode"`
+	Rewrite         *GeminiRewriteTarget `json:"rewrite,omitempty"`
+}
+
+type GeminiSteerCommand struct {
+	ThreadID    string `json:"thread_id"`
+	OperationID string `json:"operation_id"`
+	RequestID   string `json:"request_id"`
+	Prompt      string `json:"prompt"`
 }
 
 type GeminiAnswerCommand struct {

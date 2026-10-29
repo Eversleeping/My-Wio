@@ -9,10 +9,10 @@ import { formatTime } from "./format";
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; inputSupported?: boolean; answerFailure?: boolean } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, input_supported:options.inputSupported ?? true,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -20,6 +20,11 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     let body: unknown = [];
     if (init.method === "POST") {
       const input = JSON.parse(String(init.body)); requests.push({url,body:input}); body = {...currentThread,model,id:"thread-created"};
+      if (url.endsWith("/steer")) {
+        if (options.steerFailure) return new Response(JSON.stringify({error:"Turn is no longer running"}), {status:409,headers:{"Content-Type":"application/json"}});
+        body={operation_id:"steer-op"};
+        eventLog=[...eventLog,{event_id:"steer",stream_id:thread.id,sequence:100,kind:"gemini.steer.queued",occurred_at:thread.updated_at,payload:{text:input.prompt,operation_id:input.operation_id,request_id:input.request_id}}];
+      }
       if (url.endsWith("/answer")) body={operation_id:"answer-op"};
       if (url.endsWith("/fork")) body={operation_id:"fork-op",target_thread_id:"forked-thread"};
       if (url.endsWith("/rewrite")) {
@@ -43,6 +48,41 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
   return {user:userEvent.setup(),requests,modelRequests,onSelectThread};
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
+
+test("sends a correction to the current Gemini turn while retaining the interrupt button", async () => {
+  const ready = [{event_id:"ready",sequence:1,kind:"gemini.steer.ready",stream_id:thread.id,occurred_at:thread.updated_at,payload:{operation_id:"op1"}}];
+  const {user,requests}=setup(true,"auto","configured",ready,{status:"running",steerSupported:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  await waitFor(()=>expect(input).toBeEnabled());
+  await user.type(input,"Focus on the storage bug");
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await screen.findByText("Waiting for the next model request");
+  expect(input).toHaveValue("");
+  expect(screen.getByRole("button",{name:"Interrupt"})).toBeEnabled();
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/steer",body:{prompt:"Focus on the storage bug",operation_id:"op1",request_id:expect.any(String)}});
+  expect(screen.getByRole("combobox",{name:"Gemini model"})).toBeDisabled();
+});
+
+test("retains the draft and reuses its request ID if a correction fails", async()=>{
+  const {user,requests}=setup(true,"auto","configured",[],{status:"running",steerSupported:true,steerReady:true,steerFailure:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  await waitFor(()=>expect(input).toBeEnabled());
+  await user.type(input,"Keep my changes");
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await screen.findByText("Turn is no longer running");
+  expect(input).toHaveValue("Keep my changes");
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await waitFor(()=>expect(requests).toHaveLength(2));
+  expect(requests[0].body).toEqual(requests[1].body);
+});
+
+test("does not steer a new Gemini turn using a previous turn's readiness",async()=>{
+  const ready=[{event_id:"old-ready",sequence:1,kind:"gemini.steer.ready",stream_id:thread.id,occurred_at:thread.updated_at,payload:{operation_id:"old"}}];
+  setup(true,"auto","configured",ready,{status:"running",steerSupported:true});
+  expect(await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Send correction"})).toBeDisabled();
+});
 
 test("resuming hides 25 replayed commands and shows the 29 actual completed commands", async () => {
   const events: Array<Record<string, unknown>> = [];

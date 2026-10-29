@@ -5,7 +5,13 @@ import (
 	"strings"
 )
 
-var Version = "0.2.78"
+var Version = "0.2.79"
+
+const MinimumGeminiSteerVersion = "0.2.79"
+
+func SupportsGeminiSteering(agent, cli string) bool {
+	return atLeast(agent, MinimumGeminiSteerVersion) && atLeast(cli, "0.66.0")
+}
 
 const MinimumGeminiInputVersion = "0.2.73"
 

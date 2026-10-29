@@ -813,6 +813,12 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.gemini.Answer(command)
+	case "gemini.turn.steer":
+		var command protocol.GeminiSteerCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.gemini.Steer(command)
 	case "gemini.turn.interrupt":
 		var command protocol.GeminiInterruptCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

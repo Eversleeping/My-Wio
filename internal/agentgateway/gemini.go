@@ -58,7 +58,7 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if err != nil {
 			return err
 		}
-	case "gemini.message", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered":
+	case "gemini.message", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied":
 	default:
 		return errors.New("unsupported Gemini event")
 	}
@@ -67,6 +67,17 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 }
 
 func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operation, result protocol.OperationResult) error {
+	if op.Kind == "gemini.turn.steer" {
+		if result.Status == "succeeded" {
+			return nil
+		}
+		var command protocol.GeminiSteerCommand
+		if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(map[string]string{"operation_id": command.OperationID, "request_id": command.RequestID, "message": result.Message})
+		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":rejected", StreamID: command.ThreadID, Kind: "gemini.steer.rejected", Payload: security.RedactJSON(raw)})
+	}
 	if op.Kind == "gemini.turn.interrupt" {
 		if result.Status == "succeeded" {
 			return nil

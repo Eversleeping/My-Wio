@@ -1,7 +1,7 @@
 import type { StreamEvent } from "./types";
 import type { Question } from "./components/UserInputPrompt";
 
-export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status" | "question"; text: string; time: string; title?: string; toolName?: string; toolInput?: string; toolOutput?: string; toolStatus?: string; stats?: Record<string, unknown>; images?: { data_url: string }[]; operationID?: string; questions?: Question[]; answers?: Record<string, string> };
+export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status" | "question" | "steer"; steerStatus?: "queued" | "applied" | "missed" | "failed"; text: string; time: string; title?: string; toolName?: string; toolInput?: string; toolOutput?: string; toolStatus?: string; stats?: Record<string, unknown>; images?: { data_url: string }[]; operationID?: string; questions?: Question[]; answers?: Record<string, string> };
 
 export type GeminiDisplayItem = GeminiMessage | { id: string; role: "commandGroup"; items: GeminiMessage[] };
 
@@ -89,6 +89,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
   const tools = new Map<string, GeminiMessage>();
   const replayEvents = legacyReplayEvents(events);
   const replayCounts = new Map<string, number>();
+  const steers = new Map<string, GeminiMessage>();
   let assistant: GeminiMessage | undefined;
   let operation = "";
   for (const event of events) {
@@ -100,6 +101,23 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
     }
     if (op !== operation) { assistant = undefined; operation = op; }
     const base = { id: event.event_id, time: event.occurred_at, operationID: op };
+    if (event.kind === "gemini.steer.queued") {
+      assistant = undefined;
+      const item: GeminiMessage = { ...base, role: "steer", text: readable(p.text), steerStatus: "queued" };
+      steers.set(JSON.stringify([op, p.request_id]), item);
+      messages.push(item);
+      continue;
+    }
+    if (event.kind === "gemini.steer.applied" || event.kind === "gemini.steer.rejected") {
+      const item = steers.get(JSON.stringify([op, p.request_id]));
+      if (item) item.steerStatus = event.kind === "gemini.steer.applied" ? "applied" : "failed";
+      continue;
+    }
+    if (event.kind === "gemini.result" || event.kind === "gemini.turn.completed") {
+      for (const item of steers.values()) {
+        if (item.operationID === op && item.steerStatus === "queued") item.steerStatus = "missed";
+      }
+    }
     if (event.kind === "gemini.user.message") { assistant = undefined; messages.push({ ...base, role: "user", text: readable(p.text), images: Array.isArray(p.images) ? p.images.filter((image): image is {data_url:string} => typeof image?.data_url === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(image.data_url)) : [] }); }
     else if (event.kind === "gemini.question") {
       assistant = undefined;
