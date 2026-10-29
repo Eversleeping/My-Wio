@@ -128,6 +128,24 @@ func TestBootstrapFailureDeletesUnusedEnrollment(t *testing.T) {
 	}
 }
 
+func TestBootstrapVersionDiscoveryFailureIsRetryableAndCleansEnrollment(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	fake := &fakeServerBootstrapper{installError: fmt.Errorf("%w: upstream unavailable", sshbootstrap.ErrCLIReleasesUnavailable)}
+	api := &API{store: database, bootstrapper: fake, publicURL: "https://wio.example.com", log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := directJSONRequest(t, http.MethodPost, "/api/servers/ssh/bootstrap", bootstrapInput(), nil, api.bootstrapServerSSH)
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusServiceUnavailable || body["code"] != "cli_versions_unavailable" {
+		t.Fatalf("unexpected version discovery failure: %d %v", response.Code, body)
+	}
+	var count int
+	if err := database.DB.Get(&count, "SELECT COUNT(*) FROM enrollment_tokens"); err != nil || count != 0 {
+		t.Fatalf("failed version discovery left an enrollment token: %d %v", count, err)
+	}
+}
+
 func TestRepairBootstrapCreatesEnrollmentForExistingServer(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	if _, err := database.CreateEnrollment(context.Background(), "repair-node", []string{"/srv"}, "initial-token", time.Now().Add(time.Hour)); err != nil {

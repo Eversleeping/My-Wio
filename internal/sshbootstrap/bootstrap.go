@@ -27,16 +27,17 @@ import (
 )
 
 var (
-	ErrInvalidTarget       = errors.New("invalid SSH target")
-	ErrHostKeyMismatch     = errors.New("SSH host key fingerprint changed")
-	ErrConnection          = errors.New("SSH connection failed")
-	ErrAuthentication      = errors.New("SSH authentication failed")
-	ErrPrivilegeRequired   = errors.New("root or passwordless sudo is required")
-	ErrUnsupportedPlatform = errors.New("unsupported Linux architecture")
-	ErrAssetsUnavailable   = errors.New("agent installation assets are unavailable")
-	ErrInstallation        = errors.New("agent installation failed")
-	ErrServerMismatch      = errors.New("installed Agent belongs to a different server")
-	ErrUninstallation      = errors.New("agent uninstallation failed")
+	ErrInvalidTarget          = errors.New("invalid SSH target")
+	ErrHostKeyMismatch        = errors.New("SSH host key fingerprint changed")
+	ErrConnection             = errors.New("SSH connection failed")
+	ErrAuthentication         = errors.New("SSH authentication failed")
+	ErrPrivilegeRequired      = errors.New("root or passwordless sudo is required")
+	ErrUnsupportedPlatform    = errors.New("unsupported Linux architecture")
+	ErrAssetsUnavailable      = errors.New("agent installation assets are unavailable")
+	ErrCLIReleasesUnavailable = errors.New("latest stable CLI versions are unavailable")
+	ErrInstallation           = errors.New("agent installation failed")
+	ErrServerMismatch         = errors.New("installed Agent belongs to a different server")
+	ErrUninstallation         = errors.New("agent uninstallation failed")
 )
 
 const (
@@ -108,14 +109,20 @@ type UninstallResult struct {
 }
 
 type Service struct {
-	assetDir string
+	assetDir       string
+	codexReleases  *codexcli.ReleaseChecker
+	geminiReleases *codexcli.ReleaseChecker
 }
 
 func New(assetDir string) *Service {
 	if strings.TrimSpace(assetDir) == "" {
 		assetDir = "/usr/local/share/wio"
 	}
-	return &Service{assetDir: assetDir}
+	return &Service{
+		assetDir:       assetDir,
+		codexReleases:  codexcli.NewReleaseChecker(nil, ""),
+		geminiReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/google-gemini/gemini-cli/releases", "v"),
+	}
 }
 
 func (s *Service) Probe(ctx context.Context, target HostTarget) (HostKeyResult, error) {
@@ -182,6 +189,11 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	prerequisiteUnit, err := os.ReadFile(filepath.Join(s.assetDir, "wio-prerequisite.service"))
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: %v", ErrAssetsUnavailable, err)
+	}
+	request.report("checking_cli_versions", 0, 0)
+	versions, err := s.latestCLIVersions(ctx)
+	if err != nil {
+		return InstallResult{}, err
 	}
 
 	root := isRoot(client)
@@ -264,11 +276,10 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	codexPath := "codex"
 	if probe.NPMReady {
 		request.report("installing_codex", 0, 0)
-		prefix := "/var/lib/wio-agent/codex/versions/" + codexcli.DefaultTargetVersion
-		packageName := "@openai/codex@" + codexcli.DefaultTargetVersion
-		install := "su -s /bin/sh -c " + shellQuote("npm install --prefix "+shellQuote(prefix)+" --omit=dev "+shellQuote(packageName)) + " wio-agent"
-		managedPath := prefix + "/node_modules/.bin/codex"
-		if _, installErr := run(client, elevated(root, install)); installErr == nil && agentCommandWorks(client, root, managedPath+" --version") {
+		managedPath, installErr := installBootstrapCLI("codex", versions.codex, npmRegistry, func(script string) (string, error) {
+			return run(client, elevated(root, script))
+		})
+		if installErr == nil {
 			codexReady = true
 			codexPath = managedPath
 		} else {
@@ -277,6 +288,16 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	}
 	if !codexReady && !probe.NPMReady {
 		resultWarnings = append(resultWarnings, "codex_install_requires_npm")
+	}
+	if probe.NPMReady {
+		request.report("installing_gemini", 0, 0)
+		if _, err := installBootstrapCLI("gemini", versions.gemini, npmRegistry, func(script string) (string, error) {
+			return run(client, elevated(root, script))
+		}); err != nil {
+			resultWarnings = append(resultWarnings, "gemini_install_failed")
+		}
+	} else {
+		resultWarnings = append(resultWarnings, "gemini_install_requires_npm")
 	}
 	if probe.NPMReady {
 		request.report("installing_playwright", 0, 0)

@@ -117,9 +117,12 @@ test("shows automatic dependency setup and retries an incomplete enrollment as S
     const url = String(input); requests.push(url);
     if (url.endsWith("/ssh/bootstrap-stream") || url.endsWith("/ssh/repair-stream")) {
       return new Response([
+        { type: "progress", step: "checking_cli_versions" },
         { type: "progress", step: "installing_node" },
         { type: "progress", step: "installing_deployment_dependencies" },
-        { type: "complete", result: { server_id: server.id, hostname: server.hostname, architecture: "amd64", warnings: url.endsWith("/ssh/repair-stream") ? [] : ["node_install_failed", "docker_compose_unavailable"] } }
+        { type: "progress", step: "installing_codex" },
+        { type: "progress", step: "installing_gemini" },
+        { type: "complete", result: { server_id: server.id, hostname: server.hostname, architecture: "amd64", warnings: url.endsWith("/ssh/repair-stream") ? [] : ["node_install_failed", "docker_compose_unavailable", "gemini_install_failed"] } }
       ].map(event => JSON.stringify(event)).join("\n"), { status: 200 });
     }
     const payload = url === "/api/servers" ? [server] : url === "/api/credential-profiles" ? [{ id: "codex", kind: "codex", name: "Codex", model: "gpt-6.1-sol" }] : url.endsWith("/ssh/probe") ? { fingerprint: "SHA256:test", key_type: "ssh-ed25519" } : [];
@@ -130,6 +133,7 @@ test("shows automatic dependency setup and retries an incomplete enrollment as S
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
   const form = screen.getByRole("dialog", { name: "Enroll Linux server" });
   expect(within(form).getByText(/will be installed and checked automatically/)).toBeInTheDocument();
+  expect(within(form).getByText(/install the latest stable Codex and Gemini CLI versions/)).toBeInTheDocument();
   await user.type(within(form).getByRole("textbox", { name: "Server name" }), server.name);
   await user.type(within(form).getByRole("textbox", { name: "SSH host or IP" }), server.address);
   await user.selectOptions(within(form).getByRole("combobox", { name: "Authentication" }), "password");
@@ -137,6 +141,7 @@ test("shows automatic dependency setup and retries an incomplete enrollment as S
   await user.click(within(form).getByRole("button", { name: "Check fingerprint" }));
   await user.click(await screen.findByRole("button", { name: "Confirm and install" }));
   expect(await screen.findByText(/Automatic Node.js\/npm setup failed/)).toBeInTheDocument();
+  expect(screen.getByText(/The latest stable Gemini CLI could not be installed or verified/)).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Retry setup with SSH" }));
   const repair = await screen.findByRole("dialog", { name: "Repair server registration" });
   expect(within(repair).getByRole("textbox", { name: "SSH host or IP" })).toHaveValue(server.address);

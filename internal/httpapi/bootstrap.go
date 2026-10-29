@@ -446,6 +446,8 @@ func bootstrapErrorInfo(err error) (int, string, string) {
 		return http.StatusBadRequest, "unsupported_platform", "only Linux amd64 and arm64 servers are supported"
 	case errors.Is(err, sshbootstrap.ErrAssetsUnavailable):
 		return http.StatusServiceUnavailable, "assets_unavailable", "agent installation assets are unavailable"
+	case errors.Is(err, sshbootstrap.ErrCLIReleasesUnavailable):
+		return http.StatusServiceUnavailable, "cli_versions_unavailable", "could not determine the latest stable Codex and Gemini CLI versions; retry later"
 	case errors.Is(err, sshbootstrap.ErrInstallation):
 		return http.StatusUnprocessableEntity, "installation_failed", "connected to the server but could not install the agent"
 	case errors.Is(err, sshbootstrap.ErrUninstallation):
