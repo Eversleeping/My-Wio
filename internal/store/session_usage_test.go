@@ -34,14 +34,20 @@ func TestSessionUsageAggregatesFullGeminiHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.InputTokens == nil || *got.InputTokens != 3000 || got.OutputTokens == nil || *got.OutputTokens != 300 || got.PerMinute == nil || *got.PerMinute != 3300 || got.Partial {
+	if got.InputTokens == nil || *got.InputTokens != 3000 || got.OutputTokens == nil || *got.OutputTokens != 300 || got.PerMinute == nil || *got.PerMinute != 3300 || got.OutputPerSecond == nil || *got.OutputPerSecond != 5 || got.Partial {
 		t.Fatalf("incorrect full-session usage: %+v", got)
 	}
 	add("gemini.init", `{"operation_id":"three"}`, 180)
 	add("gemini.result", `{"operation_id":"three","stats":{"input_tokens":"[REDACTED]","output_tokens":5}}`, 200)
 	got, err = db.SessionUsage(ctx, "gemini-usage", "gemini", false)
-	if err != nil || !got.Partial || got.PerMinute != nil || got.OutputTokens == nil || *got.OutputTokens != 305 {
-		t.Fatalf("missing legacy counts should be marked incomplete: %+v %v", got, err)
+	if err != nil || !got.Partial || got.PerMinute != nil || got.OutputTokens == nil || *got.OutputTokens != 305 || got.OutputPerSecond == nil || *got.OutputPerSecond != 3.8125 {
+		t.Fatalf("missing input should not prevent an output rate: %+v %v", got, err)
+	}
+	add("gemini.init", `{"operation_id":"four"}`, 220)
+	add("gemini.result", `{"operation_id":"four","stats":{"input_tokens":50}}`, 230)
+	got, err = db.SessionUsage(ctx, "gemini-usage", "gemini", false)
+	if err != nil || !got.Partial || got.OutputPerSecond != nil {
+		t.Fatalf("missing output should make the rate unavailable: %+v %v", got, err)
 	}
 }
 
@@ -63,16 +69,16 @@ func TestSessionUsageUsesCodexCumulativeSnapshotsOnce(t *testing.T) {
 	add("codex.thread.tokenUsage.updated", `{"usage":{"input_tokens":1200,"output_tokens":90}}`, 120)
 	add("codex.thread.tokenUsage.updated", `{"tokenUsage":"[REDACTED]"}`, 121)
 	got, err := db.SessionUsage(ctx, "codex-usage", "codex", true)
-	if err != nil || got.InputTokens == nil || *got.InputTokens != 1200 || got.OutputTokens == nil || *got.OutputTokens != 90 || got.PerMinute == nil || *got.PerMinute != 1548 || got.Partial {
+	if err != nil || got.InputTokens == nil || *got.InputTokens != 1200 || got.OutputTokens == nil || *got.OutputTokens != 90 || got.PerMinute == nil || *got.PerMinute != 1548 || got.OutputPerSecond == nil || *got.OutputPerSecond != 1.8 || got.Partial {
 		t.Fatalf("incorrect cumulative usage: %+v %v", got, err)
 	}
 	add("codex.turn.completed", `{"turn":{"id":"two"}}`, 130)
 	got, err = db.SessionUsage(ctx, "codex-usage", "codex", false)
-	if err != nil || got.PerMinute == nil || *got.PerMinute != 1290 {
+	if err != nil || got.PerMinute == nil || *got.PerMinute != 1290 || got.OutputPerSecond == nil || *got.OutputPerSecond != 1.5 {
 		t.Fatalf("incorrect completed rate: %+v %v", got, err)
 	}
 	got, err = db.SessionUsage(ctx, "other-thread", "codex", false)
-	if err != nil || got.InputTokens != nil || got.OutputTokens != nil || got.PerMinute != nil {
+	if err != nil || got.InputTokens != nil || got.OutputTokens != nil || got.PerMinute != nil || got.OutputPerSecond != nil {
 		t.Fatalf("unexpected data for empty thread: %+v %v", got, err)
 	}
 }

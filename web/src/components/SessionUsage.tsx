@@ -2,10 +2,15 @@ import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { useData, useThrottledValue } from "../useData";
 
-type Usage = { input_tokens: number | null; output_tokens: number | null; per_minute: number | null; partial: boolean };
+type Usage = { input_tokens: number | null; output_tokens: number | null; output_per_second: number | null; partial: boolean };
 
 export function formatUsageNumber(value: unknown, language: string) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? new Intl.NumberFormat(language, { maximumFractionDigits: 0 }).format(value) : "—";
+}
+
+export function formatUsageRate(value: unknown, language: string) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "—";
+  return new Intl.NumberFormat(language, value > 0 && value < 0.01 ? { maximumSignificantDigits: 2 } : { maximumFractionDigits: 2 }).format(value);
 }
 
 export function SessionUsage({ provider, threadID, revision, running }: { provider: "gemini" | "codex"; threadID: string; revision: unknown; running: boolean }) {
@@ -23,7 +28,7 @@ export function SessionUsage({ provider, threadID, revision, running }: { provid
     <strong>{t("sessionUsage.title")}</strong>
     <span>{t("sessionUsage.input", { value: formatUsageNumber(usage.data?.input_tokens, language) })}</span>
     <span>{t("sessionUsage.output", { value: formatUsageNumber(usage.data?.output_tokens, language) })}</span>
-    <span>{t("sessionUsage.rate", { value: formatUsageNumber(usage.data?.per_minute, language) })}</span>
+    <span>{t("sessionUsage.rate", { value: formatUsageRate(usage.data?.output_per_second, language) })}</span>
     {usage.data?.partial && <span className="session-usage-partial">{t("sessionUsage.partial")}</span>}
     {usage.error && <span className="session-usage-partial">{t("sessionUsage.loadFailed")}</span>}
   </div>;

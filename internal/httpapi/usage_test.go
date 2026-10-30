@@ -54,7 +54,7 @@ func TestUsageRoutesRequireAuthenticationAndRespectSessionType(t *testing.T) {
 		if w := request(path, false); w.Code != http.StatusUnauthorized {
 			t.Fatalf("unauthenticated %s: %d", path, w.Code)
 		}
-		if w := request(path, true); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"input_tokens":null`) {
+		if w := request(path, true); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"input_tokens":null`) || !strings.Contains(w.Body.String(), `"output_per_second":null`) {
 			t.Fatalf("empty usage %s: %d %s", path, w.Code, w.Body.String())
 		}
 	}

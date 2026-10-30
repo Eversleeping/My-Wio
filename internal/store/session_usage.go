@@ -9,10 +9,11 @@ import (
 // SessionUsage reports only counters retained in the current transcript. Null
 // means no trustworthy counter/rate was available, rather than zero usage.
 type SessionUsage struct {
-	InputTokens  *int64   `json:"input_tokens"`
-	OutputTokens *int64   `json:"output_tokens"`
-	PerMinute    *float64 `json:"per_minute"`
-	Partial      bool     `json:"partial"`
+	InputTokens     *int64   `json:"input_tokens"`
+	OutputTokens    *int64   `json:"output_tokens"`
+	PerMinute       *float64 `json:"per_minute"` // Kept for clients using the previous metric.
+	OutputPerSecond *float64 `json:"output_per_second"`
+	Partial         bool     `json:"partial"`
 }
 
 type usageTurn struct {
@@ -45,6 +46,7 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 	turns := make(map[string]*usageTurn)
 	lastTurn := ""
 	var lastUsageTime time.Time
+	outputRateIncomplete := false
 	getTurn := func(id string) *usageTurn {
 		if turns[id] == nil {
 			turns[id] = &usageTurn{}
@@ -123,6 +125,7 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 			}
 			if id == "" {
 				usage.Partial = true
+				outputRateIncomplete = true
 				continue
 			}
 			turn := getTurn(id)
@@ -140,11 +143,15 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 			if !turn.result {
 				if turn.completed {
 					usage.Partial = true
+					outputRateIncomplete = true
 				}
 				continue
 			}
 			if turn.input == nil || turn.output == nil {
 				usage.Partial = true
+			}
+			if turn.output == nil {
+				outputRateIncomplete = true
 			}
 			if turn.input != nil {
 				if usage.InputTokens == nil {
@@ -166,6 +173,7 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 		}
 		if turn.start.IsZero() || turn.end.IsZero() || !turn.end.After(turn.start) {
 			usage.Partial = true
+			outputRateIncomplete = true
 			continue
 		}
 		seconds += turn.end.Sub(turn.start).Seconds()
@@ -173,6 +181,10 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 	if !usage.Partial && usage.InputTokens != nil && usage.OutputTokens != nil && seconds > 0 {
 		value := (float64(*usage.InputTokens) + float64(*usage.OutputTokens)) * 60 / seconds
 		usage.PerMinute = &value
+	}
+	if !outputRateIncomplete && usage.OutputTokens != nil && seconds > 0 {
+		value := float64(*usage.OutputTokens) / seconds
+		usage.OutputPerSecond = &value
 	}
 	return usage, nil
 }
