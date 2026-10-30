@@ -13,6 +13,7 @@ import (
 )
 
 type GeminiThread struct {
+	RecoveryPending   bool       `db:"recovery_pending" json:"recovery_pending"`
 	SteerSupported    bool       `db:"-" json:"steer_supported"`
 	SteerReady        bool       `db:"-" json:"steer_ready"`
 	CLIVersion        string     `db:"gemini_version" json:"-"`
@@ -44,8 +45,25 @@ type GeminiThread struct {
 	ServerStatus      string     `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,s.agent_version,s.gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+const geminiThreadSelect = `SELECT t.*,CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending,s.agent_version,s.gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
  FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id` + projectServerJoin
+
+// Check running turns and deliveries whose start acknowledgement may have been
+// lost. Never replay a delivered turn: it may still have a live CLI process.
+func (s *Store) UnfinishedGeminiOperations(ctx context.Context, serverID string) ([]string, error) {
+	var ids []string
+	err := s.DB.SelectContext(ctx, &ids, s.Q("SELECT id FROM agent_operations WHERE server_id=? AND kind IN ('gemini.turn.start','gemini.turn.rewrite') AND (status='running' OR (status='delivered' AND delivered_at<?)) ORDER BY created_at"), serverID, time.Now().UTC().Add(-30*time.Second))
+	return ids, err
+}
+
+func (s *Store) ClaimGeminiDelivery(ctx context.Context, id string) (bool, error) {
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='delivered',delivered_at=? WHERE id=? AND status='queued' AND kind IN ('gemini.turn.start','gemini.turn.rewrite')"), time.Now().UTC(), id)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
 
 func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThread, error) {
 	out := []GeminiThread{}
@@ -150,7 +168,7 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 	}
 	opID, now := NewID(), time.Now().UTC()
 	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET status='queued',operation_id=?,model=?,approval_mode=?,thinking_level=?,updated_at=?,title=CASE WHEN title='Gemini' THEN ? ELSE title END
- WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting')`), opID, model, mode, level, now, truncateGeminiTitle(prompt), thread.ID)
+ WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, model, mode, level, now, truncateGeminiTitle(prompt), thread.ID)
 	if err != nil {
 		return protocol.StreamEvent{}, err
 	}
@@ -238,6 +256,19 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) er
 		return err
 	}
 	defer tx.Rollback()
+	// Serialize ownership checks, cancellation, and human confirmation on
+	// the operation row before changing the associated thread.
+	locked, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND status IN ('queued','delivered','running')"), thread.OperationID)
+	if err != nil {
+		return err
+	}
+	lockedCount, err := locked.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if lockedCount != 1 {
+		return ErrThreadActive
+	}
 	// Cancel an undispatched task locally. An in-flight task must acknowledge its
 	// cancellation before releasing the workspace or accepting another prompt.
 	result, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',completed_at=? WHERE id=? AND status='queued'"), time.Now().UTC(), thread.OperationID)
@@ -248,6 +279,10 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) er
 	if err != nil {
 		return err
 	}
+	var previousStatus string
+	if err := tx.GetContext(ctx, &previousStatus, s.Q("SELECT status FROM gemini_threads WHERE id=? AND operation_id=?"), thread.ID, thread.OperationID); err != nil {
+		return err
+	}
 	status := "interrupting"
 	if count == 1 {
 		if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
@@ -255,7 +290,7 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) er
 		}
 		status = "interrupted"
 	}
-	result, err = tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET status=?,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running')"), status, time.Now().UTC(), thread.ID, thread.OperationID)
+	result, err = tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET status=?,updated_at=? WHERE id=? AND operation_id=? AND (status IN ('queued','running') OR (status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('delivered','running'))))"), status, time.Now().UTC(), thread.ID, thread.OperationID)
 	if err != nil {
 		return err
 	}
@@ -267,7 +302,7 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) er
 		return ErrThreadActive
 	}
 	if count == 0 {
-		payload, _ := json.Marshal(protocol.GeminiInterruptCommand{ThreadID: thread.ID, OperationID: thread.OperationID})
+		payload, _ := json.Marshal(protocol.GeminiInterruptCommand{ThreadID: thread.ID, OperationID: thread.OperationID, RecoveryPending: previousStatus == "interrupted"})
 		id := NewID()
 		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at)
  VALUES(?,?,?,?,'gemini.turn.interrupt',?,?,?)`), id, thread.ServerID, thread.ProjectID, thread.WorkspaceID, string(payload), "gemini-interrupt:"+id, time.Now().UTC())
@@ -278,13 +313,62 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) er
 	return tx.Commit()
 }
 
+// ConfirmGeminiStopped is an explicit human acknowledgement for a legacy
+// orphan whose process cannot be checked by the current Agent. The operation
+// ID and thread status prevent a stale confirmation from releasing a new turn.
+func (s *Store) ConfirmGeminiStopped(ctx context.Context, threadID, operationID string) (protocol.StreamEvent, error) {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND kind IN ('gemini.turn.start','gemini.turn.rewrite') AND status IN ('delivered','running')"), operationID)
+	if err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	if count != 1 {
+		return protocol.StreamEvent{}, ErrThreadActive
+	}
+	result, err = tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET updated_at=updated_at WHERE id=? AND operation_id=? AND status='interrupted'"), threadID, operationID)
+	if err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	count, err = result.RowsAffected()
+	if err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	if count != 1 {
+		return protocol.StreamEvent{}, ErrThreadActive
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',result=?,completed_at=? WHERE id=?"), "Process exit confirmed by user", now, operationID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), now, operationID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	payload, _ := json.Marshal(map[string]string{"status": "interrupted", "operation_id": operationID})
+	event := protocol.StreamEvent{EventID: operationID + ":completed", StreamID: threadID, Kind: "gemini.turn.completed", OccurredAt: now, Payload: payload}
+	if err := tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), threadID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, now, string(payload)); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	return event, tx.Commit()
+}
+
 func (s *Store) DeleteGeminiThread(ctx context.Context, id string) error {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM gemini_threads WHERE id=? AND status NOT IN ('queued','running','interrupting')"), id)
+	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM gemini_threads WHERE id=? AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))"), id)
 	if err != nil {
 		return err
 	}
@@ -307,7 +391,7 @@ func (s *Store) UpdateGeminiThread(ctx context.Context, id, title string, archiv
 		now := time.Now().UTC()
 		at = &now
 	}
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE gemini_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND status NOT IN ('queued','running','interrupting')"), title, at, time.Now().UTC(), id)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE gemini_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))"), title, at, time.Now().UTC(), id)
 	if err != nil {
 		return err
 	}
@@ -395,7 +479,7 @@ func (s *Store) CommitGeminiRewrite(ctx context.Context, threadID, operationID, 
 	if command.ThreadID != threadID || command.Rewrite == nil || sessionID == "" || sessionID == command.SessionID {
 		return protocol.StreamEvent{}, false, ErrInvalidEditTarget
 	}
-	result, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET session_id=?,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting')"), sessionID, time.Now().UTC(), threadID, operationID)
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET session_id=?,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting','interrupted') AND EXISTS (SELECT 1 FROM agent_operations WHERE id=? AND status IN ('queued','delivered','running'))"), sessionID, time.Now().UTC(), threadID, operationID, operationID)
 	if err != nil {
 		return protocol.StreamEvent{}, false, err
 	}

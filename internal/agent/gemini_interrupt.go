@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 // A control-message acknowledgement is not proof that the CLI stopped. Wait
@@ -31,5 +34,42 @@ func (c *Client) interruptGeminiAndWait(ctx context.Context, operationID string)
 	} else if found {
 		return nil
 	}
-	return errors.New("Agent no longer owns this Gemini task; it may have restarted. Verify the old CLI process before recovering the session")
+	return errors.New(protocol.GeminiOwnershipLostMessage)
+}
+
+// A probe never starts or interrupts a turn. Replaying a completed receipt
+// repairs a lost result; an unknown owner is reported without claiming that an
+// orphaned CLI has stopped.
+func (c *Client) reconcileGeminiOperations(raw json.RawMessage) {
+	var check protocol.GeminiKeepalive
+	if len(raw) == 0 || json.Unmarshal(raw, &check) != nil {
+		return
+	}
+	for _, id := range check.OperationIDs {
+		c.seenMu.Lock()
+		execution := c.seen[id]
+		if execution != nil {
+			select {
+			case <-execution.done:
+				result := execution.result
+				c.seenMu.Unlock()
+				_ = c.queue("operation_result", result, true)
+			default:
+				c.seenMu.Unlock()
+				_ = c.queue("gemini_ownership_active", protocol.GeminiOwnership{OperationID: id}, true)
+			}
+			continue
+		}
+		result, found, err := c.loadOperationResult(id)
+		c.seenMu.Unlock()
+		if err != nil {
+			c.log.Warn("could not inspect Gemini operation receipt", "operation_id", id, "error", err)
+			continue
+		}
+		if found {
+			_ = c.queue("operation_result", result, true)
+		} else {
+			_ = c.queue("gemini_ownership_lost", protocol.GeminiOwnership{OperationID: id}, true)
+		}
+	}
 }

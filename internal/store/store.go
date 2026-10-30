@@ -1844,7 +1844,7 @@ func (s *Store) Operation(ctx context.Context, id string) (Operation, error) {
 
 func (s *Store) PendingOperations(ctx context.Context, serverID string) ([]Operation, error) {
 	var out []Operation
-	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+" WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<?)) ORDER BY created_at LIMIT 100"), serverID, time.Now().UTC().Add(-30*time.Second))
+	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+" WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<? AND kind NOT IN ('gemini.turn.start','gemini.turn.rewrite'))) ORDER BY created_at LIMIT 100"), serverID, time.Now().UTC().Add(-30*time.Second))
 	return out, err
 }
 
@@ -1909,12 +1909,21 @@ func (s *Store) MarkRunning(ctx context.Context, id string) error {
 	return err
 }
 func (s *Store) CompleteOperation(ctx context.Context, r protocol.OperationResult) error {
+	_, err := s.CompleteOperationIfActive(ctx, r)
+	return err
+}
+
+func (s *Store) CompleteOperationIfActive(ctx context.Context, r protocol.OperationResult) (bool, error) {
 	data, err := operationResultData(r.Data)
 	if err != nil {
-		return err
+		return false, err
 	}
-	_, err = s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=? AND status IN ('queued','delivered','running')"), r.Status, r.Message, data, time.Now().UTC(), r.OperationID)
-	return err
+	updated, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=? AND status IN ('queued','delivered','running')"), r.Status, r.Message, data, time.Now().UTC(), r.OperationID)
+	if err != nil {
+		return false, err
+	}
+	count, err := updated.RowsAffected()
+	return count == 1, err
 }
 
 type OperationMetricAggregate struct {

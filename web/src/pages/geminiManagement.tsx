@@ -50,8 +50,8 @@ export function useGeminiManagement({ workspaces, busy, setBusy, refresh, select
   ...(!thread.archived_at ? [
    { id: "pin", label: t(thread.pinned_at ? "codex.unpinThread" : "codex.pinThread"), icon: thread.pinned_at ? PinOff : Pin, disabled: busy, onSelect: () => action(() => patch(`/gemini/threads/${thread.id}`, { pinned: !thread.pinned_at })) },
    { id: "schedule", label:t("codex.createScheduledTask"),icon:CalendarClock,disabled:busy,onSelect:()=>setScheduled(thread) },
-   { id: "fork", label: t("codex.continueInNewTask"), icon: GitFork, disabled: busy || !thread.fork_supported || !thread.session_id || ["queued", "running", "interrupting"].includes(thread.status) || thread.server_status !== "online", onSelect: () => fork(thread) },
-   { id: "fork-worktree", label: t("codex.continueInNewWorktree"), icon: GitBranch, disabled: busy || !thread.fork_supported || !thread.session_id || ["queued", "running", "interrupting"].includes(thread.status) || thread.server_status !== "online", onSelect: () => openWorktree(thread.workspace_id, thread) }
+   { id: "fork", label: t("codex.continueInNewTask"), icon: GitFork, disabled: busy || thread.recovery_pending || !thread.fork_supported || !thread.session_id || ["queued", "running", "interrupting"].includes(thread.status) || thread.server_status !== "online", onSelect: () => fork(thread) },
+   { id: "fork-worktree", label: t("codex.continueInNewWorktree"), icon: GitBranch, disabled: busy || thread.recovery_pending || !thread.fork_supported || !thread.session_id || ["queued", "running", "interrupting"].includes(thread.status) || thread.server_status !== "online", onSelect: () => openWorktree(thread.workspace_id, thread) }
   ] satisfies ContextMenuAction[] : []),
   { id: "copy-path", label: t("codex.copyWorkingDirectory"), icon: FolderOpen, separatorBefore: true, onSelect: () => copy(thread.path, "codex.workingDirectoryCopied") },
   { id: "copy-wio-id", label: t("codex.copyWioSessionID"), icon: Copy, onSelect: () => copy(thread.id, "codex.wioSessionIDCopied") },

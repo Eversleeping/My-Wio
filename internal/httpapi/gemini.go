@@ -237,6 +237,32 @@ func (a *API) interruptGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]bool{"ok": true})
 }
 
+func (a *API) confirmGeminiStopped(w http.ResponseWriter, r *http.Request) {
+	thread, ok := a.loadGeminiThread(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		OperationID string `json:"operation_id"`
+		Confirmed   bool   `json:"confirmed"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !input.Confirmed || input.OperationID == "" {
+		writeError(w, 400, "confirmation and operation ID are required")
+		return
+	}
+	event, err := a.store.ConfirmGeminiStopped(r.Context(), thread.ID, input.OperationID)
+	if err != nil {
+		writeError(w, 409, "Gemini task changed or no longer needs confirmation")
+		return
+	}
+	a.auditGemini(r, "gemini.turn.confirm_stopped", thread.ID)
+	a.hub.Publish(event)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
 func (a *API) answerGeminiQuestion(w http.ResponseWriter, r *http.Request) {
 	thread, ok := a.loadGeminiThread(w, r)
 	if !ok {

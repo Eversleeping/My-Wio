@@ -148,7 +148,7 @@ func TestGeminiLongTurnCanBeInterruptedWhileWaitingForInput(t *testing.T) {
 			client.seenMu.Lock()
 			result := client.seen["turn"].result
 			client.seenMu.Unlock()
-			if result.Status != "failed" || result.Message != context.Canceled.Error() {
+			if result.Status != "interrupted" || result.Message != context.Canceled.Error() {
 				t.Fatalf("cancelled turn did not finish: %#v", result)
 			}
 			if err := client.gemini.Answer(protocol.GeminiAnswerCommand{ThreadID: "thread", OperationID: "turn", RequestID: question.EventID, Answers: map[string]protocol.UserInputAnswer{"q": {Answers: []string{"Yes"}}}}); err == nil {
@@ -193,5 +193,39 @@ func TestGeminiInterruptRequiresOwnedExecutionOrCompletedReceipt(t *testing.T) {
 	}
 	if err := client.interruptGeminiAndWait(context.Background(), "finished"); err != nil {
 		t.Fatal("persisted completion was not recognized", err)
+	}
+}
+
+func TestGeminiReconciliationDoesNotRestartOrInterruptTurns(t *testing.T) {
+	client := NewClient(Config{StateDir: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer client.codex.Close()
+	active := &operationExecution{kind: "gemini.turn.start", done: make(chan struct{})}
+	client.seen["active"] = active
+	if err := client.saveOperationResult(protocol.OperationResult{OperationID: "finished", Status: "interrupted", Message: "context canceled"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(protocol.GeminiKeepalive{OperationIDs: []string{"active", "finished", "missing"}})
+	client.reconcileGeminiOperations(raw)
+	first := receiveAgentEnvelope(t, client.outbound)
+	var ownership protocol.GeminiOwnership
+	if first.Kind != "gemini_ownership_active" || json.Unmarshal(first.PayloadJSON, &ownership) != nil || ownership.OperationID != "active" {
+		t.Fatalf("active owner not reported: %#v", first)
+	}
+	second := receiveAgentEnvelope(t, client.outbound)
+	var result protocol.OperationResult
+	if second.Kind != "operation_result" || json.Unmarshal(second.PayloadJSON, &result) != nil || result.OperationID != "finished" || result.Status != "interrupted" {
+		t.Fatalf("finished receipt not replayed: %#v", second)
+	}
+	third := receiveAgentEnvelope(t, client.outbound)
+	var lost protocol.GeminiOwnership
+	if third.Kind != "gemini_ownership_lost" || json.Unmarshal(third.PayloadJSON, &lost) != nil || lost.OperationID != "missing" {
+		t.Fatalf("missing owner not reported: %#v", third)
+	}
+	select {
+	case <-active.done:
+		t.Fatal("probe interrupted an active turn")
+	case extra := <-client.outbound:
+		t.Fatalf("unexpected probe output: %#v", extra)
+	default:
 	}
 }

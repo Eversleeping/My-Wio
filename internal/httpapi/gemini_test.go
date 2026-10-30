@@ -223,3 +223,56 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 		t.Fatalf("history remains: %+v", events)
 	}
 }
+
+func TestGeminiManualStopConfirmationIsBoundToTheLostTurn(t *testing.T) {
+	ctx := context.Background()
+	db := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, db, "gemini-confirm-agent")
+	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/confirm", Name: "confirm"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, _ := db.ListWorkspaces(ctx)
+	thread, _ := db.CreateGeminiThread(ctx, workspaces[0].ID, "auto", "default")
+	if _, err := db.QueueGeminiTurn(ctx, thread, "work", "auto", "default"); err != nil {
+		t.Fatal(err)
+	}
+	thread, _ = db.GeminiThread(ctx, thread.ID)
+	if err := db.MarkRunning(ctx, thread.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE gemini_threads SET status='interrupted' WHERE id=?"), thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(db)
+	path := "/api/gemini/threads/" + thread.ID + "/confirm-stopped"
+	request := func(body map[string]any) *httptest.ResponseRecorder {
+		return threadResourceRequest(t, "POST", path, thread.ID, body, api.confirmGeminiStopped)
+	}
+	if w := request(map[string]any{"operation_id": thread.OperationID}); w.Code != 400 {
+		t.Fatalf("missing confirmation accepted: %d", w.Code)
+	}
+	if w := request(map[string]any{"operation_id": "stale", "confirmed": true}); w.Code != 409 {
+		t.Fatalf("stale operation accepted: %d", w.Code)
+	}
+	before, _ := db.GeminiThread(ctx, thread.ID)
+	if !before.RecoveryPending {
+		t.Fatal("invalid confirmation released workspace")
+	}
+	if w := request(map[string]any{"operation_id": thread.OperationID, "confirmed": true}); w.Code != 200 {
+		t.Fatalf("confirmed stop rejected: %d %s", w.Code, w.Body.String())
+	}
+	after, _ := db.GeminiThread(ctx, thread.ID)
+	if after.Status != "interrupted" || after.RecoveryPending {
+		t.Fatalf("manual confirmation did not release workspace: %+v", after)
+	}
+	events, _ := db.Events(ctx, thread.ID, 0, 500)
+	if events[len(events)-1].Kind != "gemini.turn.completed" {
+		t.Fatalf("missing completion event: %+v", events)
+	}
+	if _, err := db.QueueGeminiTurn(ctx, after, "next", "auto", "default"); err != nil {
+		t.Fatalf("workspace was not released: %v", err)
+	}
+	if w := request(map[string]any{"operation_id": thread.OperationID, "confirmed": true}); w.Code != 409 {
+		t.Fatalf("stale confirmation changed a new turn: %d", w.Code)
+	}
+}

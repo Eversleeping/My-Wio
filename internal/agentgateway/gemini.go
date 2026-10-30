@@ -33,14 +33,22 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 	if payload.OperationID == "" || payload.OperationID != thread.OperationID {
 		return nil
 	}
-	if thread.Status != "queued" && thread.Status != "running" && thread.Status != "interrupting" {
-		return nil
-	}
 	switch event.Kind {
 	case "gemini.init":
 		if payload.SessionID == "" || len(payload.SessionID) > 128 {
 			return errors.New("invalid Gemini session id")
 		}
+	case "gemini.message", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied":
+	default:
+		return errors.New("unsupported Gemini event")
+	}
+	// Buffered output does not prove the original process is still alive.
+	// Preserve it while awaiting an explicit ownership probe response.
+	if thread.Status != "queued" && thread.Status != "running" && thread.Status != "interrupting" && !thread.RecoveryPending {
+		return nil
+	}
+	switch event.Kind {
+	case "gemini.init":
 		operation, err := g.store.Operation(ctx, payload.OperationID)
 		if err != nil {
 			return err
@@ -54,13 +62,10 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 				g.hub.Publish(replacement)
 			}
 		}
-		_, err = g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE gemini_threads SET session_id=?,status=CASE WHEN status='interrupting' THEN status ELSE 'running' END,updated_at=? WHERE id=? AND operation_id=?`), payload.SessionID, time.Now().UTC(), thread.ID, payload.OperationID)
+		_, err = g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE gemini_threads SET session_id=?,status=CASE WHEN status IN ('interrupting','interrupted') THEN status ELSE 'running' END,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting','interrupted') AND EXISTS (SELECT 1 FROM agent_operations WHERE id=? AND status IN ('queued','delivered','running'))`), payload.SessionID, time.Now().UTC(), thread.ID, payload.OperationID, payload.OperationID)
 		if err != nil {
 			return err
 		}
-	case "gemini.message", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied":
-	default:
-		return errors.New("unsupported Gemini event")
 	}
 	event.Payload = security.RedactJSON(event.Payload)
 	return g.publish(ctx, event)
@@ -105,10 +110,24 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 			if err = g.store.CompleteOperation(ctx, stopped); err != nil {
 				return err
 			}
+			completed, err := g.store.Operation(ctx, command.OperationID)
+			if err != nil {
+				return err
+			}
+			if completed.Status != "cancelled" {
+				return nil
+			}
 			return g.completeGeminiOperation(ctx, original, stopped)
 		}
+		if result.Message == protocol.GeminiOwnershipLostMessage {
+			return g.markGeminiOwnershipLost(ctx, op.ServerID, command.OperationID)
+		}
 		// A failed interrupt must not leave the session permanently locked.
-		_, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE gemini_threads SET status='running' WHERE id=? AND operation_id=? AND status='interrupting'"), command.ThreadID, command.OperationID)
+		status := "running"
+		if command.RecoveryPending {
+			status = "interrupted"
+		}
+		_, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE gemini_threads SET status=? WHERE id=? AND operation_id=? AND status='interrupting'"), status, command.ThreadID, command.OperationID)
 		if err != nil {
 			return err
 		}
@@ -130,7 +149,7 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 	if result.Status != "succeeded" {
 		status = "failed"
 	}
-	if thread.Status == "interrupting" {
+	if thread.Status == "interrupting" || result.Status == "interrupted" || result.Status == "cancelled" || (result.Status == "failed" && result.Message == context.Canceled.Error()) {
 		status = "interrupted"
 	}
 	if err := g.store.CompleteGeminiTurn(ctx, command.ThreadID, op.ID, status); err != nil {
@@ -145,4 +164,71 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 	}
 	raw, _ := json.Marshal(map[string]string{"status": status, "message": result.Message, "operation_id": op.ID})
 	return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":completed", StreamID: command.ThreadID, Kind: "gemini.turn.completed", Payload: security.RedactJSON(raw)})
+}
+
+func (g *Gateway) markGeminiOwnershipLost(ctx context.Context, serverID, operationID string) error {
+	return g.updateGeminiOwnership(ctx, serverID, operationID, false)
+}
+
+func (g *Gateway) markGeminiOwnershipActive(ctx context.Context, serverID, operationID string) error {
+	return g.updateGeminiOwnership(ctx, serverID, operationID, true)
+}
+
+func (g *Gateway) updateGeminiOwnership(ctx context.Context, serverID, operationID string, active bool) error {
+	op, err := g.store.Operation(ctx, operationID)
+	if err != nil {
+		return err
+	}
+	if op.ServerID != serverID || (op.Kind != "gemini.turn.start" && op.Kind != "gemini.turn.rewrite") {
+		return errors.New("Gemini ownership check operation mismatch")
+	}
+	var command protocol.GeminiTurnCommand
+	if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
+		return err
+	}
+	tx, err := g.store.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Lock the operation before its thread, matching interruption and manual
+	// confirmation, so a late probe cannot revive a confirmed termination.
+	locked, err := tx.ExecContext(ctx, g.store.Q("UPDATE agent_operations SET status=status WHERE id=? AND server_id=? AND status IN ('delivered','running')"), operationID, serverID)
+	if err != nil {
+		return err
+	}
+	count, err := locked.RowsAffected()
+	if err != nil || count == 0 {
+		return err
+	}
+	status, kind, condition := "interrupted", "gemini.turn.ownership_lost", "status IN ('queued','running','interrupting')"
+	if active {
+		status, kind, condition = "running", "gemini.turn.ownership_active", "status='interrupted'"
+	}
+	// A lost owner keeps the workspace reserved until the Agent proves the
+	// process stopped or supplies its original result.
+	changed, err := tx.ExecContext(ctx, g.store.Q("UPDATE gemini_threads SET status=?,updated_at=? WHERE id=? AND operation_id=? AND "+condition), status, time.Now().UTC(), command.ThreadID, operationID)
+	if err != nil {
+		return err
+	}
+	count, err = changed.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return tx.Commit()
+	}
+	raw, _ := json.Marshal(map[string]any{"operation_id": operationID, "status": status, "recovery_pending": !active})
+	event := protocol.StreamEvent{EventID: store.NewID(), StreamID: command.ThreadID, Kind: kind, OccurredAt: time.Now().UTC(), Payload: raw}
+	if err := tx.GetContext(ctx, &event.Sequence, g.store.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), event.StreamID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, g.store.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(raw)); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	g.hub.Publish(event)
+	return nil
 }

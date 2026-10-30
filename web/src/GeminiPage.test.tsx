@@ -9,10 +9,10 @@ import { formatTime } from "./format";
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -97,6 +97,41 @@ test("does not steer a new Gemini turn using a previous turn's readiness",async(
 test("disables the Gemini action while an interrupt is in progress", async () => {
   setup(true,"auto","configured",[],{status:"interrupting",steerSupported:true});
   expect(await screen.findByRole("button",{name:"Interrupt"})).toBeDisabled();
+});
+
+test("updates a lost task to interrupted and allows another turn only after stop confirmation", async () => {
+  const {user, requests, currentThread} = setup(true, "auto", "configured", [], {status: "running"});
+  expect(await screen.findByText("Gemini is working…")).toBeInTheDocument();
+  currentThread.status = "interrupted";
+  currentThread.recovery_pending = true;
+  await user.click(screen.getByRole("button", {name: "Refresh"}));
+  await screen.findByText(/The Agent lost track of this task/);
+  expect(screen.queryByText("Gemini is working…")).not.toBeInTheDocument();
+  expect(screen.getByRole("textbox", {name: "Ask Gemini to work on this project…"})).toBeDisabled();
+  await user.click(screen.getByRole("button", {name: "Retry stop confirmation"}));
+  expect(requests).toContainEqual({url: "/api/gemini/threads/thread-1/interrupt", body: {}});
+  await user.click(screen.getByRole("button", {name: "I have checked the process"}));
+  expect(screen.getByText(/previous Gemini CLI process and its child processes on Production/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name: "Cancel"}));
+  expect(requests).toHaveLength(1);
+  await user.click(screen.getByRole("button", {name: "I have checked the process"}));
+  await user.click(screen.getByRole("button", {name: "Confirm and release workspace"}));
+  await waitFor(() => expect(requests).toContainEqual({url: "/api/gemini/threads/thread-1/confirm-stopped", body: {operation_id: "op1", confirmed: true}}));
+  currentThread.recovery_pending = false;
+  await user.click(screen.getByRole("button", {name: "Refresh"}));
+  await waitFor(() => expect(screen.getByRole("textbox", {name: "Ask Gemini to work on this project…"})).toBeEnabled());
+  expect(screen.queryByText(/The Agent lost track of this task/)).not.toBeInTheDocument();
+});
+
+test("shows unfinished tool status as unknown until ownership is restored", async () => {
+  const events = [{event_id:"tool",sequence:1,kind:"gemini.tool_use",stream_id:thread.id,occurred_at:thread.updated_at,payload:{operation_id:"op1",tool_id:"run_shell_command__1",tool_name:"run_shell_command",status:"in_progress"}}];
+  const {user, currentThread} = setup(true, "auto", "configured", events, {status:"interrupted", recoveryPending:true});
+  expect(await screen.findByText("Unknown")).toBeInTheDocument();
+  currentThread.status = "running";
+  currentThread.recovery_pending = false;
+  await user.click(screen.getByRole("button", {name:"Refresh"}));
+  await waitFor(() => expect(screen.queryByText("Unknown")).not.toBeInTheDocument());
+  expect(screen.getByText("run_shell_command").closest("summary")).toHaveTextContent("Running");
 });
 
 test("keeps a draft and allows interruption when a Gemini task becomes queued", async () => {

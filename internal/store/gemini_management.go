@@ -27,7 +27,7 @@ func (s *Store) ArchiveGeminiProject(ctx context.Context, projectID string, serv
 		scope = " AND server_id=?"
 		args = append(args, serverOption[0])
 	}
-	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`)`), args...)
+	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running'))) AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`)`), args...)
 	if err != nil {
 		return 0, err
 	}
@@ -53,7 +53,7 @@ func (s *Store) QueueGeminiFork(ctx context.Context, thread GeminiThread, eventI
 		return "", "", ErrGeminiCredentialsBusy
 	}
 	opID, targetID := NewID(), NewID()
-	r, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET operation_id=?,status='queued' WHERE id=? AND session_id<>'' AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting')`), opID, thread.ID)
+	r, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET operation_id=?,status='queued' WHERE id=? AND session_id<>'' AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, thread.ID)
 	if err != nil {
 		return "", "", err
 	}

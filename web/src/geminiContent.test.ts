@@ -65,6 +65,16 @@ test("respects terminal status on a full tool snapshot", () => {
   expect(geminiMessages([event(1, "gemini.tool_use", { tool_id: "t", status: "failed" })])[0].toolStatus).toBe("failed");
 });
 
+test("marks only unfinished commands of an interrupted turn as interrupted", () => {
+  const messages = geminiMessages([
+    event(1, "gemini.tool_use", {operation_id: "a", tool_id: "pending"}),
+    event(2, "gemini.tool_use", {operation_id: "a", tool_id: "done", status: "completed"}),
+    event(3, "gemini.tool_use", {operation_id: "b", tool_id: "other"}),
+    event(4, "gemini.turn.completed", {operation_id: "a", status: "interrupted"}),
+  ]);
+  expect(messages.filter(item => item.role === "tool").map(item => item.toolStatus)).toEqual(["interrupted", "completed", "running"]);
+});
+
 test("groups tool calls between replies once, including running calls and their original timestamps", () => {
   const events = [
     event(1, "gemini.message", { role: "assistant", content: "Starting", operation_id: "op1" }),

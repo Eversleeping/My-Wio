@@ -1,5 +1,16 @@
 package protocol
 
+const GeminiOwnershipLostMessage = "Agent no longer owns this Gemini task; it may have restarted. Verify the old CLI process before recovering the session"
+
+// GeminiKeepalive requests a status check without replaying a turn.
+type GeminiKeepalive struct {
+	OperationIDs []string `json:"gemini_operation_ids,omitempty"`
+}
+
+type GeminiOwnership struct {
+	OperationID string `json:"operation_id"`
+}
+
 // GeminiTurnCommand runs a headless Gemini CLI turn in an existing workspace.
 // Authentication stays on the Agent host; credentials never enter this payload.
 type GeminiTurnCommand struct {
@@ -37,8 +48,9 @@ type GeminiAnswerCommand struct {
 }
 
 type GeminiInterruptCommand struct {
-	ThreadID    string `json:"thread_id"`
-	OperationID string `json:"operation_id"`
+	ThreadID        string `json:"thread_id"`
+	OperationID     string `json:"operation_id"`
+	RecoveryPending bool   `json:"recovery_pending,omitempty"`
 }
 
 // GeminiRewriteTarget identifies the original native turn by the CLI's own

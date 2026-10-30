@@ -198,6 +198,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		default:
 		}
 		if command.Kind == protocol.ControlKindKeepalive && command.OperationID == "" {
+			go c.reconcileGeminiOperations(command.PayloadJSON)
 			continue
 		}
 		go c.handleOperation(ctx, command)
@@ -548,6 +549,9 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	message := ""
 	if err != nil {
 		status = "failed"
+		if (envelope.Kind == "gemini.turn.start" || envelope.Kind == "gemini.turn.rewrite") && (errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
+			status = "interrupted"
+		}
 		message = err.Error()
 		c.log.Warn("operation failed", "operation_id", envelope.OperationID, "kind", envelope.Kind, "error", err)
 	}

@@ -79,7 +79,7 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- g.receive(stream, serverID) }()
-	if err := sendKeepalive(stream, time.Now()); err != nil {
+	if err := g.sendKeepalive(stream, serverID, time.Now()); err != nil {
 		return err
 	}
 	// Pending operations are also flushed when Wake is signalled. Keep a short
@@ -102,7 +102,7 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 			return stream.Context().Err()
 		case <-ticker.C:
 		case now := <-keepalive.C:
-			if err := sendKeepalive(stream, now); err != nil {
+			if err := g.sendKeepalive(stream, serverID, now); err != nil {
 				return err
 			}
 		case <-wake:
@@ -110,8 +110,16 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 	}
 }
 
-func sendKeepalive(stream protocol.AgentServiceConnectServer, now time.Time) error {
-	return stream.Send(&protocol.ControlEnvelope{Kind: protocol.ControlKindKeepalive, CreatedAtUnixMS: now.UnixMilli()})
+func (g *Gateway) sendKeepalive(stream protocol.AgentServiceConnectServer, serverID string, now time.Time) error {
+	ids, err := g.store.UnfinishedGeminiOperations(stream.Context(), serverID)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(protocol.GeminiKeepalive{OperationIDs: ids})
+	if err != nil {
+		return err
+	}
+	return stream.Send(&protocol.ControlEnvelope{Kind: protocol.ControlKindKeepalive, CreatedAtUnixMS: now.UnixMilli(), PayloadJSON: payload})
 }
 
 func (g *Gateway) receive(stream protocol.AgentServiceConnectServer, serverID string) error {
@@ -158,6 +166,18 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		return g.publish(ctx, protocol.StreamEvent{StreamID: "inventory", Kind: "inventory.updated", Payload: msg.PayloadJSON})
 	case "gemini_event":
 		return g.handleGeminiEvent(ctx, serverID, msg.PayloadJSON)
+	case "gemini_ownership_lost":
+		var lost protocol.GeminiOwnership
+		if err := json.Unmarshal(msg.PayloadJSON, &lost); err != nil {
+			return err
+		}
+		return g.markGeminiOwnershipLost(ctx, serverID, lost.OperationID)
+	case "gemini_ownership_active":
+		var active protocol.GeminiOwnership
+		if err := json.Unmarshal(msg.PayloadJSON, &active); err != nil {
+			return err
+		}
+		return g.markGeminiOwnershipActive(ctx, serverID, active.OperationID)
 	case "event":
 		var event protocol.StreamEvent
 		if err := json.Unmarshal(msg.PayloadJSON, &event); err != nil {
@@ -278,6 +298,13 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		// its snapshot with stale data.
 		if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
 			return nil
+		}
+		geminiTurn := operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite"
+		geminiInterrupted := geminiTurn && (result.Status == "interrupted" || result.Status == "cancelled" || (result.Status == "failed" && result.Message == context.Canceled.Error()))
+		if geminiInterrupted {
+			// Agent operations use the shared cancelled state for metrics and
+			// filtering, while the Gemini session displays interrupted.
+			result.Status = "cancelled"
 		}
 		resultLogFields := []any{
 			"server_id", serverID,
@@ -631,15 +658,21 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
+		geminiCompletionClaimed := false
 		if operation.Kind == "gemini.credentials.configure" {
 			err = g.store.CompleteGeminiCredentialUpdate(ctx, result)
 		} else if operation.Kind == "credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
+		} else if geminiInterrupted {
+			geminiCompletionClaimed, err = g.store.CompleteOperationIfActive(ctx, result)
 		} else {
 			err = g.store.CompleteOperation(ctx, result)
 		}
 		if err != nil {
 			return err
+		}
+		if geminiInterrupted && !geminiCompletionClaimed {
+			return nil
 		}
 		if operation.Kind == "gemini.thread.fork" || operation.Kind == "git.worktree.create" {
 			var command protocol.GeminiForkCommand
@@ -663,7 +696,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if statusErr != nil {
 			return statusErr
 		}
-		if updatedOperation.Status == "cancelled" {
+		if updatedOperation.Status == "cancelled" && !geminiCompletionClaimed {
 			return nil
 		}
 		if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "gemini.turn.interrupt" || operation.Kind == "gemini.turn.steer" {
@@ -930,6 +963,7 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 		return err
 	}
 	for _, op := range ops {
+		geminiTurn := op.Kind == "gemini.turn.start" || op.Kind == "gemini.turn.rewrite"
 		payload := json.RawMessage(op.Payload)
 		if strings.HasPrefix(op.Payload, "v1:") {
 			if err := g.vault.Decrypt(op.Payload, &payload); err != nil {
@@ -937,12 +971,25 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				continue
 			}
 		}
+		if geminiTurn {
+			// Claim before sending so cancellation or a lost acknowledgement cannot
+			// lead to a duplicate CLI execution on reconnect.
+			claimed, err := g.store.ClaimGeminiDelivery(stream.Context(), op.ID)
+			if err != nil {
+				return err
+			}
+			if !claimed {
+				continue
+			}
+		}
 		if err := stream.Send(&protocol.ControlEnvelope{OperationID: op.ID, Kind: op.Kind, CreatedAtUnixMS: op.CreatedAt.UnixMilli(), PayloadJSON: payload}); err != nil {
 			return err
 		}
-		if err := g.store.MarkDelivered(stream.Context(), op.ID); err != nil {
-			g.log.Warn("could not mark Agent operation delivered", "operation_id", op.ID, "error", err)
-			continue
+		if !geminiTurn {
+			if err := g.store.MarkDelivered(stream.Context(), op.ID); err != nil {
+				g.log.Warn("could not mark Agent operation delivered", "operation_id", op.ID, "error", err)
+				continue
+			}
 		}
 		g.log.Info(
 			"Agent operation delivered",

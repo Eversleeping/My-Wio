@@ -111,6 +111,129 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertGeminiCredentialBindingsAndReplay(t, scans)
 	assertProjectServerPreferencesIsolation(t, scans)
 	assertHiddenServerProjectsRecovery(t, scans)
+	assertGeminiRecoveryOnPostgres(t, scans)
+}
+
+func assertGeminiRecoveryOnPostgres(t *testing.T, database *Store) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "recovery-node", []string{"/srv"}, "recovery-enrollment", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "recovery-enrollment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "recovery-node", "recovery-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/recovery-pg", Name: "recovery-pg"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workspaceID string
+	for _, workspace := range workspaces {
+		if workspace.ServerID == server.ID && workspace.Path == "/srv/recovery-pg" {
+			workspaceID = workspace.ID
+		}
+	}
+	thread, err := database.CreateGeminiThread(ctx, workspaceID, "auto", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.QueueGeminiTurn(ctx, thread, "work", "auto", "default"); err != nil {
+		t.Fatal(err)
+	}
+	thread, err = database.GeminiThread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := database.ClaimGeminiDelivery(ctx, thread.OperationID); err != nil || !claimed {
+		t.Fatalf("PostgreSQL delivery claim: %v %v", claimed, err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE agent_operations SET delivered_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), thread.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := database.UnfinishedGeminiOperations(ctx, server.ID)
+	if err != nil || len(ids) != 1 || ids[0] != thread.OperationID {
+		t.Fatalf("PostgreSQL reconciliation lookup: %v %v", ids, err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE gemini_threads SET status='interrupted' WHERE id=?"), thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	thread, err = database.GeminiThread(ctx, thread.ID)
+	if err != nil || !thread.RecoveryPending {
+		t.Fatalf("PostgreSQL recovery status: %+v %v", thread, err)
+	}
+	if err := database.InterruptGeminiTurn(ctx, thread); err != nil {
+		t.Fatalf("PostgreSQL retry interruption: %v", err)
+	}
+	operations, err := database.PendingOperations(ctx, server.ID)
+	if err != nil || len(operations) != 1 || operations[0].Kind != "gemini.turn.interrupt" {
+		t.Fatalf("PostgreSQL retry operation: %+v %v", operations, err)
+	}
+	var retry protocol.GeminiInterruptCommand
+	if err := json.Unmarshal([]byte(operations[0].Payload), &retry); err != nil || !retry.RecoveryPending {
+		t.Fatalf("PostgreSQL retry did not retain recovery state: %+v %v", retry, err)
+	}
+	// Simulate a failed verification before explicitly confirming process exit.
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE gemini_threads SET status='interrupted' WHERE id=?"), thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ConfirmGeminiStopped(ctx, thread.ID, thread.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	thread, err = database.GeminiThread(ctx, thread.ID)
+	if err != nil || thread.RecoveryPending || thread.Status != "interrupted" {
+		t.Fatalf("PostgreSQL confirmed recovery: %+v %v", thread, err)
+	}
+	// A concurrent retry and confirmation cannot both win and release an
+	// operation while a new interruption request is being accepted.
+	contended, err := database.CreateGeminiThread(ctx, workspaceID, "auto", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.QueueGeminiTurn(ctx, contended, "work", "auto", "default"); err != nil {
+		t.Fatal(err)
+	}
+	contended, err = database.GeminiThread(ctx, contended.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := database.ClaimGeminiDelivery(ctx, contended.OperationID); err != nil || !claimed {
+		t.Fatalf("PostgreSQL contended delivery claim: %v %v", claimed, err)
+	}
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE gemini_threads SET status='interrupted' WHERE id=?"), contended.ID); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		results <- database.InterruptGeminiTurn(ctx, contended)
+	}()
+	go func() {
+		<-start
+		_, err := database.ConfirmGeminiStopped(ctx, contended.ID, contended.OperationID)
+		results <- err
+	}()
+	close(start)
+	first, second := <-results, <-results
+	if (first == nil) == (second == nil) || (first != nil && !errors.Is(first, ErrThreadActive)) || (second != nil && !errors.Is(second, ErrThreadActive)) {
+		t.Fatalf("PostgreSQL retry and confirmation outcomes: %v, %v", first, second)
+	}
+	current, err := database.GeminiThread(ctx, contended.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := database.Operation(ctx, contended.OperationID)
+	if err != nil || !((current.Status == "interrupting" && op.Status == "delivered") || (current.Status == "interrupted" && op.Status == "cancelled")) {
+		t.Fatalf("PostgreSQL concurrent recovery inconsistent: thread=%+v operation=%+v error=%v", current, op, err)
+	}
 }
 
 func availablePostgresPort(t *testing.T) uint32 {

@@ -27,6 +27,7 @@ export interface WorkspaceChangesSnapshot { workspace_id: string; changes: Works
 export interface WorkspaceDiffPreview { workspace_id: string; path: string; content: string; additions: number; deletions: number; binary: boolean; truncated: boolean; status: "idle" | "loading" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
 export interface Thread { id: string; workspace_id: string; project_id: string; codex_thread_id: string; title: string; status: string; path: string; server_id: string; server_name: string; project_name: string; created_at: string; updated_at: string; pinned_at: string | null; archived_at: string | null; project_pinned_at: string | null; project_hidden_at: string | null }
 export interface GeminiThread {
+  recovery_pending?: boolean;
   steer_supported?: boolean; steer_ready?: boolean;
  input_supported?: boolean;
  thinking_level?: string; thinking_supported?: boolean;

@@ -118,6 +118,11 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
         if (item.operationID === op && item.steerStatus === "queued") item.steerStatus = "missed";
       }
     }
+    if (event.kind === "gemini.turn.completed" && (p.status === "interrupted" || p.status === "failed")) {
+      for (const item of tools.values()) {
+        if (item.operationID === op && ["running", "pending", "in_progress"].includes(item.toolStatus ?? "running")) item.toolStatus = p.status;
+      }
+    }
     if (event.kind === "gemini.user.message") { assistant = undefined; messages.push({ ...base, role: "user", text: readable(p.text), images: Array.isArray(p.images) ? p.images.filter((image): image is {data_url:string} => typeof image?.data_url === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(image.data_url)) : [] }); }
     else if (event.kind === "gemini.question") {
       assistant = undefined;
