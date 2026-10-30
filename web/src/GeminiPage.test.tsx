@@ -45,16 +45,22 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
   }));
   const onSelectThread = vi.fn();
   render(<I18nProvider><GeminiPage realtime={0} notify={vi.fn()} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>);
-  return {user:userEvent.setup(),requests,modelRequests,onSelectThread};
+  return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread};
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
-test("sends a correction to the current Gemini turn while retaining the interrupt button", async () => {
+test("switches the Gemini action between interrupting and sending a correction", async () => {
   const ready = [{event_id:"ready",sequence:1,kind:"gemini.steer.ready",stream_id:thread.id,occurred_at:thread.updated_at,payload:{operation_id:"op1"}}];
   const {user,requests}=setup(true,"auto","configured",ready,{status:"running",steerSupported:true});
   const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
   await waitFor(()=>expect(input).toBeEnabled());
+  expect(screen.getByRole("button",{name:"Interrupt"})).toBeEnabled();
+  expect(screen.queryByRole("button",{name:"Send correction"})).not.toBeInTheDocument();
+  await user.click(input);
+  await user.keyboard("{Enter}");
+  expect(requests).toHaveLength(0);
   await user.type(input,"Focus on the storage bug");
+  expect(screen.queryByRole("button",{name:"Interrupt"})).not.toBeInTheDocument();
   await user.click(screen.getByRole("button",{name:"Send correction"}));
   await screen.findByText("Waiting for the next model request");
   expect(input).toHaveValue("");
@@ -62,6 +68,9 @@ test("sends a correction to the current Gemini turn while retaining the interrup
   expect(requests).toHaveLength(1);
   expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/steer",body:{prompt:"Focus on the storage bug",operation_id:"op1",request_id:expect.any(String)}});
   expect(screen.getByRole("combobox",{name:"Gemini model"})).toBeDisabled();
+  await user.click(screen.getByRole("button",{name:"Interrupt"}));
+  await waitFor(()=>expect(requests).toHaveLength(2));
+  expect(requests[1]).toEqual({url:"/api/gemini/threads/thread-1/interrupt",body:{}});
 });
 
 test("retains the draft and reuses its request ID if a correction fails", async()=>{
@@ -81,7 +90,27 @@ test("does not steer a new Gemini turn using a previous turn's readiness",async(
   const ready=[{event_id:"old-ready",sequence:1,kind:"gemini.steer.ready",stream_id:thread.id,occurred_at:thread.updated_at,payload:{operation_id:"old"}}];
   setup(true,"auto","configured",ready,{status:"running",steerSupported:true});
   expect(await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"})).toBeDisabled();
-  expect(screen.getByRole("button",{name:"Send correction"})).toBeDisabled();
+  expect(screen.queryByRole("button",{name:"Send correction"})).not.toBeInTheDocument();
+  expect(screen.getByRole("button",{name:"Interrupt"})).toBeEnabled();
+});
+
+test("disables the Gemini action while an interrupt is in progress", async () => {
+  setup(true,"auto","configured",[],{status:"interrupting",steerSupported:true});
+  expect(await screen.findByRole("button",{name:"Interrupt"})).toBeDisabled();
+});
+
+test("keeps a draft and allows interruption when a Gemini task becomes queued", async () => {
+  const {user,requests,currentThread}=setup(true);
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  await user.type(input,"Keep this draft");
+  currentThread.status="queued";
+  await user.click(screen.getByRole("button",{name:"Refresh"}));
+  const interrupt=await screen.findByRole("button",{name:"Interrupt"});
+  expect(input).toBeDisabled();
+  expect(input).toHaveValue("Keep this draft");
+  await user.click(interrupt);
+  await waitFor(()=>expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/interrupt",body:{}}));
+  expect(input).toHaveValue("Keep this draft");
 });
 
 test("resuming hides 25 replayed commands and shows the 29 actual completed commands", async () => {

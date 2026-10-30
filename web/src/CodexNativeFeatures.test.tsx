@@ -92,7 +92,7 @@ test("starts the first turn after a new goal is persisted", async () => {
   expect(requests[turnIndex].body?.prompt).toBe("Ship the release");
 });
 
-test("steers a running task without starting or interrupting a turn", async () => {
+test("switches the Codex action between interrupting and sending a correction", async () => {
   const user = userEvent.setup();
   const value = { ...thread("steer"), status: "running" };
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -105,12 +105,23 @@ test("steers a running task without starting or interrupting a turn", async () =
   }));
   renderSession(value);
   const composer = await screen.findByPlaceholderText("Add instructions to correct the running task");
-  await user.type(composer, "Focus on failing tests{Enter}");
+  expect(screen.getByRole("button", { name: "Interrupt active turn" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Send correction" })).not.toBeInTheDocument();
+  await user.click(composer);
+  await user.keyboard("{Enter}");
+  expect(requests.filter(request => /\/(turns|steer|interrupt)$/.test(request.url))).toHaveLength(0);
+  await user.type(composer, "Focus on failing tests");
+  expect(screen.queryByRole("button", { name: "Interrupt active turn" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Send correction" })).toBeEnabled();
+  await user.keyboard("{Enter}");
   await waitFor(() => expect(requests.some(request => request.url.endsWith("/steer"))).toBe(true));
   const correction = requests.find(request => request.url.endsWith("/steer"))!;
   expect(correction.body).toEqual({ prompt: "Focus on failing tests", images: [] });
   expect(requests.some(request => request.url.endsWith("/turns") || request.url.endsWith("/interrupt"))).toBe(false);
   await waitFor(() => expect(composer).toHaveValue(""));
+  await user.click(screen.getByRole("button", { name: "Interrupt active turn" }));
+  await waitFor(() => expect(requests.some(request => request.url.endsWith("/interrupt"))).toBe(true));
+  expect(requests.find(request => request.url.endsWith("/interrupt"))?.body).toEqual({});
 });
 
 test("retains rejected corrections and blocks queued sessions", async () => {
@@ -132,7 +143,8 @@ test("retains rejected corrections and blocks queued sessions", async () => {
   expect(composer).toHaveValue("Use the existing API");
   rerender(session("queued"));
   expect(screen.getByPlaceholderText("Message Codex")).toHaveValue("Use the existing API");
-  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Interrupt active turn" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
   rerender(session("completed"));
   expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 });
