@@ -29,6 +29,7 @@ export interface Thread { id: string; workspace_id: string; project_id: string; 
 export interface GeminiThread {
   recovery_pending?: boolean;
   steer_supported?: boolean; steer_ready?: boolean;
+  skills_supported?: boolean; plan_supported?: boolean;
  input_supported?: boolean;
  thinking_level?: string; thinking_supported?: boolean;
   fork_supported: boolean;

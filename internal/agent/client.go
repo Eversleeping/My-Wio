@@ -324,6 +324,19 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
 			}
 		}
+	} else if envelope.Kind == "gemini.skills.list" {
+		var command protocol.GeminiSkillsCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var root string
+			root, err = scanner.ResolveWorkspaceRoot(command.Workspace, c.inventoryRoots())
+			if err == nil {
+				var result protocol.GeminiSkillsResult
+				result, err = c.gemini.ListSkills(ctx, envelope.OperationID, root)
+				if err == nil {
+					resultData, err = json.Marshal(result)
+				}
+			}
+		}
 	} else if envelope.Kind == "workspace.files" {
 		var command protocol.WorkspaceFilesCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {

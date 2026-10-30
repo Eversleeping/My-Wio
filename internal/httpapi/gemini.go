@@ -16,7 +16,7 @@ import (
 )
 
 func validGeminiOptions(model, mode string) bool {
-	if !credentialModelPattern.MatchString(model) || (mode != "default" && mode != "auto_edit" && mode != "yolo") {
+	if !credentialModelPattern.MatchString(model) || (mode != "default" && mode != "auto_edit" && mode != "yolo" && mode != "plan") {
 		return false
 	}
 	return true
@@ -51,13 +51,17 @@ func (a *API) createGeminiThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid Gemini model, thinking level or approval mode")
 		return
 	}
-	if input.ThinkingLevel != "" || input.ApprovalMode == "yolo" {
+	if input.ThinkingLevel != "" || input.ApprovalMode == "yolo" || input.ApprovalMode == "plan" {
 		workspace, err := a.store.Workspace(r.Context(), input.WorkspaceID)
 		if err != nil {
 			writeError(w, 400, "workspace not found")
 			return
 		}
 		server, err := a.store.Server(r.Context(), workspace.ServerID)
+		if input.ApprovalMode == "plan" && (err != nil || !buildinfo.SupportsGeminiPlan(server.AgentVersion, server.GeminiVersion)) {
+			writeError(w, 409, "Gemini plan mode requires Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
+			return
+		}
 		if input.ApprovalMode == "yolo" && (err != nil || !buildinfo.SupportsGeminiYolo(server.AgentVersion)) {
 			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals")
 			return
@@ -182,6 +186,10 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.ApprovalMode == "yolo" && !buildinfo.SupportsGeminiYolo(server.AgentVersion) {
 		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals")
+		return
+	}
+	if input.ApprovalMode == "plan" && !buildinfo.SupportsGeminiPlan(server.AgentVersion, server.GeminiVersion) {
+		writeError(w, 409, "Gemini plan mode requires Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
 		return
 	}
 	if level != "" && !buildinfo.SupportsGeminiThinking(server.AgentVersion) {

@@ -161,8 +161,11 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	a.active[operationID] = cancel
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); delete(a.active, operationID); a.mu.Unlock() }()
-	if command.ApprovalMode != "default" && command.ApprovalMode != "auto_edit" && command.ApprovalMode != "yolo" {
+	if command.ApprovalMode != "default" && command.ApprovalMode != "auto_edit" && command.ApprovalMode != "yolo" && command.ApprovalMode != "plan" {
 		return errors.New("invalid Gemini approval mode")
+	}
+	if command.ApprovalMode == "plan" && !command.Interactive {
+		return errors.New("Gemini plan mode requires the interactive ACP protocol")
 	}
 	if command.Interactive {
 		return a.runACP(ctx, operationID, command, executable, environment)

@@ -66,6 +66,11 @@ func fakeACPCLI() {
 			}
 		case "session/prompt":
 			_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), msg.Params, 0600)
+			if text := os.Getenv("WIO_GEMINI_TEST_MODE_TEXT"); text != "" {
+				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": text}})
+				result = map[string]any{"stopReason": "end_turn"}
+				break
+			}
 			if sample := os.Getenv("WIO_GEMINI_TEST_USAGE_RESULT"); sample != "" {
 				_ = json.Unmarshal([]byte(sample), &result)
 				break

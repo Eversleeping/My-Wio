@@ -9,10 +9,10 @@ import { formatTime } from "./format";
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -26,6 +26,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
         eventLog=[...eventLog,{event_id:"steer",stream_id:thread.id,sequence:100,kind:"gemini.steer.queued",occurred_at:thread.updated_at,payload:{text:input.prompt,operation_id:input.operation_id,request_id:input.request_id}}];
       }
       if (url.endsWith("/answer")) body={operation_id:"answer-op"};
+      if (url.endsWith("/gemini/skills")) body={operation_id:"skills-op"};
       if (url.endsWith("/fork")) body={operation_id:"fork-op",target_thread_id:"forked-thread"};
       if (url.endsWith("/rewrite")) {
         if (options.rewriteFailure) return new Response(JSON.stringify({error:"Native history unavailable; original conversation was kept"}),{status:409,headers:{"Content-Type":"application/json"}});
@@ -36,6 +37,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     }
     else if (url === "/api/operations/answer-op") body={status:options.answerFailure ? "failed" : "succeeded",result:"Question expired"};
     else if (url === "/api/operations/fork-op") body={status:"succeeded"};
+    else if (url.endsWith("/gemini/skills/skills-op")) body={status:"succeeded",skills:[{name:"code-review",description:"Review code",enabled:true,builtin:false},{name:"disabled",description:"Disabled skill",enabled:false,builtin:false}]};
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
     else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
     else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
@@ -44,8 +46,9 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     return new Response(JSON.stringify(body),{status:200,headers:{"Content-Type":"application/json"}});
   }));
   const onSelectThread = vi.fn();
-  render(<I18nProvider><GeminiPage realtime={0} notify={vi.fn()} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>);
-  return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread};
+  const notify = vi.fn();
+  render(<I18nProvider><GeminiPage realtime={0} notify={notify} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>);
+  return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread,notify};
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
@@ -559,4 +562,78 @@ test("shows answer delivery failure without marking the answer sent", async () =
   const {user}=setup(true,"auto","configured",[interactiveQuestion],{status:"running",answerFailure:true});
   await user.click(await screen.findByRole("radio",{name:"Blue Ocean"}));await user.click(screen.getByRole("button",{name:"Submit answers"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("Question expired");expect(screen.queryByRole("button",{name:"Answers sent"})).not.toBeInTheDocument();
+});
+
+test("opens Gemini slash actions with the keyboard and submits a plan turn", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const { user, requests } = setup(true, "gemini-upstream-current", "configured", [], { planSupported: true });
+  const input = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
+  await user.type(input, "/plan");
+  expect(screen.getByRole("option", { name: /\/plan/ })).toBeInTheDocument();
+  await user.keyboard("{Enter}");
+  expect(screen.getByRole("combobox", { name: "Tool permissions" })).toHaveValue("plan");
+  await user.type(input, "Plan this change");
+  await user.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Plan this change",model:"gemini-upstream-current",approval_mode:"plan",thinking_level:""}}));
+});
+
+test("reports an unsupported plan mode and lets Escape dismiss the slash menu", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const { user, notify } = setup(true);
+  const input = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
+  await user.type(input, "/plan{Enter}");
+  expect(notify).toHaveBeenCalledWith(expect.stringContaining("0.2.83"));
+  expect(screen.getByRole("combobox", {name:"Tool permissions"})).toHaveValue("default");
+  await user.type(input, "/");
+  expect(screen.getByRole("option", {name:/\/schedule/})).toBeInTheDocument();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("option", {name:/\/schedule/})).not.toBeInTheDocument();
+});
+
+test("opens the schedule and interview from the Gemini slash menu", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const { user } = setup(true);
+  const input = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
+  await user.type(input, "/schedule{Enter}");
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getByRole("combobox", {name:"Agent"})).toHaveValue("gemini");
+  await user.click(within(dialog).getByRole("button", {name:"Close"}));
+  await user.type(input, "/grill-me{Enter}");
+  expect((input as HTMLTextAreaElement).value).toContain("interactive question tool");
+});
+
+test("discovers actual Gemini skills and prepares a task without selecting disabled skills", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const { user, requests } = setup(true, "auto", "configured", [], { skillsSupported: true });
+  const input = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
+  await user.type(input, "/skills{Enter}");
+  const dialog = screen.getByRole("dialog");
+  const enabled = await within(dialog).findByRole("button", {name:"Use skill code-review"});
+  expect(within(dialog).getByRole("button", {name:"Use skill disabled"})).toBeDisabled();
+  expect(requests).toContainEqual({url:"/api/workspaces/workspace-1/gemini/skills",body:{}});
+  await user.click(enabled);
+  expect((input as HTMLTextAreaElement).value).toContain("code-review");
+});
+
+test("shows discovered native Gemini commands and prepares them for explicit sending", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const events = [{event_id:"commands",sequence:1,stream_id:thread.id,kind:"gemini.commands",occurred_at:thread.updated_at,payload:{commands:[{name:"help",description:"Show available commands"}]}}];
+  const { user, requests } = setup(true, "gemini-upstream-current", "configured", events);
+  const input = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
+  await user.type(input, "/help{Enter}");
+  expect(input).toHaveValue("/help ");
+  expect(requests).toHaveLength(0);
+  await user.click(screen.getByRole("button", {name:"Send"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"/help ",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
+});
+
+test("explains remote browser prerequisites before preparing a request", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const { user } = setup(true);
+  const input = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
+  await user.type(input, "/browser{Enter}");
+  const dialog = screen.getByRole("dialog", {name:"Gemini browser agent"});
+  expect(within(dialog).getByText(/Chrome 144 or newer/)).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", {name:"Prepare browser task"}));
+  expect((input as HTMLTextAreaElement).value).toContain("browser_agent");
 });

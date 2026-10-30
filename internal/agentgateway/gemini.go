@@ -26,6 +26,7 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 	var payload struct {
 		OperationID string `json:"operation_id"`
 		SessionID   string `json:"session_id"`
+		Mode        string `json:"approval_mode"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return err
@@ -38,7 +39,11 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if payload.SessionID == "" || len(payload.SessionID) > 128 {
 			return errors.New("invalid Gemini session id")
 		}
-	case "gemini.message", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied":
+	case "gemini.mode":
+		if payload.Mode != "default" && payload.Mode != "auto_edit" && payload.Mode != "yolo" && payload.Mode != "plan" {
+			return errors.New("invalid Gemini approval mode update")
+		}
+	case "gemini.message", "gemini.commands", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied":
 	default:
 		return errors.New("unsupported Gemini event")
 	}
@@ -63,6 +68,11 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 			}
 		}
 		_, err = g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE gemini_threads SET session_id=?,status=CASE WHEN status IN ('interrupting','interrupted') THEN status ELSE 'running' END,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting','interrupted') AND EXISTS (SELECT 1 FROM agent_operations WHERE id=? AND status IN ('queued','delivered','running'))`), payload.SessionID, time.Now().UTC(), thread.ID, payload.OperationID, payload.OperationID)
+		if err != nil {
+			return err
+		}
+	case "gemini.mode":
+		_, err = g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE gemini_threads SET approval_mode=?,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting','interrupted') AND EXISTS (SELECT 1 FROM agent_operations WHERE id=? AND status IN ('queued','delivered','running'))`), payload.Mode, time.Now().UTC(), thread.ID, payload.OperationID, payload.OperationID)
 		if err != nil {
 			return err
 		}

@@ -11,6 +11,21 @@ type GeminiOwnership struct {
 	OperationID string `json:"operation_id"`
 }
 
+type GeminiSkillsCommand struct {
+	Workspace string `json:"workspace"`
+}
+
+type GeminiSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Builtin     bool   `json:"builtin"`
+}
+
+type GeminiSkillsResult struct {
+	Skills []GeminiSkill `json:"skills"`
+}
+
 // GeminiTurnCommand runs a headless Gemini CLI turn in an existing workspace.
 // Authentication stays on the Agent host; credentials never enter this payload.
 type GeminiTurnCommand struct {

@@ -65,6 +65,14 @@ func TestACPApprovalModesAndConfirmedInterruption(t *testing.T) {
 			t.Fatalf("mode override not rejected: %v", err)
 		}
 	})
+	t.Run("plan-mode-mismatch", func(t *testing.T) {
+		t.Setenv("WIO_GEMINI_TEST_MODE_OVERRIDE", "default")
+		adapter := New(binary, func(protocol.StreamEvent) error { t.Error("prompt ran despite approval mode mismatch"); return nil })
+		err := adapter.Run(context.Background(), "op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), Model: "flash", ApprovalMode: "plan", Prompt: "test"})
+		if err == nil || !strings.Contains(err.Error(), "approval mode") {
+			t.Fatalf("plan mode override not rejected: %v", err)
+		}
+	})
 	t.Run("interrupt-unanswered-permission", func(t *testing.T) {
 		question := make(chan struct{}, 1)
 		adapter := New(binary, func(e protocol.StreamEvent) error {
@@ -100,4 +108,26 @@ func TestACPApprovalModesAndConfirmedInterruption(t *testing.T) {
 			t.Fatal("process cleanup has not completed")
 		}
 	})
+}
+
+func TestACPModelTextCannotChangePermissionMode(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+	t.Setenv("WIO_GEMINI_TEST_MODE_TEXT", "[MODE_UPDATE] yolo")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+	binary, _ := os.Executable()
+	var changed bool
+	a := New(binary, func(event protocol.StreamEvent) error {
+		if event.Kind == "gemini.mode" {
+			changed = true
+		}
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Run(ctx, "op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), Model: "flash", ApprovalMode: "plan", Prompt: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("model output changed saved permissions without an approval")
+	}
 }

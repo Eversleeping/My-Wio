@@ -20,6 +20,8 @@ type GeminiThread struct {
 	ThinkingLevel     string     `db:"thinking_level" json:"thinking_level"`
 	InputSupported    bool       `db:"-" json:"input_supported"`
 	ThinkingSupported bool       `db:"-" json:"thinking_supported"`
+	SkillsSupported   bool       `db:"-" json:"skills_supported"`
+	PlanSupported     bool       `db:"-" json:"plan_supported"`
 	AgentVersion      string     `db:"agent_version" json:"-"`
 	RewriteSupported  bool       `db:"-" json:"rewrite_supported"`
 	ForkSupported     bool       `db:"-" json:"fork_supported"`
@@ -76,6 +78,8 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 		out[i].SteerSupported = buildinfo.SupportsGeminiSteering(out[i].AgentVersion, out[i].CLIVersion)
 		out[i].InputSupported = buildinfo.SupportsGeminiInput(out[i].AgentVersion)
 		out[i].ThinkingSupported = buildinfo.SupportsGeminiThinking(out[i].AgentVersion)
+		out[i].SkillsSupported = buildinfo.SupportsGeminiSkills(out[i].AgentVersion, out[i].CLIVersion)
+		out[i].PlanSupported = buildinfo.SupportsGeminiPlan(out[i].AgentVersion, out[i].CLIVersion)
 		out[i].ForkSupported = buildinfo.SupportsGeminiFork(out[i].AgentVersion)
 		out[i].RewriteSupported = buildinfo.SupportsGeminiRewrite(out[i].AgentVersion)
 	}
@@ -93,6 +97,8 @@ func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, erro
 		thread.SteerReady = count > 0
 	}
 	thread.ThinkingSupported = buildinfo.SupportsGeminiThinking(thread.AgentVersion)
+	thread.SkillsSupported = buildinfo.SupportsGeminiSkills(thread.AgentVersion, thread.CLIVersion)
+	thread.PlanSupported = buildinfo.SupportsGeminiPlan(thread.AgentVersion, thread.CLIVersion)
 	thread.ForkSupported = buildinfo.SupportsGeminiFork(thread.AgentVersion)
 	thread.RewriteSupported = buildinfo.SupportsGeminiRewrite(thread.AgentVersion)
 	return thread, err

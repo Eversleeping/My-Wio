@@ -47,6 +47,15 @@ func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	if current.SessionID != "native-session" || current.Status != "running" {
 		t.Fatalf("session binding: %+v", current)
 	}
+	modePayload, _ := json.Marshal(map[string]string{"operation_id": thread.OperationID, "approval_mode": "plan"})
+	modeRaw, _ := json.Marshal(protocol.StreamEvent{EventID: "gemini-mode", StreamID: thread.ID, Kind: "gemini.mode", Payload: modePayload})
+	if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "gemini_event", PayloadJSON: modeRaw}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ = db.GeminiThread(ctx, thread.ID)
+	if current.ApprovalMode != "plan" {
+		t.Fatalf("current mode update lost: %+v", current)
+	}
 	// A question uses its stable request id across the gateway and survives
 	// credential redaction. Answer completion must not release the waiting turn.
 	questionPayload, _ := json.Marshal(map[string]any{"operation_id": thread.OperationID, "questions": []any{map[string]any{"id": "choice", "question": "Which?", "isOther": true}}})
@@ -124,6 +133,13 @@ func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	newThread, _ := db.GeminiThread(ctx, thread.ID)
 	if newThread.Status != "queued" {
 		t.Fatalf("stale init changed later turn: %+v", newThread)
+	}
+	if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "gemini_event", PayloadJSON: modeRaw}); err != nil {
+		t.Fatal(err)
+	}
+	newThread, _ = db.GeminiThread(ctx, thread.ID)
+	if newThread.ApprovalMode != "default" {
+		t.Fatalf("stale mode changed later turn: %+v", newThread)
 	}
 	op, _ := db.Operation(ctx, newThread.OperationID)
 	var command protocol.GeminiTurnCommand

@@ -71,5 +71,5 @@ export function useGeminiManagement({ workspaces, busy, setBusy, refresh, select
    <p className="muted">{t(worktree?.thread ? "codex.continueWorktreeDescription" : "codex.createWorktreeDescription")}</p>{error && <p role="alert">{error}</p>}<DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={() => setWorktree(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={busy || !form.branch.trim()}>{busy && <LoaderCircle className="spin" size={16} />}{t("common.save")}</button></DialogActions>
   </form></Dialog>
  </>;
- return { projectActions, threadActions, fork, dialogs };
+ return { projectActions, threadActions, fork, schedule: setScheduled, dialogs };
 }

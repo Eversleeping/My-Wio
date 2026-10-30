@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -32,7 +33,16 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	if err != nil {
 		return err
 	}
+	if command.ApprovalMode == "plan" && strings.HasPrefix(strings.TrimSpace(command.Prompt), "/") {
+		fields := strings.Fields(command.Prompt)
+		if len(fields) == 0 || (fields[0] != "/help" && fields[0] != "/about") {
+			return errors.New("this Gemini CLI command is unavailable in plan mode; switch permissions before running it")
+		}
+	}
 	blocks := []any{}
+	if command.ApprovalMode == "plan" && !strings.HasPrefix(strings.TrimSpace(command.Prompt), "/") {
+		blocks = append(blocks, map[string]string{"type": "text", "text": "In plan mode, present the complete plan in the conversation before requesting approval. Do not implement the plan without approval."})
+	}
 	if len(command.SteeringContext) > 0 {
 		prior, _ := json.Marshal(command.SteeringContext)
 		blocks = append(blocks, map[string]string{"type": "text", "text": "User updates delivered during the preceding task (retained for continuity):\n" + string(prior)})
@@ -128,6 +138,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	}
 	replay := true
 	resuming := command.SessionID != ""
+	sessionID := command.SessionID
+	var planApproved atomic.Bool
+	var availableCommands []acpCommand
 	var sequence int
 	toolCalls := 0
 	// Requests are sequential; server-initiated requests are answered concurrently
@@ -146,6 +159,15 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 				return nil, fmt.Errorf("Gemini ACP connection closed: %w", err)
 			case msg := <-messages:
 				if msg.Method == "session/update" {
+					if commands, ok := availableACPCommands(msg.Params); ok {
+						availableCommands = commands
+						if !replay {
+							if err := emit("commands", map[string]any{"commands": commands}); err != nil {
+								return nil, err
+							}
+						}
+						continue
+					}
 					if replay {
 						continue
 					}
@@ -172,7 +194,11 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 						}
 						_ = json.Unmarshal(u.Content, &c)
 						if c.Type == "text" {
-							err = emit("message", map[string]any{"role": "assistant", "content": c.Text, "delta": true})
+							if mode, ok := geminiModeUpdate(c.Text); ok && mode == "default" && planApproved.CompareAndSwap(true, false) {
+								err = emit("mode", map[string]any{"approval_mode": mode})
+							} else {
+								err = emit("message", map[string]any{"role": "assistant", "content": c.Text, "delta": true})
+							}
 						}
 					case "tool_call":
 						// Gemini 0.65/0.66 streamHistory emits terminal tool_call
@@ -214,10 +240,22 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							}
 							_ = json.Unmarshal(msg.Params, &p)
 							outcome := map[string]string{"outcome": "cancelled"}
+							planApproval := strings.HasPrefix(p.ToolCall.ID, "exit_plan_mode_")
+							planText := ""
+							if planApproval {
+								planApproved.Store(false)
+								var err error
+								planText, err = readGeminiPlan(p.ToolCall.Title, command.Workspace, sessionID, environment)
+								if err != nil || emit("message", map[string]any{"role": "assistant", "content": "Proposed plan for review:\n\n" + planText, "delta": false}) != nil {
+									_ = emit("message", map[string]any{"role": "assistant", "content": "The Gemini plan could not be displayed in full, so approval was cancelled. Ask Gemini to provide a readable plan and try again.", "delta": false})
+									_ = write(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"outcome": outcome}})
+									return
+								}
+							}
 							// ACP asks the client for confirmation even in YOLO mode.
 							// Use a one-time grant so this turn cannot change saved policy.
 							bridgeCall := strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_ask_user") && strings.HasPrefix(p.ToolCall.Title, "wio_ask_user(")
-							if bridgeCall || command.ApprovalMode == "yolo" {
+							if bridgeCall || (command.ApprovalMode == "yolo" && !planApproval) {
 								for _, o := range p.Options {
 									if o.Kind == "allow_once" {
 										outcome = map[string]string{"outcome": "selected", "optionId": o.ID}
@@ -226,6 +264,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 								}
 							} else {
 								q := protocol.UserInputQuestion{ID: "permission", Header: "Gemini", Question: p.ToolCall.Title + "\n" + string(p.ToolCall.Content)}
+								if planApproval {
+									q.Question = "Review the complete plan shown above. Allow Gemini to leave plan mode and begin implementation?"
+								}
 								for _, o := range p.Options {
 									q.Options = append(q.Options, struct {
 										Label       string `json:"label"`
@@ -236,6 +277,14 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 								if err == nil {
 									for _, o := range p.Options {
 										if answer := answers["permission"].Answers; len(answer) > 0 && o.Name == answer[0] {
+											if planApproval && (o.Kind == "allow_once" || o.Kind == "allow_always") {
+												currentPlan, err := readGeminiPlan(p.ToolCall.Title, command.Workspace, sessionID, environment)
+												if err != nil || currentPlan != planText {
+													_ = emit("message", map[string]any{"role": "assistant", "content": "The Gemini plan changed before approval. Approval was cancelled; review the updated plan before trying again.", "delta": false})
+													break
+												}
+												planApproved.Store(true)
+											}
 											outcome = map[string]string{"outcome": "selected", "optionId": o.ID}
 											break
 										}
@@ -271,7 +320,6 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	}
 	params := map[string]any{"cwd": command.Workspace, "mcpServers": []any{bridge}}
 	var sessionResult json.RawMessage
-	sessionID := command.SessionID
 	if sessionID == "" {
 		raw, err := call("session/new", params)
 		if err != nil {
@@ -291,7 +339,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		// Discard the initial history burst until commands are ready. This is
 		// NOT a history-complete fence: terminal tool snapshots can arrive
 		// later, so the notification handler filters those throughout resume.
-		if err = drainACPHistory(ctx, messages, readError); err != nil {
+		if availableCommands, err = drainACPHistory(ctx, messages, readError); err != nil {
 			return err
 		}
 	}
@@ -308,11 +356,16 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	if json.Unmarshal(sessionResult, &state) != nil {
 		return errors.New("invalid Gemini session configuration")
 	}
-	if (state.Modes == nil && command.ApprovalMode == "yolo") || (state.Modes != nil && state.Modes.Current != command.ApprovalMode) {
+	if (state.Modes == nil && (command.ApprovalMode == "yolo" || command.ApprovalMode == "plan")) || (state.Modes != nil && state.Modes.Current != command.ApprovalMode) {
 		return errors.New("Gemini CLI did not accept the requested approval mode; check workspace trust and administrator settings")
 	}
 	if err = emit("init", map[string]any{"session_id": sessionID, "model": command.Model, "thinking_level": command.ThinkingLevel, "timestamp": time.Now().UTC().Truncate(time.Millisecond).Format(time.RFC3339Nano)}); err != nil {
 		return err
+	}
+	if availableCommands != nil {
+		if err = emit("commands", map[string]any{"commands": availableCommands}); err != nil {
+			return err
+		}
 	}
 	replay = false
 	raw, err := call("session/prompt", map[string]any{"sessionId": sessionID, "prompt": blocks})
@@ -370,29 +423,72 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	return nil
 }
 
-func drainACPHistory(ctx context.Context, messages <-chan acpMessage, readError <-chan error) error {
+func geminiModeUpdate(text string) (string, bool) {
+	mode, ok := strings.CutPrefix(text, "[MODE_UPDATE] ")
+	if !ok {
+		return "", false
+	}
+	switch mode {
+	case "default", "auto_edit", "yolo", "plan":
+		return mode, true
+	default:
+		return "", false
+	}
+}
+
+func drainACPHistory(ctx context.Context, messages <-chan acpMessage, readError <-chan error) ([]acpCommand, error) {
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-deadline.C:
-			return errors.New("Gemini did not finish replaying session history")
+			return nil, errors.New("Gemini did not finish replaying session history")
 		case err := <-readError:
-			return fmt.Errorf("Gemini history connection closed: %w", err)
+			return nil, fmt.Errorf("Gemini history connection closed: %w", err)
 		case msg := <-messages:
 			if msg.Method != "session/update" {
 				continue
 			}
-			var p struct {
-				Update struct {
-					Type string `json:"sessionUpdate"`
-				} `json:"update"`
-			}
-			if json.Unmarshal(msg.Params, &p) == nil && p.Update.Type == "available_commands_update" {
-				return nil
+			if commands, ok := availableACPCommands(msg.Params); ok {
+				return commands, nil
 			}
 		}
 	}
+}
+
+type acpCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func availableACPCommands(raw json.RawMessage) ([]acpCommand, bool) {
+	var payload struct {
+		Update struct {
+			Type     string       `json:"sessionUpdate"`
+			Commands []acpCommand `json:"availableCommands"`
+		} `json:"update"`
+	}
+	if json.Unmarshal(raw, &payload) != nil || payload.Update.Type != "available_commands_update" {
+		return nil, false
+	}
+	commands := make([]acpCommand, 0, len(payload.Update.Commands))
+	seen := map[string]bool{}
+	for _, command := range payload.Update.Commands {
+		if len(commands) >= 50 {
+			break
+		}
+		if len(command.Name) == 0 || len(command.Name) > 64 || strings.IndexFunc(command.Name, func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+		}) >= 0 || seen[command.Name] {
+			continue
+		}
+		seen[command.Name] = true
+		if len([]rune(command.Description)) > 256 {
+			command.Description = string([]rune(command.Description)[:256])
+		}
+		commands = append(commands, command)
+	}
+	return commands, true
 }
