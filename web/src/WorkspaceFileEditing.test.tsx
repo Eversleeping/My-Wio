@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { FilePreviewPane, WorkspaceFilesPanel } from "./App";
 import { I18nProvider } from "./i18n";
 import { clearFileDrafts } from "./workspaceFileEditing";
+import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "./components/SessionPreviews";
 
 const hash = "a".repeat(64);
 let writes: { method: string; path: string; body: Record<string, unknown> }[];
@@ -107,4 +108,42 @@ test("uploads local binary file bytes without modifying them", async () => {
   await user.click(dialog.getByRole("button", { name: "Add file" }));
   await waitFor(() => expect(writes).toHaveLength(1));
   expect(writes[0].body).toEqual({ path: "asset.bin", content_base64: "AP8B" });
+});
+
+function PreviewTabsHarness({ scope = "session-one", workspace = "workspace" }: { scope?: string; workspace?: string }) {
+  const previews = useSessionPreviews(scope, workspace);
+  return <I18nProvider>
+    <button onClick={() => previews.open({ path: "a/same.txt", mode: "file" })}>Open first</button>
+    <button onClick={() => previews.open({ path: "b/same.txt", mode: "file" })}>Open second</button>
+    <button onClick={() => previews.open({ path: "a/same.txt", mode: "diff" })}>Open diff</button>
+    <SessionPreviewTabs previews={previews} />
+    <SessionPreviewPanels previews={previews} workspaceID={workspace} workspaceRoot="/project" writable realtime={0} notify={vi.fn()} onOpenFile={previews.open}><div>Conversation content</div></SessionPreviewPanels>
+  </I18nProvider>;
+}
+
+test("keeps multiple distinct tabs and protects an unsaved draft when closing an inactive tab", async () => {
+  const user = userEvent.setup();
+  const view = render(<PreviewTabsHarness />);
+  await user.click(screen.getByRole("button", { name: "Open first" }));
+  await begin(user);
+  await user.clear(screen.getByRole("textbox", { name: "File content" }));
+  await user.type(screen.getByRole("textbox", { name: "File content" }), "unsaved draft");
+  await user.click(screen.getByRole("button", { name: "Open second" }));
+  await user.click(screen.getByRole("button", { name: "Open diff" }));
+  await user.click(screen.getByRole("button", { name: "Open second" }));
+  expect(screen.getAllByRole("tab")).toHaveLength(4);
+  expect(screen.getAllByRole("tab").filter(tab => tab.title === "a/same.txt")).toHaveLength(2);
+  await user.click(screen.getByRole("tab", { name: "Conversation" }));
+  expect(screen.getByText("Conversation content")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Close a/same.txt" }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("a/same.txt");
+  expect(screen.getByRole("textbox", { name: "File content" })).toHaveValue("unsaved draft");
+  await user.click(screen.getByRole("button", { name: "Continue editing" }));
+  expect(screen.getAllByRole("tab")).toHaveLength(4);
+  await user.click(screen.getByRole("button", { name: "Close a/same.txt" }));
+  await user.click(screen.getByRole("button", { name: "Discard changes" }));
+  expect(screen.getAllByRole("tab")).toHaveLength(3);
+  expect(screen.getByRole("button", { name: "Close b/same.txt" })).toBeInTheDocument();
+  view.rerender(<PreviewTabsHarness scope="session-two" workspace="other-workspace" />);
+  expect(screen.queryByRole("tab")).not.toBeInTheDocument();
 });

@@ -322,14 +322,14 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	var result struct {
 		StopReason string `json:"stopReason"`
 		Usage      struct {
-			Input  int64 `json:"inputTokens"`
-			Output int64 `json:"outputTokens"`
+			Input  *int64 `json:"inputTokens"`
+			Output *int64 `json:"outputTokens"`
 		} `json:"usage"`
 		Meta struct {
 			Quota struct {
 				Tokens struct {
-					Input  int64 `json:"input_tokens"`
-					Output int64 `json:"output_tokens"`
+					Input  *int64 `json:"input_tokens"`
+					Output *int64 `json:"output_tokens"`
 				} `json:"token_count"`
 			} `json:"quota"`
 		} `json:"_meta"`
@@ -342,10 +342,22 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		status = "error"
 	}
 	input, output := result.Usage.Input, result.Usage.Output
-	if input == 0 && output == 0 {
-		input, output = result.Meta.Quota.Tokens.Input, result.Meta.Quota.Tokens.Output
+	quotaInput, quotaOutput := result.Meta.Quota.Tokens.Input, result.Meta.Quota.Tokens.Output
+	zeroUsage := input != nil && output != nil && *input == 0 && *output == 0
+	if (input == nil || zeroUsage) && quotaInput != nil {
+		input = quotaInput
 	}
-	payload := map[string]any{"status": status, "stats": map[string]any{"input_tokens": input, "output_tokens": output, "tool_calls": toolCalls}}
+	if (output == nil || zeroUsage) && quotaOutput != nil {
+		output = quotaOutput
+	}
+	stats := map[string]any{"tool_calls": toolCalls}
+	if input != nil && *input >= 0 {
+		stats["input_tokens"] = *input
+	}
+	if output != nil && *output >= 0 {
+		stats["output_tokens"] = *output
+	}
+	payload := map[string]any{"status": status, "stats": stats}
 	if status != "success" {
 		payload["error"] = map[string]string{"message": "Gemini stopped: " + result.StopReason}
 	}

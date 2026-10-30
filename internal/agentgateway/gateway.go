@@ -170,6 +170,9 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if thread.ServerID != serverID {
 			return errors.New("Agent event server mismatch")
 		}
+		if event.Kind == "codex.thread.tokenUsage.updated" {
+			event.Payload = codexUsagePayload(event.Payload)
+		}
 		event.Payload = security.RedactJSON(event.Payload)
 		if event.Kind != "user.message" {
 			cancelled, err := g.store.HasPendingTurnCancellation(ctx, event.StreamID)

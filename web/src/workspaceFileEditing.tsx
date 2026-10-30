@@ -12,6 +12,7 @@ if (typeof window !== "undefined") window.addEventListener("beforeunload", event
   if (drafts.size) { event.preventDefault(); event.returnValue = ""; }
 });
 export function clearFileDrafts() { drafts.clear(); }
+export function hasFileDraft(workspaceID: string, path: string) { return drafts.has(`${workspaceID}:${path}`); }
 const errorText = (error: unknown) => error instanceof Error ? error.message : "Request failed";
 
 // Keep the operation id until completion. A timeout/retry must not queue a second write.

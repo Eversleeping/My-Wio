@@ -1,3 +1,4 @@
+import { SessionUsage } from "./components/SessionUsage";
 import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
 import { CodexModelPicker } from "./components/CodexModelPicker";
 import { UserInputPrompt, QuestionForm, isUserInputRequest } from "./components/UserInputPrompt";
@@ -1229,7 +1230,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     <dl className="composer-status-list"><div><dt>{t("codex.statusCodexThreadID")}</dt><dd>{thread.codex_thread_id ? <code>{thread.codex_thread_id}</code> : t("codex.notBound")}</dd></div><div><dt>{t("codex.modelOverride")}</dt><dd>{String(statusSnapshot?.data?.model || model || t("codex.modelServerDefault"))}</dd></div><div><dt>{t("codex.reasoningEffort")}</dt><dd>{String(statusSnapshot?.data?.reasoning_effort || (reasoningEffort ? t(codexReasoningOptions.find(option => option.value === reasoningEffort)?.labelKey ?? "codex.reasoningDefault") : t("codex.reasoningDefault")))}</dd></div><div><dt>{t("codex.statusApprovalPolicy")}</dt><dd>{String(statusSnapshot?.data?.approval_policy || t(approvalMode === "on-request" ? "codex.approveOnRequest" : approvalMode === "untrusted" ? "codex.untrusted" : "codex.neverApprove"))}</dd></div><div><dt>{t("column.state")}</dt><dd><Status value={thread.status} /></dd></div>{statusSnapshot?.data?.account_type && <div><dt>{t("codex.statusAccount")}</dt><dd>{statusSnapshot.data.account_type}</dd></div>}{statusSnapshot?.data?.rate_limits_available === false && <div><dt>{t("codex.statusRateLimits")}</dt><dd>{t("codex.statusRateLimitsUnavailable")}</dd></div>}{(statusSnapshot?.data?.rate_limits ?? []).map(limit => <div key={limit.name}><dt>{limit.name}</dt><dd>{limit.used_percent == null ? limit.detail || "-" : `${limit.used_percent}%${limit.resets_at ? ` · ${t("codex.resetsAt", { time: formatDate(limit.resets_at) })}` : ""}`}</dd></div>)}</dl>
   </section> : null;
   return <>
-    <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} /></div></div>
+    <div className="session-header"><div><h2>{thread.title}</h2><span><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} /></div><SessionUsage provider="codex" threadID={thread.id} revision={`${realtime}:${globalStreamRevision}`} running={activeTurn} /></div>
     <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { const stream = event.currentTarget; autoFollowStreamRef.current = isNearCodexStreamBottom(stream); if (autoFollowStreamRef.current) setHasNewEventsBelow(false); if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); }}>
       {events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : <>
         {events.hasEarlier && <div className="history-loader"><button type="button" className="secondary-button small" disabled={events.loadingEarlier} onClick={() => void loadEarlierEvents()}>{events.loadingEarlier ? <LoaderCircle className="spin" size={15} /> : <ArrowUpFromLine size={15} />}{t(events.loadingEarlier ? "codex.loadingEarlier" : "codex.loadEarlier")}</button></div>}
@@ -1454,12 +1455,13 @@ function MarkdownContent({ text, workspaceRoot, onOpenFile }: { text: string; wo
   return <Suspense fallback={<div className="message-content">{text}</div>}><MarkdownContentRenderer text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} /></Suspense>;
 }
 
-type FilePreviewPaneProps = { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable?: boolean; workspaceRoot?: string; onOpenFile?: (selection: FilePreviewSelection) => void; onClose: () => void };
+type FilePreviewPaneProps = { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable?: boolean; workspaceRoot?: string; enabled?: boolean; closeRequest?: number; onOpenFile?: (selection: FilePreviewSelection) => void; onClose: () => void };
 export function FilePreviewPane(props: FilePreviewPaneProps) { return <EditableFilePreviewPane key={`${props.workspaceID}:${props.selection.path}`} {...props} />; }
-function EditableFilePreviewPane({ workspaceID, selection, realtime, writable = false, workspaceRoot = "", onOpenFile, onClose }: FilePreviewPaneProps) {
+function EditableFilePreviewPane({ workspaceID, selection, realtime, writable = false, workspaceRoot = "", enabled = true, closeRequest = 0, onOpenFile, onClose }: FilePreviewPaneProps) {
   const { t } = useI18n();
-  const preview = useWorkspacePreview<WorkspaceFilePreview>(workspaceID, selection.path, "file-preview", realtime, t("codex.previewTimedOut"));
+  const preview = useWorkspacePreview<WorkspaceFilePreview>(workspaceID, selection.path, "file-preview", realtime, t("codex.previewTimedOut"), enabled);
   const edit = useFileEditor(workspaceID, selection.path, preview.data, writable, preview.retry, onClose);
+  useEffect(() => { if (closeRequest) edit.close(); }, [closeRequest]);
   const [showSource, setShowSource] = useState(Boolean(selection.line));
   useEffect(() => { setShowSource(Boolean(selection.line)); }, [selection.line]);
   const data = preview.data;
@@ -1478,12 +1480,12 @@ function EditableFilePreviewPane({ workspaceID, selection, realtime, writable = 
   </section>{edit.dialog}</>;
 }
 
-export function FileDiffPane({ workspaceID, selection, realtime, writable, notify, onOpenFile, onClose }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable: boolean; notify: (text: string) => void; onOpenFile?: (selection: FilePreviewSelection) => void; onClose: () => void }) {
+export function FileDiffPane({ workspaceID, selection, realtime, writable, notify, onOpenFile, onClose, enabled = true }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable: boolean; notify: (text: string) => void; onOpenFile?: (selection: FilePreviewSelection) => void; onClose: () => void; enabled?: boolean }) {
   const { t } = useI18n();
   const [discarding, setDiscarding] = useState(false);
   const [discardConfirmation, setDiscardConfirmation] = useState(false);
   const previewBodyRef = useRef<HTMLDivElement>(null);
-  const preview = useWorkspacePreview<WorkspaceDiffPreview>(workspaceID, selection.path, "diff-preview", realtime, t("codex.diffTimedOut"));
+  const preview = useWorkspacePreview<WorkspaceDiffPreview>(workspaceID, selection.path, "diff-preview", realtime, t("codex.diffTimedOut"), enabled);
   const data = preview.data;
   const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
   const error = preview.error || data?.error || "";
@@ -1606,7 +1608,7 @@ const previewPollDelays = [750, 1_500, 3_000, 6_000];
 const previewPollTimeout = 20_000;
 type WorkspacePreviewSnapshot = { path: string; status: string; error: string };
 
-function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: string, path: string, kind: "file-preview" | "diff-preview", realtime: number, timeoutMessage: string) {
+function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: string, path: string, kind: "file-preview" | "diff-preview", realtime: number, timeoutMessage: string, enabled = true) {
   const key = `${workspaceID}:${kind}:${path}`;
   const endpoint = `/workspaces/${workspaceID}/${kind}?path=${encodeURIComponent(path)}`;
   const [requestNonce, setRequestNonce] = useState(0);
@@ -1617,6 +1619,7 @@ function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: st
   const retry = useCallback(() => setRequestNonce(value => value + 1), []);
 
   useEffect(() => {
+    if (!enabled) return;
     const controller = new AbortController();
     let active = true;
     let started = false;
@@ -1706,7 +1709,7 @@ function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: st
       document.removeEventListener("visibilitychange", visibilityChanged);
       if (confirmRef.current === confirmCurrent) confirmRef.current = null;
     };
-  }, [endpoint, key, kind, path, requestNonce, timeoutMessage, workspaceID]);
+  }, [enabled, endpoint, key, kind, path, requestNonce, timeoutMessage, workspaceID]);
 
   useEffect(() => {
     if (lastRealtimeRef.current === realtime) return;

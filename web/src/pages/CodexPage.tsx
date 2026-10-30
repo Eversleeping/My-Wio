@@ -13,8 +13,6 @@ import {
   Copy,
   EyeOff,
   ExternalLink,
-  FileCode2,
-  FileDiff,
   Folder,
   FolderOpen,
   FolderTree,
@@ -50,8 +48,6 @@ import {
   Dialog,
   ErrorBanner,
   Field,
-  FileDiffPane,
-  FilePreviewPane,
   groupThreadsByWorkspace,
   locationFor,
   mergeThreads,
@@ -67,6 +63,7 @@ import {
 } from "../App";
 import { ScheduledTaskDialog } from "./ScheduledTaskDialog";
 import { UserInputPrompt, isUserInputRequest } from "../components/UserInputPrompt";
+import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "../components/SessionPreviews";
 
 function pretty(value: unknown) {
   try {
@@ -115,8 +112,6 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
   const [worktreeError, setWorktreeError] = useState("");
   const [scheduledThread, setScheduledThread] = useState<Thread | null>(null);
   const [codexConfirmation, setCodexConfirmation] = useState<{ type: "archive-project" | "hide-project"; group: ThreadGroup } | { type: "delete-thread"; thread: Thread } | null>(null);
-  const [preview, setPreview] = useState<FilePreviewSelection | null>(null);
-  const [activePane, setActivePane] = useState<"conversation" | "preview">("conversation");
   const [mobileView, setMobileView] = useState<"sessions" | "files" | "conversation">(selectedThreadID ? "conversation" : "sessions");
   const listedActiveThreads = threads.data ?? [];
   const listedArchivedThreads = archivedThreads.data ?? [];
@@ -133,6 +128,8 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
   const visibleThreads = useMemo(() => activeThreads.filter(thread => !thread.project_hidden_at), [activeThreads]);
   const active = visibleThreads.find(thread => thread.id === selected) ?? visibleThreads[0];
   const activeWorkspace = workspaces.data?.find(workspace => workspace.id === active?.workspace_id);
+  const previews = useSessionPreviews(`${active?.id ?? ""}:${active?.workspace_id ?? ""}`, active?.workspace_id ?? "");
+  const preview = previews.preview;
   const threadGroups = useMemo(() => groupThreadsByWorkspace(visibleThreads, workspaces.data ?? []), [visibleThreads, workspaces.data]);
   const approvalKey = approvals.map(item => item.id).join(",");
   useEffect(() => {
@@ -148,10 +145,10 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
   }, [archivedThreads.data, deepLinkedThread.loading, onSelectThread, requestedThread, selected, selectedThreadID, showArchived, threads.data, visibleThreads]);
   useEffect(() => { setApprovalOpen(Boolean(approvalKey)); }, [approvalKey, approvalSignal]);
   useEffect(() => { if (pendingThread && listedActiveThreads.some(thread => thread.id === pendingThread.id)) setPendingThread(null); }, [listedActiveThreads, pendingThread]);
-  useEffect(() => { setPreview(null); setActivePane("conversation"); if (active) setMobileView("conversation"); }, [active?.workspace_id]);
+  useEffect(() => { if (active) setMobileView("conversation"); }, [active?.workspace_id]);
   const selectThread = (threadID: string) => { setSelected(threadID); setMobileView(threadID ? "conversation" : "sessions"); onSelectThread(threadID); };
   const toggleWorkspace = (workspaceID: string) => setCollapsedWorkspaces(current => { const next = new Set(current); if (next.has(workspaceID)) next.delete(workspaceID); else next.add(workspaceID); return next; });
-  const openFile = (selection: FilePreviewSelection) => { setPreview(selection); setActivePane("preview"); setMobileView("conversation"); };
+  const openFile = (selection: FilePreviewSelection) => { previews.open(selection); setMobileView("conversation"); };
   const copyValue = async (value: string, success: string) => { try { await copyText(value); notify(success); } catch (error) { notify(message(error)); } };
   const deepLink = (threadID: string) => `${window.location.origin}${locationFor("codex", threadID)}`;
   const beginRename = (kind: "project" | "thread", id: string, name: string, serverID?: string) => { setRenameTarget({ kind, id, name, serverID }); setRenameValue(name); };
@@ -322,7 +319,12 @@ export default function CodexPage({ realtime, streamRevisions, approvals, approv
         })}</div>}
       </section>;
     })}{activeThreadSource.loadError && <div className="snapshot-notice warning"><AlertTriangle size={15} />{activeThreadSource.loadError}</div>}{activeThreadSource.hasMore && <div className="history-loader"><button type="button" className="secondary-button small" disabled={activeThreadSource.loadingMore} onClick={() => void activeThreadSource.loadMore()}>{activeThreadSource.loadingMore ? <LoaderCircle className="spin" size={15} /> : <ArrowDownToLine size={15} />}{t(activeThreadSource.loadingMore ? "codex.loadingMoreSessions" : "codex.loadMoreSessions")}</button></div>}</>}</div></section><SidebarHeightDivider value={sidebarHeight} onChange={setSidebarHeight} /><WorkspaceFilesPanel workspaceID={active?.workspace_id ?? null} taskID={active?.id ?? ""} taskStatus={active?.status ?? ""} realtime={realtime} notify={notify} writable={activeWorkspace?.management_mode === "managed"} activePath={preview?.path ?? ""} activeMode={preview?.mode ?? "file"} onOpenFile={openFile} /></aside>
-    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>{preview && <div className="session-pane-tabs" role="tablist" aria-label={t("codex.sessionViews")}><button type="button" role="tab" aria-selected={activePane === "conversation"} className={activePane === "conversation" ? "active" : ""} onClick={() => setActivePane("conversation")}><MessageSquare size={15} />{t("codex.conversation")}</button><button type="button" role="tab" aria-selected={activePane === "preview"} className={activePane === "preview" ? "active" : ""} onClick={() => setActivePane("preview")}>{preview.mode === "diff" ? <FileDiff size={15} /> : <FileCode2 size={15} />}{t(preview.mode === "diff" ? "codex.fileReview" : "codex.filePreview")}</button></div>}<div className={`session-panes ${preview ? `has-preview ${activePane}-active` : ""}`}><section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={streamRevisions[active.id]?.revision ?? 0} globalStreamRevision={streamRevisions["*"]?.revision ?? 0} streamRevision={streamRevisions[active.id]?.revision ?? 0} invalidationSequence={streamRevisions[active.id]?.minimumSequence} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} onFork={eventID => continueInNewTask(active, eventID)} forkBusy={threadAction !== ""} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>{active && preview && (preview.mode === "diff" ? <FileDiffPane onOpenFile={openFile} workspaceID={active.workspace_id} selection={preview} realtime={realtime} writable={activeWorkspace?.management_mode === "managed"} notify={notify} onClose={() => { setPreview(null); setActivePane("conversation"); }} /> : <FilePreviewPane workspaceRoot={active.path} onOpenFile={openFile} writable={activeWorkspace?.management_mode === "managed"} workspaceID={active.workspace_id} selection={preview} realtime={realtime} onClose={() => { setPreview(null); setActivePane("conversation"); }} />)}</div></section>
+    <section className={`session-area ${mobileView === "conversation" ? "mobile-active" : "mobile-hidden"}`}>
+      <SessionPreviewTabs previews={previews} />
+      <SessionPreviewPanels previews={previews} workspaceID={active?.workspace_id ?? ""} workspaceRoot={active?.path ?? ""} writable={activeWorkspace?.management_mode === "managed"} realtime={realtime} notify={notify} onOpenFile={openFile}>
+        <section className="session-panel">{activeThreadSource.error && !activeThreadSource.data ? <ErrorState error={activeThreadSource.error} reload={activeThreadSource.reload} /> : active ? <SessionView key={active.id} thread={active} approvals={approvals.filter(item => item.thread_id === active.id)} realtime={streamRevisions[active.id]?.revision ?? 0} globalStreamRevision={streamRevisions["*"]?.revision ?? 0} streamRevision={streamRevisions[active.id]?.revision ?? 0} invalidationSequence={streamRevisions[active.id]?.minimumSequence} reloadApprovals={reloadApprovals} notify={notify} onOpenFile={openFile} onNewTask={() => setCreateOpen(true)} onFork={eventID => continueInNewTask(active, eventID)} forkBusy={threadAction !== ""} /> : <Empty icon={<SquareTerminal size={28} />} text={t("codex.selectWorkspace")} />}</section>
+      </SessionPreviewPanels>
+    </section>
     <button className={`approval-drawer-button ${approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: approvals.length })}</button>
     <Dialog open={createOpen} title={t("codex.newSession")} onClose={() => setCreateOpen(false)}><CreateThread workspaces={workspaces.data ?? []} onCreated={thread => { setPendingThread(thread); selectThread(thread.id); setCreateOpen(false); threads.reload(); notify(t("codex.sessionCreated")); }} /></Dialog>
     <Dialog open={renameTarget !== null} title={t(renameTarget?.kind === "project" ? "codex.renameProject" : "codex.renameThread")} onClose={() => { if (!renameBusy) setRenameTarget(null); }}><form onSubmit={submitRename}><Field label={t(renameTarget?.kind === "project" ? "project.name" : "codex.threadName")}><input autoFocus maxLength={180} value={renameValue} onChange={event => setRenameValue(event.target.value)} required /></Field><DialogActions><button type="button" className="secondary-button" disabled={renameBusy} onClick={() => setRenameTarget(null)}>{t("common.cancel")}</button><button className="primary-button" disabled={renameBusy || !renameValue.trim()}>{renameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions></form></Dialog>
