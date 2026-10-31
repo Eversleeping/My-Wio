@@ -1,4 +1,5 @@
 import { SessionUsage } from "./components/SessionUsage";
+import { ThemeSwitch } from "./theme";
 import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
 import { CodexModelPicker } from "./components/CodexModelPicker";
 import { UserInputPrompt, QuestionForm, isUserInputRequest } from "./components/UserInputPrompt";
@@ -406,7 +407,7 @@ export default function App() {
             return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><Icon size={18} /><span>{t(item.labelKey)}</span>{item.id === "codex" && (approvals.data?.length ?? 0) > 0 && <b className="nav-count" aria-live="polite">{approvals.data?.length}</b>}</button>;
           })}
         </nav>
-        <div className="sidebar-language"><LanguageSwitch /></div>
+        <div className="sidebar-language"><ThemeSwitch /><LanguageSwitch /></div>
         <div className="sidebar-user"><UserRound size={17} /><span>{session?.username}</span><button className="icon-button" onClick={logout} title={t("auth.signOut")}><LogOut size={17} /></button></div>
       </aside>
       {mobileNav && <button className="nav-scrim" onClick={() => setMobileNav(false)} aria-label={t("nav.close")} />}
@@ -414,7 +415,7 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} title={t("nav.open")}><Menu size={20} /></button>
           <div><p className="eyebrow">{t("app.controlPlane")}</p><h1>{t(navigation.find(item => item.id === view)?.labelKey ?? "nav.overview")}</h1></div>
-          <div className="topbar-actions"><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`} role="status" aria-live="polite">{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
+          <div className="topbar-actions"><ThemeSwitch /><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`} role="status" aria-live="polite">{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
         </header>
         <div className="page-content">{page}</div>
       </main>

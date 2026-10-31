@@ -3,6 +3,7 @@ import { AlertTriangle, Check, ChevronRight, Copy, Eye, EyeOff, KeyRound, Loader
 import { QRCodeSVG } from "qrcode.react";
 import { post } from "./api";
 import { useI18n } from "./i18n";
+import { ThemeSwitch } from "./theme";
 import type { Session } from "./types";
 
 export type AuthMode = "password" | "totp" | "password_totp";
@@ -138,7 +139,7 @@ export function LoginScreen({ authMode, onLogin }: { authMode: AuthMode; onLogin
 
 function AuthBrand() {
   const { t } = useI18n();
-  return <div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong><LanguageSwitch /></div>;
+  return <div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong><ThemeSwitch /><LanguageSwitch /></div>;
 }
 
 function LanguageSwitch() {

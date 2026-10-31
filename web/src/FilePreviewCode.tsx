@@ -1,8 +1,10 @@
 import { Highlight, themes } from "prism-react-renderer";
 import { VirtualizedList } from "./components/VirtualizedList";
+import { useTheme } from "./theme";
 
 export default function FilePreviewCode({ content, language, targetLine }: { content: string; language: string; targetLine?: number }) {
-  return <Highlight theme={themes.github} code={content} language={language}>{({ className, style, tokens, getLineProps, getTokenProps }) => <VirtualizedList
+  const { theme } = useTheme();
+  return <Highlight theme={theme === "light" ? themes.github : themes.vsDark} code={content} language={language}>{({ className, style, tokens, getLineProps, getTokenProps }) => <VirtualizedList
     className={`file-code ${className}`}
     style={{ ...style, height: "100%" }}
     items={tokens}

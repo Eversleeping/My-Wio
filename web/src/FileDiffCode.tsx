@@ -1,12 +1,14 @@
 import { useRef, type RefObject } from "react";
 import { Highlight, themes } from "prism-react-renderer";
 import { VirtualizedItems } from "./components/VirtualizedList";
+import { useTheme } from "./theme";
 
 type DiffRow = { kind: "context" | "add" | "delete"; oldLine?: number; newLine?: number; text: string };
 type DiffSection = { collapsed: number; rows: DiffRow[] };
 type DiffRenderItem = { kind: "collapsed"; count: number; key: string } | { kind: "row"; row: DiffRow; tokenIndex: number; key: string };
 
 export default function FileDiffCode({ content, language, unchangedLabel, scrollRef }: { content: string; language: string; unchangedLabel: (count: number) => string; scrollRef?: RefObject<HTMLElement | null> }) {
+  const { theme } = useTheme();
   const internalRef = useRef<HTMLDivElement>(null);
   const viewportRef = scrollRef ?? internalRef;
   const sections = parseUnifiedDiff(content);
@@ -21,7 +23,7 @@ export default function FileDiffCode({ content, language, unchangedLabel, scroll
     });
   });
   return <div ref={internalRef} className="file-diff" role="table" style={scrollRef ? undefined : { overflowY: "auto", height: "100%" }}>
-    <Highlight theme={themes.github} code={rows.map(row => row.text).join("\n")} language={language}>{({ tokens, getLineProps, getTokenProps }) => <VirtualizedItems
+    <Highlight theme={theme === "light" ? themes.github : themes.vsDark} code={rows.map(row => row.text).join("\n")} language={language}>{({ tokens, getLineProps, getTokenProps }) => <VirtualizedItems
       items={renderItems}
       scrollRef={viewportRef}
       getKey={item => item.key}

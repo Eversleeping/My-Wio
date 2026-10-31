@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import App from "./App";
 import { I18nProvider } from "./i18n";
+import { ThemeProvider } from "./theme";
 import "./styles.css";
 
 const frontendVersionValue = document.querySelector<HTMLMetaElement>('meta[name="wio-frontend-version"]')?.content ?? "";
@@ -53,6 +54,10 @@ void checkFrontendVersion();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <I18nProvider><App /></I18nProvider>
+    <I18nProvider>
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    </I18nProvider>
   </React.StrictMode>
 );
