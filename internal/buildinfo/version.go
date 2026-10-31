@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.2.85"
+var Version = "0.2.86"
 
 const MinimumGeminiGoalVersion = "0.2.84"
 

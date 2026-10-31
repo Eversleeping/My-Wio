@@ -102,6 +102,12 @@ Wio 在同一个 Gemini ACP 会话中检查每轮结束状态；模型尚未报�
 
 - [Gemini CLI API key 与基础地址实现（v0.65.0）](https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/core/contentGenerator.ts)
 
+## 自定义网关模型与长任务
+
+Gemini CLI 的循环检测会在约 30 轮后调用内部辅助模型，默认模型可能不同于页面所选模型。如果网关未提供 `gemini-3-flash-preview`，会出现正常工具调用结束后持续收到 503、页面长时间显示运行中的情况。Wio 为配置了自定义 API 地址且选择了明确模型的任务安装原生配置别名，通过独立进程环境变量将 `loop-detection` 和 `loop-detection-double-check` 指向该任务的模型，保留循环检测及其原有生成参数。已有同名别名保持不变；其他模型覆盖规则和管理员配置仍按 CLI 的优先级处理。
+
+别名保存在 Agent 账户设置中，保留现有配置和 JSONC 注释，不写入项目。非 Wio 启动或自动模型选择未传入覆盖变量时，别名回退到 CLI 原有默认模型。已运行的 CLI 不会热加载此修复：需要结束卡住的任务，更新 Agent，再在原会话继续。其他内部辅助模型（例如压缩、搜索）仍遵循原有 CLI 配置。
+
 ## 思考等级
 
 - 模型旁显示思考等级。`-minimal/-low/-medium/-high` 等上游模型名称后缀标为“模型预设”，例如 `gemini-3.8-flash-high` 显示“高（模型预设）”；此标签源于模型名称，不冒充响应返回的实际等级。固定预设不提供冲突等级，不虚构未从上游获取到的其他模型 ID。
