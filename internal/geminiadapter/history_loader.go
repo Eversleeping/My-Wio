@@ -2,6 +2,7 @@ package geminiadapter
 
 import (
 	_ "embed"
+	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,11 +23,11 @@ func acpHistoryEnvironment(environment []string) ([]string, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loaderPath := filepath.ToSlash(path)
-	if !strings.HasPrefix(loaderPath, "/") {
-		loaderPath = "/" + loaderPath
+	bootstrapPath := filepath.ToSlash(filepath.Join(directory, "bootstrap.mjs"))
+	if !strings.HasPrefix(bootstrapPath, "/") {
+		bootstrapPath = "/" + bootstrapPath
 	}
-	loaderURL := (&url.URL{Scheme: "file", Path: loaderPath}).String()
+	bootstrapURL := (&url.URL{Scheme: "file", Path: bootstrapPath}).String()
 	result := make([]string, 0, len(environment)+1)
 	options := ""
 	for _, entry := range environment {
@@ -36,8 +37,16 @@ func acpHistoryEnvironment(environment []string) ([]string, func(), error) {
 			result = append(result, entry)
 		}
 	}
-	// Node 20+ supports loader hooks; URL encoding also handles temporary
-	// directories containing spaces on Windows. Preserve the account's flags.
-	result = append(result, "NODE_OPTIONS="+options+" --experimental-loader="+loaderURL)
+	// Register from the main process, restoring NODE_OPTIONS before any tools
+	// or MCP children start. In particular, long-lived project processes must
+	// never inherit a reference to a loader we remove at the end of this turn.
+	// Node 20.6+ supports register; managed Wio runtimes use Node 22.
+	originalOptions, _ := json.Marshal(options)
+	bootstrap := "import { register } from 'node:module';\nprocess.env.NODE_OPTIONS = " + string(originalOptions) + ";\nregister('./loader.mjs', import.meta.url);\n"
+	if err := os.WriteFile(filepath.Join(directory, "bootstrap.mjs"), []byte(bootstrap), 0600); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	result = append(result, "NODE_OPTIONS="+options+" --import="+bootstrapURL)
 	return result, cleanup, nil
 }

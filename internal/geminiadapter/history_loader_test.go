@@ -36,6 +36,7 @@ async function loadSession() {
   return response;
 }
 const response = await loadSession();
+if (process.env.NODE_OPTIONS !== '--no-warnings') process.exit(3);
 if (!response._meta?.wioHistoryReplayed || events.join(',') !== 'old1,old2,old3') process.exit(2);
 console.log('REPLAY_FINISHED');
 `)
