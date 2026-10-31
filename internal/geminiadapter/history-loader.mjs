@@ -5,6 +5,9 @@
 // prompt rather than silently mixing history with new output.
 export async function load(url, context, nextLoad) {
   const result = await nextLoad(url, context);
+  // NODE_OPTIONS also reaches Node-based tools and MCP servers. Their source
+  // must remain untouched even if it happens to contain the same expression.
+  if (!url.startsWith('file:') || !decodeURIComponent(new URL(url).pathname).includes('/@google/gemini-cli/')) return result;
   if (result.format !== 'module' || result.source == null) return result;
   const source = typeof result.source === 'string'
     ? result.source : Buffer.from(result.source).toString('utf8');

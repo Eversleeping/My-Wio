@@ -16,7 +16,7 @@ func TestHistoryLoaderWaitsForReplayAndPreservesInstalledSource(t *testing.T) {
 		t.Skip("Node.js not installed")
 	}
 	// Exercise the actual Node loader API, including a path with spaces.
-	directory := filepath.Join(t.TempDir(), "CLI with spaces")
+	directory := filepath.Join(t.TempDir(), "CLI with spaces", "node_modules", "@google", "gemini-cli")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -57,5 +57,15 @@ console.log('REPLAY_FINISHED');
 	}
 	if current, err := os.ReadFile(path); err != nil || string(current) != string(source) {
 		t.Fatal("loader changed the installed source")
+	}
+	userPath := filepath.Join(t.TempDir(), "user-tool.mjs")
+	userSource := strings.Replace(string(source), "if (!response._meta?.wioHistoryReplayed || events.join(',') !== 'old1,old2,old3') process.exit(2);", "if (response._meta !== undefined || events.length !== 0) process.exit(2);", 1)
+	if err := os.WriteFile(userPath, []byte(userSource), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.CommandContext(ctx, node, userPath)
+	cmd.Env = environment
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("loader modified an unrelated Node tool: %v %s", err, output)
 	}
 }
