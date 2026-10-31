@@ -61,6 +61,7 @@ console.log('REPLAY_FINISHED');
 	}
 	userPath := filepath.Join(t.TempDir(), "user-tool.mjs")
 	userSource := strings.Replace(string(source), "if (!response._meta?.wioHistoryReplayed || events.join(',') !== 'old1,old2,old3') process.exit(2);", "if (response._meta !== undefined || events.length !== 0) process.exit(2);", 1)
+	userSource = strings.Replace(userSource, "if (process.env.NODE_OPTIONS !== '--no-warnings') process.exit(3);", "", 1)
 	if err := os.WriteFile(userPath, []byte(userSource), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -68,5 +69,18 @@ console.log('REPLAY_FINISHED');
 	cmd.Env = environment
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("loader modified an unrelated Node tool: %v %s", err, output)
+	}
+	// Match the real CLI wrapper: the actual ACP module loads only in a
+	// relaunched child. It still needs the hook, then must clear its own flags.
+	wrapper := filepath.Join(t.TempDir(), "wrapper.mjs")
+	if err := os.WriteFile(wrapper, []byte(`import { spawnSync } from 'node:child_process';
+const child = spawnSync(process.execPath, [process.argv[2]], { stdio: 'inherit' });
+process.exit(child.status ?? 1);`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.CommandContext(ctx, node, wrapper, path)
+	cmd.Env = environment
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("loader did not survive CLI relaunch: %v %s", err, output)
 	}
 }

@@ -37,12 +37,12 @@ func acpHistoryEnvironment(environment []string) ([]string, func(), error) {
 			result = append(result, entry)
 		}
 	}
-	// Register from the main process, restoring NODE_OPTIONS before any tools
-	// or MCP children start. In particular, long-lived project processes must
-	// never inherit a reference to a loader we remove at the end of this turn.
+	// The CLI relaunches itself, so restore NODE_OPTIONS in the adapted ACP
+	// module, before tools or MCP children start. Long-lived project processes
+	// must never inherit a loader we remove at the end of this turn.
 	// Node 20.6+ supports register; managed Wio runtimes use Node 22.
 	originalOptions, _ := json.Marshal(options)
-	bootstrap := "import { register } from 'node:module';\nprocess.env.NODE_OPTIONS = " + string(originalOptions) + ";\nregister('./loader.mjs', import.meta.url);\n"
+	bootstrap := "import { register } from 'node:module';\nregister('./loader.mjs', { parentURL: import.meta.url, data: { originalNodeOptions: " + string(originalOptions) + " } });\n"
 	if err := os.WriteFile(filepath.Join(directory, "bootstrap.mjs"), []byte(bootstrap), 0600); err != nil {
 		cleanup()
 		return nil, nil, err

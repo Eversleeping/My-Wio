@@ -3,6 +3,11 @@
 // process's module source: installed CLI files and native history stay intact.
 // The private acknowledgement makes unfamiliar CLI versions fail before a
 // prompt rather than silently mixing history with new output.
+let originalNodeOptions;
+export function initialize(data) {
+  originalNodeOptions = data?.originalNodeOptions;
+}
+
 export async function load(url, context, nextLoad) {
   const result = await nextLoad(url, context);
   // NODE_OPTIONS also reaches Node-based tools and MCP servers. Their source
@@ -16,6 +21,15 @@ export async function load(url, context, nextLoad) {
   if (source.indexOf(target) !== source.lastIndexOf(target)) {
     throw new Error('Ambiguous Gemini ACP history implementation');
   }
-  return { ...result, source: source.replace(target,
-    'await session.streamHistory(messages).then(() => { response._meta = { ...response._meta, wioHistoryReplayed: true }; }).catch(') };
+  let patched = source.replace(target,
+    'await session.streamHistory(messages).then(() => { response._meta = { ...response._meta, wioHistoryReplayed: true }; }).catch(');
+  // The CLI entry point relaunches Node before importing the ACP module.
+  // Keep our bootstrap through that relaunch, then restore the original flags
+  // in the actual CLI process before it starts tools or MCP children.
+  if (typeof originalNodeOptions === 'string') {
+    const restore = `process.env.NODE_OPTIONS = ${JSON.stringify(originalNodeOptions)};\n`;
+    const shebangEnd = patched.startsWith('#!') ? patched.indexOf('\n') + 1 : 0;
+    patched = patched.slice(0, shebangEnd) + restore + patched.slice(shebangEnd);
+  }
+  return { ...result, source: patched };
 }
