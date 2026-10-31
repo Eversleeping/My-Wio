@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { I18nProvider } from "../i18n";
-import { formatUsageRate, SessionUsage } from "./SessionUsage";
+import { formatCompactUsageNumber, formatUsageRate, SessionUsage } from "./SessionUsage";
 
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
@@ -12,6 +12,8 @@ test.each(["gemini", "codex"] as const)("shows %s session totals and an unavaila
   render(<I18nProvider><SessionUsage provider={provider} threadID="thread-1" revision={0} running={false} /></I18nProvider>);
   expect(await screen.findByText("Input 1,234,567 tokens")).toBeInTheDocument();
   expect(screen.getByText("Output 8,910 tokens")).toBeInTheDocument();
+  expect(screen.getByText("In 1.23M")).toHaveAttribute("title", "Input 1,234,567 tokens");
+  expect(screen.getByText("Out 8.91K")).toHaveAttribute("title", "Output 8,910 tokens");
   expect(screen.getByText("Average output — tokens/sec")).toBeInTheDocument();
   expect(screen.getByText("Incomplete records")).toBeInTheDocument();
   expect(fetcher).toHaveBeenCalledWith(`/api/${provider === "gemini" ? "gemini/" : ""}threads/thread-1/usage`, expect.anything());
@@ -27,4 +29,19 @@ test.each(["gemini", "codex"] as const)("shows the %s average output rate per se
 test("keeps small positive output rates visible", () => {
   expect(formatUsageRate(0.00123, "en")).toBe("0.0012");
   expect(formatUsageRate(0, "en")).toBe("0");
+});
+
+test.each([
+  [0, "0"],
+  [999, "999"],
+  [1000, "1.00K"],
+  [96730, "96.73K"],
+  [999995, "1.00M"],
+  [10073053, "10.07M"],
+  [1234567890, "1.23B"],
+  [null, "—"],
+  [-1, "—"],
+  [Infinity, "—"]
+])("formats %s session tokens as %s on small screens", (value, expected) => {
+  expect(formatCompactUsageNumber(value, "en")).toBe(expected);
 });

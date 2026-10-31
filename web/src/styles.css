@@ -597,6 +597,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .session-header span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
 .session-header i { width: 3px; height: 3px; background: #aab0b5; border-radius: 50%; }
 .session-header .session-usage { display: flex; flex: 0 0 100%; flex-wrap: wrap; align-items: center; gap: 3px 10px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.session-header .session-usage .session-usage-compact { display: none; }
 .session-usage strong { color: #536067; font-weight: 600; }
 .session-usage .session-usage-partial { color: #9a6322; }
 .session-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; }
@@ -846,6 +847,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 .composer-bar select, .composer-bar input { width: auto; min-height: 32px; padding: 5px 8px; font-size: 11px; }
 .composer-bar > div > select { min-width: 118px; max-width: 180px; flex: 1 1 128px; }
 .composer-bar input { max-width: 150px; }
+.composer-action-compact { display: none; }
 .codex-model-picker { min-width: 0; display: flex; flex-wrap: wrap; gap: 7px; }
 .codex-model-picker select { flex: 1; min-width: 190px; }
 .codex-model-picker small { flex-basis: 100%; overflow-wrap: anywhere; }
@@ -939,6 +941,30 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .gemini-options.with-actions > .field:not(:first-child) { grid-column: 1 / -1; }
   .gemini-options-actions { grid-column: 1; grid-row: auto; justify-content: flex-end; }
   .gemini-session .session-header { gap: 6px; padding: 8px; }
+  .session-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; padding: 8px; }
+  .session-header > div.session-heading { display: contents; }
+  .session-header .session-heading h2 { grid-column: 1 / -1; grid-row: 1; }
+  .session-header .session-heading .session-meta { min-width: 0; display: block; grid-column: 1; grid-row: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-meta svg, .session-meta i { display: inline-block; vertical-align: middle; }
+  .session-meta i { margin: 0 5px; }
+  .session-header .session-actions { grid-column: 2; grid-row: 2; gap: 2px; }
+  .session-header .session-usage { min-width: 0; max-width: 100%; grid-column: 1 / -1; grid-row: 3; flex-wrap: nowrap; gap: 6px; overflow-x: auto; white-space: nowrap; }
+  .session-header .session-usage > * { flex: 0 0 auto; }
+  .session-header .session-usage .session-usage-full { display: none; }
+  .session-header .session-usage .session-usage-compact { display: inline-flex; }
+  .composer-action .composer-action-full { display: none; }
+  .composer-action .composer-action-compact { display: inline; }
+  .composer-action > svg:not(.spin) { display: none; }
+  .gemini-composer .gemini-options.with-actions { grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1fr) auto; gap: 4px; align-items: start; }
+  .gemini-composer .gemini-options.with-actions > .field:not(:first-child) { grid-column: auto; }
+  .gemini-composer .gemini-options .field { gap: 4px; margin: 0; }
+  .gemini-composer .gemini-options .field > span { display: none; }
+  .gemini-composer .gemini-options select, .gemini-composer .gemini-options input { min-width: 0; min-height: 38px; padding: 5px 3px; font-size: 11px; text-overflow: ellipsis; }
+  .gemini-composer .gemini-model-input { min-width: 0; gap: 1px; }
+  .gemini-composer .gemini-model-input .icon-button { width: 28px; height: 38px; flex-basis: 28px; }
+  .gemini-composer .gemini-options-actions { grid-column: 4; grid-row: 1; align-self: start; gap: 2px; margin: 0; }
+  .gemini-composer .gemini-options-actions .icon-button { width: 30px; height: 38px; flex-basis: 30px; }
+  .gemini-composer .composer-action { min-width: 46px; min-height: 38px; padding: 0 6px; font-size: 11px; }
   .sidebar { transform: translateX(-100%); transition: transform .2s ease; }
   .sidebar.open { transform: translateX(0); }
   .nav-scrim { position: fixed; inset: 0 0 0 232px; z-index: 35; display: block; background: rgba(17, 20, 23, .45); border: 0; }
@@ -1029,15 +1055,15 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .goal-progress-row { align-items: flex-start; flex-wrap: wrap; }
   .goal-progress-row > span { flex-basis: calc(100% - 34px); }
   .goal-progress-row > .status-tag { margin-left: 25px; }
-  .composer-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+  .composer-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px; }
   .slash-command-entry > button { grid-template-columns: 22px minmax(0, 1fr) 18px; }
   .slash-command-items em { display: none; }
   .composer-status-list { grid-template-columns: minmax(0, 1fr); }
   .composer-mode-pill { grid-column: 1 / -1; justify-self: start; }
-  .composer-bar > div { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; overflow: visible; padding: 0; }
-  .composer-bar > div > select, .composer-bar .codex-model-picker select, .composer-bar .codex-model-picker input { width: 100%; min-width: 0; max-width: none; }
+  .composer-bar > div { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; overflow: visible; padding: 0; }
+  .composer-bar > div > select, .composer-bar .codex-model-picker select, .composer-bar .codex-model-picker input { width: 100%; min-width: 0; max-width: none; min-height: 38px; padding: 5px 3px; text-overflow: ellipsis; }
   .composer-bar .codex-model-picker { min-width: 0; width: 100%; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .composer-bar > .composer-action { width: auto; min-width: 76px; height: 38px; padding: 0 10px; overflow: visible; gap: 6px; }
+  .composer-bar > .composer-action { width: auto; min-width: 46px; height: 38px; padding: 0 6px; overflow: visible; gap: 4px; font-size: 11px; }
   .composer-bar > .primary-button svg { color: #fff; }
   .approval-drawer-button { display: none !important; }
   .dialog-backdrop { padding: 8px; }
@@ -1048,8 +1074,6 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 }
 
 @media (max-width: 480px) {
-  .composer-bar > div { grid-column: 1 / -1; }
-  .composer-bar > .composer-action { grid-column: 2; }
   .stat-grid { grid-template-columns: minmax(0, 1fr); }
   .stat { min-height: 82px; }
   .auth-layout { padding: 12px; }
@@ -1074,7 +1098,7 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .recovery-codes { grid-template-columns: minmax(0, 1fr); }
   .topbar-actions .approval-pill { width: 34px; padding: 0; justify-content: center; color: transparent; gap: 0; }
   .topbar-actions .approval-pill svg { color: #7e330f; }
-  .composer-bar .primary-button { width: auto; min-width: 76px; padding: 0 10px; color: #fff; gap: 6px; }
+  .composer-bar .primary-button { color: #fff; }
   .composer-bar .primary-button svg { color: #fff; }
   .git-command-bar { grid-template-columns: minmax(0, 1fr); }
   .git-command-bar > strong { grid-column: auto; }
