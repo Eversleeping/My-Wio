@@ -1945,6 +1945,29 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 [data-theme="light"] .markdown-content h4 {
   color: #0f172a;
 }
+[data-theme="light"] .markdown-content code {
+  color: #075985;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+[data-theme="light"] .markdown-content pre {
+  color: #1e293b;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+[data-theme="light"] .markdown-content pre code {
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+[data-theme="light"] .markdown-content blockquote {
+  color: #475569;
+  background: #f1f5f9;
+  border-left-color: #0284c7;
+}
+[data-theme="light"] .markdown-content a { color: #0369a1; }
+[data-theme="light"] .markdown-content a.unavailable-link { color: #64748b; }
+[data-theme="light"] .markdown-image { background: #f1f5f9; }
 [data-theme="light"] .tool-event,
 [data-theme="light"] .raw-event {
   background: #f8fafc;
@@ -1953,6 +1976,31 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 [data-theme="light"] .tool-event summary,
 [data-theme="light"] .raw-event summary {
   color: #334155;
+}
+[data-theme="light"] .tool-event pre,
+[data-theme="light"] .raw-event pre,
+[data-theme="light"] .approval-prompt pre {
+  color: #1e293b;
+  background: #f1f5f9;
+}
+[data-theme="light"] .question-heading > strong,
+[data-theme="light"] .user-input-prompt .question-text,
+[data-theme="light"] .user-input-option strong { color: #0f172a; }
+[data-theme="light"] .user-input-prompt .user-input-option {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+[data-theme="light"] .user-input-prompt fieldset:not(:disabled) .user-input-option:hover {
+  background: #eaf4fa;
+  border-color: #7dd3fc;
+}
+[data-theme="light"] .user-input-prompt .user-input-option.selected {
+  background: #e0f2fe;
+  border-color: #0284c7;
+}
+[data-theme="light"] .user-input-prompt.answered .question-custom-answer input {
+  color: #475569;
+  background: #f1f5f9;
 }
 
 [data-theme="light"] .composer {
@@ -2134,10 +2182,14 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
 }
-[data-theme="light"] .thread-project-toggle {
+[data-theme="light"] .thread-project { border-bottom-color: #e2e8f0; }
+[data-theme="light"] .thread-project-heading {
   background: #f8fafc;
+  border-bottom-color: #e2e8f0;
+}
+[data-theme="light"] .thread-project-toggle {
+  background: transparent;
   color: #334155;
-  border-bottom: 1px solid #e2e8f0;
 }
 [data-theme="light"] .thread-project-toggle:hover {
   background: #f1f5f9;
