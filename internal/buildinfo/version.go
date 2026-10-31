@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.2.84"
+var Version = "0.2.85"
 
 const MinimumGeminiGoalVersion = "0.2.84"
 
@@ -143,7 +143,8 @@ func SupportsGeminiCredentials(version string) bool {
 	return atLeast(version, MinimumGeminiCredentialsVersion)
 }
 
-const MinimumGeminiRewriteVersion = "0.2.66"
+// ACP rewrites before 0.2.85 can load the original native conversation.
+const MinimumGeminiRewriteVersion = "0.2.85"
 
 func SupportsGeminiRewrite(version string) bool { return atLeast(version, MinimumGeminiRewriteVersion) }
 

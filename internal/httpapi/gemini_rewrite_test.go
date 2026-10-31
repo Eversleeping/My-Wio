@@ -14,7 +14,7 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "gemini-rewrite-api")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.65"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/rewrite-api", Name: "rewrite-api"}}}); err != nil {
@@ -27,10 +27,10 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	}
 	api := resourceTestAPI(db)
 	body := map[string]string{"prompt": "replacement"}
-	if response := rewriteResourceRequest(t, thread.ID, "missing", body, api.startGeminiTurn); response.Code != 409 || !strings.Contains(response.Body.String(), "0.2.66") {
+	if response := rewriteResourceRequest(t, thread.ID, "missing", body, api.startGeminiTurn); response.Code != 409 || !strings.Contains(response.Body.String(), buildinfo.MinimumGeminiRewriteVersion) {
 		t.Fatalf("old Agent accepted rewrite: %d %s", response.Code, response.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.66"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiRewriteVersion}); err != nil {
 		t.Fatal(err)
 	}
 	if response := rewriteResourceRequest(t, thread.ID, "missing", body, api.startGeminiTurn); response.Code != 409 {
@@ -58,12 +58,6 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 		t.Fatal("invalid mode accepted")
 	}
 	body["approval_mode"] = "yolo"
-	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, api.startGeminiTurn); response.Code != 409 || !strings.Contains(response.Body.String(), buildinfo.MinimumGeminiYoloVersion) {
-		t.Fatalf("old Agent accepted yolo rewrite: %d %s", response.Code, response.Body.String())
-	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiYoloVersion}); err != nil {
-		t.Fatal(err)
-	}
 	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, api.startGeminiTurn); response.Code != 202 {
 		t.Fatalf("rewrite: %d %s", response.Code, response.Body.String())
 	}

@@ -28,6 +28,12 @@ func (a *Adapter) Fork(ctx context.Context, opID string, command protocol.Gemini
 	a.active[opID] = cancel
 	a.mu.Unlock()
 	defer func() { cancel(); a.mu.Lock(); delete(a.active, opID); a.mu.Unlock() }()
+	return forkNativeHistory(forkCtx, command, environment)
+}
+
+// The caller supplies the same effective environment used to start the CLI,
+// so a turn-specific GEMINI_CLI_HOME selects the correct native history.
+func forkNativeHistory(ctx context.Context, command protocol.GeminiForkCommand, environment []string) (protocol.GeminiForkResult, error) {
 	path, chats, err := prepareNativeHistory(protocol.GeminiTurnCommand{SessionID: command.SessionID, Workspace: command.SourceWorkspace, Rewrite: command.Before}, environment)
 	if err != nil {
 		return protocol.GeminiForkResult{}, err
@@ -100,7 +106,7 @@ func (a *Adapter) Fork(ctx context.Context, opID string, command protocol.Gemini
 		err = f.Sync()
 	}
 	if err == nil {
-		err = forkCtx.Err()
+		err = ctx.Err()
 	}
 	if err != nil {
 		_ = os.Remove(dest)

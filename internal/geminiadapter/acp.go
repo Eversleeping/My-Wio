@@ -144,10 +144,12 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	replay := true
 	resuming := command.SessionID != ""
 	sessionID := command.SessionID
+	var searchHistory *nativeSearchHistory
 	var planApproved atomic.Bool
 	var availableCommands []acpCommand
 	var sequence int
 	toolCalls := 0
+	var lastModelActivity time.Time
 	// Requests are sequential; server-initiated requests are answered concurrently
 	// so waiting for a user never blocks the RPC reader or cancellation.
 	call := func(method string, params any) (json.RawMessage, error) {
@@ -192,6 +194,13 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 					u := p.Update
 					var err error
 					switch u.Type {
+					case "agent_thought_chunk", "usage_update":
+						// Record activity without exposing the model's private thought
+						// content or flooding the event stream during a long response.
+						if now := time.Now(); now.Sub(lastModelActivity) >= 15*time.Second {
+							lastModelActivity = now
+							err = emit("activity", map[string]any{"phase": "model"})
+						}
 					case "agent_message_chunk":
 						var c struct {
 							Type string `json:"type"`
@@ -220,6 +229,12 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 						}
 					case "tool_call_update":
 						if u.Status == "completed" || u.Status == "failed" {
+							content := strings.TrimSpace(string(u.Content))
+							if u.Status == "completed" && (content == "" || content == "[]" || content == "null") {
+								if output, ok := searchHistory.output(ctx, u.ToolCallID); ok {
+									u.Content, _ = json.Marshal([]any{map[string]any{"type": "content", "content": map[string]string{"type": "text", "text": output}}})
+								}
+							}
 							err = emit("tool_result", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "status": u.Status, "output": json.RawMessage(u.Content)})
 						}
 					}
@@ -320,11 +335,12 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		return err
 	}
 	if command.Rewrite != nil {
-		fork, err := a.Fork(ctx, op+":rewrite", protocol.GeminiForkCommand{SessionID: command.SessionID, SourceWorkspace: command.Workspace, Workspace: command.Workspace, Before: command.Rewrite})
+		fork, err := forkNativeHistory(ctx, protocol.GeminiForkCommand{SessionID: command.SessionID, SourceWorkspace: command.Workspace, Workspace: command.Workspace, Before: command.Rewrite}, environment)
 		if err != nil {
 			return err
 		}
-		command.SessionID = fork.SessionID
+		sessionID = fork.SessionID
+		resuming = sessionID != ""
 	}
 	params := map[string]any{"cwd": command.Workspace, "mcpServers": []any{bridge}}
 	var sessionResult json.RawMessage
@@ -375,6 +391,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 			return err
 		}
 	}
+	searchHistory = newNativeSearchHistory(sessionID, command.Workspace, environment, resuming)
 	replay = false
 	type promptResult struct {
 		StopReason string `json:"stopReason"`

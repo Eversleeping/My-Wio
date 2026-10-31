@@ -25,6 +25,30 @@ func prepareRewrite(command protocol.GeminiTurnCommand, environment []string) (s
 	return path, err
 }
 
+func nativeHistoryRoot(environment []string) (string, error) {
+	home, _ := os.UserHomeDir()
+	for _, entry := range environment {
+		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
+			home = value
+		}
+	}
+	for _, entry := range environment {
+		if value, ok := strings.CutPrefix(entry, "GEMINI_CLI_HOME="); ok && value != "" {
+			home = value
+		}
+	}
+	if home == "" {
+		return "", errors.New("Gemini home directory unavailable")
+	}
+	runtime := filepath.Join(home, ".gemini")
+	for _, entry := range environment {
+		if entry == "SANDBOX=sandbox-exec" {
+			runtime = filepath.Join(home, ".cache", ".gemini")
+		}
+	}
+	return filepath.Join(runtime, "tmp"), nil
+}
+
 func prepareNativeHistory(command protocol.GeminiTurnCommand, environment []string) (string, string, error) {
 	if command.SessionID == "" {
 		return "", "", errors.New("Gemini rewrite requires saved native history")
@@ -43,28 +67,10 @@ func prepareNativeHistory(command protocol.GeminiTurnCommand, environment []stri
 			}
 		}
 	}
-
-	home, _ := os.UserHomeDir()
-	for _, entry := range environment {
-		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
-			home = value
-		}
+	root, err := nativeHistoryRoot(environment)
+	if err != nil {
+		return "", "", err
 	}
-	for _, entry := range environment {
-		if value, ok := strings.CutPrefix(entry, "GEMINI_CLI_HOME="); ok && value != "" {
-			home = value
-		}
-	}
-	if home == "" {
-		return "", "", errors.New("Gemini home directory unavailable")
-	}
-	runtime := filepath.Join(home, ".gemini")
-	for _, entry := range environment {
-		if entry == "SANDBOX=sandbox-exec" {
-			runtime = filepath.Join(home, ".cache", ".gemini")
-		}
-	}
-	root := filepath.Join(runtime, "tmp")
 	projects, err := os.ReadDir(root)
 	if err != nil {
 		return "", "", errors.New("Gemini native session history unavailable")

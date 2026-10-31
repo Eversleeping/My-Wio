@@ -43,7 +43,7 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if payload.Mode != "default" && payload.Mode != "auto_edit" && payload.Mode != "yolo" && payload.Mode != "plan" {
 			return errors.New("invalid Gemini approval mode update")
 		}
-	case "gemini.message", "gemini.commands", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied", "gemini.goal.progress", "gemini.goal.usage":
+	case "gemini.message", "gemini.activity", "gemini.commands", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied", "gemini.goal.progress", "gemini.goal.usage":
 	default:
 		return errors.New("unsupported Gemini event")
 	}

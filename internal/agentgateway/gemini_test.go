@@ -47,6 +47,11 @@ func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	if current.SessionID != "native-session" || current.Status != "running" {
 		t.Fatalf("session binding: %+v", current)
 	}
+	activityPayload, _ := json.Marshal(map[string]string{"operation_id": thread.OperationID, "phase": "model"})
+	activityRaw, _ := json.Marshal(protocol.StreamEvent{EventID: "gemini-activity", StreamID: thread.ID, Kind: "gemini.activity", Payload: activityPayload})
+	if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "gemini_event", PayloadJSON: activityRaw}); err != nil {
+		t.Fatal(err)
+	}
 	modePayload, _ := json.Marshal(map[string]string{"operation_id": thread.OperationID, "approval_mode": "plan"})
 	modeRaw, _ := json.Marshal(protocol.StreamEvent{EventID: "gemini-mode", StreamID: thread.ID, Kind: "gemini.mode", Payload: modePayload})
 	if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "gemini_event", PayloadJSON: modeRaw}); err != nil {

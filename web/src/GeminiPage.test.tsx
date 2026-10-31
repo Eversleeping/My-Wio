@@ -176,8 +176,8 @@ test("resuming hides 25 replayed commands and shows the 29 actual completed comm
     append("gemini.tool_result", "op1", { tool_id: `read_file__call_${i}`, status: "completed", output: [] });
   }
   const { user } = setup(true, "auto", "configured", events, { status: "running" });
-  const title = await screen.findByText("Ran 29 commands");
-  expect(screen.queryByText("Ran 54 commands")).not.toBeInTheDocument();
+  const title = await screen.findByText("Tool calls: 29");
+  expect(screen.queryByText("Tool calls: 54")).not.toBeInTheDocument();
   expect(screen.queryByText("ReadFile")).not.toBeInTheDocument();
   await user.click(title);
   const group = title.closest("details")!;
@@ -196,7 +196,7 @@ test("renders one expandable tool record per call with separate parameters and o
     { kind: "gemini.tool_result", payload: { tool_id: "run_shell_command__call_2", status: "failed", output: "Command failed" } },
   ].map((e, index) => ({...e, event_id:String(index),stream_id:thread.id,sequence:index + 1,occurred_at:thread.updated_at,payload:{...e.payload,operation_id:"op1"}}));
   const { user } = setup(true, "auto", "configured", events);
-  const groupTitle = await screen.findByText("Ran 2 commands");
+  const groupTitle = await screen.findByText("Tool calls: 2");
   const group = groupTitle.closest("details")!;
   expect(group).not.toHaveAttribute("open");
   await user.click(groupTitle);
@@ -221,6 +221,40 @@ test("renders one expandable tool record per call with separate parameters and o
   expect(group).not.toHaveAttribute("open");
 });
 
+test("does not claim an empty Gemini search display means the search had no output", async () => {
+  const events = [
+    { kind: "gemini.tool_use", payload: { tool_id: "grep_search__1", tool_name: "Search files", parameters: [] } },
+    { kind: "gemini.tool_result", payload: { tool_id: "grep_search__1", status: "completed", output: [] } },
+  ].map((event, index) => ({ ...event, event_id: String(index), stream_id: thread.id, sequence: index + 1, occurred_at: thread.updated_at, payload: { ...event.payload, operation_id: "op1" } }));
+  const { user } = setup(true, "auto", "configured", events);
+  await user.click(await screen.findByText("Tool calls: 1"));
+  await user.click(screen.getByText("Search files"));
+  expect(screen.getByText("Gemini did not provide output to display. The result may be empty or unavailable.")).toBeVisible();
+  expect(screen.queryByText("No command output")).not.toBeInTheDocument();
+});
+
+test("warns when the current Gemini operation has had no updates for several minutes", async () => {
+  const events = [
+    { event_id:"old", sequence:1, kind:"gemini.message", stream_id:thread.id, occurred_at:new Date(Date.now() - 5 * 60_000).toISOString(), payload:{operation_id:"op1",role:"assistant",content:"Earlier progress"} },
+    { event_id:"other", sequence:2, kind:"gemini.message", stream_id:thread.id, occurred_at:new Date().toISOString(), payload:{operation_id:"other",role:"assistant",content:"Another operation"} },
+  ];
+  setup(true, "auto", "configured", events, {status:"running"});
+  await screen.findByText("Earlier progress");
+  expect(await screen.findByText(/No new updates for 5 minutes/)).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:"Interrupt"})).toBeEnabled();
+});
+
+test("does not warn when the current Gemini operation has a recent update", async () => {
+  const events = [
+    {event_id:"old", sequence:1, kind:"gemini.message", stream_id:thread.id, occurred_at:new Date(Date.now() - 5 * 60_000).toISOString(), payload:{operation_id:"op1",role:"assistant",content:"Earlier progress"}},
+    {event_id:"recent", sequence:2, kind:"gemini.activity", stream_id:thread.id, occurred_at:new Date().toISOString(), payload:{operation_id:"op1",phase:"model"}},
+  ];
+  setup(true, "auto", "configured", events, {status:"running"});
+  await screen.findByText("Earlier progress");
+  expect(screen.queryByText(/No new updates for/)).not.toBeInTheDocument();
+  expect(screen.getByText("Model activity received; waiting for further output…")).toBeInTheDocument();
+});
+
 test("renders separate collapsed command groups around Gemini replies", async () => {
   const events = [
     { kind: "gemini.message", payload: { role: "assistant", content: "Starting" } },
@@ -230,11 +264,11 @@ test("renders separate collapsed command groups around Gemini replies", async ()
     { kind: "gemini.tool_use", payload: { tool_id: "run_shell_command__3", tool_name: "git status" } },
   ].map((e, index) => ({ ...e, event_id: String(index), stream_id: thread.id, sequence: index + 1, occurred_at: `2026-10-25T00:00:0${index}Z`, payload: { ...e.payload, operation_id: "op1" } }));
   const { user } = setup(true, "auto", "configured", events);
-  const first = (await screen.findByText("Ran 2 commands")).closest("details")!;
-  const second = screen.getByText("Ran 1 commands").closest("details")!;
+  const first = (await screen.findByText("Tool calls: 2")).closest("details")!;
+  const second = screen.getByText("Tool calls: 1").closest("details")!;
   expect(first).not.toHaveAttribute("open");
   expect(second).not.toHaveAttribute("open");
-  await user.click(within(first).getByText("Ran 2 commands"));
+  await user.click(within(first).getByText("Tool calls: 2"));
   expect(within(first).getByText("pwd")).toBeVisible();
   expect(within(first).getByText("ls")).toBeVisible();
   expect(second).not.toHaveAttribute("open");

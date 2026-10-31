@@ -48,6 +48,9 @@ func fakeACPCLI() {
 		case "initialize":
 			result = map[string]any{"protocolVersion": 1}
 		case "session/new", "session/load":
+			if msg.Method == "session/load" && os.Getenv("WIO_GEMINI_TEST_LOAD_RECORD") != "" {
+				_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_LOAD_RECORD"), msg.Params, 0600)
+			}
 			var p struct {
 				Servers []json.RawMessage `json:"mcpServers"`
 			}
@@ -66,6 +69,12 @@ func fakeACPCLI() {
 			}
 		case "session/prompt":
 			_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), msg.Params, 0600)
+			if os.Getenv("WIO_GEMINI_TEST_ACTIVITY") == "1" {
+				for i := 0; i < 2; i++ {
+					notify(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]string{"type": "text", "text": "PRIVATE_THOUGHT"}})
+				}
+				notify(map[string]any{"sessionUpdate": "usage_update", "used": 100, "size": 1000})
+			}
 			if text := os.Getenv("WIO_GEMINI_TEST_MODE_TEXT"); text != "" {
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": text}})
 				result = map[string]any{"stopReason": "end_turn"}
@@ -115,6 +124,108 @@ func fakeACPCLI() {
 			result = map[string]any{"stopReason": "end_turn", "usage": map[string]int{"inputTokens": 37, "outputTokens": 4}}
 		}
 		_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
+	}
+}
+
+func TestACPEmitsThrottledActivityWithoutThoughtContent(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
+	t.Setenv("WIO_GEMINI_TEST_ACTIVITY", "1")
+	executable, _ := os.Executable()
+	var events []protocol.StreamEvent
+	a := New(executable, func(event protocol.StreamEvent) error { events = append(events, event); return nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Run(ctx, "op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), Prompt: "test", Model: "flash", ApprovalMode: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	activity := 0
+	for _, event := range events {
+		if bytes.Contains(event.Payload, []byte("PRIVATE_THOUGHT")) {
+			t.Fatal("model thought content was exposed")
+		}
+		if event.Kind == "gemini.activity" {
+			activity++
+		}
+	}
+	if activity != 1 {
+		t.Fatalf("expected one throttled activity event, got %d", activity)
+	}
+}
+
+func TestACPRewriteLoadsForkAndUsesTurnEnvironment(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
+	loadRecord := filepath.Join(t.TempDir(), "load.json")
+	promptRecord := filepath.Join(t.TempDir(), "prompt.json")
+	t.Setenv("WIO_GEMINI_TEST_LOAD_RECORD", loadRecord)
+	t.Setenv("WIO_GEMINI_TEST_RECORD", promptRecord)
+	// The turn override must win over the process environment for both forking
+	// the history and launching the CLI.
+	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
+	home, workspace := t.TempDir(), t.TempDir()
+	chats := filepath.Join(home, ".gemini", "tmp", "project", "chats")
+	if err := os.MkdirAll(chats, 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(chats, "session-original.jsonl")
+	history := nativeHistory(workspace)
+	if err := os.WriteFile(source, history, 0600); err != nil {
+		t.Fatal(err)
+	}
+	executable, _ := os.Executable()
+	var events []protocol.StreamEvent
+	a := New(executable, func(event protocol.StreamEvent) error { events = append(events, event); return nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: workspace, SessionID: "original-session", Prompt: "changed", Model: "flash", ApprovalMode: "default", Rewrite: &protocol.GeminiRewriteTarget{EventID: "u2", StartedAt: "2026-10-25T00:01:00Z"}}
+	if err := a.RunInTrustedWorkspaceWithEnvironment(ctx, "rewrite", command, []string{"GEMINI_CLI_HOME=" + home}); err != nil {
+		t.Fatal(err)
+	}
+	var initID string
+	for _, event := range events {
+		if event.Kind == "gemini.init" {
+			var payload struct {
+				SessionID string `json:"session_id"`
+			}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			initID = payload.SessionID
+		}
+	}
+	var load, prompt struct {
+		SessionID string `json:"sessionId"`
+	}
+	for path, destination := range map[string]any{loadRecord: &load, promptRecord: &prompt} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, destination); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if initID == "" || initID == command.SessionID || load.SessionID != initID || prompt.SessionID != initID {
+		t.Fatalf("rewrite used different or old sessions: init=%q load=%q prompt=%q", initID, load.SessionID, prompt.SessionID)
+	}
+	files, err := filepath.Glob(filepath.Join(chats, "session-*.jsonl"))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("expected original and fork: %v %v", files, err)
+	}
+	for _, path := range files {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path == source {
+			if !bytes.Equal(raw, history) {
+				t.Fatal("source history was modified")
+			}
+		} else if !bytes.Contains(raw, []byte(initID)) || !bytes.Contains(raw, []byte("patched kept answer")) || bytes.Contains(raw, []byte("discard")) {
+			t.Fatalf("incorrect forked history: %s", raw)
+		}
 	}
 }
 
