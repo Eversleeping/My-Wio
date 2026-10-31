@@ -83,6 +83,14 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		defer closeSteering()
 	}
 
+	if command.SessionID != "" {
+		var cleanup func()
+		environment, cleanup, err = acpHistoryEnvironment(environment)
+		if err != nil {
+			return fmt.Errorf("prepare Gemini history synchronization: %w", err)
+		}
+		defer cleanup()
+	}
 	cmd := exec.CommandContext(ctx, executable, "--acp", "--model", model, "--approval-mode", command.ApprovalMode)
 	cmd.Dir = command.Workspace
 	// Gemini 0.65's ACP converter drops AnsiOutput from PTY-backed shell
@@ -360,9 +368,16 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		if sessionResult, err = call("session/load", params); err != nil {
 			return err
 		}
-		// Discard the initial history burst until commands are ready. This is
-		// NOT a history-complete fence: terminal tool snapshots can arrive
-		// later, so the notification handler filters those throughout resume.
+		var loaded struct {
+			Meta struct {
+				HistoryReplayed bool `json:"wioHistoryReplayed"`
+			} `json:"_meta"`
+		}
+		if json.Unmarshal(sessionResult, &loaded) != nil || !loaded.Meta.HistoryReplayed {
+			return errors.New("Gemini CLI cannot synchronize restored history; update Wio's Gemini compatibility adapter before retrying")
+		}
+		// The process-local loader awaits streamHistory before session/load
+		// responds. Commands may follow; they no longer stand in for replay.
 		if availableCommands, err = drainACPHistory(ctx, messages, readError); err != nil {
 			return err
 		}

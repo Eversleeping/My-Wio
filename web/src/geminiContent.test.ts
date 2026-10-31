@@ -1,9 +1,28 @@
 import { expect, test } from "vitest";
-import { geminiMessages, groupGeminiMessages, type GeminiMessage } from "./geminiContent";
+import { geminiMessages, geminiForkTargets, groupGeminiMessages, type GeminiMessage } from "./geminiContent";
 import { locationFor, realtimeScopesForEvent } from "./App";
 import type { StreamEvent } from "./types";
 
 function event(sequence: number, kind: string, payload: unknown): StreamEvent { return { event_id: String(sequence), stream_id: "session", sequence, kind, payload, occurred_at: "2026-10-24T00:00:00Z" }; }
+
+test("hides explicitly verified assistant replays while preserving genuine identical replies and raw history", () => {
+  const events = [
+    event(1, "gemini.message", { operation_id: "old", role: "assistant", content: "same answer" }),
+    event(2, "gemini.result", { operation_id: "old", status: "success" }),
+    event(3, "gemini.user.message", { operation_id: "new", text: "repeat it", history_replay: true }),
+    event(4, "gemini.message", { operation_id: "new", role: "assistant", content: "same answer", delta: true, history_replay: true }),
+    event(5, "gemini.message", { operation_id: "new", role: "assistant", content: "same answer", delta: true }),
+    event(6, "gemini.result", { operation_id: "new", status: "success" }),
+    event(7, "gemini.message", { operation_id: "replay-only", role: "assistant", content: "same answer", history_replay: true }),
+    event(8, "gemini.result", { operation_id: "replay-only", status: "success" }),
+  ];
+  const before = JSON.stringify(events);
+  const messages = geminiMessages(events);
+  expect(messages.filter(m => m.role === "assistant").map(m => [m.id, m.text])).toEqual([["1", "same answer"], ["5", "same answer"]]);
+  expect(messages.find(m => m.role === "user")?.text).toBe("repeat it");
+  expect([...geminiForkTargets(events)]).toEqual(["1", "5"]);
+  expect(JSON.stringify(events)).toBe(before);
+});
 
 test("restores Gemini steering delivery status and marks undelivered updates after completion",()=>{
   const messages=geminiMessages([

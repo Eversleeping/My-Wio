@@ -20,6 +20,11 @@ export function groupGeminiMessages(messages: GeminiMessage[]): GeminiDisplayIte
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
+// A verified repair can label an old replay without deleting the stored
+// event. Never infer assistant replay from text equality or response timing.
+function verifiedHistoryReplay(event: StreamEvent): boolean {
+  return event.kind === "gemini.message" && record(event.payload).role === "assistant" && record(event.payload).history_replay === true;
+}
 function readable(value: unknown): string { return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value, null, 2); }
 
 // ACP wraps display text in content blocks; legacy JSONL emits strings/objects.
@@ -56,6 +61,7 @@ function legacyReplayEvents(events: StreamEvent[]): Set<string> {
     if (event.kind === "gemini.tool_result") results.add(key(p.operation_id, p.tool_id));
   }
   for (const event of events) {
+    if (verifiedHistoryReplay(event)) continue;
     const p = record(event.payload), op = readable(p.operation_id);
     if (event.kind === "gemini.init" && op && typeof p.session_id === "string") {
       sessions.set(op, p.session_id);
@@ -93,6 +99,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
   let assistant: GeminiMessage | undefined;
   let operation = "";
   for (const event of events) {
+    if (verifiedHistoryReplay(event)) continue;
     const p = record(event.payload);
     const op = readable(p.operation_id);
     if (event.kind === "gemini.goal.progress") { assistant = undefined; continue; }
@@ -180,6 +187,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
 export function geminiForkTargets(events: StreamEvent[]): Set<string> {
  const targets=new Set<string>(); let operation="", last="", adjacent=false;
  for(const event of events){
+  if(verifiedHistoryReplay(event))continue;
   const p=record(event.payload), op=readable(p.operation_id);
   if(op!==operation){operation=op;last="";adjacent=false;}
   if(event.kind==="gemini.message"&&p.role==="assistant") {if(!adjacent || p.delta!==true) last=event.event_id;adjacent=true;}

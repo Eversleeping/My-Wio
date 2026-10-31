@@ -58,8 +58,13 @@ func fakeACPCLI() {
 			_ = json.Unmarshal(p.Servers[0], &bridge)
 			result = map[string]any{"sessionId": "native-acp", "modes": map[string]string{"currentModeId": mode}}
 			if msg.Method == "session/load" {
-				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
+				result.(map[string]any)["_meta"] = map[string]bool{"wioHistoryReplayed": os.Getenv("WIO_GEMINI_TEST_UNFENCED_HISTORY") != "1"}
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "OLD_REPLAY_MUST_NOT_APPEAR"}})
+				// The adapted load response must follow every history message.
+				// Commands can still be emitted before or after that response.
+				notify(map[string]string{"sessionUpdate": "available_commands_update"})
+				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "OLD_REPLAY_AFTER_COMMANDS"}})
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 				notify(map[string]string{"sessionUpdate": "available_commands_update"})
 				// Command availability does not fence asynchronous history replay.
 				for _, status := range []string{"completed", "failed"} {
@@ -124,6 +129,29 @@ func fakeACPCLI() {
 			result = map[string]any{"stopReason": "end_turn", "usage": map[string]int{"inputTokens": 37, "outputTokens": 4}}
 		}
 		_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
+	}
+}
+
+func TestACPRejectsUnfencedHistoryBeforeSendingPrompt(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+	t.Setenv("WIO_GEMINI_TEST_UNFENCED_HISTORY", "1")
+	record := filepath.Join(t.TempDir(), "prompt.json")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	executable, _ := os.Executable()
+	a := New(executable, func(e protocol.StreamEvent) error {
+		if e.Kind == "gemini.message" {
+			t.Error("unfenced history reached the event stream")
+		}
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := a.Run(ctx, "op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), SessionID: "native-acp", Prompt: "do not send", Model: "flash", ApprovalMode: "default"})
+	if err == nil || !strings.Contains(err.Error(), "synchronize restored history") {
+		t.Fatalf("expected compatibility error, got %v", err)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatal("prompt sent before history was synchronized")
 	}
 }
 
