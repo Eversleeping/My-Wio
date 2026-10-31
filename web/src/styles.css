@@ -491,6 +491,7 @@ input:focus, select:focus, textarea:focus { border-color: #399476; box-shadow: 0
 .gemini-options-actions { grid-column: 4; grid-row: 1; align-self: end; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .gemini-composer { border-top: 1px solid var(--line); }
 .gemini-composer textarea { max-height: 160px; resize: vertical; }
+.gemini-composer .gemini-options .field > span { display: none; }
 .gemini-welcome { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 30px; text-align: center; }
 .gemini-welcome > svg { color: var(--green); }
 .gemini-welcome p { max-width: 420px; color: var(--muted); line-height: 1.7; }
@@ -958,12 +959,8 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
   .gemini-composer .gemini-options.with-actions { grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1fr) auto; gap: 4px; align-items: start; }
   .gemini-composer .gemini-options.with-actions > .field:not(:first-child) { grid-column: auto; }
   .gemini-composer .gemini-options .field { gap: 4px; margin: 0; }
-  .gemini-composer .gemini-options .field > span { display: none; }
   .gemini-composer .gemini-options select, .gemini-composer .gemini-options input { min-width: 0; min-height: 38px; padding: 5px 3px; font-size: 11px; text-overflow: ellipsis; }
-  .gemini-composer .gemini-model-input { min-width: 0; gap: 1px; }
-  .gemini-composer .gemini-model-input .icon-button { width: 28px; height: 38px; flex-basis: 28px; }
   .gemini-composer .gemini-options-actions { grid-column: 4; grid-row: 1; align-self: start; gap: 2px; margin: 0; }
-  .gemini-composer .gemini-options-actions .icon-button { width: 30px; height: 38px; flex-basis: 30px; }
   .gemini-composer .composer-action { min-width: 46px; min-height: 38px; padding: 0 6px; font-size: 11px; }
   .sidebar { transform: translateX(-100%); transition: transform .2s ease; }
   .sidebar.open { transform: translateX(0); }
@@ -1148,6 +1145,4 @@ button.file-tree-row:hover { color: var(--ink); background: #edf1ed; }
 
 .gemini-settings-help { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 
-.gemini-model-input { display: flex; align-items: center; gap: 5px; }
-.gemini-model-input select { flex: 1; min-width: 0; }
 .gemini-model-error { color: var(--red); overflow-wrap: anywhere; }

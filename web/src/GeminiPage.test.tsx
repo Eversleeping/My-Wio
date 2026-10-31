@@ -1,4 +1,5 @@
 import { compressImage } from "./imageCompression";
+import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -9,7 +10,7 @@ import { formatTime } from "./format";
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; strictMode?: boolean } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
   const currentThread = {...thread, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
@@ -47,8 +48,9 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
   }));
   const onSelectThread = vi.fn();
   const notify = vi.fn();
-  render(<I18nProvider><GeminiPage realtime={0} notify={notify} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>);
-  return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread,notify};
+  const page = <I18nProvider><GeminiPage realtime={0} notify={notify} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
+  const view = render(options.strictMode ? <StrictMode>{page}</StrictMode> : page);
+  return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread,notify,unmount:view.unmount};
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
@@ -285,19 +287,22 @@ test("preserves and edits a custom model name",async () => {
   await waitFor(() => expect(requests[0].body).toMatchObject({model:"gemini-custom-next"}));
 });
 
-test("automatically fetches upstream models once on opening a session and supports refresh",async () => {
-  const {user,modelRequests,requests} = setup(true);
+test("refreshes models once on each session entry, including in StrictMode",async () => {
+  const {user,modelRequests,requests,unmount,onSelectThread,notify} = setup(true,"auto","configured",[],{strictMode:true});
   await screen.findByRole("option",{name:"Upstream · gemini-upstream-current"});
   expect(modelRequests).toEqual(["/api/workspaces/workspace-1/gemini/models"]);
+  expect(screen.queryByRole("button",{name:"Refresh model list"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"Attach image"})).not.toBeInTheDocument();
   await user.selectOptions(screen.getByRole("combobox",{name:"Gemini model"}),"gemini-upstream-current");
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   expect(modelRequests).toHaveLength(1);
   await user.click(screen.getByRole("button",{name:"Send"}));
   await waitFor(() => expect(requests[0].body).toMatchObject({model:"gemini-upstream-current"}));
-  await user.click(screen.getByRole("button",{name:"Refresh model list"}));
+  expect(modelRequests).toHaveLength(1);
+  unmount();
+  render(<StrictMode><I18nProvider><GeminiPage realtime={0} notify={notify} selectedThreadID={thread.id} onSelectThread={onSelectThread} /></I18nProvider></StrictMode>);
   await screen.findByRole("option",{name:"Upstream · gemini-upstream-new"});
   expect(modelRequests).toHaveLength(2);
-  expect(screen.getByRole("textbox",{name:"Model name"})).toHaveValue("gemini-upstream-current");
 });
 
 test("loads upstream models after selecting a workspace for a new session",async () => {
