@@ -17,9 +17,9 @@ type SessionUsage struct {
 }
 
 type usageTurn struct {
-	start, end        time.Time
-	input, output     *int64
-	result, completed bool
+	start, end                  time.Time
+	input, output               *int64
+	result, progress, completed bool
 }
 
 func usageCount(values ...json.RawMessage) *int64 {
@@ -34,7 +34,7 @@ func usageCount(values ...json.RawMessage) *int64 {
 
 func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, running bool) (SessionUsage, error) {
 	usage := SessionUsage{}
-	kinds := "'gemini.init','gemini.result','gemini.turn.completed'"
+	kinds := "'gemini.init','gemini.result','gemini.goal.usage','gemini.turn.completed'"
 	if provider == "codex" {
 		kinds = "'codex.turn.started','codex.turn.completed','codex.turn.failed','codex.turn.cancelled','codex.thread.tokenUsage.updated'"
 	}
@@ -82,17 +82,30 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 				if turn.start.IsZero() {
 					turn.start = at
 				}
-			case "gemini.result":
+			case "gemini.result", "gemini.goal.usage":
+				if kind == "gemini.goal.usage" && turn.result {
+					continue
+				}
+				if kind == "gemini.result" && turn.result {
+					// Retried final events may omit counters. Preserve earlier valid
+					// values while still accepting a later valid correction.
+					if input := usageCount(p.Stats["input_tokens"], p.Stats["input"]); input != nil {
+						turn.input = input
+					}
+					if output := usageCount(p.Stats["output_tokens"], p.Stats["output"]); output != nil {
+						turn.output = output
+					}
+					continue
+				}
 				if !turn.result {
 					turn.end = at
 				}
-				turn.result = true
-				if input := usageCount(p.Stats["input_tokens"], p.Stats["input"]); input != nil {
-					turn.input = input
+				if kind == "gemini.result" {
+					turn.result = true
 				}
-				if output := usageCount(p.Stats["output_tokens"], p.Stats["output"]); output != nil {
-					turn.output = output
-				}
+				turn.progress = true
+				turn.input = usageCount(p.Stats["input_tokens"], p.Stats["input"])
+				turn.output = usageCount(p.Stats["output_tokens"], p.Stats["output"])
 			case "gemini.turn.completed":
 				turn.completed = true
 			}
@@ -140,12 +153,16 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 	var seconds float64
 	for _, turn := range turns {
 		if provider == "gemini" {
-			if !turn.result {
+			if !turn.result && !turn.progress {
 				if turn.completed {
 					usage.Partial = true
 					outputRateIncomplete = true
 				}
 				continue
+			}
+			if !turn.result {
+				usage.Partial = true
+				outputRateIncomplete = true
 			}
 			if turn.input == nil || turn.output == nil {
 				usage.Partial = true

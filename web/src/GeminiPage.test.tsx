@@ -6,21 +6,24 @@ import { afterEach, expect, test, vi } from "vitest";
 import GeminiPage from "./pages/GeminiPage";
 import { I18nProvider } from "./i18n";
 import { formatTime } from "./format";
+import type { GeminiGoal } from "./types";
 
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; strictMode?: boolean } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; archived?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; goalSupported?: boolean; goal?: GeminiGoal; goalLoadFailures?: number; goalStartFailure?: boolean; strictMode?: boolean; } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
+  let goalLoadFailures = options.goalLoadFailures ?? 0;
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     let body: unknown = [];
     if (init.method === "POST") {
       const input = JSON.parse(String(init.body)); requests.push({url,body:input}); body = {...currentThread,model,id:"thread-created"};
+      if (url.endsWith("/turns") && input.goal && options.goalStartFailure) return new Response(JSON.stringify({error:"Workspace is busy"}),{status:409,headers:{"Content-Type":"application/json"}});
       if (url.endsWith("/steer")) {
         if (options.steerFailure) return new Response(JSON.stringify({error:"Turn is no longer running"}), {status:409,headers:{"Content-Type":"application/json"}});
         body={operation_id:"steer-op"};
@@ -40,6 +43,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     else if (url === "/api/operations/fork-op") body={status:"succeeded"};
     else if (url.endsWith("/gemini/skills/skills-op")) body={status:"succeeded",skills:[{name:"code-review",description:"Review code",enabled:true,builtin:false},{name:"disabled",description:"Disabled skill",enabled:false,builtin:false}]};
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
+    else if (url === "/api/gemini/threads/thread-1/goal") { if (goalLoadFailures-- > 0) return new Response(JSON.stringify({error:"Status unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); body = options.goal ?? null; }
     else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
     else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
     else if (url.includes("/gemini/threads?") && selected) body = [{...currentThread,model}];
@@ -605,6 +609,81 @@ test("opens the schedule and interview from the Gemini slash menu", async () => 
   await user.click(within(dialog).getByRole("button", {name:"Close"}));
   await user.type(input, "/grill-me{Enter}");
   expect((input as HTMLTextAreaElement).value).toContain("interactive question tool");
+});
+
+test("starts a Gemini goal with configurable continuation and time limits", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const {user, requests} = setup(true, "auto", "configured", [], {goalSupported:true});
+  const input = await screen.findByRole("textbox", {name:"Ask Gemini to work on this project…"});
+  await user.type(input, "/goal{Enter}");
+  expect(input.closest("form")).toHaveClass("goal-mode");
+  await user.type(input, "Implement and verify the feature");
+  await user.clear(screen.getByRole("spinbutton", {name:"Continuations per run"}));
+  await user.type(screen.getByRole("spinbutton", {name:"Continuations per run"}), "5");
+  await user.clear(screen.getByRole("spinbutton", {name:"Time limit (minutes)"}));
+  await user.type(screen.getByRole("spinbutton", {name:"Time limit (minutes)"}), "30");
+  await user.click(screen.getByRole("button", {name:"Send"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Implement and verify the feature",model:"auto",approval_mode:"default",thinking_level:"",goal:{max_continuations:5,max_seconds:1800}}}));
+});
+
+test("shows a blocked goal and resumes it with its saved limits", async () => {
+  const goal: GeminiGoal = {id:"goal-1",thread_id:thread.id,objective:"Fix the tests",status:"blocked",operation_id:"old-op",continuations:3,max_continuations:8,max_seconds:1200,evidence:"Waiting for a decision",message:"Waiting for a decision",created_at:thread.created_at,updated_at:thread.updated_at};
+  const {user, requests} = setup(true, "auto", "configured", [], {goalSupported:true,goal});
+  expect(await screen.findByText("Fix the tests")).toBeInTheDocument();
+  expect(screen.getByText("3 continuations · Needs attention")).toBeInTheDocument();
+  await user.click(screen.getByText("Goal evidence and status"));
+  expect(screen.getByText("Waiting for a decision")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name:"Resume goal"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/goals/goal-1/resume",body:{max_continuations:8,max_seconds:1200}}));
+});
+
+test("keeps a directly typed goal draft when starting it fails", async () => {
+  const {user, requests} = setup(true, "auto", "configured", [], {goalSupported:true,goalStartFailure:true});
+  const input = await screen.findByRole("textbox", {name:"Ask Gemini to work on this project…"});
+  fireEvent.change(input, {target:{value:"/goal Implement and verify"}});
+  await user.click(screen.getByRole("button", {name:"Send"}));
+  expect(await screen.findByText("Workspace is busy")).toBeInTheDocument();
+  expect(input).toHaveValue("/goal Implement and verify");
+  expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Implement and verify",goal:{max_continuations:20,max_seconds:3600}}});
+});
+
+test("explains when goal mode is unsupported", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const {user, notify, requests} = setup(true);
+  const input = await screen.findByRole("textbox", {name:"Ask Gemini to work on this project…"});
+  await user.type(input, "/goal{Enter}");
+  expect(notify).toHaveBeenCalledWith(expect.stringContaining("0.2.84"));
+  fireEvent.change(input, {target:{value:"/goal Check the feature"}});
+  await user.click(screen.getByRole("button", {name:"Send"}));
+  expect(await screen.findByText(/Goal mode requires Wio Agent 0.2.84/)).toBeInTheDocument();
+  expect(requests).toHaveLength(0);
+  expect(input).toHaveValue("/goal Check the feature");
+});
+
+test("pauses an active goal and does not enable resume before stop confirmation", async () => {
+  const goal: GeminiGoal = {id:"goal-1",thread_id:thread.id,objective:"Fix the tests",status:"active",operation_id:"op1",continuations:1,max_continuations:8,max_seconds:1200,evidence:"",message:"",created_at:thread.created_at,updated_at:thread.updated_at};
+  const {user, requests} = setup(true, "auto", "configured", [], {status:"running",goalSupported:true,goal});
+  await user.click(await screen.findByRole("button", {name:"Pause goal"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/goals/goal-1/pause",body:{}}));
+});
+
+test("holds goal controls when process ownership is unconfirmed", async () => {
+  const goal: GeminiGoal = {id:"goal-1",thread_id:thread.id,objective:"Fix the tests",status:"paused",operation_id:"op1",continuations:1,max_continuations:8,max_seconds:1200,evidence:"",message:"",created_at:thread.created_at,updated_at:thread.updated_at};
+  setup(true, "auto", "configured", [], {status:"interrupted",recoveryPending:true,goalSupported:true,goal});
+  expect(await screen.findByText("1 continuations · Process status unconfirmed")).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:"Resume goal"})).toBeDisabled();
+  expect(screen.getByRole("button", {name:"Cancel goal"})).toBeDisabled();
+});
+
+test("shows a retryable goal loading error and respects archived sessions", async () => {
+  const goal: GeminiGoal = {id:"goal-1",thread_id:thread.id,objective:"Fix the tests",status:"blocked",operation_id:"old-op",continuations:1,max_continuations:8,max_seconds:1200,evidence:"",message:"",created_at:thread.created_at,updated_at:thread.updated_at};
+  const {user} = setup(true, "auto", "configured", [], {archived:true,goalSupported:true,goal,goalLoadFailures:1});
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Could not load the goal status. Status unavailable");
+  await user.click(within(alert).getByRole("button", {name:"Retry"}));
+  expect(await screen.findByText("Fix the tests")).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:"Resume goal"})).toBeDisabled();
+  expect(screen.getByRole("button", {name:"Cancel goal"})).toBeDisabled();
 });
 
 test("discovers actual Gemini skills and prepares a task without selecting disabled skills", async () => {

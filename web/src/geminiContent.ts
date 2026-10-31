@@ -95,6 +95,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
   for (const event of events) {
     const p = record(event.payload);
     const op = readable(p.operation_id);
+    if (event.kind === "gemini.goal.progress") { assistant = undefined; continue; }
     if (replayEvents.has(event.event_id)) {
       replayCounts.set(op, (replayCounts.get(op) ?? 0) + 1);
       continue;

@@ -43,7 +43,7 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if payload.Mode != "default" && payload.Mode != "auto_edit" && payload.Mode != "yolo" && payload.Mode != "plan" {
 			return errors.New("invalid Gemini approval mode update")
 		}
-	case "gemini.message", "gemini.commands", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied":
+	case "gemini.message", "gemini.commands", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied", "gemini.goal.progress", "gemini.goal.usage":
 	default:
 		return errors.New("unsupported Gemini event")
 	}
@@ -52,6 +52,7 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 	if thread.Status != "queued" && thread.Status != "running" && thread.Status != "interrupting" && !thread.RecoveryPending {
 		return nil
 	}
+	event.Payload = security.RedactJSON(event.Payload)
 	switch event.Kind {
 	case "gemini.init":
 		operation, err := g.store.Operation(ctx, payload.OperationID)
@@ -76,8 +77,15 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if err != nil {
 			return err
 		}
+	case "gemini.goal.progress":
+		var progress protocol.GeminiGoalProgress
+		if err := json.Unmarshal(event.Payload, &progress); err != nil {
+			return err
+		}
+		if err := g.store.UpdateGeminiGoalProgress(ctx, thread.ID, progress); err != nil {
+			return err
+		}
 	}
-	event.Payload = security.RedactJSON(event.Payload)
 	return g.publish(ctx, event)
 }
 
@@ -137,8 +145,27 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 		if command.RecoveryPending {
 			status = "interrupted"
 		}
-		_, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE gemini_threads SET status=? WHERE id=? AND operation_id=? AND status='interrupting'"), status, command.ThreadID, command.OperationID)
+		tx, err := g.store.DB.BeginTxx(ctx, nil)
 		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		changed, err := tx.ExecContext(ctx, g.store.Q("UPDATE gemini_threads SET status=? WHERE id=? AND operation_id=? AND status='interrupting'"), status, command.ThreadID, command.OperationID)
+		if err != nil {
+			return err
+		}
+		count, err := changed.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count == 1 && !command.RecoveryPending {
+			// The original process can still continue. Do not leave its goal
+			// displayed as paused or cancelled when stopping it failed.
+			if _, err := tx.ExecContext(ctx, g.store.Q("UPDATE gemini_goals SET status='active',updated_at=? WHERE thread_id=? AND operation_id=? AND status IN ('paused','cancelled')"), time.Now().UTC(), command.ThreadID, command.OperationID); err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
 			return err
 		}
 		raw, _ := json.Marshal(map[string]any{"message": result.Message, "severity": "error", "operation_id": command.OperationID})
@@ -227,6 +254,14 @@ func (g *Gateway) updateGeminiOwnership(ctx context.Context, serverID, operation
 	}
 	if count == 0 {
 		return tx.Commit()
+	}
+	if active {
+		// An ownership probe can reveal that a process survived a pause or
+		// cancel request whose acknowledgement was lost. Reflect reality and
+		// allow the user to issue the stop again.
+		if _, err := tx.ExecContext(ctx, g.store.Q("UPDATE gemini_goals SET status='active',updated_at=? WHERE thread_id=? AND operation_id=? AND status IN ('paused','cancelled')"), time.Now().UTC(), command.ThreadID, operationID); err != nil {
+			return err
+		}
 	}
 	raw, _ := json.Marshal(map[string]any{"operation_id": operationID, "status": status, "recovery_pending": !active})
 	event := protocol.StreamEvent{EventID: store.NewID(), StreamID: command.ThreadID, Kind: kind, OccurredAt: time.Now().UTC(), Payload: raw}

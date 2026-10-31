@@ -90,13 +90,20 @@ func (a *Adapter) Answer(command protocol.GeminiAnswerCommand) error {
 
 // The MCP bridge lives only for this turn and binds only to loopback. A random
 // bearer credential keeps unrelated local web pages from invoking its tools.
-func (a *Adapter) questionServer(ctx context.Context, op, thread string) (map[string]any, func(), error) {
+func (a *Adapter) questionServer(ctx context.Context, op, thread string, goals ...*geminiGoalRun) (map[string]any, func(), error) {
+	var goal *geminiGoalRun
+	if len(goals) > 0 {
+		goal = goals[0]
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, nil, err
 	}
 	token := uuid.NewString() + uuid.NewString()
-	name := "wio_questions_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	// Gemini CLI shortens long MCP function names before emitting ACP tool
+	// IDs. Keep our random server name short enough for exact matching when
+	// granting the two local, non-filesystem bridge tools one-time approval.
+	name := "wio_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
 			http.Error(w, "unauthorized", 401)
@@ -130,25 +137,42 @@ func (a *Adapter) questionServer(ctx context.Context, op, thread string) (map[st
 			schema := json.RawMessage(`{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"id":{"type":"string"},"header":{"type":"string"},"question":{"type":"string"},"isOther":{"type":"boolean"},"options":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label","description"]}}},"required":["id","header","question"]}}},"required":["questions"]}`)
 			// Native ask_user is excluded in ACP, including MCP tools with that
 			// exact name. Keep a distinct name so the CLI exposes this bridge.
-			result = map[string]any{"tools": []any{map[string]any{"name": "wio_ask_user", "description": "Ask the user interactive questions in the web UI and wait for their answers before continuing. Use this tool whenever clarification or a choice is needed. Provide 1-4 questions with stable IDs; options are single choice, isOther allows custom text. Omit options for a text answer. Never ask for passwords or credentials.", "inputSchema": schema, "annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}}}}
+			tools := []any{map[string]any{"name": "wio_ask_user", "description": "Ask the user interactive questions in the web UI and wait for their answers before continuing. Use this tool whenever clarification or a choice is needed. Provide 1-4 questions with stable IDs; options are single choice, isOther allows custom text. Omit options for a text answer. Never ask for passwords or credentials.", "inputSchema": schema, "annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}}}
+			if goal != nil {
+				goalSchema := json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["completed","blocked"]},"evidence":{"type":"string","minLength":1,"maxLength":16000}},"required":["status","evidence"]}`)
+				tools = append(tools, map[string]any{"name": "wio_goal_report", "description": "Report whether the active Wio goal is fully completed or blocked. Provide concrete verification evidence for completion, or explain the blocker. This does not grant tool permissions.", "inputSchema": goalSchema, "annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}})
+			}
+			result = map[string]any{"tools": tools}
 		case "tools/call":
 			var params struct {
 				Name      string `json:"name"`
 				Arguments struct {
 					Questions []protocol.UserInputQuestion `json:"questions"`
+					Status    string                       `json:"status"`
+					Evidence  string                       `json:"evidence"`
 				} `json:"arguments"`
 			}
 			var answers map[string]protocol.UserInputAnswer
 			err := json.Unmarshal(request.Params, &params)
-			if err == nil && params.Name != "wio_ask_user" {
-				err = errors.New("unknown tool")
-			}
 			if err == nil {
-				answers, err = a.ask(ctx, op, thread, params.Arguments.Questions)
+				switch params.Name {
+				case "wio_ask_user":
+					answers, err = a.ask(ctx, op, thread, params.Arguments.Questions)
+				case "wio_goal_report":
+					if ctx.Err() != nil {
+						err = ctx.Err()
+					} else {
+						err = goal.record(params.Arguments.Status, params.Arguments.Evidence)
+					}
+				default:
+					err = errors.New("unknown tool")
+				}
 			}
 			value := ""
 			if err != nil {
 				value = err.Error()
+			} else if params.Name == "wio_goal_report" {
+				value = "Goal report recorded. Finish the response; Wio will verify the turn ended normally."
 			} else {
 				raw, _ := json.Marshal(map[string]any{"answers": answers})
 				value = string(raw)

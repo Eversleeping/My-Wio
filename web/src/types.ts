@@ -29,7 +29,7 @@ export interface Thread { id: string; workspace_id: string; project_id: string; 
 export interface GeminiThread {
   recovery_pending?: boolean;
   steer_supported?: boolean; steer_ready?: boolean;
-  skills_supported?: boolean; plan_supported?: boolean;
+  skills_supported?: boolean; plan_supported?: boolean; goal_supported?: boolean;
  input_supported?: boolean;
  thinking_level?: string; thinking_supported?: boolean;
   fork_supported: boolean;
@@ -39,6 +39,7 @@ export interface GeminiThread {
 export type CodexSnapshotState = "idle" | "loading" | "refreshing" | "succeeded" | "failed" | "unsupported";
 export interface CodexSnapshot<T> { status: CodexSnapshotState; supported: boolean; reason: string; codex_version: string; data: T | null; error: string; requested_at: string | null; updated_at: string | null }
 export interface CodexGoal { thread_id: string; objective: string; status: string; token_budget: number | null; tokens_used: number; time_used_seconds: number; created_at: number; updated_at: number }
+export interface GeminiGoal { id: string; thread_id: string; objective: string; status: "active" | "paused" | "blocked" | "completed" | "cancelled"; operation_id: string; continuations: number; max_continuations: number; max_seconds: number; evidence: string; message: string; created_at: string; updated_at: string }
 export interface ScheduledTask {
  thinking_level?: string;
   agent_kind?: "codex" | "gemini";

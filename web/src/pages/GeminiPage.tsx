@@ -6,7 +6,7 @@ import { GeminiQuestion } from "../components/GeminiQuestion";
 import { GeminiSkillsDialog } from "../components/GeminiSkillsDialog";
 import { GeminiThinkingPicker, compatibleGeminiThinking } from "../components/GeminiThinkingPicker";
 import { FormEvent, type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, Boxes, CalendarClock, GitFork, Globe, Lightbulb, ListChecks, MoreHorizontal, Pin, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, Folder, LoaderCircle, MessageSquare, Pencil, Plus, RefreshCw, Sparkles, Square, Trash2, UserRound, Users, X } from "lucide-react";
+import { Archive, ArchiveRestore, Boxes, CalendarClock, GitFork, Globe, Lightbulb, ListChecks, MoreHorizontal, Pin, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, Folder, LoaderCircle, MessageSquare, Pause, Pencil, Play, Plus, RefreshCw, Sparkles, Square, Target, Trash2, UserRound, Users, X } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, message, WorkspaceFilesPanel, type FilePreviewSelection } from "../App";
 import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "../components/SessionPreviews";
@@ -22,7 +22,7 @@ import { geminiForkTargets, geminiMessages, groupGeminiMessages } from "../gemin
 import { formatTime } from "../format";
 import { useI18n } from "../i18n";
 import MarkdownContent from "../MarkdownContent";
-import type { GeminiThread, StreamEvent, Workspace } from "../types";
+import type { GeminiGoal, GeminiThread, StreamEvent, Workspace } from "../types";
 import { useData } from "../useData";
 
 type Props = { realtime: number; notify: (text: string) => void; selectedThreadID: string; onSelectThread: (id: string, replace?: boolean) => void };
@@ -241,12 +241,19 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
   useEffect(() => setMode(thread.approval_mode), [thread.approval_mode]);
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
+  const [goalRounds, setGoalRounds] = useState(20);
+  const [goalMinutes, setGoalMinutes] = useState(60);
+  const goalData = useData<GeminiGoal | null>(`/gemini/threads/${thread.id}/goal`, `${realtime}:${reload}:${thread.status}:${thread.operation_id}`);
+  const goal = goalData.data && !Array.isArray(goalData.data) && goalData.data.id ? goalData.data : null;
+  useEffect(() => { if (goal) { setGoalRounds(goal.max_continuations); setGoalMinutes(goal.max_seconds / 60); } }, [goal?.id]);
   const [confirmingOperation, setConfirmingOperation] = useState("");
   const stream = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const running = isActive(thread);
   const recoveryPending = Boolean(thread.recovery_pending);
   const blocked = running || recoveryPending;
+  const goalStopPending = Boolean(goal && goal.operation_id === thread.operation_id && (thread.status === "interrupting" || recoveryPending) && (goal.status === "paused" || goal.status === "cancelled"));
+  const goalStatus = recoveryPending && goal?.operation_id === thread.operation_id ? "unknown" : goalStopPending ? "stopping" : goal?.status;
   const slashOpen = !editingEventID && !running && /^\/[A-Za-z0-9_-]*$/.test(prompt) && prompt !== slashDismissedValue;
   const finishSlash = (action: () => void, refocus = true) => { setPrompt(""); setSlashDismissedValue(""); action(); if (refocus) requestAnimationFrame(() => promptRef.current?.focus()); };
   const draftSlash = (text: string) => finishSlash(() => setPrompt(text));
@@ -257,6 +264,7 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
     return commands.filter((item): item is {name:string;description:string} => typeof item?.name === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(item.name) && typeof item.description === "string");
   }, [events]);
   const slashItems: SlashCommandItem[] = [
+    { id: "goal", name: "/goal", description: t("gemini.slashGoal"), icon: Target, onSelect: () => thread.goal_supported ? draftSlash("/goal ") : finishSlash(() => notify(t("gemini.goalUpdate"))) },
     { id: "schedule", name: "/schedule", description: t("gemini.slashSchedule"), icon: CalendarClock, onSelect: () => finishSlash(onSchedule, false) },
     { id: "plan", name: "/plan", description: t("gemini.slashPlan"), icon: ListChecks, onSelect: () => finishSlash(() => thread.plan_supported ? setMode("plan") : notify(t("gemini.planUpdate"))) },
     { id: "grill-me", name: "/grill-me", description: t("gemini.slashInterview"), icon: MessageSquare, onSelect: () => thread.input_supported ? draftSlash(t("gemini.interviewDraft")) : finishSlash(() => notify(t("gemini.inputAgentUpdate"))) },
@@ -264,7 +272,7 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
     { id: "skills", name: "/skills", description: t("gemini.slashSkills"), icon: Boxes, onSelect: () => finishSlash(() => setSkillsOpen(true), false) },
     { id: "browser", name: "/browser", description: t("gemini.slashBrowser"), icon: Globe, onSelect: () => finishSlash(() => setBrowserOpen(true), false) },
     { id: "teamwork", name: "/teamwork", description: t("gemini.slashTeamwork"), icon: Users, onSelect: () => draftSlash(t("gemini.teamworkDraft")) },
-    ...nativeCommands.filter(item => !["schedule", "plan", "grill-me", "learn", "skills", "browser", "teamwork"].includes(item.name)).map(item => ({ id: `native-${item.name}`, name: `/${item.name}`, description: item.description, section: t("gemini.nativeCommands"), icon: Sparkles, onSelect: () => mode === "plan" && !["help", "about"].includes(item.name) ? finishSlash(() => notify(t("gemini.planCommandUnavailable"))) : draftSlash(`/${item.name} `) })),
+    ...nativeCommands.filter(item => !["goal", "schedule", "plan", "grill-me", "learn", "skills", "browser", "teamwork"].includes(item.name)).map(item => ({ id: `native-${item.name}`, name: `/${item.name}`, description: item.description, section: t("gemini.nativeCommands"), icon: Sparkles, onSelect: () => mode === "plan" && !["help", "about"].includes(item.name) ? finishSlash(() => notify(t("gemini.planCommandUnavailable"))) : draftSlash(`/${item.name} `) })),
   ];
   const messages = useMemo(() => groupGeminiMessages(geminiMessages(events)), [events]);
   const forkTargets = useMemo(() => geminiForkTargets(events), [events]);
@@ -309,19 +317,36 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
   const showInterrupt = recoveryPending || (running && (!steerReady || !prompt.trim() || images.length > 0 || Boolean(editingEventID)));
   const actionLabel = recoveryPending ? "gemini.verifyStop" : showInterrupt ? "gemini.interrupt" : running ? "codex.steer" : "gemini.send";
   const steeringRequest = useRef<{operation:string; prompt:string; id:string}>();
+  const goalDraft = !running && !editingEventID && /^\/goal(?:\s|$)/i.test(prompt);
+  const goalObjective = goalDraft ? prompt.replace(/^\/goal\s*/i, "").trim() : "";
+  const goalLimitsValid = Number.isInteger(goalRounds) && goalRounds >= 1 && goalRounds <= 100 && Number.isInteger(goalMinutes) && goalMinutes >= 1 && goalMinutes <= 1440;
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (slashOpen || busy || recoveryPending || (running && !steerReady) || imageBusy || (!prompt.trim() && !images.length) || thread.server_status !== "online") return;
     setBusy(true); setError("");
     try {
+      if (goalDraft && goalData.error) { setError(t("gemini.goalLoadError")); return; }
+      if (goalDraft && (!thread.goal_supported || !goalObjective || !goalLimitsValid)) {
+        setError(t(!thread.goal_supported ? "gemini.goalUpdate" : !goalObjective ? "gemini.goalObjectiveRequired" : "gemini.goalLimitsInvalid"));
+        return;
+      }
       if (running) {
         if (images.length || editingEventID) return;
         if (!steeringRequest.current || steeringRequest.current.operation !== thread.operation_id || steeringRequest.current.prompt !== prompt) steeringRequest.current = {operation:thread.operation_id,prompt,id:crypto.randomUUID()};
         await post(`/gemini/threads/${thread.id}/steer`, {prompt,operation_id:thread.operation_id,request_id:steeringRequest.current.id});
         steeringRequest.current = undefined;
-      } else await post(editingEventID ? `/gemini/threads/${thread.id}/events/${editingEventID}/rewrite` : `/gemini/threads/${thread.id}/turns`, { prompt, model: model.trim(), approval_mode: mode, thinking_level: thinking, ...(images.length ? { images: images.map(image => ({data_url:image.dataURL})) } : {}) });
+      } else await post(editingEventID ? `/gemini/threads/${thread.id}/events/${editingEventID}/rewrite` : `/gemini/threads/${thread.id}/turns`, { prompt: goalDraft ? goalObjective : prompt, model: model.trim(), approval_mode: mode, thinking_level: thinking, ...(goalDraft ? { goal: {max_continuations:goalRounds,max_seconds:goalMinutes*60} } : {}), ...(images.length ? { images: images.map(image => ({data_url:image.dataURL})) } : {}) });
       setPrompt(""); setImages([]); setEditingEventID(""); follow.current = true; onChanged(); setReload(value => value + 1);
     }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
+  };
+  const controlGoal = async (action: "pause" | "resume" | "cancel") => {
+    if (!goal || busy) return;
+    if (action === "resume" && !goalLimitsValid) { setError(t("gemini.goalLimitsInvalid")); return; }
+    setBusy(true); setError("");
+    try {
+      await post(`/gemini/threads/${thread.id}/goals/${goal.id}/${action}`, action === "resume" ? {max_continuations:goalRounds,max_seconds:goalMinutes*60} : {});
+      onChanged(); setReload(value => value + 1);
+    } catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
   const exportSession = async () => {
     if (exporting || running) return;
@@ -364,7 +389,20 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
       {messages.map(item => item.role === "commandGroup" ? <GeminiToolGroup key={item.id} items={item.items} uncertainOperationID={recoveryPending ? thread.operation_id : undefined} /> : item.role === "question" ? <GeminiQuestion key={item.id} item={item} threadID={thread.id} readOnly={!running || thread.status === "interrupting" || item.operationID !== thread.operation_id || Boolean(thread.archived_at) || thread.server_status !== "online"} onAnswered={() => { onChanged(); setReload(value => value + 1); }} /> : item.role === "tool" ? <GeminiTool key={item.id} item={item} uncertain={recoveryPending && item.operationID === thread.operation_id} /> : item.role === "status" ? <p className="gemini-usage" key={item.id}>{item.text === "interrupted" ? t("status.interrupted") : item.stats ? t("gemini.usage", { input: formatUsageNumber(item.stats.input_tokens, language), output: formatUsageNumber(item.stats.output_tokens, language), tools: formatUsageNumber(item.stats.tool_calls, language) }) : item.text}</p> : <article className={`message ${item.role === "error" ? "error" : item.role === "steer" ? "user" : item.role}`} key={item.id}><header>{(item.role === "user" || item.role === "steer") ? <UserRound size={15} /> : <Bot size={15} />}<strong>{(item.role === "user" || item.role === "steer") ? t("codex.you") : "Gemini"}</strong><time>{formatTime(item.time)}</time>{item.role === "steer" && <small>{t(`gemini.steer.${item.steerStatus ?? "queued"}`)}</small>}</header>{!!item.images?.length && <MessageImages sources={item.images.map(image => image.data_url)} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{item.role === "user" && <div className="message-actions"><button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(error => notify(message(error))); }}><Copy size={14} /></button>{!thread.archived_at && <button type="button" className="message-action" disabled={busy || blocked || thread.server_status !== "online" || !thread.rewrite_supported} title={t(thread.rewrite_supported ? "codex.editMessage" : "gemini.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} onClick={() => { imageWork.current?.abort(); setImageBusy(false); setPrompt(item.text); setImages((item.images ?? []).map(image => ({id:crypto.randomUUID(),dataURL:image.data_url}))); setEditingEventID(item.id); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}</div>}{item.role === "assistant" && <div className="message-actions"><ContextMenu className="message-menu" label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.branchToNewChat"), icon: GitFork, disabled: blocked || busy || !forkTargets.has(item.id) || !thread.fork_supported || Boolean(thread.archived_at) || thread.server_status !== "online", onSelect: () => onFork(item.id) }]}>{null}</ContextMenu></div>}</article>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "gemini.interrupting" : "gemini.working")}</p>}
     </div>
-    <form className="composer gemini-composer" onSubmit={submit}>
+    <form className={`composer gemini-composer ${goalDraft ? "goal-mode" : ""}`} onSubmit={submit}>
+      {goalData.error && <div className="gemini-goal-error" role="alert"><span>{t("gemini.goalLoadError")} {goalData.error}</span><button type="button" className="text-button" onClick={goalData.reload}>{t("common.retry")}</button></div>}
+      {goal && <div className="gemini-goal">
+        <div className="goal-progress-row"><Target size={16} /><span title={goal.objective}><strong>{goal.objective}</strong><small>{t("gemini.goalProgress", {count:goal.continuations})} · {t(`gemini.goalStatus.${goalStatus}`)}</small></span>
+          <div>
+            {goal.status === "active" && <button type="button" className="icon-button" aria-label={t("gemini.goalPause")} title={t("gemini.goalPause")} disabled={busy || Boolean(goalData.error) || Boolean(thread.archived_at) || thread.status === "interrupting" || recoveryPending} onClick={() => void controlGoal("pause")}><Pause size={14} /></button>}
+            {(goal.status === "paused" || goal.status === "blocked") && <button type="button" className="icon-button" aria-label={t("gemini.goalResume")} title={t("gemini.goalResume")} disabled={busy || Boolean(goalData.error) || Boolean(thread.archived_at) || blocked || thread.server_status !== "online" || !thread.goal_supported} onClick={() => void controlGoal("resume")}><Play size={14} /></button>}
+            {["active", "paused", "blocked"].includes(goal.status) && <button type="button" className="icon-button danger" aria-label={t("gemini.goalCancel")} title={t("gemini.goalCancel")} disabled={busy || Boolean(goalData.error) || Boolean(thread.archived_at) || thread.status === "interrupting" || recoveryPending} onClick={() => void controlGoal("cancel")}><X size={14} /></button>}
+          </div>
+        </div>
+        {(goal.message || goal.evidence) && <details className="gemini-goal-evidence"><summary>{t("gemini.goalEvidence")}</summary><p>{goal.message || goal.evidence}</p></details>}
+      </div>}
+      {(goalDraft || (goal && (goal.status === "paused" || goal.status === "blocked"))) && <div className="gemini-goal-limits"><label>{t("gemini.goalRounds")}<input aria-label={t("gemini.goalRounds")} type="number" min="1" max="100" value={goalRounds} onChange={event => setGoalRounds(Number(event.target.value))} disabled={busy} /></label><label>{t("gemini.goalMinutes")}<input aria-label={t("gemini.goalMinutes")} type="number" min="1" max="1440" value={goalMinutes} onChange={event => setGoalMinutes(Number(event.target.value))} disabled={busy} /></label>{goalDraft && <button type="button" className="icon-button" aria-label={t("gemini.goalExit")} title={t("gemini.goalExit")} onClick={() => setPrompt(goalObjective)}><X size={14} /></button>}</div>}
+      {goalDraft && goal && (goal.status === "paused" || goal.status === "blocked") && <p className="gemini-hint">{t("gemini.goalReplacement")}</p>}
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} disabled={busy} onClick={() => { setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length > 0 && <div className="composer-images">{images.map(image => <figure key={image.id}><img src={image.dataURL} alt="" /><button type="button" aria-label={t("common.close")} disabled={busy} onClick={() => setImages(current => current.filter(item => item.id !== image.id))}><X size={13} /></button></figure>)}</div>}
       {imageBusy && <p className="gemini-hint" role="status"><LoaderCircle className="spin" size={14} />{t("gemini.preparingImages")}</p>}

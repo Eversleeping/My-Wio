@@ -21,6 +21,7 @@ type GeminiThread struct {
 	InputSupported    bool       `db:"-" json:"input_supported"`
 	ThinkingSupported bool       `db:"-" json:"thinking_supported"`
 	SkillsSupported   bool       `db:"-" json:"skills_supported"`
+	GoalSupported     bool       `db:"-" json:"goal_supported"`
 	PlanSupported     bool       `db:"-" json:"plan_supported"`
 	AgentVersion      string     `db:"agent_version" json:"-"`
 	RewriteSupported  bool       `db:"-" json:"rewrite_supported"`
@@ -79,6 +80,7 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 		out[i].InputSupported = buildinfo.SupportsGeminiInput(out[i].AgentVersion)
 		out[i].ThinkingSupported = buildinfo.SupportsGeminiThinking(out[i].AgentVersion)
 		out[i].SkillsSupported = buildinfo.SupportsGeminiSkills(out[i].AgentVersion, out[i].CLIVersion)
+		out[i].GoalSupported = buildinfo.SupportsGeminiGoal(out[i].AgentVersion, out[i].CLIVersion)
 		out[i].PlanSupported = buildinfo.SupportsGeminiPlan(out[i].AgentVersion, out[i].CLIVersion)
 		out[i].ForkSupported = buildinfo.SupportsGeminiFork(out[i].AgentVersion)
 		out[i].RewriteSupported = buildinfo.SupportsGeminiRewrite(out[i].AgentVersion)
@@ -98,6 +100,7 @@ func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, erro
 	}
 	thread.ThinkingSupported = buildinfo.SupportsGeminiThinking(thread.AgentVersion)
 	thread.SkillsSupported = buildinfo.SupportsGeminiSkills(thread.AgentVersion, thread.CLIVersion)
+	thread.GoalSupported = buildinfo.SupportsGeminiGoal(thread.AgentVersion, thread.CLIVersion)
 	thread.PlanSupported = buildinfo.SupportsGeminiPlan(thread.AgentVersion, thread.CLIVersion)
 	thread.ForkSupported = buildinfo.SupportsGeminiFork(thread.AgentVersion)
 	thread.RewriteSupported = buildinfo.SupportsGeminiRewrite(thread.AgentVersion)
@@ -138,19 +141,19 @@ func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode
 // QueueGeminiTurn claims the session, reserves the workspace and saves the user
 // message in one transaction, so concurrent sends cannot create duplicate turns.
 func (s *Store) QueueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode string, thinking ...string) (protocol.StreamEvent, error) {
-	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "", nil, thinking...)
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "", nil, nil, thinking...)
 }
 
 func (s *Store) QueueGeminiRewrite(ctx context.Context, thread GeminiThread, eventID, prompt, model, mode string, thinking ...string) (protocol.StreamEvent, error) {
-	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, nil, thinking...)
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, nil, nil, thinking...)
 }
 
 // QueueGeminiInput shares the transactional lock and native rewrite path.
 func (s *Store) QueueGeminiInput(ctx context.Context, thread GeminiThread, eventID, prompt, model, mode, thinking string, images []protocol.TurnImage) (protocol.StreamEvent, error) {
-	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, images, thinking)
+	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, images, nil, thinking)
 }
 
-func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, thinking ...string) (protocol.StreamEvent, error) {
+func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, goal *protocol.GeminiGoalCommand, thinking ...string) (protocol.StreamEvent, error) {
 	level := thread.ThinkingLevel
 	if len(thinking) > 0 {
 		level = thinking[0]
@@ -186,6 +189,12 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		return protocol.StreamEvent{}, ErrThreadActive
 	}
 	command := protocol.GeminiTurnCommand{ThreadID: thread.ID, Workspace: thread.Path, SessionID: thread.SessionID, Prompt: prompt, Model: model, ApprovalMode: mode, ThinkingLevel: level}
+	if goal != nil {
+		if err := s.claimGeminiGoal(ctx, tx, thread.ID, opID, goal, &images, now); err != nil {
+			return protocol.StreamEvent{}, err
+		}
+		command.Goal = goal
+	}
 	if err := tx.GetContext(ctx, &command.SessionID, s.Q("SELECT session_id FROM gemini_threads WHERE id=?"), thread.ID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
@@ -194,6 +203,9 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		return protocol.StreamEvent{}, err
 	}
 	command.Interactive = buildinfo.SupportsGeminiInput(agentVersion)
+	if command.Goal != nil && !command.Interactive {
+		return protocol.StreamEvent{}, errors.New("Gemini goal requires the interactive ACP protocol")
+	}
 	if len(images) > 0 && !command.Interactive {
 		return protocol.StreamEvent{}, errors.New("update Agent to support Gemini images")
 	}
@@ -256,7 +268,7 @@ func truncateGeminiTitle(prompt string) string {
 	return string(chars)
 }
 
-func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) error {
+func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread, goalAction ...string) error {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
@@ -307,6 +319,26 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread) er
 	if changed != 1 {
 		return ErrThreadActive
 	}
+	goalStatus, goalID := "paused", ""
+	if len(goalAction) > 0 {
+		goalStatus = goalAction[0]
+	}
+	if len(goalAction) > 1 {
+		goalID = goalAction[1]
+	}
+	if goalStatus != "paused" && goalStatus != "cancelled" {
+		return errors.New("invalid Gemini goal action")
+	}
+	goalResult, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_goals SET status=?,updated_at=? WHERE thread_id=? AND operation_id=? AND status='active' AND (?='' OR id=?)"), goalStatus, time.Now().UTC(), thread.ID, thread.OperationID, goalID, goalID)
+	if err != nil {
+		return err
+	}
+	if goalID != "" {
+		goalCount, err := goalResult.RowsAffected()
+		if err != nil || goalCount != 1 {
+			return ErrGeminiGoalChanged
+		}
+	}
 	if count == 0 {
 		payload, _ := json.Marshal(protocol.GeminiInterruptCommand{ThreadID: thread.ID, OperationID: thread.OperationID, RecoveryPending: previousStatus == "interrupted"})
 		id := NewID()
@@ -352,6 +384,9 @@ func (s *Store) ConfirmGeminiStopped(ctx context.Context, threadID, operationID 
 		return protocol.StreamEvent{}, ErrThreadActive
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',result=?,completed_at=? WHERE id=?"), "Process exit confirmed by user", now, operationID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_goals SET status='blocked',message=?,updated_at=? WHERE thread_id=? AND operation_id=? AND status='active'"), "The previous process was confirmed stopped; resume the goal when ready.", now, threadID, operationID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), now, operationID); err != nil {
@@ -414,8 +449,27 @@ func (s *Store) UpdateGeminiThread(ctx context.Context, id, title string, archiv
 // CompleteGeminiTurn only accepts the currently claimed operation. Late results
 // cannot finish a later turn or overwrite its model/session state.
 func (s *Store) CompleteGeminiTurn(ctx context.Context, id, opID, status string) error {
-	_, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET status=CASE WHEN status='interrupting' THEN 'interrupted' ELSE ? END,updated_at=? WHERE id=? AND operation_id=?`), status, time.Now().UTC(), id, opID)
-	return err
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET status=CASE WHEN status='interrupting' THEN 'interrupted' ELSE ? END,updated_at=? WHERE id=? AND operation_id=?`), status, now, id, opID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count == 0 {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, s.Q(`UPDATE gemini_goals SET status=CASE WHEN ?='idle' AND report='completed' THEN 'completed' ELSE 'blocked' END,
+ message=CASE WHEN ?='idle' AND report='completed' THEN '' WHEN report='blocked' THEN evidence ELSE 'Goal stopped before reporting completion; review the conversation before resuming.' END,updated_at=?
+ WHERE thread_id=? AND operation_id=? AND status='active'`), status, status, now, id, opID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // A native timestamp is saved verbatim in gemini.init. Select a turn using the

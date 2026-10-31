@@ -112,6 +112,92 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertProjectServerPreferencesIsolation(t, scans)
 	assertHiddenServerProjectsRecovery(t, scans)
 	assertGeminiRecoveryOnPostgres(t, scans)
+	assertGeminiGoalOnPostgres(t, scans)
+}
+
+func assertGeminiGoalOnPostgres(t *testing.T, database *Store) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "goal-pg-node", []string{"/srv"}, "goal-pg-enrollment", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "goal-pg-enrollment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "goal-pg-node", "goal-pg-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84", GeminiVersion: "0.66.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/goal-pg", Name: "goal-pg"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workspaceID string
+	for _, workspace := range workspaces {
+		if workspace.ServerID == server.ID {
+			workspaceID = workspace.ID
+		}
+	}
+	thread, err := database.CreateGeminiThread(ctx, workspaceID, "auto", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal := &protocol.GeminiGoalCommand{Objective: "Complete the attached work", MaxContinuations: 2, MaxSeconds: 120}
+	images := []protocol.TurnImage{{DataURL: "data:image/png;base64,aW1hZ2U="}}
+	if _, err := database.QueueGeminiGoal(ctx, thread, goal.Objective, "auto", "default", "", images, goal); err != nil {
+		t.Fatal(err)
+	}
+	thread, _ = database.GeminiThread(ctx, thread.ID)
+	if err := database.MarkDelivered(ctx, thread.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InterruptGeminiTurn(ctx, thread, "paused", goal.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateGeminiGoalProgress(ctx, thread.ID, protocol.GeminiGoalProgress{GoalID: goal.ID, OperationID: thread.OperationID, Continuations: 1, Report: "completed", Evidence: "Tests passed"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := database.GeminiGoal(ctx, thread.ID)
+	if err != nil || stored.Status != "paused" || stored.Report != "completed" {
+		t.Fatalf("PostgreSQL pending goal: %+v %v", stored, err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: thread.OperationID, Status: "cancelled"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteGeminiTurn(ctx, thread.ID, thread.OperationID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	thread, _ = database.GeminiThread(ctx, thread.ID)
+	resume := &protocol.GeminiGoalCommand{ID: goal.ID, MaxContinuations: 3, MaxSeconds: 180}
+	if _, err := database.QueueGeminiGoal(ctx, thread, "Continue", "auto", "default", "", nil, resume); err != nil {
+		t.Fatal(err)
+	}
+	thread, _ = database.GeminiThread(ctx, thread.ID)
+	op, err := database.Operation(ctx, thread.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command protocol.GeminiTurnCommand
+	if err := json.Unmarshal([]byte(op.Payload), &command); err != nil || len(command.Images) != 1 || command.Images[0].DataURL != images[0].DataURL || command.Goal.Continuations != 1 {
+		t.Fatalf("PostgreSQL goal resume: %+v %v", command, err)
+	}
+	if err := database.UpdateGeminiGoalProgress(ctx, thread.ID, protocol.GeminiGoalProgress{GoalID: goal.ID, OperationID: thread.OperationID, Continuations: 1, Report: "completed", Evidence: "Tests passed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteGeminiTurn(ctx, thread.ID, thread.OperationID, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = database.GeminiGoal(ctx, thread.ID)
+	if err != nil || stored.Status != "completed" {
+		t.Fatalf("PostgreSQL goal completion: %+v %v", stored, err)
+	}
 }
 
 func assertGeminiRecoveryOnPostgres(t *testing.T, database *Store) {

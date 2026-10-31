@@ -29,6 +29,7 @@ type GeminiSkillsResult struct {
 // GeminiTurnCommand runs a headless Gemini CLI turn in an existing workspace.
 // Authentication stays on the Agent host; credentials never enter this payload.
 type GeminiTurnCommand struct {
+	Goal            *GeminiGoalCommand   `json:"goal,omitempty"`
 	Steering        bool                 `json:"steering,omitempty"`
 	SteeringContext []string             `json:"steering_context,omitempty"`
 	Interactive     bool                 `json:"interactive,omitempty"`
@@ -41,6 +42,24 @@ type GeminiTurnCommand struct {
 	Model           string               `json:"model"`
 	ApprovalMode    string               `json:"approval_mode"`
 	Rewrite         *GeminiRewriteTarget `json:"rewrite,omitempty"`
+}
+
+// GeminiGoalCommand is tied to one operation; the control plane keeps the
+// durable goal record and never replays an operation with uncertain ownership.
+type GeminiGoalCommand struct {
+	ID               string `json:"id"`
+	Objective        string `json:"objective"`
+	Continuations    int    `json:"continuations"`
+	MaxContinuations int    `json:"max_continuations"`
+	MaxSeconds       int    `json:"max_seconds"`
+}
+
+type GeminiGoalProgress struct {
+	OperationID   string `json:"operation_id"`
+	GoalID        string `json:"goal_id"`
+	Continuations int    `json:"continuations"`
+	Report        string `json:"report,omitempty"`
+	Evidence      string `json:"evidence,omitempty"`
 }
 
 type GeminiSteerCommand struct {

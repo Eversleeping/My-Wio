@@ -40,6 +40,11 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		}
 	}
 	blocks := []any{}
+	var goal *geminiGoalRun
+	if command.Goal != nil {
+		goal = &geminiGoalRun{goal: *command.Goal}
+		blocks = append(blocks, map[string]string{"type": "text", "text": goal.instruction()})
+	}
 	if command.ApprovalMode == "plan" && !strings.HasPrefix(strings.TrimSpace(command.Prompt), "/") {
 		blocks = append(blocks, map[string]string{"type": "text", "text": "In plan mode, present the complete plan in the conversation before requesting approval. Do not implement the plan without approval."})
 	}
@@ -64,7 +69,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		}
 		blocks = append(blocks, map[string]string{"type": "image", "mimeType": mime, "data": data})
 	}
-	bridge, closeBridge, err := a.questionServer(ctx, op, command.ThreadID)
+	bridge, closeBridge, err := a.questionServer(ctx, op, command.ThreadID, goal)
 	if err != nil {
 		return err
 	}
@@ -255,6 +260,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							// ACP asks the client for confirmation even in YOLO mode.
 							// Use a one-time grant so this turn cannot change saved policy.
 							bridgeCall := strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_ask_user") && strings.HasPrefix(p.ToolCall.Title, "wio_ask_user(")
+							if goal != nil && strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_goal_report") && strings.HasPrefix(p.ToolCall.Title, "wio_goal_report(") {
+								bridgeCall = true
+							}
 							if bridgeCall || (command.ApprovalMode == "yolo" && !planApproval) {
 								for _, o := range p.Options {
 									if o.Kind == "allow_once" {
@@ -368,11 +376,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		}
 	}
 	replay = false
-	raw, err := call("session/prompt", map[string]any{"sessionId": sessionID, "prompt": blocks})
-	if err != nil {
-		return err
-	}
-	var result struct {
+	type promptResult struct {
 		StopReason string `json:"stopReason"`
 		Usage      struct {
 			Input  *int64 `json:"inputTokens"`
@@ -387,30 +391,82 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 			} `json:"quota"`
 		} `json:"_meta"`
 	}
-	if json.Unmarshal(raw, &result) != nil {
-		return errors.New("invalid Gemini prompt result")
+	started := time.Now()
+	var result promptResult
+	var totalInput, totalOutput int64
+	knownInput, knownOutput := true, true
+	continuations, initialContinuations := 0, 0
+	if goal != nil {
+		continuations, initialContinuations = goal.goal.Continuations, goal.goal.Continuations
+	}
+	usageSnapshot := func() map[string]any {
+		stats := map[string]any{"tool_calls": toolCalls}
+		if knownInput {
+			stats["input_tokens"] = totalInput
+		}
+		if knownOutput {
+			stats["output_tokens"] = totalOutput
+		}
+		return stats
+	}
+	for {
+		raw, err := call("session/prompt", map[string]any{"sessionId": sessionID, "prompt": blocks})
+		if err != nil {
+			return err
+		}
+		result = promptResult{}
+		if json.Unmarshal(raw, &result) != nil {
+			return errors.New("invalid Gemini prompt result")
+		}
+		input, output := result.Usage.Input, result.Usage.Output
+		quotaInput, quotaOutput := result.Meta.Quota.Tokens.Input, result.Meta.Quota.Tokens.Output
+		zeroUsage := input != nil && output != nil && *input == 0 && *output == 0
+		if (input == nil || zeroUsage) && quotaInput != nil {
+			input = quotaInput
+		}
+		if (output == nil || zeroUsage) && quotaOutput != nil {
+			output = quotaOutput
+		}
+		if input == nil || *input < 0 {
+			knownInput = false
+		} else {
+			totalInput += *input
+		}
+		if output == nil || *output < 0 {
+			knownOutput = false
+		} else {
+			totalOutput += *output
+		}
+		if goal != nil {
+			if err := emit("goal.usage", map[string]any{"goal_id": goal.goal.ID, "stats": usageSnapshot()}); err != nil {
+				return err
+			}
+		}
+		if goal == nil || result.StopReason != "end_turn" {
+			break
+		}
+		report, evidence := goal.result()
+		if report == "" && continuations-initialContinuations >= goal.goal.MaxContinuations {
+			report = "blocked"
+			evidence = "The configured continuation limit was reached before the goal was reported complete. Review progress and resume if needed."
+		}
+		if report != "" {
+			if err := emit("goal.progress", map[string]any{"goal_id": goal.goal.ID, "continuations": continuations, "report": report, "evidence": evidence}); err != nil {
+				return err
+			}
+			break
+		}
+		continuations++
+		if err := emit("goal.progress", map[string]any{"goal_id": goal.goal.ID, "continuations": continuations}); err != nil {
+			return err
+		}
+		blocks = []any{map[string]string{"type": "text", "text": goal.continuation(continuations, time.Since(started))}}
 	}
 	status := "success"
 	if result.StopReason != "end_turn" {
 		status = "error"
 	}
-	input, output := result.Usage.Input, result.Usage.Output
-	quotaInput, quotaOutput := result.Meta.Quota.Tokens.Input, result.Meta.Quota.Tokens.Output
-	zeroUsage := input != nil && output != nil && *input == 0 && *output == 0
-	if (input == nil || zeroUsage) && quotaInput != nil {
-		input = quotaInput
-	}
-	if (output == nil || zeroUsage) && quotaOutput != nil {
-		output = quotaOutput
-	}
-	stats := map[string]any{"tool_calls": toolCalls}
-	if input != nil && *input >= 0 {
-		stats["input_tokens"] = *input
-	}
-	if output != nil && *output >= 0 {
-		stats["output_tokens"] = *output
-	}
-	payload := map[string]any{"status": status, "stats": stats}
+	payload := map[string]any{"status": status, "stats": usageSnapshot(), "stop_reason": result.StopReason}
 	if status != "success" {
 		payload["error"] = map[string]string{"message": "Gemini stopped: " + result.StopReason}
 	}

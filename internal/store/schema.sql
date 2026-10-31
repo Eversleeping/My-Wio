@@ -510,6 +510,25 @@ CREATE TABLE IF NOT EXISTS gemini_threads (
 
 CREATE INDEX IF NOT EXISTS gemini_threads_workspace_idx ON gemini_threads(workspace_id, updated_at);
 
+CREATE TABLE IF NOT EXISTS gemini_goals (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES gemini_threads(id) ON DELETE CASCADE,
+  objective TEXT NOT NULL,
+  images_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  continuations INTEGER NOT NULL DEFAULT 0,
+  max_continuations INTEGER NOT NULL,
+  max_seconds INTEGER NOT NULL,
+  report TEXT NOT NULL DEFAULT '',
+  evidence TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS gemini_goals_thread_idx ON gemini_goals(thread_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS gemini_goals_active_idx ON gemini_goals(thread_id) WHERE status='active';
+
 CREATE TABLE IF NOT EXISTS server_gemini_credential_profiles (
  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
  profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,

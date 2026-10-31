@@ -5,7 +5,13 @@ import (
 	"strings"
 )
 
-var Version = "0.2.83"
+var Version = "0.2.84"
+
+const MinimumGeminiGoalVersion = "0.2.84"
+
+func SupportsGeminiGoal(agent, cli string) bool {
+	return atLeast(agent, MinimumGeminiGoalVersion) && atLeast(cli, "0.66.0")
+}
 
 const MinimumGeminiSkillsVersion = "0.2.83"
 const MinimumGeminiPlanVersion = "0.2.83"

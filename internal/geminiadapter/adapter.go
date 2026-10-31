@@ -167,6 +167,14 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	if command.ApprovalMode == "plan" && !command.Interactive {
 		return errors.New("Gemini plan mode requires the interactive ACP protocol")
 	}
+	if command.Goal != nil {
+		if !command.Interactive || command.Goal.ID == "" || strings.TrimSpace(command.Goal.Objective) == "" || len(command.Goal.Objective) > 256*1024 || command.Goal.Continuations < 0 || command.Goal.MaxContinuations < 1 || command.Goal.MaxContinuations > 100 || command.Goal.MaxSeconds < 60 || command.Goal.MaxSeconds > 86400 {
+			return errors.New("invalid Gemini goal configuration")
+		}
+		var stop context.CancelFunc
+		ctx, stop = context.WithTimeout(ctx, time.Duration(command.Goal.MaxSeconds)*time.Second)
+		defer stop()
+	}
 	if command.Interactive {
 		return a.runACP(ctx, operationID, command, executable, environment)
 	}

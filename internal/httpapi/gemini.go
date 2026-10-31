@@ -143,11 +143,15 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Images        []protocol.TurnImage `json:"images"`
-		Prompt        string               `json:"prompt"`
-		ThinkingLevel *string              `json:"thinking_level"`
-		Model         string               `json:"model"`
-		ApprovalMode  string               `json:"approval_mode"`
+		Images []protocol.TurnImage `json:"images"`
+		Prompt string               `json:"prompt"`
+		Goal   *struct {
+			MaxContinuations int `json:"max_continuations"`
+			MaxSeconds       int `json:"max_seconds"`
+		} `json:"goal"`
+		ThinkingLevel *string `json:"thinking_level"`
+		Model         string  `json:"model"`
+		ApprovalMode  string  `json:"approval_mode"`
 	}
 	if !decodeJSONLimit(w, r, &input, 6<<20) {
 		return
@@ -201,12 +205,27 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	editEventID := chi.URLParam(r, "eventID")
+	if input.Goal != nil {
+		if editEventID != "" || input.Prompt == "" || !store.ValidGeminiGoalLimits(input.Goal.MaxContinuations, input.Goal.MaxSeconds) {
+			writeError(w, 400, "invalid Gemini goal objective or limits")
+			return
+		}
+		if !buildinfo.SupportsGeminiGoal(server.AgentVersion, server.GeminiVersion) {
+			writeError(w, 409, "Gemini goals require Wio Agent "+buildinfo.MinimumGeminiGoalVersion+" and Gemini CLI 0.66.0 or newer")
+			return
+		}
+	}
 	if editEventID != "" && !buildinfo.SupportsGeminiRewrite(server.AgentVersion) {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiRewriteVersion+" or newer to edit Gemini history")
 		return
 	}
 	var event protocol.StreamEvent
-	event, err = a.store.QueueGeminiInput(r.Context(), thread, editEventID, input.Prompt, input.Model, input.ApprovalMode, level, input.Images)
+	if input.Goal != nil {
+		goal := &protocol.GeminiGoalCommand{Objective: input.Prompt, MaxContinuations: input.Goal.MaxContinuations, MaxSeconds: input.Goal.MaxSeconds}
+		event, err = a.store.QueueGeminiGoal(r.Context(), thread, input.Prompt, input.Model, input.ApprovalMode, level, input.Images, goal)
+	} else {
+		event, err = a.store.QueueGeminiInput(r.Context(), thread, editEventID, input.Prompt, input.Model, input.ApprovalMode, level, input.Images)
+	}
 	if errors.Is(err, store.ErrInvalidEditTarget) {
 		writeError(w, 409, "this Gemini message has no saved native turn to rewind; original conversation was kept")
 		return
