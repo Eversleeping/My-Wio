@@ -13,39 +13,41 @@ import (
 )
 
 type GeminiThread struct {
-	RecoveryPending   bool       `db:"recovery_pending" json:"recovery_pending"`
-	SteerSupported    bool       `db:"-" json:"steer_supported"`
-	SteerReady        bool       `db:"-" json:"steer_ready"`
-	CLIVersion        string     `db:"gemini_version" json:"-"`
-	ThinkingLevel     string     `db:"thinking_level" json:"thinking_level"`
-	InputSupported    bool       `db:"-" json:"input_supported"`
-	ThinkingSupported bool       `db:"-" json:"thinking_supported"`
-	SkillsSupported   bool       `db:"-" json:"skills_supported"`
-	GoalSupported     bool       `db:"-" json:"goal_supported"`
-	PlanSupported     bool       `db:"-" json:"plan_supported"`
-	AgentVersion      string     `db:"agent_version" json:"-"`
-	RewriteSupported  bool       `db:"-" json:"rewrite_supported"`
-	ForkSupported     bool       `db:"-" json:"fork_supported"`
-	PinnedAt          *time.Time `db:"pinned_at" json:"pinned_at"`
-	ProjectPinnedAt   *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
-	ProjectHiddenAt   *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
-	ID                string     `db:"id" json:"id"`
-	WorkspaceID       string     `db:"workspace_id" json:"workspace_id"`
-	SessionID         string     `db:"session_id" json:"session_id"`
-	Title             string     `db:"title" json:"title"`
-	Model             string     `db:"model" json:"model"`
-	ApprovalMode      string     `db:"approval_mode" json:"approval_mode"`
-	Status            string     `db:"status" json:"status"`
-	OperationID       string     `db:"operation_id" json:"operation_id"`
-	ArchivedAt        *time.Time `db:"archived_at" json:"archived_at"`
-	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
-	Path              string     `db:"path" json:"path"`
-	ProjectID         string     `db:"project_id" json:"project_id"`
-	ProjectName       string     `db:"project_name" json:"project_name"`
-	ServerID          string     `db:"server_id" json:"server_id"`
-	ServerName        string     `db:"server_name" json:"server_name"`
-	ServerStatus      string     `db:"server_status" json:"server_status"`
+	RecoveryPending           bool       `db:"recovery_pending" json:"recovery_pending"`
+	SteerSupported            bool       `db:"-" json:"steer_supported"`
+	SteerImagesSupported      bool       `db:"-" json:"steer_images_supported"`
+	SkillsManagementSupported bool       `db:"-" json:"skills_management_supported"`
+	SteerReady                bool       `db:"-" json:"steer_ready"`
+	CLIVersion                string     `db:"gemini_version" json:"-"`
+	ThinkingLevel             string     `db:"thinking_level" json:"thinking_level"`
+	InputSupported            bool       `db:"-" json:"input_supported"`
+	ThinkingSupported         bool       `db:"-" json:"thinking_supported"`
+	SkillsSupported           bool       `db:"-" json:"skills_supported"`
+	GoalSupported             bool       `db:"-" json:"goal_supported"`
+	PlanSupported             bool       `db:"-" json:"plan_supported"`
+	AgentVersion              string     `db:"agent_version" json:"-"`
+	RewriteSupported          bool       `db:"-" json:"rewrite_supported"`
+	ForkSupported             bool       `db:"-" json:"fork_supported"`
+	PinnedAt                  *time.Time `db:"pinned_at" json:"pinned_at"`
+	ProjectPinnedAt           *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
+	ProjectHiddenAt           *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
+	ID                        string     `db:"id" json:"id"`
+	WorkspaceID               string     `db:"workspace_id" json:"workspace_id"`
+	SessionID                 string     `db:"session_id" json:"session_id"`
+	Title                     string     `db:"title" json:"title"`
+	Model                     string     `db:"model" json:"model"`
+	ApprovalMode              string     `db:"approval_mode" json:"approval_mode"`
+	Status                    string     `db:"status" json:"status"`
+	OperationID               string     `db:"operation_id" json:"operation_id"`
+	ArchivedAt                *time.Time `db:"archived_at" json:"archived_at"`
+	CreatedAt                 time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt                 time.Time  `db:"updated_at" json:"updated_at"`
+	Path                      string     `db:"path" json:"path"`
+	ProjectID                 string     `db:"project_id" json:"project_id"`
+	ProjectName               string     `db:"project_name" json:"project_name"`
+	ServerID                  string     `db:"server_id" json:"server_id"`
+	ServerName                string     `db:"server_name" json:"server_name"`
+	ServerStatus              string     `db:"server_status" json:"server_status"`
 }
 
 const geminiThreadSelect = `SELECT t.*,CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending,s.agent_version,s.gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
@@ -77,6 +79,8 @@ func (s *Store) GeminiThreads(ctx context.Context, archived bool) ([]GeminiThrea
 	err := s.DB.SelectContext(ctx, &out, s.Q(geminiThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN ps.pinned_at IS NULL THEN 1 ELSE 0 END,ps.pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range out {
 		out[i].SteerSupported = buildinfo.SupportsGeminiSteering(out[i].AgentVersion, out[i].CLIVersion)
+		out[i].SteerImagesSupported = buildinfo.SupportsGeminiImageSteering(out[i].AgentVersion, out[i].CLIVersion)
+		out[i].SkillsManagementSupported = buildinfo.SupportsGeminiSkillManagement(out[i].AgentVersion, out[i].CLIVersion)
 		out[i].InputSupported = buildinfo.SupportsGeminiInput(out[i].AgentVersion)
 		out[i].ThinkingSupported = buildinfo.SupportsGeminiThinking(out[i].AgentVersion)
 		out[i].SkillsSupported = buildinfo.SupportsGeminiSkills(out[i].AgentVersion, out[i].CLIVersion)
@@ -93,6 +97,8 @@ func (s *Store) GeminiThread(ctx context.Context, id string) (GeminiThread, erro
 	err := s.DB.GetContext(ctx, &thread, s.Q(geminiThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	thread.InputSupported = buildinfo.SupportsGeminiInput(thread.AgentVersion)
 	thread.SteerSupported = buildinfo.SupportsGeminiSteering(thread.AgentVersion, thread.CLIVersion)
+	thread.SteerImagesSupported = buildinfo.SupportsGeminiImageSteering(thread.AgentVersion, thread.CLIVersion)
+	thread.SkillsManagementSupported = buildinfo.SupportsGeminiSkillManagement(thread.AgentVersion, thread.CLIVersion)
 	if err == nil && thread.SteerSupported && thread.Status == "running" {
 		var count int
 		err = s.DB.GetContext(ctx, &count, s.Q("SELECT count(*) FROM events WHERE stream_id=? AND event_id=? AND kind='gemini.steer.ready'"), id, thread.OperationID+":steer-ready")
@@ -169,7 +175,7 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 		return protocol.StreamEvent{}, err
 	}
 	var configuring int
-	if err := tx.GetContext(ctx, &configuring, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('gemini.credentials.configure','cli.install','agent.update') AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
+	if err := tx.GetContext(ctx, &configuring, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('gemini.credentials.configure','gemini.skills.manage','cli.install','agent.update') AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	if configuring != 0 {

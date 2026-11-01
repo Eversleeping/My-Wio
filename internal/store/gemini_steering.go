@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -13,7 +14,10 @@ import (
 
 // Steers do not take the workspace write lock held by the active turn. Lock
 // the thread instead, capturing the exact operation and serializing completion.
-func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, requestID, prompt string) (protocol.StreamEvent, string, error) {
+func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, requestID, prompt string, images ...protocol.TurnImage) (protocol.StreamEvent, string, error) {
+	if err := protocol.ValidateGeminiImages(images); err != nil {
+		return protocol.StreamEvent{}, "", err
+	}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return protocol.StreamEvent{}, "", err
@@ -31,7 +35,7 @@ func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, reques
 	err = tx.GetContext(ctx, &existing, s.Q(operationSelect+" WHERE idempotency_key=?"), key)
 	if err == nil {
 		var command protocol.GeminiSteerCommand
-		if json.Unmarshal([]byte(existing.Payload), &command) != nil || command.Prompt != prompt || command.OperationID != expected {
+		if json.Unmarshal([]byte(existing.Payload), &command) != nil || command.Prompt != prompt || command.OperationID != expected || !slices.Equal(command.Images, images) {
 			return protocol.StreamEvent{}, "", errors.New("steering request already has different content")
 		}
 		return protocol.StreamEvent{}, existing.ID, tx.Commit()
@@ -60,21 +64,33 @@ func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, reques
 		return protocol.StreamEvent{}, "", ErrThreadActive
 	}
 	// Bound accepted input even before delayed control messages reach the Agent.
-	var total int
-	if err = tx.GetContext(ctx, &total, s.Q("SELECT count(*) FROM agent_operations WHERE server_id=? AND kind='gemini.turn.steer' AND payload LIKE ?"), thread.ServerID, "%"+expected+"%"); err != nil {
+	var pending []string
+	if err = tx.SelectContext(ctx, &pending, s.Q("SELECT payload FROM agent_operations WHERE server_id=? AND kind='gemini.turn.steer' AND payload LIKE ?"), thread.ServerID, "%"+expected+"%"); err != nil {
 		return protocol.StreamEvent{}, "", err
 	}
-	if total >= 32 {
+	if len(pending) >= 32 {
 		return protocol.StreamEvent{}, "", errors.New("too many steering instructions in this turn")
 	}
+	allImages, textBytes := slices.Clone(images), len(prompt)
+	for _, payload := range pending {
+		var previous protocol.GeminiSteerCommand
+		if json.Unmarshal([]byte(payload), &previous) != nil {
+			return protocol.StreamEvent{}, "", errors.New("invalid previous steering request")
+		}
+		allImages = append(allImages, previous.Images...)
+		textBytes += len(previous.Prompt)
+	}
+	if textBytes > 64<<10 || protocol.ValidateGeminiImages(allImages) != nil {
+		return protocol.StreamEvent{}, "", errors.New("the running task has reached its steering input limit; wait for it to finish")
+	}
 	id, now := NewID(), time.Now().UTC()
-	command := protocol.GeminiSteerCommand{ThreadID: threadID, OperationID: expected, RequestID: requestID, Prompt: prompt}
+	command := protocol.GeminiSteerCommand{ThreadID: threadID, OperationID: expected, RequestID: requestID, Prompt: prompt, Images: images}
 	raw, _ := json.Marshal(command)
 	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,'gemini.turn.steer',?,?,?)`), id, thread.ServerID, thread.ProjectID, thread.WorkspaceID, string(raw), key, now)
 	if err != nil {
 		return protocol.StreamEvent{}, "", err
 	}
-	message, _ := json.Marshal(map[string]any{"text": prompt, "request_id": requestID, "operation_id": expected})
+	message, _ := json.Marshal(map[string]any{"text": prompt, "images": images, "request_id": requestID, "operation_id": expected})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: threadID, Kind: "gemini.steer.queued", OccurredAt: now, Payload: message}
 	if err = tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), threadID); err != nil {
 		return event, "", err
@@ -121,5 +137,7 @@ func (s *Store) geminiSteeringContext(ctx context.Context, tx *sqlx.Tx, thread s
 			out = append(out, texts[id])
 		}
 	}
+	// Image updates are already recorded as real MCP results in native history.
+	// Resending them here would duplicate context and can exceed transport limits.
 	return out, nil
 }

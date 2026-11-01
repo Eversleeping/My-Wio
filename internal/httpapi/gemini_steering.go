@@ -5,20 +5,22 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 func (a *API) steerGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Prompt      string `json:"prompt"`
-		OperationID string `json:"operation_id"`
-		RequestID   string `json:"request_id"`
+		Prompt      string               `json:"prompt"`
+		OperationID string               `json:"operation_id"`
+		RequestID   string               `json:"request_id"`
+		Images      []protocol.TurnImage `json:"images"`
 	}
-	if !decodeJSONLimit(w, r, &input, 16<<10) {
+	if !decodeJSONLimit(w, r, &input, 6<<20) {
 		return
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	_, requestErr := uuid.Parse(input.RequestID)
-	if input.Prompt == "" || len(input.Prompt) > 8192 || input.OperationID == "" || requestErr != nil {
+	if (input.Prompt == "" && len(input.Images) == 0) || len(input.Prompt) > 8192 || input.OperationID == "" || requestErr != nil || protocol.ValidateGeminiImages(input.Images) != nil {
 		writeError(w, 400, "invalid Gemini steering instruction")
 		return
 	}
@@ -30,7 +32,11 @@ func (a *API) steerGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "Gemini steering requires Agent 0.2.79 and Gemini CLI 0.66.0 or newer")
 		return
 	}
-	event, id, err := a.store.QueueGeminiSteer(r.Context(), thread.ID, input.OperationID, input.RequestID, input.Prompt)
+	if len(input.Images) > 0 && !thread.SteerImagesSupported {
+		writeError(w, 409, "running image updates require Agent 0.2.88 and Gemini CLI 0.66.0 or newer")
+		return
+	}
+	event, id, err := a.store.QueueGeminiSteer(r.Context(), thread.ID, input.OperationID, input.RequestID, input.Prompt, input.Images...)
 	if err != nil {
 		writeError(w, 409, err.Error())
 		return

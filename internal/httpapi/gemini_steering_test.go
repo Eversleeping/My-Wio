@@ -75,6 +75,30 @@ func TestGeminiSteerScopesDeliveryRetriesAndNextTurnContext(t *testing.T) {
 	if code := send(op, requestID, "Different"); code != 409 {
 		t.Fatalf("changed retry: %d", code)
 	}
+	image := protocol.TurnImage{DataURL: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}
+	imageID := store.NewID()
+	imageBody := map[string]any{"operation_id": op, "request_id": imageID, "prompt": "Inspect the image", "images": []protocol.TurnImage{image}}
+	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 409 {
+		t.Fatalf("old agent accepted images: %d", r.Code)
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.88", GeminiVersion: "0.66.0"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 202 {
+			t.Fatalf("image retry: %d %s", r.Code, r.Body.String())
+		}
+	}
+	imageBody["images"] = []protocol.TurnImage{image, image}
+	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 409 {
+		t.Fatalf("changed images accepted: %d", r.Code)
+	}
+	imageBody["request_id"] = store.NewID()
+	imageBody["prompt"] = ""
+	imageBody["images"] = []protocol.TurnImage{image}
+	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 202 {
+		t.Fatalf("image only rejected: %d %s", r.Code, r.Body.String())
+	}
 	current, _ := db.GeminiThread(ctx, thread.ID)
 	if current.Status != "running" || current.OperationID != op || !current.SteerReady {
 		t.Fatal("steering changed lifecycle or readiness lost")
@@ -92,10 +116,14 @@ func TestGeminiSteerScopesDeliveryRetriesAndNextTurnContext(t *testing.T) {
 			}
 		}
 	}
-	if steers != 1 {
+	if steers != 3 {
 		t.Fatalf("retry duplicated operation: %d", steers)
 	}
 	add("gemini.steer.applied", map[string]any{"request_id": requestID})
+	imageApplied, _ := json.Marshal(map[string]string{"operation_id": op, "request_id": imageID})
+	if _, err := db.AddEvent(ctx, protocol.StreamEvent{EventID: store.NewID(), StreamID: thread.ID, Kind: "gemini.steer.applied", Payload: imageApplied}); err != nil {
+		t.Fatal(err)
+	}
 	add("gemini.result", map[string]any{"status": "success"})
 	if code := send(op, store.NewID(), "Late"); code != 409 {
 		t.Fatalf("completed model request accepted steer: %d", code)
@@ -114,7 +142,7 @@ func TestGeminiSteerScopesDeliveryRetriesAndNextTurnContext(t *testing.T) {
 	next, _ := db.Operation(ctx, current.OperationID)
 	var command protocol.GeminiTurnCommand
 	_ = json.Unmarshal([]byte(next.Payload), &command)
-	if !command.Steering || len(command.SteeringContext) != 1 || command.SteeringContext[0] != "Focus on tests" {
+	if !command.Steering || len(command.SteeringContext) != 2 || command.SteeringContext[0] != "Focus on tests" || command.SteeringContext[1] != "Inspect the image" {
 		t.Fatalf("applied context not retained: %+v", command)
 	}
 	if code := send(op, store.NewID(), "Old turn"); code != 409 {

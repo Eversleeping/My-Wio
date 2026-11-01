@@ -11,13 +11,14 @@ import type { GeminiGoal } from "./types";
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; archived?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; goalSupported?: boolean; goal?: GeminiGoal; goalLoadFailures?: number; goalStartFailure?: boolean; strictMode?: boolean; } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; archived?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerImagesSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; skillsManagementSupported?: boolean; skillsNetworkFailure?: boolean; goalSupported?: boolean; goal?: GeminiGoal; goalLoadFailures?: number; goalStartFailure?: boolean; strictMode?: boolean; } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_images_supported:options.steerImagesSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,skills_management_supported:options.skillsManagementSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   let goalLoadFailures = options.goalLoadFailures ?? 0;
+  let skillEnabled = true, skillRemoved = false, skillsNetworkFailure = options.skillsNetworkFailure ?? false;
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     let body: unknown = [];
@@ -27,10 +28,17 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
       if (url.endsWith("/steer")) {
         if (options.steerFailure) return new Response(JSON.stringify({error:"Turn is no longer running"}), {status:409,headers:{"Content-Type":"application/json"}});
         body={operation_id:"steer-op"};
-        eventLog=[...eventLog,{event_id:"steer",stream_id:thread.id,sequence:100,kind:"gemini.steer.queued",occurred_at:thread.updated_at,payload:{text:input.prompt,operation_id:input.operation_id,request_id:input.request_id}}];
+        eventLog=[...eventLog,{event_id:"steer",stream_id:thread.id,sequence:100,kind:"gemini.steer.queued",occurred_at:thread.updated_at,payload:{text:input.prompt,images:input.images,operation_id:input.operation_id,request_id:input.request_id}}];
       }
       if (url.endsWith("/answer")) body={operation_id:"answer-op"};
       if (url.endsWith("/gemini/skills")) body={operation_id:"skills-op"};
+      if (url.endsWith("/gemini/skills/manage")) {
+        if (skillsNetworkFailure) { skillsNetworkFailure = false; throw new Error("Network unavailable"); }
+        if (input.action === "disable") skillEnabled = false;
+        if (input.action === "enable") skillEnabled = true;
+        if (input.action === "uninstall") skillRemoved = true;
+        body={operation_id:"skills-op"};
+      }
       if (url.endsWith("/fork")) body={operation_id:"fork-op",target_thread_id:"forked-thread"};
       if (url.endsWith("/rewrite")) {
         if (options.rewriteFailure) return new Response(JSON.stringify({error:"Native history unavailable; original conversation was kept"}),{status:409,headers:{"Content-Type":"application/json"}});
@@ -41,7 +49,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     }
     else if (url === "/api/operations/answer-op") body={status:options.answerFailure ? "failed" : "succeeded",result:"Question expired"};
     else if (url === "/api/operations/fork-op") body={status:"succeeded"};
-    else if (url.endsWith("/gemini/skills/skills-op")) body={status:"succeeded",skills:[{name:"code-review",description:"Review code",enabled:true,builtin:false},{name:"disabled",description:"Disabled skill",enabled:false,builtin:false}]};
+    else if (url.endsWith("/gemini/skills/skills-op")) body={status:"succeeded",skills:[...(!skillRemoved ? [{name:"code-review",description:"Review code",enabled:skillEnabled,builtin:false,scope:"workspace"}] : []),{name:"disabled",description:"Disabled skill",enabled:false,builtin:false,scope:"external"}]};
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
     else if (url === "/api/gemini/threads/thread-1/goal") { if (goalLoadFailures-- > 0) return new Response(JSON.stringify({error:"Status unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); body = options.goal ?? null; }
     else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
@@ -586,6 +594,40 @@ test("preserves image attachments when editing an earlier message", async () => 
   await waitFor(()=>expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/events/with-image/rewrite",body:{images:[{data_url:pastedImage}]}}));
 });
 
+test("adds an image without text to the running task and renders its queued preview", async () => {
+  vi.mocked(compressImage).mockResolvedValue(pastedImage);
+  const {user,requests}=setup(true,"auto","configured",[],{status:"running",steerSupported:true,steerReady:true,steerImagesSupported:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  fireEvent.paste(input,{clipboardData:{items:[{type:"image/png",getAsFile:()=>new File(["image"],"test.png",{type:"image/png"})}]}});
+  await waitFor(()=>expect(document.querySelector(".composer-images img")).toHaveAttribute("src",pastedImage));
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await waitFor(()=>expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/steer",body:{prompt:"",operation_id:"op1",images:[{data_url:pastedImage}],request_id:expect.any(String)}}));
+  expect(document.querySelector(".composer-images")).not.toBeInTheDocument();
+  await waitFor(()=>expect(document.querySelector(".message.user img")).toHaveAttribute("src",pastedImage));
+});
+
+test("retains a running image and its request ID after a failed send", async () => {
+  vi.mocked(compressImage).mockResolvedValue(pastedImage);
+  const {user,requests}=setup(true,"auto","configured",[],{status:"running",steerSupported:true,steerReady:true,steerImagesSupported:true,steerFailure:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  fireEvent.paste(input,{clipboardData:{items:[{type:"image/png",getAsFile:()=>new File(["image"],"test.png",{type:"image/png"})}]}});
+  await waitFor(()=>expect(document.querySelector(".composer-images img")).toBeInTheDocument());
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await screen.findByText("Turn is no longer running");
+  expect(document.querySelector(".composer-images img")).toHaveAttribute("src",pastedImage);
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await waitFor(()=>expect(requests).toHaveLength(2));
+  expect(requests[0].body).toEqual(requests[1].body);
+});
+
+test("requires a compatible Agent before adding running images", async () => {
+  const {notify}=setup(true,"auto","configured",[],{status:"running",steerSupported:true,steerReady:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  fireEvent.paste(input,{clipboardData:{items:[{type:"image/png",getAsFile:()=>new File(["image"],"test.png",{type:"image/png"})}]}});
+  expect(notify).toHaveBeenCalledWith(expect.stringContaining("Running image updates require Agent 0.2.88+"));
+  expect(document.querySelector(".composer-images")).not.toBeInTheDocument();
+});
+
 const interactiveQuestion = {event_id:"question-1",sequence:1,kind:"gemini.question",occurred_at:thread.updated_at,payload:{operation_id:"op1",questions:[{id:"color",header:"Color",question:"Which color?",isOther:true,options:[{label:"Blue",description:"Ocean"},{label:"Green",description:"Forest"}]}]}};
 test("waits for an explicit answer and confirms Agent delivery", async () => {
   const {user,requests}=setup(true,"auto","configured",[interactiveQuestion],{status:"running"});
@@ -743,6 +785,56 @@ test("shows discovered native Gemini commands and prepares them for explicit sen
   expect(requests).toHaveLength(0);
   await user.click(screen.getByRole("button", {name:"Send"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"/help ",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
+});
+
+test("manages Gemini skills and confirms uninstalling from the installed scope",async()=>{
+  Element.prototype.scrollIntoView=vi.fn();
+  const {user,requests}=setup(true,"auto","configured",[],{skillsSupported:true,skillsManagementSupported:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  await user.type(input,"/skills{Enter}");
+  const dialog=screen.getByRole("dialog",{name:"Gemini skills"});
+  await user.click(await within(dialog).findByRole("button",{name:"Disable code-review"}));
+  await within(dialog).findByText("Skill state updated and verified. The next Gemini task uses the new configuration.");
+  expect(requests.at(-1)?.body).toMatchObject({action:"disable",name:"code-review",scope:"workspace",request_id:expect.any(String)});
+  await user.click(within(dialog).getByRole("button",{name:"Enable code-review"}));
+  await within(dialog).findByRole("button",{name:"Disable code-review"});
+  await user.type(within(dialog).getByRole("textbox",{name:"Skill source (HTTPS Git URL or path inside this project)"}),"https://github.com/example/skills.git");
+  await user.click(within(dialog).getByRole("button",{name:"Install skills"}));
+  await waitFor(()=>expect(requests.at(-1)?.body).toMatchObject({action:"install",source:"https://github.com/example/skills.git",scope:"workspace"}));
+  await waitFor(()=>expect(within(dialog).getByRole("button",{name:"Uninstall code-review"})).toBeEnabled());
+  await user.click(within(dialog).getByRole("button",{name:"Uninstall code-review"}));
+  const confirm=screen.getByRole("dialog",{name:"Uninstall"});
+  expect(within(confirm).getByText(/Remove code-review from This project/)).toBeInTheDocument();
+  await user.click(within(confirm).getByRole("button",{name:"Uninstall"}));
+  await waitFor(()=>expect(within(dialog).queryByRole("button",{name:"Uninstall code-review"})).not.toBeInTheDocument());
+  expect(requests.at(-1)?.body).toMatchObject({action:"uninstall",name:"code-review",scope:"workspace"});
+});
+
+test("retries an uncertain skill change with its original request ID",async()=>{
+  Element.prototype.scrollIntoView=vi.fn();
+  const {user,requests}=setup(true,"auto","configured",[],{skillsSupported:true,skillsManagementSupported:true,skillsNetworkFailure:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
+  await user.type(input,"/skills{Enter}");
+  const dialog=screen.getByRole("dialog",{name:"Gemini skills"});
+  await user.click(await within(dialog).findByRole("button",{name:"Disable code-review"}));
+  await within(dialog).findByText("Network unavailable");
+  expect(within(dialog).getByRole("button",{name:"Disable code-review"})).toBeDisabled();
+  await user.click(within(dialog).getByRole("button",{name:"Check or retry the same operation"}));
+  await within(dialog).findByRole("button",{name:"Enable code-review"});
+  const changes=requests.filter(item=>item.url.endsWith("/manage"));
+  expect(changes).toHaveLength(2);
+  expect(changes[0].body).toEqual(changes[1].body);
+});
+
+test("shows Goal waiting diagnostics and removes them when visible progress resumes",async()=>{
+  const goal:GeminiGoal={id:"goal-1",thread_id:thread.id,objective:"Fix tests",status:"active",operation_id:"op1",continuations:1,max_continuations:8,max_seconds:1200,evidence:"",message:"",created_at:thread.created_at,updated_at:thread.updated_at};
+  const events:Array<Record<string,unknown>>=[{event_id:"quiet",sequence:1,stream_id:thread.id,kind:"gemini.goal.diagnostic",occurred_at:thread.updated_at,payload:{operation_id:"op1",code:"quiet",phase:"user",seconds:120}}];
+  const {user}=setup(true,"auto","configured",events,{status:"running",goalSupported:true,goal});
+  await screen.findByText("Goal is waiting for your answer or approval. This time counts toward its limit.");
+  events.push({event_id:"answer",sequence:2,stream_id:thread.id,kind:"gemini.message",occurred_at:thread.updated_at,payload:{operation_id:"op1",role:"assistant",content:"New progress",delta:true}});
+  await user.click(screen.getByRole("button",{name:"Refresh"}));
+  await screen.findByText("New progress");
+  expect(screen.queryByText("Goal is waiting for your answer or approval. This time counts toward its limit.")).not.toBeInTheDocument();
 });
 
 test("explains remote browser prerequisites before preparing a request", async () => {

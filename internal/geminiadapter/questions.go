@@ -22,6 +22,17 @@ type pendingQuestion struct {
 	claimed               bool
 }
 
+func (a *Adapter) waitingForQuestion(op string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, p := range a.questions {
+		if p.operationID == op && !p.claimed && p.ctx.Err() == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *Adapter) ask(ctx context.Context, op, thread string, questions []protocol.UserInputQuestion) (map[string]protocol.UserInputAnswer, error) {
 	if len(questions) == 0 || len(questions) > 4 {
 		return nil, errors.New("ask 1 to 4 questions")
@@ -138,6 +149,7 @@ func (a *Adapter) questionServer(ctx context.Context, op, thread string, goals .
 			// Native ask_user is excluded in ACP, including MCP tools with that
 			// exact name. Keep a distinct name so the CLI exposes this bridge.
 			tools := []any{map[string]any{"name": "wio_ask_user", "description": "Ask the user interactive questions in the web UI and wait for their answers before continuing. Use this tool whenever clarification or a choice is needed. Provide 1-4 questions with stable IDs; options are single choice, isOther allows custom text. Omit options for a text answer. Never ask for passwords or credentials.", "inputSchema": schema, "annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}}}
+			tools = append(tools, map[string]any{"name": "wio_read_images", "description": "Read images the user attached while this task was running. Use only a request_id supplied by a Wio user update. The result contains the actual images; it cannot access files or other tasks.", "inputSchema": json.RawMessage(`{"type":"object","properties":{"request_id":{"type":"string"}},"required":["request_id"],"additionalProperties":false}`), "annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}})
 			if goal != nil {
 				goalSchema := json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["completed","blocked"]},"evidence":{"type":"string","minLength":1,"maxLength":16000}},"required":["status","evidence"]}`)
 				tools = append(tools, map[string]any{"name": "wio_goal_report", "description": "Report whether the active Wio goal is fully completed or blocked. Provide concrete verification evidence for completion, or explain the blocker. This does not grant tool permissions.", "inputSchema": goalSchema, "annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}})
@@ -150,12 +162,16 @@ func (a *Adapter) questionServer(ctx context.Context, op, thread string, goals .
 					Questions []protocol.UserInputQuestion `json:"questions"`
 					Status    string                       `json:"status"`
 					Evidence  string                       `json:"evidence"`
+					RequestID string                       `json:"request_id"`
 				} `json:"arguments"`
 			}
 			var answers map[string]protocol.UserInputAnswer
+			var images []any
 			err := json.Unmarshal(request.Params, &params)
 			if err == nil {
 				switch params.Name {
+				case "wio_read_images":
+					images, err = a.readSteeringImages(op, thread, params.Arguments.RequestID)
 				case "wio_ask_user":
 					answers, err = a.ask(ctx, op, thread, params.Arguments.Questions)
 				case "wio_goal_report":
@@ -178,6 +194,9 @@ func (a *Adapter) questionServer(ctx context.Context, op, thread string, goals .
 				value = string(raw)
 			}
 			result = map[string]any{"content": []any{map[string]string{"type": "text", "text": value}}, "isError": err != nil}
+			if err == nil && params.Name == "wio_read_images" {
+				result = map[string]any{"content": images, "isError": false}
+			}
 		default:
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})

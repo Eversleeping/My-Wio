@@ -324,6 +324,22 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
 			}
 		}
+	} else if envelope.Kind == "gemini.skills.manage" {
+		var command protocol.GeminiSkillManageCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			if c.agentUpdatePending() {
+				err = errors.New("Agent update is in progress")
+			} else {
+				command.Workspace, err = scanner.ResolveWorkspaceRoot(command.Workspace, c.inventoryRoots())
+				if err == nil {
+					var result protocol.GeminiSkillsResult
+					result, err = c.gemini.ManageSkill(ctx, command)
+					if err == nil {
+						resultData, err = json.Marshal(result)
+					}
+				}
+			}
+		}
 	} else if envelope.Kind == "gemini.skills.list" {
 		var command protocol.GeminiSkillsCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {

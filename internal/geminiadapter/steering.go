@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +111,7 @@ func ensureSteeringHook(env []string) error {
 
 type steeringHint struct {
 	ID, Text string
+	Images   []protocol.TurnImage
 	Applied  bool
 }
 type steeringTurn struct {
@@ -133,24 +135,68 @@ func (a *Adapter) Steer(command protocol.GeminiSteerCommand) error {
 	if turn.closed || turn.ctx.Err() != nil || turn.thread != command.ThreadID || !turn.ready {
 		return errors.New("Gemini steering is unavailable for this turn")
 	}
-	if command.RequestID == "" || strings.TrimSpace(command.Prompt) == "" || len(command.Prompt) > 8192 {
+	if command.RequestID == "" || (strings.TrimSpace(command.Prompt) == "" && len(command.Images) == 0) || len(command.Prompt) > 8192 {
 		return errors.New("invalid Gemini steering instruction")
 	}
-	bytes := len(command.Prompt)
+	if err := protocol.ValidateGeminiImages(command.Images); err != nil {
+		return err
+	}
+	textBytes := len(command.Prompt)
+	images := append([]protocol.TurnImage(nil), command.Images...)
 	for _, hint := range turn.hints {
 		if hint.ID == command.RequestID {
-			if hint.Text != command.Prompt {
-				return errors.New("Gemini steering request already has different text")
+			if hint.Text != command.Prompt || !slices.Equal(hint.Images, command.Images) {
+				return errors.New("Gemini steering request already has different content")
 			}
 			return nil
 		}
-		bytes += len(hint.Text)
+		textBytes += len(hint.Text)
+		images = append(images, hint.Images...)
 	}
-	if len(turn.hints) >= 32 || bytes > 64<<10 {
+	if len(turn.hints) >= 32 || textBytes > 64<<10 {
 		return errors.New("too many Gemini steering instructions in this turn")
 	}
-	turn.hints = append(turn.hints, steeringHint{ID: command.RequestID, Text: command.Prompt})
+	if err := protocol.ValidateGeminiImages(images); err != nil {
+		return errors.New("the running task has reached its image limit; wait for it to finish")
+	}
+	turn.hints = append(turn.hints, steeringHint{ID: command.RequestID, Text: command.Prompt, Images: slices.Clone(command.Images)})
 	return nil
+}
+
+// BeforeModel's stable interface is text-only. The model retrieves queued
+// images through this local MCP tool, which records them in native history.
+func (a *Adapter) readSteeringImages(op, thread, requestID string) ([]any, error) {
+	a.mu.Lock()
+	turn := a.steering[op]
+	a.mu.Unlock()
+	if turn == nil {
+		return nil, errors.New("the image update belongs to an expired task")
+	}
+	turn.mu.Lock()
+	defer turn.mu.Unlock()
+	if turn.closed || turn.ctx.Err() != nil || turn.thread != thread {
+		return nil, errors.New("the image update belongs to an expired task")
+	}
+	for i := range turn.hints {
+		hint := &turn.hints[i]
+		if hint.ID != requestID || len(hint.Images) == 0 {
+			continue
+		}
+		content := []any{map[string]string{"type": "text", "text": "User update supplied during this task: " + hint.Text}}
+		for _, image := range hint.Images {
+			prefix, data, _ := strings.Cut(image.DataURL, ",")
+			content = append(content, map[string]string{"type": "image", "mimeType": strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64"), "data": data})
+		}
+		if !hint.Applied {
+			raw, _ := json.Marshal(map[string]any{"operation_id": op, "request_id": hint.ID})
+			if err := a.emit(protocol.StreamEvent{EventID: hint.ID + ":applied", StreamID: thread, Kind: "gemini.steer.applied", Payload: raw}); err != nil {
+				return nil, err
+			}
+			hint.Applied = true
+		}
+		return content, nil
+	}
+	return nil, errors.New("no image update with this request_id exists in this task")
 }
 
 // Keep every applied hint in subsequent model requests: BeforeModel edits do
@@ -208,14 +254,20 @@ func (a *Adapter) startSteering(ctx context.Context, op, thread string, env []st
 		hints := []string{}
 		for i := range turn.hints {
 			hint := &turn.hints[i]
-			if !hint.Applied {
+			if !hint.Applied && len(hint.Images) == 0 {
 				if err := emit("applied", hint.ID+":applied", map[string]any{"request_id": hint.ID}); err != nil {
 					http.Error(w, "event unavailable", 503)
 					return
 				}
 				hint.Applied = true
 			}
-			hints = append(hints, hint.Text)
+			text := hint.Text
+			if len(hint.Images) > 0 && !hint.Applied {
+				text += "\nThe user also attached images. Before continuing, call the wio_read_images tool with request_id " + hint.ID + " to receive the actual images. Do not claim to have seen them before reading the tool result."
+			}
+			if text != "" {
+				hints = append(hints, text)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"hints": hints})

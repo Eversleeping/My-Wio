@@ -150,6 +150,24 @@ func TestGeminiNativeSteering(t *testing.T) {
 	delivered := false
 	toolPaired := false
 	shellSucceeded := false
+	imageDelivered := false
+	imageTool := ""
+	var findImageTool func(any)
+	findImageTool = func(value any) {
+		switch value := value.(type) {
+		case map[string]any:
+			if name, ok := value["name"].(string); ok && strings.HasSuffix(name, "wio_read_images") {
+				imageTool = name
+			}
+			for _, child := range value {
+				findImageTool(child)
+			}
+		case []any:
+			for _, child := range value {
+				findImageTool(child)
+			}
+		}
+	}
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(r.URL.Path, "countTokens") {
@@ -164,6 +182,13 @@ func TestGeminiNativeSteering(t *testing.T) {
 		mu.Lock()
 		requests++
 		n := requests
+		var input any
+		_ = json.Unmarshal(body, &input)
+		findImageTool(input)
+		name := imageTool
+		if n >= 3 && bytes.Contains(body, []byte(`"inlineData"`)) && bytes.Contains(body, []byte("iVBORw0KGgo")) {
+			imageDelivered = true
+		}
 		if bytes.Contains(body, []byte("STEER_TEST_MARKER")) {
 			delivered = true
 		}
@@ -176,6 +201,9 @@ func TestGeminiNativeSteering(t *testing.T) {
 		if n == 1 {
 			part = map[string]any{"functionCall": map[string]any{"name": "run_shell_command", "args": map[string]any{"command": "node -e \"console.log('tool finished')\" | node -e \"process.stdin.pipe(process.stdout)\"", "description": "Run a shell pipeline"}}}
 		}
+		if n == 2 && name != "" {
+			part = map[string]any{"functionCall": map[string]any{"name": name, "args": map[string]any{"request_id": "hint"}}}
+		}
 		result := map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"role": "model", "parts": []any{part}}, "finishReason": "STOP"}}, "usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5}, "modelVersion": "gemini-2.5-flash"}
 		raw, _ := json.Marshal(result)
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -185,7 +213,19 @@ func TestGeminiNativeSteering(t *testing.T) {
 	var a *Adapter
 	var ready, steered atomic.Bool
 	var questions atomic.Int32
+	var applied atomic.Int32
+	sessionID := ""
 	a = New(cli, func(e protocol.StreamEvent) error {
+		if e.Kind == "gemini.init" {
+			var p struct {
+				SessionID string `json:"session_id"`
+			}
+			_ = json.Unmarshal(e.Payload, &p)
+			sessionID = p.SessionID
+		}
+		if e.Kind == "gemini.steer.applied" {
+			applied.Add(1)
+		}
 		if e.Kind == "gemini.question" {
 			questions.Add(1)
 			return fmt.Errorf("YOLO shell pipeline unexpectedly requested approval")
@@ -197,7 +237,7 @@ func TestGeminiNativeSteering(t *testing.T) {
 			if !ready.Load() {
 				return fmt.Errorf("hook was not invoked before tool execution")
 			}
-			if err := a.Steer(protocol.GeminiSteerCommand{ThreadID: "native", OperationID: "op", RequestID: "hint", Prompt: "STEER_TEST_MARKER: focus on tests"}); err != nil {
+			if err := a.Steer(protocol.GeminiSteerCommand{ThreadID: "native", OperationID: "op", RequestID: "hint", Prompt: "STEER_TEST_MARKER: focus on tests", Images: []protocol.TurnImage{{DataURL: testSteeringPNG}}}); err != nil {
 				return err
 			}
 			steered.Store(true)
@@ -210,9 +250,79 @@ func TestGeminiNativeSteering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// MCP image results must survive a fresh CLI process and native resume.
+	mu.Lock()
+	imageDelivered = false
+	mu.Unlock()
+	if sessionID == "" {
+		t.Fatal("missing native session")
+	}
+	err = a.RunInTrustedWorkspaceWithEnvironment(ctx, "op-resume", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "native", SessionID: sessionID, Workspace: workspace, Prompt: "Continue with the image from the last task", Model: "gemini-2.5-flash", ApprovalMode: "yolo"}, []string{"GEMINI_CLI_HOME=" + home, "GEMINI_API_KEY=fake-local-test-key", "GOOGLE_GEMINI_BASE_URL=" + model.URL, "GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + filepath.Join(home, "missing.json"), "GEMINI_CLI_SYSTEM_DEFAULTS_PATH=" + filepath.Join(home, "missing-defaults.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	if requests < 2 || !steered.Load() || !delivered || !toolPaired || !shellSucceeded || questions.Load() != 0 {
-		t.Fatalf("real CLI path: requests=%d steered=%v delivered=%v toolPaired=%v shellSucceeded=%v questions=%d", requests, steered.Load(), delivered, toolPaired, shellSucceeded, questions.Load())
+	if requests < 3 || !steered.Load() || !delivered || !imageDelivered || !toolPaired || !shellSucceeded || questions.Load() != 0 || applied.Load() != 1 {
+		t.Fatalf("real CLI path: requests=%d steered=%v delivered=%v image=%v toolPaired=%v shellSucceeded=%v questions=%d applied=%d tool=%s", requests, steered.Load(), delivered, imageDelivered, toolPaired, shellSucceeded, questions.Load(), applied.Load(), imageTool)
+	}
+}
+
+const testSteeringPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+
+func TestSteeringImagesAreScopedIdempotentAndAppliedOnlyWhenRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	applied := 0
+	a := New("", func(e protocol.StreamEvent) error {
+		if e.Kind == "gemini.steer.applied" {
+			applied++
+		}
+		return nil
+	})
+	a.steering = map[string]*steeringTurn{"op": {ctx: ctx, thread: "thread", ready: true}}
+	request := protocol.GeminiSteerCommand{ThreadID: "thread", OperationID: "op", RequestID: "image", Images: []protocol.TurnImage{{DataURL: testSteeringPNG}}}
+	if err := a.Steer(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Steer(request); err != nil {
+		t.Fatal(err)
+	}
+	changed := request
+	changed.Images = append(changed.Images, changed.Images...)
+	if a.Steer(changed) == nil {
+		t.Fatal("changed image retry accepted")
+	}
+	if applied != 0 {
+		t.Fatal("unread image marked delivered")
+	}
+	if _, err := a.readSteeringImages("op", "other", "image"); err == nil {
+		t.Fatal("cross-thread image exposed")
+	}
+	if _, err := a.readSteeringImages("other", "thread", "image"); err == nil {
+		t.Fatal("cross-operation image exposed")
+	}
+	for i := 0; i < 2; i++ {
+		content, err := a.readSteeringImages("op", "thread", "image")
+		if err != nil || len(content) != 2 || content[1].(map[string]string)["type"] != "image" {
+			t.Fatalf("image result: %+v %v", content, err)
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("applied %d times", applied)
+	}
+	for i := 1; i < 4; i++ {
+		request.RequestID = fmt.Sprint(i)
+		if err := a.Steer(request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request.RequestID = "over-limit"
+	if a.Steer(request) == nil {
+		t.Fatal("accepted fifth image")
+	}
+	cancel()
+	if _, err := a.readSteeringImages("op", "thread", "image"); err == nil {
+		t.Fatal("cancelled image exposed")
 	}
 }

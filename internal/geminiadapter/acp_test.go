@@ -69,6 +69,17 @@ func fakeACPCLI() {
 			}
 		case "session/prompt":
 			_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), msg.Params, 0600)
+			if os.Getenv("WIO_GEMINI_TEST_REPEAT_TOOLS") == "1" {
+				for i := 0; i < goalRepeatedToolLimit; i++ {
+					id := fmt.Sprint(i)
+					notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": "read_file", "status": "in_progress", "rawInput": map[string]string{"path": "same.txt"}, "content": []any{}})
+					notify(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": "read_file", "status": "completed", "content": []any{}})
+				}
+				// Remain alive until the adapter closes stdin during cleanup.
+				_, _ = io.Copy(io.Discard, os.Stdin)
+				_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD")+".exited", []byte("yes"), 0600)
+				return
+			}
 			if os.Getenv("WIO_GEMINI_TEST_ACTIVITY") == "1" {
 				for i := 0; i < 2; i++ {
 					notify(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]string{"type": "text", "text": "PRIVATE_THOUGHT"}})

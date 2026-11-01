@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 func TestParseGeminiSkills(t *testing.T) {
@@ -35,6 +37,57 @@ func TestParseGeminiSkills(t *testing.T) {
 	var buffer boundedSkillBuffer
 	if _, err := buffer.Write([]byte(strings.Repeat("x", maxGeminiSkillsOutput+1))); err == nil {
 		t.Fatal("accepted oversized CLI output")
+	}
+}
+
+func TestNativeGeminiSkillManagementLifecycle(t *testing.T) {
+	cli := os.Getenv("WIO_GEMINI_STEERING_CLI")
+	if cli == "" {
+		t.Skip("set WIO_GEMINI_STEERING_CLI for official CLI integration")
+	}
+	for _, scope := range []string{"workspace", "user"} {
+		t.Run(scope, func(t *testing.T) {
+			home, workspace := t.TempDir(), t.TempDir()
+			source := filepath.Join(workspace, "source", "wio-lifecycle")
+			if err := os.MkdirAll(source, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: wio-lifecycle\ndescription: Test skill lifecycle\n---\nLocal test instructions.\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a := New(cli, nil)
+			a.environment = []string{"GEMINI_CLI_HOME=" + home, "GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + filepath.Join(home, "missing.json"), "GEMINI_CLI_SYSTEM_DEFAULTS_PATH=" + filepath.Join(home, "missing-defaults.json")}
+			for _, action := range []string{"install", "disable", "enable", "uninstall"} {
+				cmd := protocol.GeminiSkillManageCommand{Workspace: workspace, Action: action, Scope: scope, Name: "wio-lifecycle"}
+				if action == "install" {
+					cmd.Name = ""
+					cmd.Source = source
+				}
+				result, err := a.ManageSkill(context.Background(), cmd)
+				if err != nil {
+					t.Fatalf("%s: %v", action, err)
+				}
+				found := false
+				for _, skill := range result.Skills {
+					if skill.Name == "wio-lifecycle" {
+						found = true
+						if skill.Scope != scope || skill.Enabled != (action != "disable") {
+							t.Fatalf("%s: %+v", action, skill)
+						}
+					}
+				}
+				if found != (action != "uninstall") {
+					t.Fatalf("%s: skill found=%v", action, found)
+				}
+			}
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.MkdirAll(outside, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.ManageSkill(context.Background(), protocol.GeminiSkillManageCommand{Workspace: workspace, Action: "install", Source: outside, Scope: scope}); err == nil {
+				t.Fatal("accepted source outside workspace")
+			}
+		})
 	}
 }
 

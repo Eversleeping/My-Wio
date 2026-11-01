@@ -104,7 +104,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
     const base = { id: event.event_id, time: event.occurred_at, operationID: op };
     if (event.kind === "gemini.steer.queued") {
       assistant = undefined;
-      const item: GeminiMessage = { ...base, role: "steer", text: readable(p.text), steerStatus: "queued" };
+      const item: GeminiMessage = { ...base, role: "steer", text: readable(p.text), images: Array.isArray(p.images) ? p.images.filter((image): image is {data_url:string} => typeof image?.data_url === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(image.data_url)) : [], steerStatus: "queued" };
       steers.set(JSON.stringify([op, p.request_id]), item);
       messages.push(item);
       continue;

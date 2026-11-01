@@ -9,7 +9,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
-var ErrGeminiCredentialsBusy = errors.New("finish active Gemini turns, installations and credential updates first")
+var ErrGeminiCredentialsBusy = errors.New("finish active Gemini turns, installations and configuration changes first")
 
 func (s *Store) QueueGeminiCredentialUpdate(ctx context.Context, serverID, profileID, ciphertext string) (string, error) {
 	if !strings.HasPrefix(ciphertext, "v1:") {
@@ -24,7 +24,7 @@ func (s *Store) QueueGeminiCredentialUpdate(ctx context.Context, serverID, profi
 		return "", err
 	}
 	var active int
-	if err = tx.GetContext(ctx, &active, s.Q(`SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('gemini.turn.start','gemini.turn.rewrite','gemini.thread.fork','git.worktree.create','gemini.credentials.configure','cli.install','agent.update') AND status IN ('queued','delivered','running')`), serverID); err != nil {
+	if err = tx.GetContext(ctx, &active, s.Q(`SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('gemini.turn.start','gemini.turn.rewrite','gemini.thread.fork','git.worktree.create','gemini.credentials.configure','gemini.skills.manage','cli.install','agent.update') AND status IN ('queued','delivered','running')`), serverID); err != nil {
 		return "", err
 	}
 	if active != 0 {

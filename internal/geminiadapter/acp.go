@@ -150,6 +150,12 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	var sequence int
 	toolCalls := 0
 	var lastModelActivity time.Time
+	lastProgress := time.Now()
+	lastDiagnostic := time.Time{}
+	phase := "model"
+	var waitingForUser atomic.Int32
+	diagnosticTicker := time.NewTicker(15 * time.Second)
+	defer diagnosticTicker.Stop()
 	// Requests are sequential; server-initiated requests are answered concurrently
 	// so waiting for a user never blocks the RPC reader or cancellation.
 	call := func(method string, params any) (json.RawMessage, error) {
@@ -160,6 +166,17 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		}
 		for {
 			select {
+			case now := <-diagnosticTicker.C:
+				if goal != nil && !replay && now.Sub(lastProgress) >= 2*time.Minute && now.Sub(lastDiagnostic) >= 2*time.Minute {
+					waitingPhase := phase
+					if waitingForUser.Load() > 0 || a.waitingForQuestion(op) {
+						waitingPhase = "user"
+					}
+					if err := emit("goal.diagnostic", map[string]any{"goal_id": goal.goal.ID, "code": "quiet", "phase": waitingPhase, "seconds": int(now.Sub(lastProgress).Seconds())}); err != nil {
+						return nil, err
+					}
+					lastDiagnostic = now
+				}
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case err := <-readError:
@@ -186,6 +203,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							Title      string          `json:"title"`
 							Status     string          `json:"status"`
 							Content    json.RawMessage `json:"content"`
+							RawInput   json.RawMessage `json:"rawInput"`
 						} `json:"update"`
 					}
 					if json.Unmarshal(msg.Params, &p) != nil {
@@ -208,6 +226,8 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 						}
 						_ = json.Unmarshal(u.Content, &c)
 						if c.Type == "text" {
+							lastProgress, phase = time.Now(), "model"
+							goal.activity("message", c.Text)
 							if mode, ok := geminiModeUpdate(c.Text); ok && mode == "default" && planApproved.CompareAndSwap(true, false) {
 								err = emit("mode", map[string]any{"approval_mode": mode})
 							} else {
@@ -223,12 +243,20 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							continue
 						}
 						toolCalls++
+						lastProgress, phase = time.Now(), "tool"
+						input := u.RawInput
+						if len(input) == 0 || string(input) == "null" {
+							input = u.Content
+						}
+						goal.toolStarted(u.ToolCallID, u.Title, input)
+						goal.activity("tool", u.Title+string(input))
 						err = emit("tool_use", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "status": u.Status, "parameters": json.RawMessage(u.Content)})
 						if err == nil && (u.Status == "completed" || u.Status == "failed") {
 							err = emit("tool_result", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "status": u.Status, "output": json.RawMessage(u.Content)})
 						}
 					case "tool_call_update":
 						if u.Status == "completed" || u.Status == "failed" {
+							lastProgress, phase = time.Now(), "model"
 							content := strings.TrimSpace(string(u.Content))
 							if u.Status == "completed" && (content == "" || content == "[]" || content == "null") {
 								if output, ok := searchHistory.output(ctx, u.ToolCallID); ok {
@@ -236,6 +264,10 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 								}
 							}
 							err = emit("tool_result", map[string]any{"tool_id": u.ToolCallID, "tool_name": u.Title, "status": u.Status, "output": json.RawMessage(u.Content)})
+							goal.activity("result", u.Status+string(u.Content))
+							if err == nil && goal.toolFinished(u.ToolCallID, u.Title, u.Status, u.Content) {
+								return nil, errGeminiGoalNoProgress
+							}
 						}
 					}
 					if err != nil {
@@ -245,7 +277,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 				}
 				if msg.Method != "" && len(msg.ID) > 0 {
 					if msg.Method == "session/request_permission" {
+						waitingForUser.Add(1)
 						go func(msg acpMessage) {
+							defer waitingForUser.Add(-1)
 							var p struct {
 								ToolCall struct {
 									ID      string          `json:"toolCallId"`
@@ -275,6 +309,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							// ACP asks the client for confirmation even in YOLO mode.
 							// Use a one-time grant so this turn cannot change saved policy.
 							bridgeCall := strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_ask_user") && strings.HasPrefix(p.ToolCall.Title, "wio_ask_user(")
+							if strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_read_images") && strings.HasPrefix(p.ToolCall.Title, "wio_read_images(") {
+								bridgeCall = true
+							}
 							if goal != nil && strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_goal_report") && strings.HasPrefix(p.ToolCall.Title, "wio_goal_report(") {
 								bridgeCall = true
 							}
@@ -412,6 +449,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	var result promptResult
 	var totalInput, totalOutput int64
 	knownInput, knownOutput := true, true
+	stalled := false
 	continuations, initialContinuations := 0, 0
 	if goal != nil {
 		continuations, initialContinuations = goal.goal.Continuations, goal.goal.Continuations
@@ -428,6 +466,17 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	}
 	for {
 		raw, err := call("session/prompt", map[string]any{"sessionId": sessionID, "prompt": blocks})
+		if errors.Is(err, errGeminiGoalNoProgress) {
+			stalled, knownInput, knownOutput = true, false, false
+			report, evidence := goal.result()
+			if err := emit("goal.diagnostic", map[string]any{"goal_id": goal.goal.ID, "code": "repeated_tools", "count": goalRepeatedToolLimit}); err != nil {
+				return err
+			}
+			if err := emit("goal.progress", map[string]any{"goal_id": goal.goal.ID, "continuations": continuations, "report": report, "evidence": evidence}); err != nil {
+				return err
+			}
+			break
+		}
 		if err != nil {
 			return err
 		}
@@ -462,6 +511,11 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		if goal == nil || result.StopReason != "end_turn" {
 			break
 		}
+		if goal.finishRound() {
+			if err := emit("goal.diagnostic", map[string]any{"goal_id": goal.goal.ID, "code": "repeated_rounds", "count": goalRepeatedRoundLimit}); err != nil {
+				return err
+			}
+		}
 		report, evidence := goal.result()
 		if report == "" && continuations-initialContinuations >= goal.goal.MaxContinuations {
 			report = "blocked"
@@ -480,6 +534,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		blocks = []any{map[string]string{"type": "text", "text": goal.continuation(continuations, time.Since(started))}}
 	}
 	status := "success"
+	if stalled {
+		return emit("result", map[string]any{"status": "stopped", "stats": usageSnapshot(), "stop_reason": "wio_no_progress"})
+	}
 	if result.StopReason != "end_turn" {
 		status = "error"
 	}

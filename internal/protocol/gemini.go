@@ -15,11 +15,22 @@ type GeminiSkillsCommand struct {
 	Workspace string `json:"workspace"`
 }
 
+type GeminiSkillManageCommand struct {
+	Workspace string `json:"workspace"`
+	Action    string `json:"action"`
+	Name      string `json:"name,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Scope     string `json:"scope"`
+}
+
 type GeminiSkill struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
 	Builtin     bool   `json:"builtin"`
+	Scope       string `json:"scope,omitempty"`
+	Location    string `json:"-"`
 }
 
 type GeminiSkillsResult struct {
@@ -63,10 +74,11 @@ type GeminiGoalProgress struct {
 }
 
 type GeminiSteerCommand struct {
-	ThreadID    string `json:"thread_id"`
-	OperationID string `json:"operation_id"`
-	RequestID   string `json:"request_id"`
-	Prompt      string `json:"prompt"`
+	ThreadID    string      `json:"thread_id"`
+	OperationID string      `json:"operation_id"`
+	RequestID   string      `json:"request_id"`
+	Prompt      string      `json:"prompt"`
+	Images      []TurnImage `json:"images,omitempty"`
 }
 
 type GeminiInterruptResult struct {

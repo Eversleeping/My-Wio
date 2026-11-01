@@ -1265,6 +1265,12 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .goal-progress-row > div { display: flex; align-items: center; flex: 0 0 auto; gap: 3px; }
 .goal-progress-row .icon-button { width: 28px; height: 28px; flex: 0 0 28px; }
 .gemini-goal { width: 100%; }
+.gemini-skill-install { display: grid; gap: 10px; padding: 12px 0 18px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.gemini-skill-install .field { min-width: 0; }
+.gemini-skill-install input { width: 100%; }
+.gemini-skill-install .primary-button { justify-self: start; }
+.gemini-skill-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.gemini-goal-diagnostic { margin: 0 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); font-size: 12px; overflow-wrap: anywhere; }
 .gemini-goal-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--danger, #c33); font-size: 12px; }
 .gemini-goal-evidence { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .gemini-goal-evidence summary { cursor: pointer; }

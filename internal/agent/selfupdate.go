@@ -36,7 +36,7 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 		return "", errors.New("an Agent update is already in progress")
 	}
 	for _, execution := range c.seen {
-		if execution.kind != "gemini.turn.start" && execution.kind != "gemini.turn.rewrite" && execution.kind != "gemini.thread.fork" && execution.kind != "git.worktree.create" {
+		if execution.kind != "gemini.turn.start" && execution.kind != "gemini.turn.rewrite" && execution.kind != "gemini.thread.fork" && execution.kind != "git.worktree.create" && execution.kind != "gemini.skills.manage" {
 			continue
 		}
 		select {

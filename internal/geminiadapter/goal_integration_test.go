@@ -117,6 +117,42 @@ func TestGoalStopsAtLimitWithoutACompletionReport(t *testing.T) {
 	}
 }
 
+func TestGoalRepetitionGuardsStopAndReleaseTheCLI(t *testing.T) {
+	for _, kind := range []string{"rounds", "tools"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+			record := filepath.Join(t.TempDir(), "prompt.json")
+			t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+			if kind == "rounds" {
+				t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":5}}`)
+			} else {
+				t.Setenv("WIO_GEMINI_TEST_REPEAT_TOOLS", "1")
+			}
+			executable, _ := os.Executable()
+			var events []protocol.StreamEvent
+			a := New(executable, func(e protocol.StreamEvent) error { events = append(events, e); return nil })
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err := a.Run(ctx, "repetition-op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), Prompt: "Do the work", Model: "flash", ApprovalMode: "default", Goal: &protocol.GeminiGoalCommand{ID: "goal-id", Objective: "Do the work", MaxContinuations: 20, MaxSeconds: 60}})
+			raw, _ := json.Marshal(events)
+			if err != nil || !strings.Contains(string(raw), `"report":"blocked"`) || !strings.Contains(string(raw), `"code":"repeated_`+kind+`"`) {
+				t.Fatalf("guard: %v events=%s", err, raw)
+			}
+			a.mu.Lock()
+			active := len(a.active)
+			a.mu.Unlock()
+			if active != 0 {
+				t.Fatal("guard retained active operation")
+			}
+			if kind == "tools" {
+				if _, err := os.Stat(record + ".exited"); err != nil {
+					t.Fatal("CLI cleanup did not finish before adapter returned", err)
+				}
+			}
+		})
+	}
+}
+
 func TestGoalDoesNotContinueAfterNonNormalStop(t *testing.T) {
 	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
 	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
