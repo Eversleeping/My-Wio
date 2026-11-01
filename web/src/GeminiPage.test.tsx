@@ -11,10 +11,10 @@ import type { GeminiGoal } from "./types";
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
-function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; archived?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerImagesSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; skillsManagementSupported?: boolean; skillsNetworkFailure?: boolean; goalSupported?: boolean; goal?: GeminiGoal; goalLoadFailures?: number; goalStartFailure?: boolean; strictMode?: boolean; } = {}) {
+function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; archived?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerImagesSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; skillsManagementSupported?: boolean; skillsNetworkFailure?: boolean; goalSupported?: boolean; goal?: GeminiGoal; goalLoadFailures?: number; goalStartFailure?: boolean; strictMode?: boolean; credentialRevision?: string; modelCredentialRevision?: string; defaultModel?: string; modelIDs?: string[]; modelResponseGate?: Promise<void>; thinking?: string; } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_images_supported:options.steerImagesSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,skills_management_supported:options.skillsManagementSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, credential_revision:options.credentialRevision, model_credential_revision:options.modelCredentialRevision, thinking_level:options.thinking ?? "", archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_images_supported:options.steerImagesSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,skills_management_supported:options.skillsManagementSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   let goalLoadFailures = options.goalLoadFailures ?? 0;
@@ -50,7 +50,7 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     else if (url === "/api/operations/answer-op") body={status:options.answerFailure ? "failed" : "succeeded",result:"Question expired"};
     else if (url === "/api/operations/fork-op") body={status:"succeeded"};
     else if (url.endsWith("/gemini/skills/skills-op")) body={status:"succeeded",skills:[...(!skillRemoved ? [{name:"code-review",description:"Review code",enabled:skillEnabled,builtin:false,scope:"workspace"}] : []),{name:"disabled",description:"Disabled skill",enabled:false,builtin:false,scope:"external"}]};
-    else if (url.endsWith("/gemini/models")) { modelRequests.push(url); if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,models:[{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
+    else if (url.endsWith("/gemini/models")) { modelRequests.push(url); const revision = currentThread.credential_revision; if (options.modelResponseGate) await options.modelResponseGate; if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,credential_revision:revision,default_model:options.defaultModel,models:options.modelIDs?.map(id => ({id,name:id})) ?? [{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
     else if (url === "/api/gemini/threads/thread-1/goal") { if (goalLoadFailures-- > 0) return new Response(JSON.stringify({error:"Status unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); body = options.goal ?? null; }
     else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
     else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
@@ -331,6 +331,70 @@ test("preserves and edits a custom model name",async () => {
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   await user.click(screen.getByRole("button",{name:"Send"}));
   await waitFor(() => expect(requests[0].body).toMatchObject({model:"gemini-custom-next"}));
+});
+
+test("replaces an unavailable saved model after server credentials change", async () => {
+  const {user,requests} = setup(true,"gemini-old","configured",[],{credentialRevision:"new-config",modelCredentialRevision:"old-config",defaultModel:"gemini-2.5-pro",modelIDs:["gemini-fallback","gemini-2.5-pro"],thinking:"high"});
+  await screen.findByText("Server API configuration updated; switched to available model gemini-2.5-pro.");
+  expect(screen.getByRole("combobox",{name:"Gemini model"})).toHaveValue("gemini-2.5-pro");
+  await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Continue");
+  await user.click(screen.getByRole("button",{name:"Send"}));
+  await waitFor(() => expect(requests[0].body).toMatchObject({model:"gemini-2.5-pro",thinking_level:""}));
+});
+
+test("preserves a valid saved model after credentials change", async () => {
+  setup(true,"gemini-upstream-current","configured",[],{credentialRevision:"new-config",modelCredentialRevision:"old-config"});
+  await screen.findByText("Server API configuration updated; model list refreshed.");
+  expect(screen.getByRole("combobox",{name:"Gemini model"})).toHaveValue("gemini-upstream-current");
+});
+
+test("preserves a saved custom model when credentials have not changed", async () => {
+  setup(true,"gemini-custom","configured",[],{credentialRevision:"same-config",modelCredentialRevision:"same-config"});
+  await screen.findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  expect(screen.getByRole("textbox",{name:"Model name"})).toHaveValue("gemini-custom");
+  expect(screen.queryByText(/Server API configuration updated/)).not.toBeInTheDocument();
+});
+
+test("checks credentials again when the open session reports a new binding", async () => {
+  const {user,currentThread,modelRequests} = setup(true,"gemini-upstream-current","configured",[],{credentialRevision:"old-config",modelCredentialRevision:"old-config"});
+  await screen.findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Keep my draft");
+  currentThread.credential_revision = "new-config";
+  await user.click(screen.getByRole("button",{name:"Refresh"}));
+  await screen.findByText("Server API configuration updated; switched to available model gemini-upstream-new.");
+  expect(modelRequests).toHaveLength(2);
+  expect(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"})).toHaveValue("Keep my draft");
+});
+
+test("defers model reconciliation until a running session becomes idle", async () => {
+  const {user,currentThread} = setup(true,"gemini-old","configured",[],{status:"running",credentialRevision:"new-config",modelCredentialRevision:"old-config"});
+  await screen.findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  expect(screen.getByRole("textbox",{name:"Model name"})).toHaveValue("gemini-old");
+  currentThread.status = "idle";
+  await user.click(screen.getByRole("button",{name:"Refresh"}));
+  await screen.findByText("Server API configuration updated; switched to available model gemini-upstream-current.");
+});
+
+test("keeps manual model edits made while checking credentials", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  const {user,requests} = setup(true,"gemini-old","configured",[],{credentialRevision:"new-config",modelCredentialRevision:"old-config",modelResponseGate:gate});
+  const name = await screen.findByRole("textbox",{name:"Model name"});
+  await user.clear(name); await user.type(name,"gemini-manual");
+  await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Continue");
+  expect(screen.getByRole("button",{name:"Send"})).toBeDisabled();
+  release();
+  await screen.findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  expect(name).toHaveValue("gemini-manual");
+  await user.click(screen.getByRole("button",{name:"Send"}));
+  await waitFor(() => expect(requests[0].body).toMatchObject({model:"gemini-manual"}));
+});
+
+test("keeps the saved model when a credential check fails", async () => {
+  setup(true,"gemini-old","failed",[],{credentialRevision:"new-config",modelCredentialRevision:"old-config"});
+  await screen.findByText("Upstream unavailable");
+  expect(screen.getByRole("textbox",{name:"Model name"})).toHaveValue("gemini-old");
+  expect(screen.queryByText(/Server API configuration updated/)).not.toBeInTheDocument();
 });
 
 test("refreshes models once on each session entry, including in StrictMode",async () => {

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
@@ -111,19 +112,61 @@ func TestWorkspaceGeminiModelsUsesBoundProfileAndHandlesMissingConfig(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO server_gemini_credential_profiles(server_id,profile_id) VALUES(?,?)"), server.ID, profile.ID); err != nil {
+	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO server_gemini_credential_profiles(server_id,profile_id,updated_at) VALUES(?,?,?)"), server.ID, profile.ID, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	result = request()
 	var body struct {
-		Models     []geminiModel `json:"models"`
-		Configured bool          `json:"configured"`
+		Models       []geminiModel `json:"models"`
+		Configured   bool          `json:"configured"`
+		Revision     string        `json:"credential_revision"`
+		DefaultModel string        `json:"default_model"`
 	}
 	if json.Unmarshal(result.Body.Bytes(), &body) != nil || result.Code != 200 || !body.Configured || len(body.Models) != 1 || body.Models[0].ID != "gemini-upstream" || strings.Contains(result.Body.String(), "synthetic") {
 		t.Fatal(result.Code, result.Body.String())
 	}
+	if body.Revision == "" || body.DefaultModel != "auto" {
+		t.Fatalf("missing applied configuration metadata: %+v", body)
+	}
+	previousRevision := body.Revision
+	// Editing a preset does not mean the Agent has received the new key.
+	profile.Model = "gemini-upstream"
+	if _, err := db.SaveCredentialProfile(ctx, profile, encrypted); err != nil {
+		t.Fatal(err)
+	}
+	result = request()
+	if result.Code != 409 || !strings.Contains(result.Body.String(), "reapply") || strings.Contains(result.Body.String(), "synthetic") {
+		t.Fatal("unapplied preset was used", result.Code, result.Body.String())
+	}
+	operation, err := db.QueueGeminiCredentialUpdate(ctx, server.ID, profile.ID, "v1:synthetic-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompleteGeminiCredentialUpdate(ctx, protocol.OperationResult{OperationID: operation, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	result = request()
+	if json.Unmarshal(result.Body.Bytes(), &body) != nil || result.Code != 200 || body.Revision == previousRevision || body.DefaultModel != "gemini-upstream" {
+		t.Fatal("reapplied configuration not refreshed", result.Code, result.Body.String())
+	}
 	if result.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("model list must refresh from upstream")
+	}
+	// A preset can change while its earlier snapshot is still being applied.
+	operation, err = db.QueueGeminiCredentialUpdate(ctx, server.ID, profile.ID, "v1:synthetic-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.Model = "gemini-other"
+	if _, err := db.SaveCredentialProfile(ctx, profile, encrypted); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompleteGeminiCredentialUpdate(ctx, protocol.OperationResult{OperationID: operation, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	result = request()
+	if result.Code != 409 || !strings.Contains(result.Body.String(), "reapply") {
+		t.Fatal("in-flight preset edit not detected", result.Code, result.Body.String())
 	}
 	missing := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/missing/gemini/models", "missing", nil, a.workspaceGeminiModels)
 	if missing.Code != 404 {

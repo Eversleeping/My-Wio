@@ -52,7 +52,7 @@ func (a *API) updateServerGeminiCredentialProfile(w http.ResponseWriter, r *http
 		writeError(w, 500, "could not protect Gemini credentials")
 		return
 	}
-	id, err := a.store.QueueGeminiCredentialUpdate(r.Context(), server.ID, profile.ID, ciphertext)
+	id, err := a.store.QueueGeminiCredentialUpdate(r.Context(), server.ID, profile.ID, ciphertext, profile.UpdatedAt)
 	if errors.Is(err, store.ErrGeminiCredentialsBusy) {
 		writeError(w, 409, err.Error())
 		return

@@ -151,37 +151,57 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
   </div>;
 }
 
-type GeminiModels = { models: { id: string; name: string }[]; configured: boolean };
+type GeminiModels = { models: { id: string; name: string }[]; configured: boolean; credential_revision?: string; default_model?: string };
 
-function useGeminiModels(workspaceID: string) {
-  const [result, setResult] = useState<{ workspaceID: string; data: GeminiModels | null; error: string }>({ workspaceID: "", data: null, error: "" });
+function useGeminiModels(workspaceID: string, revision = "") {
+  const key = `${workspaceID}:${revision}`;
+  const [result, setResult] = useState<{ key: string; data: GeminiModels | null; error: string }>({ key: "", data: null, error: "" });
   useEffect(() => {
     if (!workspaceID) return;
     const controller = new AbortController();
-    // Match Codex: defer the one refresh until StrictMode's mount replay has settled.
+    // Defer the refresh until StrictMode's mount replay has settled.
     const timer = window.setTimeout(() => {
       api<GeminiModels>(`/workspaces/${workspaceID}/gemini/models`, { signal: controller.signal })
-        .then(data => { if (!controller.signal.aborted) setResult({ workspaceID, data, error: "" }); })
-        .catch(error => { if (!controller.signal.aborted) setResult({ workspaceID, data: null, error: error instanceof Error ? error.message : "Request failed" }); });
+        .then(data => { if (!controller.signal.aborted) setResult({ key, data, error: "" }); })
+        .catch(error => { if (!controller.signal.aborted) setResult({ key, data: null, error: error instanceof Error ? error.message : "Request failed" }); });
     }, 0);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [workspaceID]);
-  return result.workspaceID === workspaceID ? result : { data: null, error: "" };
+  }, [workspaceID, key]);
+  return result.key === key ? { ...result, loading: false } : { data: null, error: "", loading: Boolean(workspaceID) };
 }
 
-function ModelOptions({ workspaceID, model, mode, thinking, setThinking, setModel, setMode, disabled = false, autoSelect = false, planSupported = false, actions }: { workspaceID: string; model: string; mode: string; thinking: string; setThinking: (value: string) => void; setModel: (value: string) => void; setMode: (value: string) => void; disabled?: boolean; autoSelect?: boolean; planSupported?: boolean; actions?: ReactNode }) {
+function ModelOptions({ models, modelCredentialRevision, model, mode, thinking, setThinking, setModel, setMode, disabled = false, autoSelect = false, planSupported = false, actions }: { models: ReturnType<typeof useGeminiModels>; modelCredentialRevision?: string; model: string; mode: string; thinking: string; setThinking: (value: string) => void; setModel: (value: string) => void; setMode: (value: string) => void; disabled?: boolean; autoSelect?: boolean; planSupported?: boolean; actions?: ReactNode }) {
   const { t } = useI18n();
-  const models = useGeminiModels(workspaceID);
   const upstream = models.data?.models ?? [];
   const [customSelected, setCustomSelected] = useState(false);
-  useEffect(() => { if (autoSelect && !customSelected && !model && upstream.length) setModel(upstream[0].id); }, [autoSelect, customSelected, model, setModel, upstream]);
+  const manuallySelected = useRef(false);
+  const handledRevision = useRef("");
+  const [configurationNotice, setConfigurationNotice] = useState("");
+  useEffect(() => {
+    const data = models.data;
+    if (disabled || !data?.configured || !upstream.length || manuallySelected.current) return;
+    const preferred = upstream.find(item => item.id === data.default_model)?.id ?? upstream[0].id;
+    if (autoSelect && !model) { setModel(preferred); return; }
+    const revision = data.credential_revision;
+    if (!revision || modelCredentialRevision === undefined || revision === modelCredentialRevision || handledRevision.current === revision) return;
+    handledRevision.current = revision;
+    if (upstream.some(item => item.id === model)) {
+      setConfigurationNotice(t("gemini.credentialsRefreshed"));
+      return;
+    }
+    setModel(preferred);
+    setThinking(compatibleGeminiThinking(preferred, thinking));
+    setCustomSelected(false);
+    setConfigurationNotice(t("gemini.credentialsModelChanged", { model: preferred }));
+  }, [autoSelect, disabled, model, modelCredentialRevision, models.data, setModel, setThinking, thinking, t, upstream]);
   const custom = customSelected || Boolean(model) && !upstream.some(item => item.id === model);
-  return <div className={`gemini-options${actions ? " with-actions" : ""}`}><Field label={t("gemini.model")}><select aria-label={t("gemini.model")} value={custom ? "__custom__" : model} disabled={disabled} onChange={event => { const custom = event.target.value === "__custom__"; setCustomSelected(custom); const nextModel=custom ? "" : event.target.value; setModel(nextModel); setThinking(compatibleGeminiThinking(nextModel,thinking)); }}><option value="" disabled>{t("gemini.selectModel")}</option>{upstream.map(item => <option value={item.id} key={item.id}>{item.name === item.id ? item.id : `${item.name} · ${item.id}`}</option>)}<option value="__custom__">{t("gemini.customModel")}</option></select>{custom && <input aria-label={t("gemini.customModelName")} placeholder={t("gemini.customModelName")} required maxLength={128} value={model} disabled={disabled} onChange={event => { setCustomSelected(true); setModel(event.target.value); setThinking(compatibleGeminiThinking(event.target.value,thinking)); }} />}{models.error && <small className="gemini-model-error" role="alert">{models.error}</small>}{models.data?.configured === false && <small className="muted">{t("gemini.modelsUnconfigured")}</small>}</Field><GeminiThinkingPicker model={model} value={thinking} onChange={setThinking} disabled={disabled} /><Field label={t("gemini.permissions")}><select aria-label={t("gemini.permissions")} value={mode} disabled={disabled} onChange={event => setMode(event.target.value)}><option value="default">{t("gemini.defaultMode")}</option><option value="auto_edit">{t("gemini.autoEditMode")}</option>{(planSupported || mode === "plan") && <option value="plan">{t("gemini.planMode")}</option>}<option value="yolo">{t("gemini.neverApprove")}</option></select></Field>{actions && <div className="gemini-options-actions">{actions}</div>}</div>;
+  return <div className={`gemini-options${actions ? " with-actions" : ""}`}><Field label={t("gemini.model")}><select aria-label={t("gemini.model")} value={custom ? "__custom__" : model} disabled={disabled} onChange={event => { manuallySelected.current = true; const custom = event.target.value === "__custom__"; setCustomSelected(custom); const nextModel=custom ? "" : event.target.value; setModel(nextModel); setThinking(compatibleGeminiThinking(nextModel,thinking)); }}><option value="" disabled>{t("gemini.selectModel")}</option>{upstream.map(item => <option value={item.id} key={item.id}>{item.name === item.id ? item.id : `${item.name} · ${item.id}`}</option>)}<option value="__custom__">{t("gemini.customModel")}</option></select>{custom && <input aria-label={t("gemini.customModelName")} placeholder={t("gemini.customModelName")} required maxLength={128} value={model} disabled={disabled} onChange={event => { manuallySelected.current = true; setCustomSelected(true); setModel(event.target.value); setThinking(compatibleGeminiThinking(event.target.value,thinking)); }} />}{configurationNotice && <small className="muted" role="status">{configurationNotice}</small>}{models.loading && <small className="muted">{t("gemini.checkingCredentials")}</small>}{models.error && <small className="gemini-model-error" role="alert">{models.error}</small>}{models.data?.configured === false && <small className="muted">{t("gemini.modelsUnconfigured")}</small>}</Field><GeminiThinkingPicker model={model} value={thinking} onChange={setThinking} disabled={disabled} /><Field label={t("gemini.permissions")}><select aria-label={t("gemini.permissions")} value={mode} disabled={disabled} onChange={event => setMode(event.target.value)}><option value="default">{t("gemini.defaultMode")}</option><option value="auto_edit">{t("gemini.autoEditMode")}</option>{(planSupported || mode === "plan") && <option value="plan">{t("gemini.planMode")}</option>}<option value="yolo">{t("gemini.neverApprove")}</option></select></Field>{actions && <div className="gemini-options-actions">{actions}</div>}</div>;
 }
 
 function CreateGeminiSession({ initialWorkspaceID, initialModel, initialThinking, initialMode, workspaces, error, onRetry, onCreated }: { initialWorkspaceID: string; initialModel: string; initialThinking: string; initialMode: string; workspaces: Workspace[]; error: string; onRetry: () => void; onCreated: (thread: GeminiThread) => void }) {
   const { t } = useI18n();
   const [workspaceID, setWorkspaceID] = useState(initialWorkspaceID);
+  const models = useGeminiModels(workspaceID);
   const [model, setModel] = useState(initialModel);
   const [thinking, setThinking]=useState(initialThinking);
   const [mode, setMode] = useState(initialMode);
@@ -192,7 +212,7 @@ function CreateGeminiSession({ initialWorkspaceID, initialModel, initialThinking
     try { onCreated(await post<GeminiThread>("/gemini/threads", { workspace_id: workspaceID, model: model.trim(), approval_mode: mode, thinking_level: thinking })); }
     catch (error) { setFailure(message(error)); } finally { setBusy(false); }
   };
-  return <form onSubmit={submit}>{error && <ErrorState error={error} reload={onRetry} />}<Field label={t("gemini.workspace")}><select required disabled={busy} value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); setModel(""); setThinking(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{workspaces.filter(workspace => workspace.status === "ready").map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><ModelOptions key={workspaceID} autoSelect workspaceID={workspaceID} model={model} mode={mode} thinking={thinking} setThinking={setThinking} setModel={setModel} setMode={setMode} disabled={busy} /><p className="gemini-hint">{t("gemini.permissionsHelp")}</p>{failure && <ErrorBanner text={failure} />}<DialogActions><button className="primary-button" disabled={busy || !workspaceID || !model.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("gemini.newSession")}</button></DialogActions></form>;
+  return <form onSubmit={submit}>{error && <ErrorState error={error} reload={onRetry} />}<Field label={t("gemini.workspace")}><select required disabled={busy} value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); setModel(""); setThinking(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{workspaces.filter(workspace => workspace.status === "ready").map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><ModelOptions key={workspaceID} autoSelect models={models} model={model} mode={mode} thinking={thinking} setThinking={setThinking} setModel={setModel} setMode={setMode} disabled={busy} /><p className="gemini-hint">{t("gemini.permissionsHelp")}</p>{failure && <ErrorBanner text={failure} />}<DialogActions><button className="primary-button" disabled={busy || !workspaceID || !model.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("gemini.newSession")}</button></DialogActions></form>;
 }
 
 function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOpenFile, onFork, onSchedule }: { thread: GeminiThread; realtime: string; notify: (text: string) => void; onChanged: () => void; onNewSession: () => void; onOpenFile: (value: FilePreviewSelection) => void; onFork: (eventID?: string) => void; onSchedule: () => void }) {
@@ -236,6 +256,7 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [model, setModel] = useState(thread.model);
+  const models = useGeminiModels(thread.workspace_id, thread.credential_revision);
   const [thinking, setThinking]=useState(thread.thinking_level ?? "");
   useEffect(() => setThinking(thread.thinking_level ?? ""), [thread.thinking_level]);
   const [mode, setMode] = useState(thread.approval_mode);
@@ -340,7 +361,7 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
   const goalObjective = goalDraft ? prompt.replace(/^\/goal\s*/i, "").trim() : "";
   const goalLimitsValid = Number.isInteger(goalRounds) && goalRounds >= 1 && goalRounds <= 100 && Number.isInteger(goalMinutes) && goalMinutes >= 1 && goalMinutes <= 1440;
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); if (slashOpen || busy || recoveryPending || (running && !steerReady) || imageBusy || (!prompt.trim() && !images.length) || thread.server_status !== "online") return;
+    event.preventDefault(); if ((!running && models.loading) || slashOpen || busy || recoveryPending || (running && !steerReady) || imageBusy || (!prompt.trim() && !images.length) || thread.server_status !== "online") return;
     setBusy(true); setError("");
     try {
       if (goalDraft && goalData.error) { setError(t("gemini.goalLoadError")); return; }
@@ -433,7 +454,7 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
       {running && <p className="gemini-hint">{t(steerReady ? "gemini.steerHint" : "gemini.steerUnavailable")}</p>}
       {thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}
       {slashOpen && <SlashCommandMenu items={slashItems} query={prompt.slice(1)} label={t("codex.slashMenu")} onDismiss={() => setSlashDismissedValue(prompt)} keyboardRef={slashKeyboardRef} />}
-      {thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <><textarea ref={promptRef} onPaste={event => { const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} aria-label={t("gemini.prompt")} placeholder={t(running ? "codex.steerPlaceholder" : "gemini.prompt")} value={prompt} disabled={busy || recoveryPending || (running && !steerReady)} onChange={event => { setPrompt(event.target.value); if (event.target.value !== slashDismissedValue) setSlashDismissedValue(""); }} onKeyDown={event => { if (slashOpen && slashKeyboardRef.current?.(event)) return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><ModelOptions workspaceID={thread.workspace_id} planSupported={thread.plan_supported} model={model} mode={mode} thinking={thinking} setThinking={setThinking} setModel={setModel} setMode={setMode} disabled={blocked || busy} actions={<button type={showInterrupt ? "button" : "submit"} className={showInterrupt ? "secondary-button danger composer-action" : "primary-button composer-action"} aria-label={t(actionLabel)} disabled={busy || (showInterrupt ? thread.status === "interrupting" || (recoveryPending && thread.server_status !== "online") : slashOpen || imageBusy || (!prompt.trim() && !images.length) || !model.trim() || thread.server_status !== "online" || (running && (!steerReady || (!!images.length && !thread.steer_images_supported) || !!editingEventID)))} onClick={showInterrupt ? () => void interrupt() : undefined}>{busy ? <LoaderCircle className="spin" size={15} /> : showInterrupt ? <Square size={14} /> : <ArrowUp size={15} />}<span className="composer-action-full">{t(actionLabel)}</span><span className="composer-action-compact">{t(recoveryPending ? "gemini.verifyStop" : showInterrupt ? "codex.interruptShort" : running ? "codex.steerShort" : "gemini.send")}</span></button>} /></>}
+      {thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <><textarea ref={promptRef} onPaste={event => { const files = Array.from(event.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => file !== null); if (files.length) { event.preventDefault(); void addImages(files); } }} aria-label={t("gemini.prompt")} placeholder={t(running ? "codex.steerPlaceholder" : "gemini.prompt")} value={prompt} disabled={busy || recoveryPending || (running && !steerReady)} onChange={event => { setPrompt(event.target.value); if (event.target.value !== slashDismissedValue) setSlashDismissedValue(""); }} onKeyDown={event => { if (slashOpen && slashKeyboardRef.current?.(event)) return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><ModelOptions models={models} modelCredentialRevision={thread.model_credential_revision} planSupported={thread.plan_supported} model={model} mode={mode} thinking={thinking} setThinking={setThinking} setModel={setModel} setMode={setMode} disabled={blocked || busy} actions={<button type={showInterrupt ? "button" : "submit"} className={showInterrupt ? "secondary-button danger composer-action" : "primary-button composer-action"} aria-label={t(actionLabel)} disabled={busy || (showInterrupt ? thread.status === "interrupting" || (recoveryPending && thread.server_status !== "online") : (!running && models.loading) || slashOpen || imageBusy || (!prompt.trim() && !images.length) || !model.trim() || thread.server_status !== "online" || (running && (!steerReady || (!!images.length && !thread.steer_images_supported) || !!editingEventID)))} onClick={showInterrupt ? () => void interrupt() : undefined}>{busy ? <LoaderCircle className="spin" size={15} /> : showInterrupt ? <Square size={14} /> : <ArrowUp size={15} />}<span className="composer-action-full">{t(actionLabel)}</span><span className="composer-action-compact">{t(recoveryPending ? "gemini.verifyStop" : showInterrupt ? "codex.interruptShort" : running ? "codex.steerShort" : "gemini.send")}</span></button>} /></>}
     </form>
     <GeminiSkillsDialog open={skillsOpen} thread={thread} onClose={() => setSkillsOpen(false)} onUse={name => { setSkillsOpen(false); setPrompt(t("gemini.skillDraft", { name })); requestAnimationFrame(() => promptRef.current?.focus()); }} />
     <Dialog open={browserOpen} title={t("gemini.browserTitle")} onClose={() => setBrowserOpen(false)}>

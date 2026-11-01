@@ -42,10 +42,19 @@ func (a *API) workspaceGeminiModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"models": []geminiModel{}, "configured": false})
 		return
 	}
-	profile, err := a.store.CredentialProfile(r.Context(), server.GeminiProfileID)
+	config, err := a.store.GeminiModelConfiguration(r.Context(), server.ID)
+	if err != nil {
+		writeError(w, 409, "Gemini API configuration changed; reopen the session to retry")
+		return
+	}
+	profile, err := a.store.CredentialProfile(r.Context(), config.ProfileID)
 	var key string
 	if err != nil || profile.Kind != "gemini" || a.vault == nil || a.vault.Decrypt(profile.Ciphertext, &key) != nil || !validCredentialSecret(key) {
 		writeError(w, 409, "Gemini API profile is unavailable; reapply the server credentials")
+		return
+	}
+	if (config.ProfileRevision != "" && config.ProfileRevision != profile.UpdatedAt.UTC().Format(time.RFC3339Nano)) || (config.ProfileRevision == "" && profile.UpdatedAt.After(config.AppliedAt)) {
+		writeError(w, 409, "Gemini API profile has changed; reapply the server credentials before refreshing models")
 		return
 	}
 	models, err := fetchGeminiModels(r.Context(), profile.Endpoint, key)
@@ -55,7 +64,14 @@ func (a *API) workspaceGeminiModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"models": models, "configured": true})
+	// Do not return a list fetched with credentials superseded during the request.
+	latest, err := a.store.GeminiModelConfiguration(r.Context(), server.ID)
+	currentProfile, profileErr := a.store.CredentialProfile(r.Context(), config.ProfileID)
+	if err != nil || profileErr != nil || latest.Revision != config.Revision || !currentProfile.UpdatedAt.Equal(profile.UpdatedAt) {
+		writeError(w, 409, "Gemini API configuration changed; reopen the session to retry")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"models": models, "configured": true, "credential_revision": config.Revision, "default_model": profile.Model})
 }
 
 func fetchGeminiModels(ctx context.Context, endpoint, key string) ([]geminiModel, error) {

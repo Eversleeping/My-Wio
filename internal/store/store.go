@@ -79,6 +79,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateGeminiModelConfig(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateGeminiThinking(ctx, db, driver); err != nil {
 		_ = db.Close()
 		return nil, err

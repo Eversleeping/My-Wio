@@ -113,6 +113,8 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertHiddenServerProjectsRecovery(t, scans)
 	assertGeminiRecoveryOnPostgres(t, scans)
 	assertGeminiGoalOnPostgres(t, scans)
+	assertGeminiModelConfigRevision(t, scans)
+	assertGeminiModelConfigMigration(t, scans)
 }
 
 func assertGeminiGoalOnPostgres(t *testing.T, database *Store) {

@@ -493,6 +493,7 @@ CREATE INDEX IF NOT EXISTS alerts_status_idx ON alerts(status, opened_at);
 CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_log(occurred_at);
 
 CREATE TABLE IF NOT EXISTS gemini_threads (
+  model_credential_revision TEXT NOT NULL DEFAULT '',
   thinking_level TEXT NOT NULL DEFAULT '',
   id TEXT PRIMARY KEY,
   pinned_at TIMESTAMP,
@@ -530,11 +531,13 @@ CREATE INDEX IF NOT EXISTS gemini_goals_thread_idx ON gemini_goals(thread_id, cr
 CREATE UNIQUE INDEX IF NOT EXISTS gemini_goals_active_idx ON gemini_goals(thread_id) WHERE status='active';
 
 CREATE TABLE IF NOT EXISTS server_gemini_credential_profiles (
+ profile_revision TEXT NOT NULL DEFAULT '',
  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
  profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS server_gemini_credential_updates (
+ profile_revision TEXT NOT NULL DEFAULT '',
  operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
  profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL
