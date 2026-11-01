@@ -175,6 +175,10 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 		ctx, stop = context.WithTimeout(ctx, time.Duration(command.Goal.MaxSeconds)*time.Second)
 		defer stop()
 	}
+	environment, err := loopModelEnvironment(environment, command.Model)
+	if err != nil {
+		return err
+	}
 	if command.Interactive {
 		return a.runACP(ctx, operationID, command, executable, environment)
 	}
