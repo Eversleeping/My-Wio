@@ -1853,6 +1853,10 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 [data-theme="light"] .dialog-backdrop {
   background: rgba(15, 23, 42, 0.45);
 }
+[data-theme="light"] .toggle-row {
+  color: var(--ink);
+  background: var(--panel-elevated);
+}
 
 [data-theme="light"] .auth-layout {
   background: #f8fafc;
