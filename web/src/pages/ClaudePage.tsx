@@ -214,7 +214,11 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     })().catch(err => { if (!controller.signal.aborted) setError(message(err)); });
     return () => controller.abort();
   }, [events.data, mergeEvents, thread.id]);
-  const running = activeTurn(thread); const blocked = running || thread.recovery_pending || Boolean(thread.archived_at) || thread.server_status !== "online";
+  const running = activeTurn(thread);
+  const steerState = [...allEvents].reverse().find(event => ["claude.steer.ready", "claude.steer.closed"].includes(event.kind) && (event.payload as {operation_id?:string}).operation_id === thread.operation_id);
+  const steerReady = thread.status === "running" && Boolean(thread.steer_supported) && (steerState ? steerState.kind === "claude.steer.ready" : Boolean(thread.steer_ready));
+  const blocked = (running && !steerReady) || thread.recovery_pending || Boolean(thread.archived_at) || thread.server_status !== "online";
+  const steeringRequest = useRef<{operation:string;prompt:string;images:string;id:string}>();
   const [images,setImages]=useState<{id:string;dataURL:string}[]>([]);
   const [imageBusy,setImageBusy]=useState(false);
   const imageWork=useRef<AbortController|null>(null);
@@ -234,7 +238,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     } catch {if(!controller.signal.aborted)setError(t("codex.imageFailed"));}
     finally {if(imageWork.current===controller){imageWork.current=null;setImageBusy(false);}}
   };
-  const slashOpen=!blocked && !busy && /^\/[A-Za-z0-9_.:/-]*$/.test(prompt) && prompt!==slashDismissed;
+  const slashOpen=!running && !blocked && !busy && /^\/[A-Za-z0-9_.:/-]*$/.test(prompt) && prompt!==slashDismissed;
   const finishSlash=(action:()=>void)=>{setPrompt("");setSlashSection("");action();};
   const latestInit = [...allEvents].reverse().find(event => event.kind === "claude.init");
   const historicalSkills = (latestInit?.payload as { skills?: unknown[] })?.skills;
@@ -245,7 +249,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     {id:"model",name:"/model",description:t("claude.model"),icon:Bot,onSelect:()=>{setSlashSection("model");setPrompt("/");}},
     {id:"effort",name:"/effort",description:t("claude.effort"),icon:Gauge,onSelect:()=>{setSlashSection("effort");setPrompt("/");}},
     {id:"permissions",name:"/permissions",description:t("claude.permission"),icon:Settings2,onSelect:()=>{setSlashSection("permissions");setPrompt("/");}},
-    ...["skill", "skills"].map(command => ({ id: command, name: `/${command}`, description: t("codex.slashSkillsDescription"), icon: ListChecks, onSelect: () => { setSlashSection("skills"); setPrompt("/"); } })),
+    { id: "skill", name: "/skill", description: t("codex.slashSkillsDescription"), icon: ListChecks, onSelect: () => { setSlashSection("skills"); setPrompt("/"); } },
     {id:"plan",name:"/plan",description:t("claude.permission.plan"),icon:ListChecks,onSelect:()=>finishSlash(()=>setMode("plan"))},
     {id:"new",name:"/new",description:t("claude.newSession"),icon:Plus,onSelect:()=>finishSlash(onNew)},
     {id:"schedule",name:"/schedule",description:t("codex.createScheduledTask"),icon:CalendarClock,onSelect:()=>finishSlash(onSchedule)},
@@ -253,14 +257,35 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     {id:"help",name:"/help",description:t("claude.commandsHelp"),icon:MessageSquare,onSelect:()=>finishSlash(()=>setHelpOpen(true))},
     ...nativeSkills.filter(skill=>!["model","effort","permissions","skill","skills","plan","new","schedule","fork","help"].includes(skill.name)).map(skillItem),
   ];
+  const showInterrupt = running && (!steerReady || (!prompt.trim() && !images.length));
+  const queuedInstructions = allEvents.filter(event=>event.kind==="claude.steer.queued").flatMap(event=>{
+    const payload=event.payload as {request_id:string;text:string;images?:{data_url:string}[];operation_id:string};
+    if(allEvents.some(item=>item.kind==="claude.steer.applied" && (item.payload as {request_id?:string}).request_id===payload.request_id))return [];
+    const receipt=[...allEvents].reverse().find(item=>["claude.steer.accepted","claude.steer.applied","claude.steer.rejected","claude.steer.unconfirmed"].includes(item.kind) && (item.payload as {request_id?:string}).request_id===payload.request_id);
+    if(receipt?.kind==="claude.steer.applied")return [];
+    return [{...payload,id:event.event_id,state:receipt?.kind.split(".").at(-1) ?? "queued"}];
+  });
   const items = useMemo(() => claudeDisplayEvents(allEvents, t("claude.denied")), [allEvents, t]);
   useEffect(() => { if (follow.current && stream.current) stream.current.scrollTop = stream.current.scrollHeight; }, [items]);
   const send = async (event: FormEvent) => {
     event.preventDefault(); if (blocked || busy || imageBusy || slashOpen || (!prompt.trim() && !images.length)) return;
-    const option=/^\/(model|effort|permissions)\s+(\S+)\s*$/.exec(prompt);
+    const option=!running && /^\/(model|effort|permissions)\s+(\S+)\s*$/.exec(prompt);
     if(option){const [,command,value]=option;if(command==="model")setModel(value);else if(command==="effort" && ["default","low","medium","high","xhigh","max"].includes(value) && (value==="default" || thread.effort_supported))setEffort(value==="default"?"":value);else if(command==="permissions" && modes.includes(value))setMode(value);else {setError(t("claude.invalidCommandOption"));return;}setPrompt("");setError("");return;}
     setBusy(true); setError("");
-    try { await post(`/claude/threads/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:images.map(image=>({data_url:image.dataURL}))} : {}) }); setPrompt(""); setImages([]); follow.current = true; onChanged(); }
+    try {
+      const imagePayload = images.map(image => ({ data_url: image.dataURL }));
+      if (running) {
+        if (!steerReady) return;
+        const imageIDs = images.map(image=>image.id).join(",");
+        if (!steeringRequest.current || steeringRequest.current.operation!==thread.operation_id || steeringRequest.current.prompt!==prompt || steeringRequest.current.images!==imageIDs) steeringRequest.current={operation:thread.operation_id,prompt,images:imageIDs,id:crypto.randomUUID()};
+        await post(`/claude/threads/${thread.id}/steer`, {prompt:prompt.trim(),operation_id:thread.operation_id,request_id:steeringRequest.current.id,...(images.length?{images:imagePayload}:{})});
+        steeringRequest.current=undefined;
+      } else {
+        if (steeringRequest.current) { setError(t("claude.steerTaskEnded")); return; }
+        await post(`/claude/threads/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:imagePayload} : {}) });
+      }
+      setPrompt(""); setImages([]); follow.current=true; onChanged();
+    }
     catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
   const interrupt = async () => { setBusy(true); setError(""); try { await post(`/claude/threads/${thread.id}/interrupt`, {}); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
@@ -276,14 +301,16 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
       {events.error && <ErrorState error={events.error} reload={events.reload} />}
       {!items.length && <Empty icon={<Bot size={30} />} text={t("claude.startPrompt")} />}
       {items.map(item => item.role === "toolGroup" ? <ClaudeToolGroup key={item.id} tools={item.tools ?? []} /> : <article className={`message ${item.role === "notice" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Claude"}</strong></header>{!!item.images?.length && <MessageImages sources={item.images} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} /></article>)}
+      {queuedInstructions.map(instruction=><div key={instruction.id} className="claude-steer-instruction" role="status"><strong>{t(`claude.steer.${instruction.state}`)}</strong><p>{instruction.text}</p>{!!instruction.images?.length && <MessageImages sources={instruction.images.map(image=>image.data_url)} />}{instruction.state==="rejected" && <button type="button" className="text-button" disabled={busy || Boolean(prompt.trim()) || images.length>0} onClick={()=>{setPrompt(instruction.text);setImages((instruction.images??[]).map(image=>({id:crypto.randomUUID(),dataURL:image.data_url})));steeringRequest.current=undefined;promptRef.current?.focus();}}>{t("claude.steerRestore")}</button>}</div>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "claude.interrupting" : "claude.working")}</p>}
     </div>
     <form className="composer gemini-composer claude-composer" onSubmit={send}>{error && <ErrorBanner text={error} />}{thread.recovery_pending && <><p className="gemini-hint" role="status">{t("claude.recovery")}</p><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>{t("claude.confirmStopped")}</button></>}{thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}{thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <>
+      {running && thread.status!=="interrupting" && <p className="gemini-hint" role="status">{t(steerReady ? "claude.steerHint" : thread.steer_supported ? "claude.steerStarting" : "claude.steerUpgrade")}</p>}
       {images.length>0 && <div className="composer-images">{images.map(image=><figure key={image.id}><img src={image.dataURL} alt=""/><button type="button" aria-label={t("common.close")} disabled={busy} onClick={()=>setImages(current=>current.filter(item=>item.id!==image.id))}><X size={13}/></button></figure>)}</div>}
       {imageBusy && <p className="gemini-hint" role="status">{t("gemini.preparingImages")}</p>}
-      {slashOpen && <SlashCommandMenu status={slashSection === "skills" ? skillsStatus : undefined} items={slashItems} query={slashSection ? "" : prompt.slice(1)} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashSection?()=>{setSlashSection("");setPrompt("/");}:undefined} onDismiss={()=>{setSlashDismissed(prompt);setSlashSection("");}} keyboardRef={slashKeyboardRef}/>}
+      {slashOpen && <SlashCommandMenu status={slashSection === "skills" ? skillsStatus : undefined} items={slashItems} query={slashSection ? "" : prompt === "/skills" ? "skill" : prompt.slice(1)} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashSection?()=>{setSlashSection("");setPrompt("/");}:undefined} onDismiss={()=>{setSlashDismissed(prompt);setSlashSection("");}} keyboardRef={slashKeyboardRef}/>}
       {availableModels.error && <small className="gemini-model-error" role="status">{t("claude.modelsRefreshFailed")} {availableModels.error}</small>}
-      <textarea ref={promptRef} onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.type.startsWith("image/")).map(item=>item.getAsFile()).filter((file):file is File=>file!==null);if(files.length){event.preventDefault();void addImages(files);}}} aria-label={t("claude.prompt")} placeholder={t("claude.prompt")} value={prompt} disabled={busy || blocked} onChange={event => {setPrompt(event.target.value);setSlashDismissed("");if(!event.target.value.startsWith("/"))setSlashSection("");}} onKeyDown={event => { if(slashOpen && slashKeyboardRef.current?.(event))return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-bar"><ClaudeOptions compact requestCustom={requestCustomModel} availableModels={availableModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} effortSupported={thread.effort_supported} setModel={setModel} setMode={setMode} disabled={busy || blocked} />{running ? <button type="button" className="secondary-button danger composer-action" aria-label={t("gemini.interrupt")} disabled={busy || thread.status === "interrupting" || thread.server_status !== "online"} onClick={() => void interrupt()}><Square size={15} /><span>{t("gemini.interrupt")}</span></button> : <button className="primary-button composer-action" aria-label={t("codex.send")} disabled={busy || blocked || imageBusy || slashOpen || (!prompt.trim() && !images.length) || !model.trim()}><ArrowUp size={16} /><span>{t("codex.send")}</span></button>}</div></>}</form>
+      <textarea ref={promptRef} onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.type.startsWith("image/")).map(item=>item.getAsFile()).filter((file):file is File=>file!==null);if(files.length){event.preventDefault();void addImages(files);}}} aria-label={t("claude.prompt")} placeholder={t("claude.prompt")} value={prompt} disabled={busy || blocked} onChange={event => {setPrompt(event.target.value);if(steeringRequest.current && event.target.value!==steeringRequest.current.prompt)steeringRequest.current=undefined;setSlashDismissed("");if(!event.target.value.startsWith("/"))setSlashSection("");}} onKeyDown={event => { if(slashOpen && slashKeyboardRef.current?.(event))return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-bar"><ClaudeOptions compact requestCustom={requestCustomModel} availableModels={availableModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} effortSupported={thread.effort_supported} setModel={setModel} setMode={setMode} disabled={busy || blocked || running} />{showInterrupt ? <button type="button" className="secondary-button danger composer-action" aria-label={t("gemini.interrupt")} disabled={busy || thread.status === "interrupting" || thread.server_status !== "online"} onClick={() => void interrupt()}><Square size={15} /><span>{t("gemini.interrupt")}</span></button> : <button className="primary-button composer-action" aria-label={t(running ? "codex.steer" : "codex.send")} disabled={busy || blocked || imageBusy || slashOpen || (!prompt.trim() && !images.length) || !model.trim()}><ArrowUp size={16} /><span>{t(running ? "codex.steer" : "codex.send")}</span></button>}</div></>}</form>
     <Dialog open={helpOpen} title={t("claude.commandsHelp")} onClose={()=>setHelpOpen(false)}><p>{t("claude.commandsDescription")}</p><p><a href="https://code.claude.com/docs/en/headless" target="_blank" rel="noreferrer">Claude Code</a></p></Dialog>
     <ConfirmDialog open={confirming} danger title={t("claude.confirmStopped")} impact={t("claude.confirmStoppedImpact")} confirmLabel={t("claude.confirmStopped")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setConfirming(false)} onConfirm={confirmStopped} />
   </section>;

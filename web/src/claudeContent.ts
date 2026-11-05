@@ -38,7 +38,7 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
       const previous = items.at(-1);
       if (previous?.role === "assistant") previous.text += text;
       else items.push({ id: event.event_id, role: "assistant", text });
-    } else if (event.kind === "claude.user.message") {
+    } else if (event.kind === "claude.user.message" || event.kind === "claude.steer.applied") {
       items.push({ id: event.event_id, role: "user", text, images: Array.isArray(p.images) ? p.images.flatMap(image => typeof image?.data_url === "string" ? [image.data_url] : []) : [] });
     } else if (event.kind === "claude.notice") items.push({ id: event.event_id, role: "notice", text });
     else if (event.kind === "claude.result") {

@@ -1,6 +1,11 @@
 package protocol
 
-import "regexp"
+import (
+	"errors"
+	"github.com/google/uuid"
+	"regexp"
+	"strings"
+)
 
 const ClaudeOwnershipLostMessage = "Agent no longer owns this Claude task; verify the old CLI process before recovering the session"
 
@@ -26,6 +31,7 @@ func ValidClaudeSkillName(name string) bool {
 
 // ClaudeTurnCommand contains no credentials. The CLI authenticates as the Agent account.
 type ClaudeTurnCommand struct {
+	Steer          bool        `json:"steer,omitempty"`
 	Images         []TurnImage `json:"images,omitempty"`
 	ForkSnapshotID string      `json:"fork_snapshot_id,omitempty"`
 	ForkSessionID  string      `json:"fork_session_id,omitempty"`
@@ -63,4 +69,22 @@ type ClaudeInterruptCommand struct {
 	ThreadID        string `json:"thread_id"`
 	OperationID     string `json:"operation_id"`
 	RecoveryPending bool   `json:"recovery_pending,omitempty"`
+}
+
+const ClaudeSteerUnconfirmedMessage = "Claude did not confirm the instruction; check its delivery status before sending it again"
+
+type ClaudeSteerCommand struct {
+	ThreadID    string      `json:"thread_id"`
+	OperationID string      `json:"operation_id"`
+	RequestID   string      `json:"request_id"`
+	Prompt      string      `json:"prompt"`
+	Images      []TurnImage `json:"images,omitempty"`
+}
+
+func ValidateClaudeSteer(c ClaudeSteerCommand) error {
+	_, err := uuid.Parse(c.RequestID)
+	if c.ThreadID == "" || c.OperationID == "" || err != nil || c.Prompt != strings.TrimSpace(c.Prompt) || len(c.Prompt) > 8192 || (c.Prompt == "" && len(c.Images) == 0) || ValidateGeminiImages(c.Images) != nil {
+		return errors.New("invalid Claude steering instruction")
+	}
+	return nil
 }

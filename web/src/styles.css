@@ -2523,3 +2523,6 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 @media (max-width: 400px) { .claude-composer .composer-action { padding: 5px 8px; } .claude-composer .composer-action span { display: none; } .claude-composer .composer-action > svg { display: block; } }
 
 .slash-command-status { margin: 0; padding: 10px 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
+.claude-steer-instruction { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.claude-steer-instruction p { margin: 6px 0 0; white-space: pre-wrap; }

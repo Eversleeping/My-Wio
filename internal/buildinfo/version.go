@@ -5,7 +5,13 @@ import (
 	"strings"
 )
 
-var Version = "0.2.94"
+var Version = "0.2.95"
+
+const MinimumClaudeSteerVersion = "0.2.95"
+
+func SupportsClaudeSteering(agent, cli string) bool {
+	return atLeast(agent, MinimumClaudeSteerVersion) && atLeast(strings.TrimSpace(strings.SplitN(cli, " ", 2)[0]), "2.1.286")
+}
 
 const MinimumClaudeSkillsVersion = "0.2.94"
 

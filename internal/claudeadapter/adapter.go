@@ -19,6 +19,10 @@ import (
 // Run keeps prompts off the process command line and requires a complete result.
 // Authentication and native transcripts remain under the Agent's account.
 func Run(parent context.Context, executable, operationID string, command protocol.ClaudeTurnCommand, emit func(protocol.StreamEvent) error, environment ...string) error {
+	return run(parent, executable, operationID, command, emit, nil, environment...)
+}
+
+func run(parent context.Context, executable, operationID string, command protocol.ClaudeTurnCommand, emit func(protocol.StreamEvent) error, live *liveTurn, environment ...string) error {
 	if executable == "" {
 		executable = "claude"
 	}
@@ -46,43 +50,31 @@ func Run(parent context.Context, executable, operationID string, command protoco
 		args = append(args, "--resume", command.ResumePath, "--fork-session")
 	}
 	input := command.Prompt
-	if len(command.Images) > 0 {
-		if len(command.Images) > 4 {
-			return errors.New("too many Claude images")
-		}
-		total := 0
-		blocks := []any{}
-		if command.Prompt != "" {
-			blocks = append(blocks, map[string]string{"type": "text", "text": command.Prompt})
-		}
-		for _, image := range command.Images {
-			prefix, data, ok := strings.Cut(image.DataURL, ",")
-			if !ok || (prefix != "data:image/png;base64" && prefix != "data:image/jpeg;base64" && prefix != "data:image/webp;base64") {
-				return errors.New("invalid Claude image")
-			}
-			decoded, err := base64.StdEncoding.DecodeString(data)
-			if err != nil || len(decoded) == 0 || len(decoded) > 2<<20 {
-				return errors.New("invalid Claude image data")
-			}
-			total += len(decoded)
-			if total > 4<<20 {
-				return errors.New("Claude images are too large")
-			}
-			blocks = append(blocks, map[string]any{"type": "image", "source": map[string]string{"type": "base64", "media_type": strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64"), "data": data}})
-		}
-		raw, err := json.Marshal(map[string]any{"type": "user", "session_id": "", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": blocks}})
+	if len(command.Images) > 0 || live != nil {
+		raw, err := claudeUserInput(command.Prompt, command.Images, uuid.NewString(), "next")
 		if err != nil {
 			return err
 		}
-		input = string(raw) + "\n"
+		input = string(raw)
 		args = append(args, "--input-format", "stream-json")
+	}
+	if live != nil {
+		args = append(args, "--replay-user-messages")
 	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, args...)
 	configureEnvironment(cmd, environment)
 	cmd.Dir = command.Workspace
-	cmd.Stdin = strings.NewReader(input)
+	if live == nil {
+		cmd.Stdin = strings.NewReader(input)
+	} else {
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return err
+		}
+		live.start(stdin, cancel, nil)
+	}
 	configureProcess(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -104,12 +96,27 @@ func Run(parent context.Context, executable, operationID string, command protoco
 		}
 		return emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: "claude." + kind, Payload: raw})
 	}
+	if live != nil {
+		live.mu.Lock()
+		live.emit = send
+		live.mu.Unlock()
+		if _, err := live.stdin.Write([]byte(input)); err != nil {
+			cancel()
+			_ = cmd.Wait()
+			return errors.New("could not send initial Claude input")
+		}
+	}
 	for scan.Scan() {
 		if len(strings.TrimSpace(scan.Text())) == 0 {
 			continue
 		}
 		var data struct {
 			Type              string          `json:"type"`
+			UUID              string          `json:"uuid"`
+			IsReplay          bool            `json:"isReplay"`
+			UserMessageUUID   string          `json:"user_message_uuid"`
+			UserMessageUUIDs  []string        `json:"user_message_uuids"`
+			QueuedTurnCount   int             `json:"queued_turn_count"`
 			Subtype           string          `json:"subtype"`
 			SessionID         string          `json:"session_id"`
 			Skills            []string        `json:"skills"`
@@ -119,7 +126,10 @@ func Run(parent context.Context, executable, operationID string, command protoco
 			Errors            []string        `json:"errors"`
 			Usage             json.RawMessage `json:"usage"`
 			PermissionDenials json.RawMessage `json:"permission_denials"`
-			Event             struct {
+			Tasks             []struct {
+				Ambient bool `json:"ambient"`
+			} `json:"tasks"`
+			Event struct {
 				Type  string `json:"type"`
 				Delta struct {
 					Type string `json:"type"`
@@ -137,6 +147,29 @@ func Run(parent context.Context, executable, operationID string, command protoco
 		if data.ParentToolUseID != nil && !strings.HasPrefix(*data.ParentToolUseID, "forked-command-") {
 			continue
 		}
+		if live != nil {
+			if data.Type == "assistant" || data.Type == "stream_event" {
+				live.progress()
+			}
+			ids := append(data.UserMessageUUIDs, data.UserMessageUUID)
+			for _, id := range ids {
+				if id != "" {
+					if err := live.acknowledge(id, true); err != nil {
+						streamErr = err
+						break
+					}
+				}
+			}
+			if streamErr != nil {
+				break
+			}
+			if data.Type == "user" && data.IsReplay {
+				if err := live.acknowledge(data.UUID, false); err != nil {
+					streamErr = err
+					break
+				}
+			}
+		}
 		switch data.Type {
 		case "system":
 			if data.Subtype == "init" {
@@ -146,6 +179,17 @@ func Run(parent context.Context, executable, operationID string, command protoco
 				}
 				gotInit = true
 				streamErr = send("init", map[string]any{"session_id": data.SessionID, "skills": data.Skills})
+				if streamErr == nil && live != nil {
+					streamErr = live.initialized()
+				}
+			} else if data.Subtype == "background_tasks_changed" && live != nil {
+				count := 0
+				for _, task := range data.Tasks {
+					if !task.Ambient {
+						count++
+					}
+				}
+				streamErr = live.backgroundTasks(count)
 			} else if data.Subtype == "permission_denied" {
 				streamErr = send("notice", map[string]any{"text": "Claude Code denied a tool request that required approval."})
 			}
@@ -207,6 +251,9 @@ func Run(parent context.Context, executable, operationID string, command protoco
 			gotResult = true
 			success = !data.IsError && data.Subtype == "success"
 			streamErr = send("result", map[string]any{"success": success, "errors": data.Errors, "usage": data.Usage, "permission_denials": data.PermissionDenials})
+			if streamErr == nil && live != nil {
+				streamErr = live.result(data.QueuedTurnCount)
+			}
 		}
 		if streamErr != nil {
 			break
@@ -254,4 +301,32 @@ func configureEnvironment(cmd *exec.Cmd, environment []string) {
 		}
 		cmd.Env = append(cmd.Env, environment...)
 	}
+}
+
+func claudeUserInput(prompt string, images []protocol.TurnImage, id, priority string) ([]byte, error) {
+	if len(images) > 4 {
+		return nil, errors.New("too many Claude images")
+	}
+	blocks := []any{}
+	if prompt != "" {
+		blocks = append(blocks, map[string]string{"type": "text", "text": prompt})
+	}
+	total := 0
+	for _, image := range images {
+		prefix, data, ok := strings.Cut(image.DataURL, ",")
+		if !ok || (prefix != "data:image/png;base64" && prefix != "data:image/jpeg;base64" && prefix != "data:image/webp;base64") {
+			return nil, errors.New("invalid Claude image")
+		}
+		decoded, err := base64.StdEncoding.DecodeString(data)
+		if err != nil || len(decoded) == 0 || len(decoded) > 2<<20 {
+			return nil, errors.New("invalid Claude image data")
+		}
+		total += len(decoded)
+		if total > 4<<20 {
+			return nil, errors.New("Claude images are too large")
+		}
+		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]string{"type": "base64", "media_type": strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64"), "data": data}})
+	}
+	raw, err := json.Marshal(map[string]any{"type": "user", "uuid": id, "session_id": "", "parent_tool_use_id": nil, "priority": priority, "origin": map[string]string{"kind": "human"}, "message": map[string]any{"role": "user", "content": blocks}})
+	return append(raw, '\n'), err
 }

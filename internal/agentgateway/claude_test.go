@@ -340,3 +340,79 @@ func TestClaudeForkCompletionAndScheduledNativeIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeSteerReceiptsUseStoredContentAndDoNotCompleteParent(t *testing.T) {
+	db, server := gatewayTestServer(t, "claude-steer-receipts")
+	ctx := context.Background()
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95", ClaudeVersion: "2.1.318", ClaudeReady: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude-steer", Name: "steer"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, _ := db.ListWorkspaces(ctx)
+	thread, err := db.CreateClaudeThread(ctx, workspaces[0].ID, "sonnet", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueClaudeTurn(ctx, thread, "initial", "sonnet", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	thread, _ = db.ClaudeThread(ctx, thread.ID)
+	if _, err = db.ClaimGeminiDelivery(ctx, thread.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.DB.ExecContext(ctx, db.Q("UPDATE claude_threads SET status='running' WHERE id=?"), thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	g := New(db, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	send := func(kind, requestID, text string) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{"operation_id": thread.OperationID, "request_id": requestID, "text": text, "ready": true})
+		raw, _ := json.Marshal(protocol.StreamEvent{EventID: store.NewID(), StreamID: thread.ID, Kind: kind, Payload: payload})
+		if err := g.handleClaudeEvent(ctx, server.ID, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send("claude.steer.ready", "", "")
+	command := protocol.ClaudeSteerCommand{ThreadID: thread.ID, OperationID: thread.OperationID, RequestID: store.NewID(), Prompt: "canonical correction"}
+	_, controlID, err := db.QueueClaudeSteer(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send("claude.steer.applied", store.NewID(), "unknown instruction")
+	for i := 0; i < 2; i++ {
+		send("claude.steer.accepted", command.RequestID, "")
+		send("claude.steer.applied", command.RequestID, "untrusted replacement")
+	}
+	op, _ := db.Operation(ctx, controlID)
+	for _, message := range []string{"input has closed", protocol.ClaudeSteerUnconfirmedMessage} {
+		if err = g.completeClaudeOperation(ctx, op, protocol.OperationResult{OperationID: controlID, Status: "failed", Message: message}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thread, _ = db.ClaudeThread(ctx, thread.ID)
+	parent, _ := db.Operation(ctx, thread.OperationID)
+	if thread.Status != "running" || parent.Status != "delivered" {
+		t.Fatalf("control result completed parent task: thread=%s operation=%s", thread.Status, parent.Status)
+	}
+	events, err := db.Events(ctx, thread.ID, 0, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, event := range events {
+		counts[event.Kind]++
+		if event.Kind == "claude.steer.applied" {
+			var payload struct{ Text string }
+			if json.Unmarshal(event.Payload, &payload) != nil || payload.Text != command.Prompt {
+				t.Fatal("receipt did not use canonical instruction", string(event.Payload))
+			}
+		}
+	}
+	for _, kind := range []string{"claude.steer.accepted", "claude.steer.applied", "claude.steer.rejected", "claude.steer.unconfirmed"} {
+		if counts[kind] != 1 {
+			t.Fatal("missing or duplicated receipt", counts)
+		}
+	}
+}

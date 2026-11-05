@@ -59,6 +59,7 @@ type Client struct {
 	geminiVersionPath  string
 	geminiVersion      string
 	geminiVersionUntil time.Time
+	claudeTurns        claudeadapter.Sessions
 	claudeMu           sync.RWMutex
 	claudeVersionMu    sync.Mutex
 	claudeVersionPath  string
@@ -330,6 +331,11 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			if err == nil {
 				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
 			}
+		}
+	} else if envelope.Kind == "claude.turn.steer" {
+		var command protocol.ClaudeSteerCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			err = c.claudeTurns.Steer(ctx, command)
 		}
 	} else if envelope.Kind == "claude.turn.interrupt" {
 		var command protocol.ClaudeInterruptCommand
@@ -950,7 +956,8 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		environment = append(environment, gitEnvironment...)
-		return claudeadapter.Run(ctx, effectiveClaudePath(c.config.StateDir), envelope.OperationID, command, func(event protocol.StreamEvent) error {
+		command.Steer = command.Steer && buildinfo.SupportsClaudeSteering(buildinfo.Version, c.currentClaudeVersion(ctx, effectiveClaudePath(c.config.StateDir)))
+		return c.claudeTurns.Run(ctx, effectiveClaudePath(c.config.StateDir), envelope.OperationID, command, func(event protocol.StreamEvent) error {
 			if event.EventID == "" {
 				event.EventID = uuid.NewString()
 			}

@@ -11,6 +11,10 @@ import (
 )
 
 type ClaudeThread struct {
+	SteerSupported  bool       `db:"-" json:"steer_supported"`
+	SteerReady      bool       `db:"-" json:"steer_ready"`
+	ClaudeVersion   string     `db:"claude_version" json:"-"`
+	SteerState      string     `db:"steer_state" json:"-"`
 	SkillsSupported bool       `db:"-" json:"skills_supported"`
 	ID              string     `db:"id" json:"id"`
 	WorkspaceID     string     `db:"workspace_id" json:"workspace_id"`
@@ -42,9 +46,10 @@ type ClaudeThread struct {
 }
 
 const claudeThreadSelect = `SELECT t.*,cm.pinned_at,COALESCE(cm.fork_snapshot_id,'') AS fork_snapshot_id,COALESCE(cm.fork_session_id,'') AS fork_session_id,COALESCE(cto.effort,'') AS effort,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,
- w.server_id,s.name AS server_name,s.agent_version,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status,
+ w.server_id,s.name AS server_name,s.agent_version,COALESCE(ccli.version,'') AS claude_version,
+ COALESCE((SELECT payload FROM events WHERE stream_id=t.id AND kind IN ('claude.steer.ready','claude.steer.closed') ORDER BY sequence DESC LIMIT 1),'') AS steer_state,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status,
  CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending
- FROM claude_threads t LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id` + projectServerJoin
+ FROM claude_threads t LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN server_claude_cli ccli ON ccli.server_id=s.id` + projectServerJoin
 
 func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThread, error) {
 	condition := "t.archived_at IS NULL"
@@ -54,6 +59,7 @@ func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThrea
 	threads := []ClaudeThread{}
 	err := s.DB.SelectContext(ctx, &threads, s.Q(claudeThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN cm.pinned_at IS NULL THEN 1 ELSE 0 END,cm.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range threads {
+		threads[i].setSteerCapability()
 		threads[i].EffortSupported = buildinfo.SupportsClaudeEffort(threads[i].AgentVersion)
 		threads[i].SkillsSupported = buildinfo.SupportsClaudeSkills(threads[i].AgentVersion)
 		threads[i].InputSupported = buildinfo.SupportsClaudeInput(threads[i].AgentVersion)
@@ -64,6 +70,7 @@ func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThrea
 func (s *Store) ClaudeThread(ctx context.Context, id string) (ClaudeThread, error) {
 	var thread ClaudeThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(claudeThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	thread.setSteerCapability()
 	thread.EffortSupported = buildinfo.SupportsClaudeEffort(thread.AgentVersion)
 	thread.SkillsSupported = buildinfo.SupportsClaudeSkills(thread.AgentVersion)
 	thread.InputSupported = buildinfo.SupportsClaudeInput(thread.AgentVersion)
@@ -149,6 +156,7 @@ func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt
 		return protocol.StreamEvent{}, err
 	}
 	command := protocol.ClaudeTurnCommand{ThreadID: thread.ID, Workspace: thread.Path, SessionID: sessionID, Prompt: prompt, Model: model, PermissionMode: mode, Effort: effort}
+	command.Steer = thread.SteerSupported
 	command.Images = images
 	if sessionID == "" {
 		command.ForkSnapshotID = thread.ForkSnapshotID
@@ -286,4 +294,13 @@ func (s *Store) UnfinishedClaudeOperations(ctx context.Context, serverID string)
 	var ids []string
 	err := s.DB.SelectContext(ctx, &ids, s.Q("SELECT id FROM agent_operations WHERE server_id=? AND kind='claude.turn.start' AND (status='running' OR (status='delivered' AND delivered_at<?)) ORDER BY created_at"), serverID, time.Now().UTC().Add(-30*time.Second))
 	return ids, err
+}
+
+func (thread *ClaudeThread) setSteerCapability() {
+	thread.SteerSupported = buildinfo.SupportsClaudeSteering(thread.AgentVersion, thread.ClaudeVersion)
+	var state struct {
+		OperationID string `json:"operation_id"`
+		Ready       bool   `json:"ready"`
+	}
+	thread.SteerReady = thread.SteerSupported && thread.Status == "running" && json.Unmarshal([]byte(thread.SteerState), &state) == nil && state.OperationID == thread.OperationID && state.Ready
 }

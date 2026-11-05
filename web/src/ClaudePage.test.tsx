@@ -9,15 +9,16 @@ vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const baseThread = { input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
 
-function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; events?: unknown[] } = {}) {
+function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; steerSupported?:boolean; steerReady?:boolean; steerFailures?:number; events?: unknown[] } = {}) {
   window.localStorage.setItem("wio_language", "en");
-  const thread = { ...baseThread, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
+  const thread = { ...baseThread, steer_supported: options.steerSupported ?? false, steer_ready:options.steerReady ?? false, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
   const requests: Array<{ url: string; body: unknown }> = [];
+  let steerFailures=options.steerFailures??0;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input); let body: unknown = [];
     if(url.endsWith("/claude/skills")) { requests.push({url,body:{}}); return new Response(JSON.stringify({operation_id:"skill-op"}), {status:202}); }
     if(url.endsWith("/claude/skills/skill-op")) return new Response(JSON.stringify(options.skillsError ? {status:"failed",error:"Could not initialize CLI"} : {status:"succeeded",skills:options.skills ?? []}),{status:200});
-    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); body = url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
+    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
     else if (url.startsWith("/api/operations/")) body={status:"succeeded"};
     else if (url === "/api/workspaces/workspace-1/claude/models") body = { configured: true, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
@@ -37,6 +38,68 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
+
+test("steers a running Claude task and switches between stopping and sending", async () => {
+  const { user, requests } = setup({selected:true,status:"running",steerSupported:true,steerReady:true});
+  const input=await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});
+  expect(input).toBeEnabled();
+  expect(screen.getByLabelText("Claude model or alias")).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Interrupt"})).toBeEnabled();
+  await user.type(input,"Focus on the failing tests");
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/steer",body:{prompt:"Focus on the failing tests",operation_id:"op-1",request_id:expect.any(String)}}));
+  expect(input).toHaveValue("");
+  expect(requests.filter(request=>request.url.endsWith("/turns"))).toHaveLength(0);
+  await user.click(screen.getByRole("button",{name:"Interrupt"}));
+  await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/interrupt",body:{}}));
+});
+
+test("preserves a failed correction and retries with the same request ID", async () => {
+  const {user,requests}=setup({selected:true,status:"running",steerSupported:true,steerReady:true,steerFailures:1});
+  const input=await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});
+  await user.type(input,"Keep the public API");
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  expect(await screen.findByText("Temporary network failure")).toBeInTheDocument();
+  expect(input).toHaveValue("Keep the public API");
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await waitFor(()=>expect(input).toHaveValue(""));
+  const steers=requests.filter(request=>request.url.endsWith("/steer"));
+  expect(steers).toHaveLength(2);expect(steers[1].body).toEqual(steers[0].body);
+});
+
+test.each(["", "Use the attached screenshot"])("pastes images into a running correction, retains failed input and retries once (prompt=%s)", async prompt => {
+  const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=";
+  vi.mocked(compressImage).mockResolvedValue(dataURL);
+  const {user,requests} = setup({selected:true,status:"running",steerSupported:true,steerReady:true,steerFailures:1});
+  const input = await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});
+  if (prompt) await user.type(input,prompt);
+  fireEvent.paste(input,{clipboardData:{items:[{type:"image/png",getAsFile:()=>new File(["image"],"correction.png",{type:"image/png"})}]}});
+  await waitFor(()=>expect(document.querySelector(".composer-images img")).toHaveAttribute("src",dataURL));
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  expect(await screen.findByText("Temporary network failure")).toBeInTheDocument();
+  expect(input).toHaveValue(prompt);
+  expect(document.querySelector(".composer-images img")).toHaveAttribute("src",dataURL);
+  await user.click(screen.getByRole("button",{name:"Send correction"}));
+  await waitFor(()=>expect(document.querySelector(".composer-images img")).toBeNull());
+  const steers = requests.filter(request=>request.url.endsWith("/steer"));
+  expect(steers).toHaveLength(2);
+  expect(steers[0].body).toEqual({operation_id:"op-1",request_id:expect.any(String),prompt,images:[{data_url:dataURL}]});
+  expect(steers[1].body).toEqual(steers[0].body);
+  expect(requests.filter(request=>request.url.endsWith("/turns"))).toHaveLength(0);
+  expect(screen.getByRole("button",{name:"Interrupt"})).toBeEnabled();
+});
+
+test("shows one skill menu entry and accepts the plural alias",async()=>{
+  Element.prototype.scrollIntoView=vi.fn();
+  const {user}=setup({selected:true,skills:[{name:"review",description:"Review changes"}]});
+  const input=await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});
+  await user.type(input,"/");
+  const menu=screen.getByRole("listbox");
+  expect(within(menu).getByRole("option",{name:/^\/skill Browse/})).toBeInTheDocument();
+  expect(within(menu).queryByRole("option",{name:/^\/skills /})).not.toBeInTheDocument();
+  await user.clear(input);await user.type(input,"/skills");await user.keyboard("{Enter}");
+  expect(await within(screen.getByRole("listbox")).findByRole("option",{name:/\/review/})).toBeInTheDocument();
+});
 
 test("discovers skills before the first turn and sends namespaced native commands", async () => {
   Element.prototype.scrollIntoView = vi.fn();
