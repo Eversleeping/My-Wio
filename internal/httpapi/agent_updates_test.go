@@ -77,13 +77,17 @@ func TestAgentUpdateDoesNotRestartActiveAIWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	claude, err := db.CreateClaudeThread(ctx, workspaces[0].ID, "sonnet", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	assetDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(assetDir, "wio-agent-linux-amd64"), []byte("test-update"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(db)
 	api.agentUpdates = agentupdate.New(assetDir)
-	for _, target := range []struct{ table, id string }{{"gemini_threads", gemini.ID}, {"codex_threads", codex.ID}} {
+	for _, target := range []struct{ table, id string }{{"gemini_threads", gemini.ID}, {"codex_threads", codex.ID}, {"claude_threads", claude.ID}} {
 		for _, status := range []string{"queued", "running", "interrupting"} {
 			if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE "+target.table+" SET status=? WHERE id=?"), status, target.id); err != nil {
 				t.Fatal(err)

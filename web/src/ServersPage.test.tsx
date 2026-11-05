@@ -133,7 +133,7 @@ test("shows automatic dependency setup and retries an incomplete enrollment as S
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
   const form = screen.getByRole("dialog", { name: "Enroll Linux server" });
   expect(within(form).getByText(/will be installed and checked automatically/)).toBeInTheDocument();
-  expect(within(form).getByText(/install the latest stable Codex and Gemini CLI versions/)).toBeInTheDocument();
+  expect(within(form).getByText(/install the latest stable Codex, Gemini and Claude CLI versions/)).toBeInTheDocument();
   await user.type(within(form).getByRole("textbox", { name: "Server name" }), server.name);
   await user.type(within(form).getByRole("textbox", { name: "SSH host or IP" }), server.address);
   await user.selectOptions(within(form).getByRole("combobox", { name: "Authentication" }), "password");

@@ -511,6 +511,27 @@ CREATE TABLE IF NOT EXISTS gemini_threads (
 
 CREATE INDEX IF NOT EXISTS gemini_threads_workspace_idx ON gemini_threads(workspace_id, updated_at);
 
+CREATE TABLE IF NOT EXISTS claude_threads (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT 'Claude',
+  model TEXT NOT NULL DEFAULT 'sonnet',
+  permission_mode TEXT NOT NULL DEFAULT 'default',
+  status TEXT NOT NULL DEFAULT 'idle',
+  operation_id TEXT NOT NULL DEFAULT '',
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS claude_threads_workspace_idx ON claude_threads(workspace_id, updated_at);
+
+-- Keep options separate so older controllers can still read claude_threads.*.
+CREATE TABLE IF NOT EXISTS claude_thread_options (
+  thread_id TEXT PRIMARY KEY REFERENCES claude_threads(id) ON DELETE CASCADE,
+  effort TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS gemini_goals (
   id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES gemini_threads(id) ON DELETE CASCADE,
@@ -541,6 +562,26 @@ CREATE TABLE IF NOT EXISTS server_gemini_credential_updates (
  operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
  profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS server_claude_cli (
+ server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+ version TEXT NOT NULL DEFAULT '',
+ ready INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS server_claude_credential_profiles (
+ server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+ profile_revision TEXT NOT NULL DEFAULT '',
+ model TEXT NOT NULL DEFAULT '',
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS server_claude_credential_updates (
+ operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
+ server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+ profile_revision TEXT NOT NULL DEFAULT '',
+ model TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS gemini_scheduled_tasks (

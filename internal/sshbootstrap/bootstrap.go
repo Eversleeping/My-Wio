@@ -112,6 +112,7 @@ type Service struct {
 	assetDir       string
 	codexReleases  *codexcli.ReleaseChecker
 	geminiReleases *codexcli.ReleaseChecker
+	claudeReleases *codexcli.ReleaseChecker
 }
 
 func New(assetDir string) *Service {
@@ -122,6 +123,7 @@ func New(assetDir string) *Service {
 		assetDir:       assetDir,
 		codexReleases:  codexcli.NewReleaseChecker(nil, ""),
 		geminiReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/google-gemini/gemini-cli/releases", "v"),
+		claudeReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/anthropics/claude-code/releases", "v"),
 	}
 }
 
@@ -298,6 +300,14 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		}
 	} else {
 		resultWarnings = append(resultWarnings, "gemini_install_requires_npm")
+	}
+	if probe.NPMReady {
+		request.report("installing_claude", 0, 0)
+		if _, err := installBootstrapCLI("claude", versions.claude, npmRegistry, func(script string) (string, error) { return run(client, elevated(root, script)) }); err != nil {
+			resultWarnings = append(resultWarnings, "claude_install_failed")
+		}
+	} else {
+		resultWarnings = append(resultWarnings, "claude_install_requires_npm")
 	}
 	if probe.NPMReady {
 		request.report("installing_playwright", 0, 0)

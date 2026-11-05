@@ -14,11 +14,13 @@ import (
 	"github.com/wio-platform/wio/internal/codexcli"
 )
 
-func TestBootstrapResolvesLatestStableVersionsForBothCLIs(t *testing.T) {
+func TestBootstrapResolvesLatestStableVersionsForAllCLIs(t *testing.T) {
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/codex":
 			w.Write([]byte(`[{"tag_name":"rust-v0.165.0"},{"tag_name":"rust-v0.166.0-alpha.1","prerelease":true},{"tag_name":"rust-v0.164.0"}]`))
+		case "/claude":
+			w.Write([]byte(`[{"tag_name":"v2.1.318"},{"tag_name":"v2.1.319-preview.1","prerelease":true}]`))
 		case "/gemini":
 			w.Write([]byte(`[{"tag_name":"v0.66.0"},{"tag_name":"v0.68.0","draft":true},{"tag_name":"v0.67.0-preview.1","prerelease":true},{"tag_name":"v0.65.0"}]`))
 		default:
@@ -29,26 +31,32 @@ func TestBootstrapResolvesLatestStableVersionsForBothCLIs(t *testing.T) {
 	service := New(t.TempDir())
 	service.codexReleases = codexcli.NewReleaseChecker(releases.Client(), releases.URL+"/codex")
 	service.geminiReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/gemini", "v")
+	service.claudeReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/claude", "v")
 	versions, err := service.latestCLIVersions(context.Background())
-	if err != nil || versions.codex != "0.165.0" || versions.gemini != "0.66.0" {
-		t.Fatalf("bootstrap did not select both newest formal releases: %+v %v", versions, err)
+	if err != nil || versions.codex != "0.165.0" || versions.gemini != "0.66.0" || versions.claude != "2.1.318" {
+		t.Fatalf("bootstrap did not select all newest formal releases: %+v %v", versions, err)
 	}
 }
 
 func TestBootstrapCannotSilentlyUsePinnedVersionWhenDiscoveryFails(t *testing.T) {
-	for _, failing := range []string{"codex", "gemini"} {
+	for _, failing := range []string{"codex", "gemini", "claude"} {
 		t.Run(failing, func(t *testing.T) {
 			releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/"+failing {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					return
 				}
-				w.Write([]byte(`[{"tag_name":"rust-v0.165.0"}]`))
+				if r.URL.Path == "/codex" {
+					w.Write([]byte(`[{"tag_name":"rust-v0.165.0"}]`))
+				} else {
+					w.Write([]byte(`[{"tag_name":"v2.1.318"}]`))
+				}
 			}))
 			defer releases.Close()
 			service := New(t.TempDir())
 			service.codexReleases = codexcli.NewReleaseChecker(releases.Client(), releases.URL+"/codex")
 			service.geminiReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/gemini", "v")
+			service.claudeReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/claude", "v")
 			versions, err := service.latestCLIVersions(context.Background())
 			if !errors.Is(err, ErrCLIReleasesUnavailable) || versions != (cliVersions{}) {
 				t.Fatalf("discovery failure fell back to an old version: %+v %v", versions, err)
@@ -61,6 +69,7 @@ func TestBootstrapInstallsAndActivatesVerifiedCLIsAsServiceAccount(t *testing.T)
 	for _, test := range []struct{ kind, version, packageName, reported string }{
 		{"codex", "0.165.0", "@openai/codex", "codex-cli 0.165.0\n"},
 		{"gemini", "0.66.0", "@google/gemini-cli", "0.66.0\n"},
+		{"claude", "2.1.318", "@anthropic-ai/claude-code", "2.1.318 (Claude Code)\n"},
 	} {
 		t.Run(test.kind, func(t *testing.T) {
 			for _, registry := range []string{officialNPMRegistry, mainlandNPMRegistry} {
@@ -95,7 +104,7 @@ func TestBootstrapInstallsAndActivatesVerifiedCLIsAsServiceAccount(t *testing.T)
 }
 
 func TestBootstrapKeepsPreviousSelectionWhenCLIInstallationOrVerificationFails(t *testing.T) {
-	for _, kind := range []string{"codex", "gemini"} {
+	for _, kind := range []string{"codex", "gemini", "claude"} {
 		for _, failure := range []string{"install", "verification", "wrong_version", "activation"} {
 			t.Run(kind+"/"+failure, func(t *testing.T) {
 				calls := 0
@@ -140,7 +149,7 @@ func TestBootstrapPublishesCLISelectionWithRealShell(t *testing.T) {
 	if err != nil {
 		t.Skip("POSIX shell unavailable")
 	}
-	for _, kind := range []string{"codex", "gemini"} {
+	for _, kind := range []string{"codex", "gemini", "claude"} {
 		for _, reported := range []string{"0.165.0", "0.144.4"} {
 			t.Run(kind+"/"+reported, func(t *testing.T) {
 				root := filepath.Join(t.TempDir(), "CLI tools")

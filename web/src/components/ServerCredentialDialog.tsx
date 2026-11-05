@@ -16,17 +16,20 @@ export function ServerCredentialDialog({ server, profiles, profilesError, onClos
   const { t } = useI18n();
   const codexProfiles = profiles.filter(profile => profile.kind === "codex");
   const geminiProfiles = profiles.filter(profile => profile.kind === "gemini");
+  const claudeProfiles = profiles.filter(profile => profile.kind === "claude");
   const gitProfiles = profiles.filter(profile => profile.kind === "git");
-  const [kind, setKind] = useState<"codex" | "gemini">(!server.codex_profile_id && !codexProfiles.length && geminiProfiles.length ? "gemini" : "codex");
+  const [kind, setKind] = useState<"codex" | "gemini" | "claude">(!server.codex_profile_id && !codexProfiles.length ? geminiProfiles.length ? "gemini" : claudeProfiles.length ? "claude" : "codex" : "codex");
   const [codexProfileID, setCodexProfileID] = useState(server.codex_profile_id);
   const [geminiProfileID, setGeminiProfileID] = useState(server.gemini_profile_id || "");
+  const [claudeProfileID, setClaudeProfileID] = useState(server.claude_profile_id || "");
   const [gitProfileIDs, setGitProfileIDs] = useState(server.git_profiles?.map(profile => profile.id) ?? (server.git_profile_id ? [server.git_profile_id] : []));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [operation, setOperation] = useState<Operation | null>(null);
   const submitRef = useRef(false);
   const applying = busy || !!operation && pending(operation.status);
-  const unsupported = kind === "gemini" && !server.gemini_credentials_supported;
+  const unsupported = kind === "gemini" && !server.gemini_credentials_supported || kind === "claude" && !server.claude_credentials_supported;
+  const selectedProfileID = kind === "gemini" ? geminiProfileID : kind === "claude" ? claudeProfileID : codexProfileID;
 
   useEffect(() => {
     if (!operation || !pending(operation.status)) return;
@@ -47,11 +50,11 @@ export function ServerCredentialDialog({ server, profiles, profilesError, onClos
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (submitRef.current || applying || unsupported || server.status !== "online" || !(kind === "gemini" ? geminiProfileID : codexProfileID)) return;
+    if (submitRef.current || applying || unsupported || server.status !== "online" || !selectedProfileID) return;
     submitRef.current = true; setBusy(true); setError(""); setOperation(null);
     try {
-      if (kind === "gemini") {
-        const result = await post<{ operation_id: string }>(`/servers/${server.id}/gemini-credential-profile`, { profile_id: geminiProfileID });
+      if (kind === "gemini" || kind === "claude") {
+        const result = await post<{ operation_id: string }>(`/servers/${server.id}/${kind}-credential-profile`, { profile_id: selectedProfileID });
         setOperation({ id: result.operation_id, status: "queued", result: "" });
       } else {
         await post(`/servers/${server.id}/credential-profiles`, { codex_profile_id: codexProfileID, git_profile_ids: gitProfileIDs });
@@ -60,7 +63,7 @@ export function ServerCredentialDialog({ server, profiles, profilesError, onClos
     } catch (failure) { setError(message(failure)); }
     finally { setBusy(false); submitRef.current = false; }
   };
-  const selectKind = (value: "codex" | "gemini") => { setKind(value); setError(""); setOperation(null); };
+  const selectKind = (value: "codex" | "gemini" | "claude") => { setKind(value); setError(""); setOperation(null); };
 
   return <Dialog open title={t("server.editCredentials")} onClose={onClose} dismissDisabled={busy} closeLabel={t("common.close")}>
     <form onSubmit={save}>
@@ -68,6 +71,7 @@ export function ServerCredentialDialog({ server, profiles, profilesError, onClos
       <div className="segmented-control" role="tablist" aria-label={t("settings.type")}>
         <button type="button" role="tab" aria-selected={kind === "codex"} className={kind === "codex" ? "active" : ""} disabled={applying} onClick={() => selectKind("codex")}>Codex / Git</button>
         <button type="button" role="tab" aria-selected={kind === "gemini"} className={kind === "gemini" ? "active" : ""} disabled={applying} onClick={() => selectKind("gemini")}>{t("settings.geminiType")}</button>
+        <button type="button" role="tab" aria-selected={kind === "claude"} className={kind === "claude" ? "active" : ""} disabled={applying} onClick={() => selectKind("claude")}>{t("settings.claudeType")}</button>
       </div>
       {profilesError && <p className="error-banner" role="alert">{profilesError}</p>}
       {kind === "gemini" ? <>
@@ -77,6 +81,13 @@ export function ServerCredentialDialog({ server, profiles, profilesError, onClos
         </select></label>
         {!geminiProfiles.length && <p className="security-notice">{t("settings.noGeminiProfiles")}</p>}
         {unsupported && <p className="security-notice">{t("settings.geminiUpgradeAgent")}</p>}
+      </> : kind === "claude" ? <>
+        <p className="muted">{t("settings.claudeCurrentProfile", { name: server.claude_profile_name || t("settings.geminiUnconfigured") })}</p>
+        <label className="field"><span>{t("settings.claudeType")}</span><select value={claudeProfileID} required disabled={applying || unsupported} onChange={event => { setClaudeProfileID(event.target.value); setOperation(null); }}>
+          <option value="">{t("settings.selectClaudeProfile")}</option>{claudeProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}
+        </select></label>
+        {!claudeProfiles.length && <p className="security-notice">{t("settings.noClaudeProfiles")}</p>}
+        {unsupported && <p className="security-notice">{t("settings.claudeUpgradeAgent")}</p>}
       </> : <>
         <label className="field"><span>{t("server.codexProfile")}</span><select value={codexProfileID} required disabled={applying} onChange={event => setCodexProfileID(event.target.value)}>
           <option value="">{t(codexProfiles.length ? "server.selectCodexProfile" : "server.noCodexProfiles")}</option>{codexProfiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} · {profile.model}</option>)}
@@ -92,7 +103,7 @@ export function ServerCredentialDialog({ server, profiles, profilesError, onClos
       {server.status !== "online" && <p className="error-banner" role="alert">{t("server.credentialsOffline")}</p>}
       {error && <p className="error-banner" role="alert">{error}</p>}
       {operation && <p role="status" className={operation.status === "failed" ? "error-banner" : "security-notice"}>{t(`status.${operation.status}`)}{operation.result ? ` · ${operation.result}` : ""}</p>}
-      <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t("common.close")}</button><button className="primary-button" disabled={applying || unsupported || server.status !== "online" || !!profilesError || !(kind === "gemini" ? geminiProfileID : codexProfileID)}>{applying ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{t(applying ? "server.credentialsUpdating" : "server.saveCredentials")}</button></DialogActions>
+      <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t("common.close")}</button><button className="primary-button" disabled={applying || unsupported || server.status !== "online" || !!profilesError || !selectedProfileID}>{applying ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{t(applying ? "server.credentialsUpdating" : "server.saveCredentials")}</button></DialogActions>
     </form>
   </Dialog>;
 }

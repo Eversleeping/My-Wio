@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import CodexPage from "./pages/CodexPage";
 import GeminiPage from "./pages/GeminiPage";
+import ClaudePage from "./pages/ClaudePage";
 import { I18nProvider } from "./i18n";
 
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
-test.each(["codex", "gemini"])("%s scopes project pins and hidden-project recovery by server", async kind => {
+test.each(["codex", "gemini", "claude"])("%s scopes project pins and hidden-project recovery by server", async kind => {
   window.localStorage.setItem("wio_language", "en");
   const now = "2026-10-28T00:00:00Z";
   let threads = ["a", "b"].map(id => ({ id: `thread-${id}`, workspace_id: `workspace-${id}`, project_id: "shared-project", server_id: `server-${id}`, server_name: `Server ${id.toUpperCase()}`, server_status: "online", project_name: "same", path: "/srv/same", title: `Task ${id}`, status: "idle", codex_thread_id: `native-${id}`, session_id: `native-${id}`, model: "flash", approval_mode: "default", operation_id: "", archived_at: null, pinned_at: null, project_pinned_at: null as string | null, project_hidden_at: null as string | null, created_at: now, updated_at: now, fork_supported: true, rewrite_supported: true }));
@@ -22,7 +23,7 @@ test.each(["codex", "gemini"])("%s scopes project pins and hidden-project recove
       body = {};
     } else if (url.pathname === "/api/projects/hidden") body = threads.filter(thread => thread.project_hidden_at).map(thread => ({ project_id: thread.project_id, server_id: thread.server_id, project_name: thread.project_name, server_name: thread.server_name, hidden_at: now }));
     else if (url.pathname === "/api/threads") body = { items: url.searchParams.get("archived") === "true" ? [] : threads, has_more: false, next: null };
-    else if (url.pathname === "/api/gemini/threads") body = url.searchParams.get("archived") === "true" ? [] : threads;
+    else if (url.pathname === "/api/gemini/threads" || url.pathname === "/api/claude/threads") body = url.searchParams.get("archived") === "true" ? [] : threads;
     else if (url.pathname === "/api/workspaces") body = threads.map(thread => ({ id: thread.workspace_id, project_id: thread.project_id, server_id: thread.server_id, server_name: thread.server_name, project_name: "same", path: "/srv/same", branch: "main", status: "ready", management_mode: "managed" }));
     else if (url.pathname.endsWith("/gemini/models")) body = { configured: true, models: [{ id: "flash", name: "flash" }] };
     else if (/\/threads\/thread-[ab]$/.test(url.pathname)) body = threads.find(thread => url.pathname.endsWith(thread.id));
@@ -30,7 +31,7 @@ test.each(["codex", "gemini"])("%s scopes project pins and hidden-project recove
     return new Response(JSON.stringify(body), { status: 200 });
   }));
   const shared = { realtime: 0, notify: vi.fn(), selectedThreadID: "", onSelectThread: vi.fn() };
-  const page = (realtime = 0) => <I18nProvider>{kind === "codex" ? <CodexPage {...shared} realtime={realtime} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} /> : <GeminiPage {...shared} realtime={realtime} />}</I18nProvider>;
+  const page = (realtime = 0) => <I18nProvider>{kind === "codex" ? <CodexPage {...shared} realtime={realtime} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} /> : kind === "gemini" ? <GeminiPage {...shared} realtime={realtime} /> : <ClaudePage {...shared} realtime={realtime} />}</I18nProvider>;
   const { container, rerender } = render(page());
   await waitFor(() => expect(container.querySelectorAll(".thread-project")).toHaveLength(2));
   const group = (server: string) => Array.from(container.querySelectorAll<HTMLElement>(".thread-project")).find(item => item.querySelector(".thread-project-toggle small")?.textContent === server)!;

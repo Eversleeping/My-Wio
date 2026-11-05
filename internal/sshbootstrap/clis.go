@@ -11,6 +11,7 @@ import (
 type cliVersions struct {
 	codex  string
 	gemini string
+	claude string
 }
 
 // Resolve formal releases at enrollment time, using the same official discovery
@@ -26,11 +27,15 @@ func (s *Service) latestCLIVersions(ctx context.Context) (cliVersions, error) {
 	if err != nil {
 		return cliVersions{}, fmt.Errorf("%w: Gemini: %v", ErrCLIReleasesUnavailable, err)
 	}
-	return cliVersions{codex: codex, gemini: gemini}, nil
+	claude, err := s.claudeReleases.LatestStable(ctx)
+	if err != nil {
+		return cliVersions{}, fmt.Errorf("%w: Claude: %v", ErrCLIReleasesUnavailable, err)
+	}
+	return cliVersions{codex: codex, gemini: gemini, claude: claude}, nil
 }
 
 func installBootstrapCLI(kind, version, registry string, run func(string) (string, error)) (string, error) {
-	packages := map[string]string{"codex": "@openai/codex", "gemini": "@google/gemini-cli"}
+	packages := map[string]string{"codex": "@openai/codex", "gemini": "@google/gemini-cli", "claude": "@anthropic-ai/claude-code"}
 	packageName, ok := packages[kind]
 	if !ok || !codexcli.ValidTargetVersion(version) {
 		return "", ErrInvalidTarget
@@ -46,7 +51,7 @@ func installBootstrapCLI(kind, version, registry string, run func(string) (strin
 	if reported, err := asAgent(shellQuote(executable) + " --version"); err != nil || !codexcli.ReportedVersionMatches(reported, version) {
 		return "", fmt.Errorf("%s CLI version verification failed", kind)
 	}
-	// Both CLI adapters read this marker on startup. Publish only after verifying
+	// The CLI adapters read this marker on startup. Publish only after verifying
 	// the executable, so an existing selection survives an unsuccessful repair.
 	marker := "/var/lib/wio-agent/" + kind + "/current-version"
 	activate := `set -eu

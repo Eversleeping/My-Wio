@@ -52,7 +52,7 @@ func (s *Store) WorkspaceDeletionPlan(ctx context.Context, workspaceID string, f
 	if err = s.DB.GetContext(ctx, &plan.ActiveOperations, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND status IN ('queued','delivered','running')"), workspaceID); err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
-	if err = s.DB.GetContext(ctx, &plan.ThreadCount, s.Q("SELECT (SELECT COUNT(*) FROM codex_threads WHERE workspace_id=?) + (SELECT COUNT(*) FROM gemini_threads WHERE workspace_id=?)"), workspaceID, workspaceID); err != nil {
+	if err = s.DB.GetContext(ctx, &plan.ThreadCount, s.Q("SELECT (SELECT COUNT(*) FROM codex_threads WHERE workspace_id=?) + (SELECT COUNT(*) FROM gemini_threads WHERE workspace_id=?) + (SELECT COUNT(*) FROM claude_threads WHERE workspace_id=?)"), workspaceID, workspaceID, workspaceID); err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
 	if err = s.DB.GetContext(ctx, &plan.ChildWorkspaces, s.Q("SELECT COUNT(*) FROM workspaces WHERE parent_workspace_id=?"), workspaceID); err != nil {
@@ -96,7 +96,8 @@ func (s *Store) RemoveWorkspaceRecord(ctx context.Context, workspaceID string) e
 		AND NOT EXISTS (SELECT 1 FROM agent_operations WHERE workspace_id=? AND status IN ('queued','delivered','running'))
 		AND NOT EXISTS (SELECT 1 FROM codex_threads WHERE workspace_id=?)
 		AND NOT EXISTS (SELECT 1 FROM gemini_threads WHERE workspace_id=?)
-		AND NOT EXISTS (SELECT 1 FROM workspaces child WHERE child.parent_workspace_id=?)`), workspaceID, workspaceID, workspaceID, workspaceID, workspaceID)
+		AND NOT EXISTS (SELECT 1 FROM claude_threads WHERE workspace_id=?)
+		AND NOT EXISTS (SELECT 1 FROM workspaces child WHERE child.parent_workspace_id=?)`), workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID)
 	if err != nil {
 		return err
 	}

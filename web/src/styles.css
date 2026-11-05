@@ -933,6 +933,18 @@ input:focus, select:focus, textarea:focus {
 .gemini-hint { margin: 10px 12px; }
 .gemini-working { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .gemini-options { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1fr); gap: 12px; }
+.claude-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.claude-options .field { min-width: 0; margin: 8px 0; }
+.claude-composer .composer-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; }
+.claude-composer .composer-bar > .claude-composer-options { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 7px; }
+.claude-composer .claude-composer-options > input, .claude-composer .claude-composer-options > select { width: 100%; min-width: 0; max-width: none; min-height: 36px; text-overflow: ellipsis; }
+.claude-composer .composer-action { min-height: 36px; white-space: nowrap; }
+@media (max-width: 760px) {
+  .claude-options { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .claude-composer .composer-bar, .claude-composer .composer-bar > .claude-composer-options { gap: 4px; }
+  .claude-composer .composer-bar > .claude-composer-options { grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr) minmax(0, 1fr); }
+  .claude-composer .claude-composer-options > input, .claude-composer .claude-composer-options > select { min-height: 38px; padding: 5px 3px; font-size: 11px; }
+}
 .gemini-options .field { min-width: 0; margin: 8px 0; }
 .gemini-options.with-actions { grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1fr) auto; }
 .gemini-options-actions { grid-column: 4; grid-row: 1; align-self: end; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }

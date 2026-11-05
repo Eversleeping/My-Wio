@@ -136,7 +136,7 @@ import type {
   WorkspaceFilesSnapshot
 } from "./types";
 
-type View = "dashboard" | "servers" | "projects" | "codex" | "gemini" | "deployments" | "operations" | "monitoring" | "settings";
+type View = "dashboard" | "servers" | "projects" | "codex" | "gemini" | "claude" | "deployments" | "operations" | "monitoring" | "settings";
 type RealtimeScope = View | "approvals";
 type RealtimeRevisions = Record<RealtimeScope, number>;
 type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
@@ -150,6 +150,7 @@ const ServersPageRoute = lazy(() => import("./pages/ServersPage"));
 const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
 const CodexPageRoute = lazy(() => import("./pages/CodexPage"));
 const GeminiPageRoute = lazy(() => import("./pages/GeminiPage"));
+const ClaudePageRoute = lazy(() => import("./pages/ClaudePage"));
 const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
 const OperationsPageRoute = lazy(() => import("./pages/OperationsPage"));
 const MonitoringPageRoute = lazy(() => import("./pages/MonitoringPage"));
@@ -169,12 +170,13 @@ const codexAutoFollowThreshold = 96;
 const threadEventsPageSize = 500;
 const threadListPageSize = 50;
 const auditListPageSize = 50;
-const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "gemini", "deployments", "operations", "monitoring", "settings", "approvals"];
-const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, gemini: 0, deployments: 0, operations: 0, monitoring: 0, settings: 0, approvals: 0 });
+const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "gemini", "claude", "deployments", "operations", "monitoring", "settings", "approvals"];
+const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, gemini: 0, claude: 0, deployments: 0, operations: 0, monitoring: 0, settings: 0, approvals: 0 });
 
 export function realtimeScopesForEvent(event: Pick<Partial<StreamEvent>, "kind">): RealtimeScope[] {
   const kind = event.kind ?? "";
   if (kind.startsWith("gemini.")) return ["gemini", "operations"];
+  if (kind.startsWith("claude.")) return ["claude", "operations"];
   if (kind === "inventory.updated") return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
   if (kind.startsWith("deployment.")) return ["dashboard", "deployments", "operations", "monitoring"];
   if (kind.startsWith("agent.")) return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
@@ -218,6 +220,7 @@ const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboa
   { id: "projects", labelKey: "nav.projects", icon: GitBranch },
   { id: "codex", labelKey: "nav.codex", icon: Code2 },
   { id: "gemini", labelKey: "nav.gemini", icon: Sparkles },
+  { id: "claude", labelKey: "nav.claude", icon: Bot },
   { id: "deployments", labelKey: "nav.deployments", icon: Rocket },
   { id: "operations", labelKey: "nav.operations", icon: ListChecks },
   { id: "monitoring", labelKey: "nav.monitoring", icon: Activity },
@@ -228,13 +231,13 @@ function readLocationState(): { view: View; threadID: string } {
   const params = new URLSearchParams(window.location.search);
   const requestedView = params.get("view");
   const view = navigation.some(item => item.id === requestedView) ? requestedView as View : "dashboard";
-  return { view, threadID: view === "codex" || view === "gemini" ? params.get("thread") ?? "" : "" };
+  return { view, threadID: view === "codex" || view === "gemini" || view === "claude" ? params.get("thread") ?? "" : "" };
 }
 
 export function locationFor(view: View, threadID = "") {
   const params = new URLSearchParams();
   if (view !== "dashboard") params.set("view", view);
-  if ((view === "codex" || view === "gemini") && threadID) params.set("thread", threadID);
+  if ((view === "codex" || view === "gemini" || view === "claude") && threadID) params.set("thread", threadID);
   const query = params.toString();
   return `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
 }
@@ -378,7 +381,7 @@ export default function App() {
     authenticate(null);
   };
   const selectView = (next: View, threadID = "", replace = false) => {
-    const nextThreadID = next === "codex" || next === "gemini" ? threadID : "";
+    const nextThreadID = next === "codex" || next === "gemini" || next === "claude" ? threadID : "";
     setView(next);
     setCodexThreadID(nextThreadID);
     setMobileNav(false);
@@ -391,6 +394,7 @@ export default function App() {
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute realtime={realtimeRevisions.projects} notify={setToast} /></Suspense>,
     codex: <Suspense fallback={<PageLoading />}><CodexPageRoute realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} /></Suspense>,
     gemini: <Suspense fallback={<PageLoading />}><GeminiPageRoute realtime={realtimeRevisions.gemini} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("gemini", threadID, replace)} /></Suspense>,
+    claude: <Suspense fallback={<PageLoading />}><ClaudePageRoute realtime={realtimeRevisions.claude} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("claude", threadID, replace)} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute realtime={realtimeRevisions.deployments} notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><OperationsPageRoute realtime={realtimeRevisions.operations} /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute realtime={realtimeRevisions.monitoring} /></Suspense>,

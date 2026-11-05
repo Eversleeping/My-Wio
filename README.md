@@ -35,6 +35,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 - 控制面下发 Agent 更新包，Agent 校验大小与 SHA-256 后原子切换版本，首次启动失败时自动回退
 - 实时展示 Codex 消息、命令输出、文件变更、任务状态、中断和审批请求；支持图片输入、消息改写、任务分叉、独立 worktree、目标、MCP、Skills、限额状态和模型/推理强度选择
 - 在 Codex 下方提供独立 Gemini 页面，通过官方 Gemini CLI 支持模型选择、流式会话、工具结果、历史续聊、中断及归档；接入步骤见 [Gemini 使用说明](docs/GEMINI.md)
+- 提供独立 Claude 页面，通过目标服务器的官方 Claude Code CLI 支持模型与权限选择、流式会话、工具结果、历史续聊、中断及归档；安装和认证步骤见 [Claude 使用说明](docs/CLAUDE.md)
 - 支持在设置中检查并选择稳定的 Codex CLI 版本，并向在线 Agent 下发 Codex CLI 更新
 - 使用 Docker Compose 发布目录、健康检查、稳定的 Compose 项目名、部署日志、容器启停/重启/删除和上一版本回滚
 - 支持 Vault Secret Set、Codex/Git 凭据预设、外部访问链接、告警确认和审计日志
@@ -223,9 +224,9 @@ Linux 控制面进程默认同时运行一个内置 Agent，并以固定的“�
 4. 在 Wio 中打开“服务器”，点击“注册服务器”，填写服务器地址、SSH 用户以及密码或私钥文件，选择 Codex 预设和可选 Git 预设。
 5. Wio 首先只读取 SSH 主机公钥，不发送登录凭据。确认页面显示的 SHA-256 指纹后，Wio 才会连接并执行固定的安装流程。
 
-自动注册会创建专用 `wio-agent` 系统用户、安装 Agent 和两个 systemd unit、生成一次性注册令牌并启动服务。目标服务器存在 npm 时，安装器会根据该服务器的公网出口地域自动选择 registry：中国大陆使用 `https://registry.npmmirror.com`，境外或地域识别失败时使用 `https://registry.npmjs.org`；该配置同时写入 `root` 和 `wio-agent` 账户。注册与 SSH 修复会查询官方发布源中的 Codex CLI、Gemini CLI 最新稳定版（排除预发布与草稿，GitHub 不可用时回退到官方 npm），并在目标服务器具备 npm 后按查询到的确切版本分别安装到受管目录。安装器以 `wio-agent` 账户执行版本校验，通过后才原子更新各自的 `current-version`，供 Agent 启动时使用；查询失败会在修改远端安装文件前终止并提示重试，安装或校验失败会保留原有版本选择并显示警告。版本发现结果最多缓存 5 分钟，不使用代码中固定的旧版本或设置页手动选定的版本。同时会尝试安装固定版本的 Playwright CLI（本分支为 `1.61.1`）、Chromium 浏览器及其 Linux 系统依赖。中国大陆服务器的 Chromium 下载使用 `https://npmmirror.com/mirrors/playwright`，其他地区使用官方 CDN，浏览器下载超时为 10 分钟。Playwright 保存在 `/var/lib/wio-agent/playwright`，浏览器文件由 `wio-agent` 持有，安装器会实际启动一次无头 Chromium 完成验收。
+自动注册会创建专用 `wio-agent` 系统用户、安装 Agent 和两个 systemd unit、生成一次性注册令牌并启动服务。目标服务器存在 npm 时，安装器会根据该服务器的公网出口地域自动选择 registry：中国大陆使用 `https://registry.npmmirror.com`，境外或地域识别失败时使用 `https://registry.npmjs.org`；该配置同时写入 `root` 和 `wio-agent` 账户。注册与 SSH 修复会查询官方发布源中的 Codex CLI、Gemini CLI、Claude CLI 最新稳定版（排除预发布与草稿，GitHub 不可用时回退到官方 npm），并在目标服务器具备 npm 后按查询到的确切版本分别安装到受管目录。安装器以 `wio-agent` 账户执行版本校验，通过后才原子更新各自的 `current-version`，供 Agent 启动时使用；查询失败会在修改远端安装文件前终止并提示重试，安装或校验失败会保留原有版本选择并显示警告。版本发现结果最多缓存 5 分钟，不使用代码中固定的旧版本或设置页手动选定的版本。同时会尝试安装固定版本的 Playwright CLI（本分支为 `1.61.1`）、Chromium 浏览器及其 Linux 系统依赖。中国大陆服务器的 Chromium 下载使用 `https://npmmirror.com/mirrors/playwright`，其他地区使用官方 CDN，浏览器下载超时为 10 分钟。Playwright 保存在 `/var/lib/wio-agent/playwright`，浏览器文件由 `wio-agent` 持有，安装器会实际启动一次无头 Chromium 完成验收。
 
-Agent 核心安装、注册或配置失败会终止流程；npm、Codex CLI、Gemini CLI、Playwright、Git 或 Docker 的可选能力失败则在完成页面显示警告，通常不会阻止 Agent 注册。注册时可显式允许 `wio-agent` 与 Codex 免密使用 sudo；该选项会关闭 Agent 服务中阻止提权和系统写入的沙箱限制，并授予 `NOPASSWD: ALL`，应只用于完全信任工作区代码和 Codex 操作的服务器。
+Agent 核心安装、注册或配置失败会终止流程；npm、Codex CLI、Gemini CLI、Claude CLI、Playwright、Git 或 Docker 的可选能力失败则在完成页面显示警告，通常不会阻止 Agent 注册。注册时可显式允许 `wio-agent` 与 Codex 免密使用 sudo；该选项会关闭 Agent 服务中阻止提权和系统写入的沙箱限制，并授予 `NOPASSWD: ALL`，应只用于完全信任工作区代码和 Codex 操作的服务器。
 
 Codex provider 配置保存在 `/var/lib/wio-agent/.codex/config.toml`。注册与凭据更新都会保留已有的项目信任和用户自定义字段，并固定写入 `sandbox_mode = "danger-full-access"` 及 `[sandbox_workspace_write].network_access = true`，允许 Codex 在受管项目中修改 Git 元数据（包括 `.git`）并访问包仓库、Git 和外部 API。普通 Agent 的 systemd 单元仍通过 `ProtectSystem=strict`、`ProtectHome=read-only` 和 `ReadWritePaths=/var/lib/wio-agent` 将写入范围限制在 Agent 管理目录；显式启用 Agent sudo 的服务器会放宽该系统级限制，应只用于完全信任工作区代码和 Codex 操作的服务器。API Key 写入目标服务器的 `/etc/wio-agent/codex.key`，权限为 `0600`；控制面不保存 SSH 密码或 SSH 私钥，Codex API Key 与 Git Token 预设仅以 Vault 密文保存，且不会把明文写入审计日志或返回浏览器。Git 预设还会保存非敏感的提交姓名与邮箱，并与 HTTPS 凭据助手一起写入 Agent 的全局 `.gitconfig`。Agent 仅在启动 `codex app-server` 子进程时注入 API Key，Git、扫描和 Docker Compose 子进程不会继承它。
 

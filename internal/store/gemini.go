@@ -64,7 +64,7 @@ func (s *Store) UnfinishedGeminiOperations(ctx context.Context, serverID string)
 }
 
 func (s *Store) ClaimGeminiDelivery(ctx context.Context, id string) (bool, error) {
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='delivered',delivered_at=? WHERE id=? AND status='queued' AND kind IN ('gemini.turn.start','gemini.turn.rewrite')"), time.Now().UTC(), id)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='delivered',delivered_at=? WHERE id=? AND status='queued' AND kind IN ('gemini.turn.start','gemini.turn.rewrite','claude.turn.start')"), time.Now().UTC(), id)
 	if err != nil {
 		return false, err
 	}

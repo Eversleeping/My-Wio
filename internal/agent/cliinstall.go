@@ -45,9 +45,76 @@ func (c *Client) installCLI(ctx context.Context, command protocol.CLIInstallComm
 			}
 			return writeManagedCLIVersion(c.config.StateDir, "gemini", command.Version)
 		})
+	case "claude":
+		if !c.claudeMu.TryLock() {
+			return errors.New("finish active Claude turns before changing versions")
+		}
+		defer c.claudeMu.Unlock()
+		if err := installClaudeCLI(ctx, c.config.StateDir, command.Version); err != nil {
+			return err
+		}
+		return writeManagedCLIVersion(c.config.StateDir, "claude", command.Version)
 	default:
 		return errors.New("unsupported AI CLI")
 	}
+}
+
+var readClaudeUpdateVersion = func(ctx context.Context, executable string) string {
+	return commandVersionWithTimeout(ctx, executable, 15*time.Second)
+}
+
+func (c *Client) currentClaudeVersion(ctx context.Context, executable string) string {
+	c.claudeVersionMu.Lock()
+	defer c.claudeVersionMu.Unlock()
+	if c.claudeVersionPath == executable && time.Now().Before(c.claudeVersionUntil) {
+		return c.claudeVersion
+	}
+	version := readClaudeUpdateVersion(ctx, executable)
+	if version != "" {
+		c.claudeVersionPath, c.claudeVersion, c.claudeVersionUntil = executable, version, time.Now().Add(2*time.Minute)
+	}
+	return version
+}
+
+func installClaudeCLI(ctx context.Context, stateDir, version string) error {
+	if !codexcli.ValidTargetVersion(version) {
+		return errors.New("invalid Claude CLI version")
+	}
+	if _, err := findCodexUpdateCommand("npm"); err != nil {
+		return errors.New("Node.js and npm are required; use SSH repair to install server dependencies")
+	}
+	prefix := managedClaudePrefix(stateDir, version)
+	if err := os.MkdirAll(prefix, 0o750); err != nil {
+		return err
+	}
+	if err := runCodexUpdateCommand(ctx, "npm", "install", "--prefix", prefix, "--omit=dev", "--registry=https://registry.npmjs.org", "@anthropic-ai/claude-code@"+version); err != nil {
+		return fmt.Errorf("install Claude CLI %s: %w", version, err)
+	}
+	if reported := readClaudeUpdateVersion(ctx, managedClaudeExecutable(stateDir, version)); !codexcli.ReportedVersionMatches(reported, version) {
+		return errors.New("Claude CLI version verification failed")
+	}
+	return nil
+}
+
+func managedClaudePrefix(stateDir, version string) string {
+	return filepath.Join(stateDir, "claude", "versions", version)
+}
+
+func managedClaudeExecutable(stateDir, version string) string {
+	return filepath.Join(managedClaudePrefix(stateDir, version), "node_modules", ".bin", "claude")
+}
+
+func effectiveClaudePath(stateDir string) string {
+	raw, err := os.ReadFile(filepath.Join(stateDir, "claude", codexCurrentVersionFile))
+	version := strings.TrimSpace(string(raw))
+	if err != nil || !codexcli.ValidTargetVersion(version) {
+		return "claude"
+	}
+	executable := managedClaudeExecutable(stateDir, version)
+	if info, err := os.Stat(executable); err != nil || info.IsDir() {
+		return "claude"
+	}
+	return executable
 }
 
 func installGeminiCLI(ctx context.Context, stateDir, version string) error {

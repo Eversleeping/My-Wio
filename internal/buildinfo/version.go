@@ -5,7 +5,21 @@ import (
 	"strings"
 )
 
-var Version = "0.2.89"
+var Version = "0.2.92"
+
+const MinimumClaudeEffortVersion = "0.2.92"
+
+func SupportsClaudeEffort(version string) bool { return atLeast(version, MinimumClaudeEffortVersion) }
+
+const MinimumClaudeVersion = "0.2.90"
+
+func SupportsClaude(version string) bool { return atLeast(version, MinimumClaudeVersion) }
+
+const MinimumClaudeManagementVersion = "0.2.91"
+
+func SupportsClaudeManagement(version string) bool {
+	return atLeast(version, MinimumClaudeManagementVersion)
+}
 
 const MinimumGeminiImageSteerVersion = "0.2.88"
 const MinimumGeminiSkillManagementVersion = "0.2.88"

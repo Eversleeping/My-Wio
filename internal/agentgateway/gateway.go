@@ -115,7 +115,11 @@ func (g *Gateway) sendKeepalive(stream protocol.AgentServiceConnectServer, serve
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(protocol.GeminiKeepalive{OperationIDs: ids})
+	claudeIDs, err := g.store.UnfinishedClaudeOperations(stream.Context(), serverID)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(protocol.GeminiKeepalive{OperationIDs: ids, ClaudeOperationIDs: claudeIDs})
 	if err != nil {
 		return err
 	}
@@ -166,6 +170,14 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		return g.publish(ctx, protocol.StreamEvent{StreamID: "inventory", Kind: "inventory.updated", Payload: msg.PayloadJSON})
 	case "gemini_event":
 		return g.handleGeminiEvent(ctx, serverID, msg.PayloadJSON)
+	case "claude_event":
+		return g.handleClaudeEvent(ctx, serverID, msg.PayloadJSON)
+	case "claude_ownership_lost", "claude_ownership_active":
+		var ownership protocol.GeminiOwnership
+		if err := json.Unmarshal(msg.PayloadJSON, &ownership); err != nil {
+			return err
+		}
+		return g.updateClaudeOwnership(ctx, serverID, ownership.OperationID, msg.Kind == "claude_ownership_active")
 	case "gemini_ownership_lost":
 		var lost protocol.GeminiOwnership
 		if err := json.Unmarshal(msg.PayloadJSON, &lost); err != nil {
@@ -299,7 +311,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
 			return nil
 		}
-		geminiTurn := operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite"
+		geminiTurn := operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "claude.turn.start"
 		geminiInterrupted := geminiTurn && (result.Status == "interrupted" || result.Status == "cancelled" || (result.Status == "failed" && result.Message == context.Canceled.Error()))
 		if geminiInterrupted {
 			// Agent operations use the shared cancelled state for metrics and
@@ -661,9 +673,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		geminiCompletionClaimed := false
 		if operation.Kind == "gemini.credentials.configure" {
 			err = g.store.CompleteGeminiCredentialUpdate(ctx, result)
+		} else if operation.Kind == "claude.credentials.configure" {
+			err = g.store.CompleteClaudeCredentialUpdate(ctx, result)
 		} else if operation.Kind == "credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
-		} else if geminiInterrupted {
+		} else if geminiInterrupted || operation.Kind == "claude.turn.start" {
 			geminiCompletionClaimed, err = g.store.CompleteOperationIfActive(ctx, result)
 		} else {
 			err = g.store.CompleteOperation(ctx, result)
@@ -671,7 +685,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if err != nil {
 			return err
 		}
-		if geminiInterrupted && !geminiCompletionClaimed {
+		if (geminiInterrupted || operation.Kind == "claude.turn.start") && !geminiCompletionClaimed {
 			return nil
 		}
 		if operation.Kind == "gemini.thread.fork" || operation.Kind == "git.worktree.create" {
@@ -701,6 +715,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "gemini.turn.interrupt" || operation.Kind == "gemini.turn.steer" {
 			if err := g.completeGeminiOperation(ctx, operation, result); err != nil {
+				return err
+			}
+		}
+		if operation.Kind == "claude.turn.start" || operation.Kind == "claude.turn.interrupt" {
+			if err := g.completeClaudeOperation(ctx, operation, result); err != nil {
 				return err
 			}
 		}
@@ -963,7 +982,7 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 		return err
 	}
 	for _, op := range ops {
-		geminiTurn := op.Kind == "gemini.turn.start" || op.Kind == "gemini.turn.rewrite"
+		geminiTurn := op.Kind == "gemini.turn.start" || op.Kind == "gemini.turn.rewrite" || op.Kind == "claude.turn.start"
 		payload := json.RawMessage(op.Payload)
 		if strings.HasPrefix(op.Payload, "v1:") {
 			if err := g.vault.Decrypt(op.Payload, &payload); err != nil {

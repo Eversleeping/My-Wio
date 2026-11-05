@@ -26,7 +26,7 @@ func (s *Store) QueueAgentUpdate(ctx context.Context, serverID string, command p
 	if n, err := r.RowsAffected(); err != nil || n != 1 {
 		return "", errors.New("server unavailable")
 	}
-	for _, kind := range []string{"codex", "gemini"} {
+	for _, kind := range []string{"codex", "gemini", "claude"} {
 		blockers, err := s.cliInstallBlockers(ctx, tx, serverID, kind)
 		if err != nil {
 			return "", err

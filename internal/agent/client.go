@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/claudeadapter"
 	"github.com/wio-platform/wio/internal/codexadapter"
 	"github.com/wio-platform/wio/internal/deployer"
 	"github.com/wio-platform/wio/internal/geminiadapter"
@@ -58,6 +59,11 @@ type Client struct {
 	geminiVersionPath  string
 	geminiVersion      string
 	geminiVersionUntil time.Time
+	claudeMu           sync.RWMutex
+	claudeVersionMu    sync.Mutex
+	claudeVersionPath  string
+	claudeVersion      string
+	claudeVersionUntil time.Time
 }
 
 type operationExecution struct {
@@ -199,6 +205,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		}
 		if command.Kind == protocol.ControlKindKeepalive && command.OperationID == "" {
 			go c.reconcileGeminiOperations(command.PayloadJSON)
+			go c.reconcileClaudeOperations(command.PayloadJSON)
 			continue
 		}
 		go c.handleOperation(ctx, command)
@@ -254,7 +261,7 @@ func operationContext(parent context.Context, kind string) (context.Context, con
 	// Gemini turns run synchronously until inference and all tools finish, and
 	// can also wait for user input. Their lifetime follows explicit interruption
 	// or Agent shutdown, rather than the maintenance-operation deadline.
-	if kind == "gemini.turn.start" || kind == "gemini.turn.rewrite" {
+	if kind == "gemini.turn.start" || kind == "gemini.turn.rewrite" || kind == "claude.turn.start" {
 		return context.WithCancel(parent)
 	}
 	timeout := 10 * time.Minute
@@ -319,6 +326,16 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
 			err = c.interruptGeminiAndWait(stopContext, command.OperationID)
+			stopCancel()
+			if err == nil {
+				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
+			}
+		}
+	} else if envelope.Kind == "claude.turn.interrupt" {
+		var command protocol.ClaudeInterruptCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
+			err = c.interruptClaudeAndWait(stopContext, command.OperationID)
 			stopCancel()
 			if err == nil {
 				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
@@ -578,7 +595,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	message := ""
 	if err != nil {
 		status = "failed"
-		if (envelope.Kind == "gemini.turn.start" || envelope.Kind == "gemini.turn.rewrite") && (errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
+		if (envelope.Kind == "gemini.turn.start" || envelope.Kind == "gemini.turn.rewrite" || envelope.Kind == "claude.turn.start") && (errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
 			status = "interrupted"
 		}
 		message = err.Error()
@@ -860,6 +877,38 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.gemini.RunInTrustedWorkspaceWithEnvironment(ctx, envelope.OperationID, command, environment)
+	case "claude.turn.start":
+		if c.agentUpdatePending() {
+			return errors.New("Agent update is in progress; retry the task after it reconnects")
+		}
+		var command protocol.ClaudeTurnCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		root, err := scanner.ResolveWorkspaceRoot(command.Workspace, c.inventoryRoots())
+		if err != nil {
+			return err
+		}
+		command.Workspace = root
+		if !c.claudeMu.TryRLock() {
+			return errors.New("Claude configuration or installation is in progress")
+		}
+		defer c.claudeMu.RUnlock()
+		environment, err := c.claudeEnvironment()
+		if err != nil {
+			return err
+		}
+		gitEnvironment, err := c.geminiGitEnvironment(ctx)
+		if err != nil {
+			return err
+		}
+		environment = append(environment, gitEnvironment...)
+		return claudeadapter.Run(ctx, effectiveClaudePath(c.config.StateDir), envelope.OperationID, command, func(event protocol.StreamEvent) error {
+			if event.EventID == "" {
+				event.EventID = uuid.NewString()
+			}
+			return c.queue("claude_event", event, true)
+		}, environment...)
 	case "gemini.question.answer":
 		var command protocol.GeminiAnswerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
@@ -920,6 +969,12 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.configureGeminiCredentials(command)
+	case "claude.credentials.configure":
+		var command protocol.ConfigureClaudeCredentialsCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.configureClaudeCredentials(command)
 	case "credentials.configure":
 		var command protocol.ConfigureCredentialsCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
@@ -1051,6 +1106,9 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	geminiPath := c.gemini.Command()
 	heartbeat.GeminiVersion = c.currentGeminiVersion(ctx, geminiPath)
 	heartbeat.GeminiReady = commandAvailable(geminiPath)
+	claudePath := effectiveClaudePath(c.config.StateDir)
+	heartbeat.ClaudeVersion = c.currentClaudeVersion(ctx, claudePath)
+	heartbeat.ClaudeReady = commandAvailable(claudePath)
 	return c.queue("heartbeat", heartbeat, false)
 }
 

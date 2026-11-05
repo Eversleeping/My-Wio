@@ -49,6 +49,7 @@ type API struct {
 	agentUpdates   *agentupdate.Store
 	codexReleases  *codexcli.ReleaseChecker
 	geminiReleases *codexcli.ReleaseChecker
+	claudeReleases *codexcli.ReleaseChecker
 	gitProviders   gitprovider.Creator
 	publicURL      string
 	secureCookie   bool
@@ -79,6 +80,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 		agentUpdates:   agentupdate.New(assetDir),
 		codexReleases:  codexcli.NewReleaseChecker(nil, ""),
 		geminiReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/google-gemini/gemini-cli/releases", "v"),
+		claudeReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/anthropics/claude-code/releases", "v"),
 		gitProviders:   gitprovider.Client{},
 		publicURL:      strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		secureCookie:   strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
@@ -98,6 +100,15 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/auth/session", api.session)
 			private.Post("/auth/logout", api.logout)
 			private.Get("/summary", api.summary)
+			private.Get("/claude/threads", api.claudeThreads)
+			private.Post("/claude/threads", api.createClaudeThread)
+			private.Get("/claude/threads/{threadID}", api.claudeThread)
+			private.Get("/claude/threads/{threadID}/events", api.claudeEvents)
+			private.Post("/claude/threads/{threadID}/turns", api.startClaudeTurn)
+			private.Post("/claude/threads/{threadID}/interrupt", api.interruptClaudeTurn)
+			private.Post("/claude/threads/{threadID}/confirm-stopped", api.confirmClaudeStopped)
+			private.Patch("/claude/threads/{threadID}", api.updateClaudeThread)
+			private.Delete("/claude/threads/{threadID}", api.deleteClaudeThread)
 			private.Post("/gemini/threads/{threadID}/fork", api.forkGeminiThread)
 			private.Post("/gemini/threads/{threadID}/fork-worktree", api.forkGeminiWorktree)
 			private.Post("/projects/{projectID}/gemini/threads/archive", api.archiveGeminiProject)
@@ -229,7 +240,11 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/settings/gemini-cli", api.geminiCLISettings)
 			private.Post("/settings/gemini-cli/check-updates", api.checkGeminiCLIUpdates)
 			private.Post("/settings/gemini-cli/select-version", api.selectGeminiCLIVersion)
+			private.Get("/settings/claude-cli", api.claudeCLISettings)
+			private.Post("/settings/claude-cli/check-updates", api.checkClaudeCLIUpdates)
+			private.Post("/settings/claude-cli/select-version", api.selectClaudeCLIVersion)
 			private.Post("/servers/{serverID}/gemini-credential-profile", api.updateServerGeminiCredentialProfile)
+			private.Post("/servers/{serverID}/claude-credential-profile", api.updateServerClaudeCredentialProfile)
 			private.Get("/settings/codex-cli", api.codexCLISettings)
 			private.Post("/settings/codex-cli/check-updates", api.checkCodexCLIUpdates)
 			private.Post("/settings/codex-cli/select-version", api.selectCodexCLIVersion)

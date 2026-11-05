@@ -19,6 +19,7 @@ function setup() {
       if (url === "/api/credential-profiles") return response(profile,201);
     }
     if (url === "/api/settings/gemini-cli") return response({target_version:target, versions:["0.65.0","0.64.0"]});
+    if (url === "/api/settings/claude-cli") return response({target_version:"1.0.0", versions:["1.0.0"]});
     if (url === "/api/settings/codex-cli") return response({target_version:"1.0.0", versions:["1.0.0"]});
     if (url === "/api/credential-profiles") return response([profile]);
     if (url === "/api/servers") return response([

@@ -58,6 +58,8 @@ func NewTaggedReleaseChecker(client *http.Client, url, tagPrefix string) *Releas
 		registryURL = "https://registry.npmjs.org/@openai%2fcodex"
 	case "https://api.github.com/repos/google-gemini/gemini-cli/releases":
 		registryURL = "https://registry.npmjs.org/@google%2fgemini-cli"
+	case "https://api.github.com/repos/anthropics/claude-code/releases":
+		registryURL = "https://registry.npmjs.org/@anthropic-ai%2fclaude-code"
 	}
 	return &ReleaseChecker{client: client, url: url, tagPrefix: tagPrefix, registryURL: registryURL}
 }

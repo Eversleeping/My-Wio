@@ -37,6 +37,7 @@ func ReportedVersionMatches(reported, target string) bool {
 func parseReportedVersion(value string) ([3]int, bool) {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "codex-cli ")
+	value = strings.TrimSuffix(value, " (Claude Code)")
 	value = strings.TrimPrefix(value, "v")
 	return parseVersion(value)
 }

@@ -71,7 +71,7 @@ func TestCLIInstallAndStatusPreserveExplicitVersion(t *testing.T) {
 		t.Fatalf("status: %d %s", w.Code, w.Body)
 	}
 	var statuses []serverCLI
-	if err := json.Unmarshal(w.Body.Bytes(), &statuses); err != nil || len(statuses) != 2 || statuses[1].Operation == nil || statuses[1].Version != "0.65.0" || !statuses[1].Ready {
+	if err := json.Unmarshal(w.Body.Bytes(), &statuses); err != nil || len(statuses) != 3 || statuses[2].Kind != "claude" || statuses[2].Supported || statuses[1].Operation == nil || statuses[1].Version != "0.65.0" || !statuses[1].Ready {
 		t.Fatalf("statuses: %#v %v", statuses, err)
 	}
 	for _, status := range statuses {

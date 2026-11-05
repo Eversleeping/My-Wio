@@ -42,19 +42,27 @@ func (s *Store) cliInstallBlockers(ctx context.Context, query sqlx.QueryerContex
 	table := "codex_threads"
 	if kind == "gemini" {
 		table = "gemini_threads"
+	} else if kind == "claude" {
+		table = "claude_threads"
 	} else if kind != "codex" {
 		return out, errors.New("unsupported AI CLI")
 	}
-	if err := sqlx.SelectContext(ctx, query, &out.BlockingOperations, s.Q("SELECT id,kind,status FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','gemini.credentials.configure','gemini.skills.manage') AND status IN ('queued','delivered','running') ORDER BY created_at,id"), serverID); err != nil {
+	if err := sqlx.SelectContext(ctx, query, &out.BlockingOperations, s.Q("SELECT id,kind,status FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','gemini.credentials.configure','gemini.skills.manage','claude.credentials.configure') AND status IN ('queued','delivered','running') ORDER BY created_at,id"), serverID); err != nil {
 		return out, err
 	}
-	err := sqlx.SelectContext(ctx, query, &out.ActiveThreads, s.Q("SELECT t.id,t.title,t.status FROM "+table+" t JOIN workspaces w ON w.id=t.workspace_id WHERE w.server_id=? AND t.status IN ('queued','running','interrupting') ORDER BY t.updated_at,t.id"), serverID)
+	active := "t.status IN ('queued','running','interrupting')"
+	if kind == "claude" {
+		// An interrupted session can still own a process after the Agent loses
+		// contact; do not replace its executable or restart the Agent yet.
+		active = "(" + active + " OR (t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running'))))"
+	}
+	err := sqlx.SelectContext(ctx, query, &out.ActiveThreads, s.Q("SELECT t.id,t.title,t.status FROM "+table+" t JOIN workspaces w ON w.id=t.workspace_id WHERE w.server_id=? AND "+active+" ORDER BY t.updated_at,t.id"), serverID)
 	return out, err
 }
 
 // Lock the server row so concurrent installation requests cannot both queue.
 func (s *Store) QueueCLIInstall(ctx context.Context, serverID string, command protocol.CLIInstallCommand) (string, error) {
-	if command.Kind != "codex" && command.Kind != "gemini" {
+	if command.Kind != "codex" && command.Kind != "gemini" && command.Kind != "claude" {
 		return "", errors.New("unsupported AI CLI")
 	}
 	tx, err := s.DB.BeginTxx(ctx, nil)

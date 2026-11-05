@@ -4,7 +4,8 @@ const GeminiOwnershipLostMessage = "Agent no longer owns this Gemini task; it ma
 
 // GeminiKeepalive requests a status check without replaying a turn.
 type GeminiKeepalive struct {
-	OperationIDs []string `json:"gemini_operation_ids,omitempty"`
+	OperationIDs       []string `json:"gemini_operation_ids,omitempty"`
+	ClaudeOperationIDs []string `json:"claude_operation_ids,omitempty"`
 }
 
 type GeminiOwnership struct {

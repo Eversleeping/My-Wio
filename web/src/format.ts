@@ -1,7 +1,7 @@
 import { currentLocale } from "./i18n";
 
 export function formatCLIVersion(value: string) {
-  return value.trim().replace(/^codex-cli\s+/i, "").replace(/^v(?=\d)/, "");
+  return value.trim().replace(/^codex-cli\s+/i, "").replace(/^v(?=\d)/, "").replace(/\s*\(Claude Code\)$/i, "");
 }
 
 export function shortSHA(value: string) {

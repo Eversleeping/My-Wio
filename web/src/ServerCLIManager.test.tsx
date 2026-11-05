@@ -39,7 +39,7 @@ test("shows only the latest three releases per agent and cancels a version switc
   await user.click(within(confirmation).getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog", { name: "Confirm Codex version change" })).not.toBeInTheDocument();
   expect(installs).toEqual([]);
-  expect(screen.getAllByRole("combobox")).toHaveLength(2);
+  expect(screen.getAllByRole("combobox")).toHaveLength(3);
 });
 
 test("keeps Gemini available when the Codex version request fails and supports refreshing", async () => {
@@ -148,10 +148,10 @@ test("lists each CLI on one row and distinguishes active conversations from a pr
   render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
   const list = screen.getByRole("table", { name: "Manage AI Agents" });
   await screen.findByText("Active tasks (1)");
-  expect(within(list).getAllByRole("row")).toHaveLength(3);
+  expect(within(list).getAllByRole("row")).toHaveLength(4);
   expect(within(list).getAllByRole("columnheader").map(cell => cell.textContent)).toEqual(["Agent name", "Version", "Status", "Actions"]);
   expect(screen.getByText("Last installation: Succeeded")).toBeInTheDocument();
-  expect(screen.getAllByRole("combobox")).toHaveLength(2);
+  expect(screen.getAllByRole("combobox")).toHaveLength(3);
   expect(screen.getByRole("button", { name: "Switch Gemini version" })).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Switch Gemini to 0.66.0" })).not.toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Blocked conversation" })).toHaveAttribute("href", "?view=gemini&thread=thread-1");
@@ -174,4 +174,26 @@ test("translates a busy response and reloads the actual blocking conversations",
   expect(await screen.findByRole("alert")).toHaveTextContent("此服务器仍有运行中的会话或维护任务");
   expect(await screen.findByRole("link", { name: "新任务" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "切换 Gemini 版本" })).toBeDisabled();
+});
+
+test("switches Claude with its official version format and preserves the configured target", async () => {
+ window.localStorage.setItem("wio_language", "en");
+ const requests: Array<{url:string;body:unknown}> = [];
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,init:RequestInit={})=>{
+  const url=String(input);
+  if(init.method==="POST") { requests.push({url,body:JSON.parse(String(init.body))});return new Response(JSON.stringify({operation_id:"claude-install"})); }
+  return new Response(JSON.stringify(url.endsWith("/versions") ? {versions:["2.1.318","2.1.317","2.1.316","2.1.315"],target_version:"2.1.315"} : [{kind:"claude",version:"2.1.318 (Claude Code)",ready:true,supported:true,active_threads:[],blocking_operations:[]}]));
+ }));
+ render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()}/></I18nProvider>);
+ const user=userEvent.setup();
+ const select=screen.getByRole("combobox",{name:"Claude version"});
+ await within(select).findByRole("option",{name:"2.1.315"});
+ expect(select).toHaveValue("2.1.315");
+ await user.selectOptions(select,"2.1.318");
+ expect(screen.getByRole("button",{name:"Switch Claude version"})).toBeDisabled();
+ await user.selectOptions(select,"2.1.317");
+ await user.click(screen.getByRole("button",{name:"Switch Claude version"}));
+ expect(screen.getByRole("dialog",{name:"Confirm Claude version change"})).toHaveTextContent("from 2.1.318 to 2.1.317");
+ await user.click(screen.getByRole("button",{name:"Switch Claude to 2.1.317"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/servers/node-1/ai-clis/claude/install",body:{version:"2.1.317"}}));
 });

@@ -29,6 +29,9 @@ func (a *API) cliChecker(kind string) *codexcli.ReleaseChecker {
 	if kind == "gemini" {
 		return a.geminiReleases
 	}
+	if kind == "claude" {
+		return a.claudeReleases
+	}
 	return nil
 }
 
@@ -46,6 +49,7 @@ func (a *API) serverCLIs(w http.ResponseWriter, r *http.Request) {
 	items := []serverCLI{
 		{Kind: "codex", Version: server.CodexVersion, Ready: server.CodexReady != 0, Supported: supported},
 		{Kind: "gemini", Version: server.GeminiVersion, Ready: server.GeminiReady != 0, Supported: supported},
+		{Kind: "claude", Version: server.ClaudeVersion, Ready: server.ClaudeReady != 0, Supported: buildinfo.SupportsClaudeManagement(server.AgentVersion)},
 	}
 	for i := range items {
 		items[i].CLIInstallBlockers, err = a.store.CLIInstallBlockers(r.Context(), server.ID, items[i].Kind)
@@ -74,7 +78,9 @@ func (a *API) cliVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := ""
-	if chi.URLParam(r, "kind") == "gemini" {
+	if chi.URLParam(r, "kind") == "claude" {
+		target, err = a.store.Setting(r.Context(), claudeCLITargetSetting, defaultClaudeTargetVersion)
+	} else if chi.URLParam(r, "kind") == "gemini" {
 		target, err = a.store.Setting(r.Context(), geminiCLITargetSetting, defaultGeminiTargetVersion)
 	} else {
 		target, err = a.store.Setting(r.Context(), codexCLITargetSetting, codexcli.DefaultTargetVersion)
@@ -106,7 +112,11 @@ func (a *API) installServerCLI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "server is offline")
 		return
 	}
-	if !buildinfo.SupportsCLIManagement(server.AgentVersion) {
+	if kind == "claude" && !buildinfo.SupportsClaudeManagement(server.AgentVersion) {
+		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumClaudeManagementVersion+" or newer first")
+		return
+	}
+	if kind != "claude" && !buildinfo.SupportsCLIManagement(server.AgentVersion) {
 		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumCLIManagementVersion+" or newer first")
 		return
 	}
@@ -140,6 +150,8 @@ func (a *API) installServerCLI(w http.ResponseWriter, r *http.Request) {
 	current := server.CodexVersion
 	if kind == "gemini" {
 		current = server.GeminiVersion
+	} else if kind == "claude" {
+		current = server.ClaudeVersion
 	}
 	if codexcli.ReportedVersionMatches(current, version) {
 		writeError(w, 409, "selected CLI version is already installed")

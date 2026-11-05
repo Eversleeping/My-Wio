@@ -6,7 +6,7 @@ import { formatCLIVersion } from "../format";
 import type { Server } from "../types";
 import { Dialog, DialogActions } from "./Dialog";
 
-type CLIKind = "codex" | "gemini";
+type CLIKind = "codex" | "gemini" | "claude";
 interface CLIStatus {
   kind: CLIKind;
   version: string;
@@ -17,7 +17,8 @@ interface CLIStatus {
   blocking_operations?: { id: string; kind: string; status: string }[];
 }
 const pending = (status?: string) => ["queued", "delivered", "running"].includes(status ?? "");
-const kinds = ["codex", "gemini"] as const;
+const kinds = ["codex", "gemini", "claude"] as const;
+const cliName = (kind: CLIKind) => kind === "codex" ? "Codex" : kind === "gemini" ? "Gemini" : "Claude";
 type Versions = { entries: string[]; version: string; loading: boolean; error: string };
 const emptyVersions = (): Versions => ({ entries: [], version: "", loading: true, error: "" });
 
@@ -25,7 +26,7 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
   const { t } = useI18n();
   const confirmationDescriptionID = useId();
   const [items, setItems] = useState<CLIStatus[]>([]);
-  const [versions, setVersions] = useState<Record<CLIKind, Versions>>({ codex: emptyVersions(), gemini: emptyVersions() });
+  const [versions, setVersions] = useState<Record<CLIKind, Versions>>({ codex: emptyVersions(), gemini: emptyVersions(), claude: emptyVersions() });
   const [confirmation, setConfirmation] = useState<{ kind: CLIKind; version: string } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -52,6 +53,7 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
       void api<{ versions: string[]; target_version?: string }>(`/ai-clis/${kind}/versions`, { signal: controller.signal }).then(data => {
         if (controller.signal.aborted) return;
         const entries = data.versions.slice(0, 3);
+        if (data.target_version && data.versions.includes(data.target_version) && !entries.includes(data.target_version)) entries.push(data.target_version);
         setVersions(current => ({ ...current, [kind]: {
           entries, loading: false, error: "",
           version: entries.includes(current[kind].version) ? current[kind].version : data.target_version && entries.includes(data.target_version) ? data.target_version : entries[0] ?? ""
@@ -73,7 +75,7 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
   const install = async () => {
     if (!confirmation || !canInstall(confirmation.kind, confirmation.version)) return;
     const { kind, version } = confirmation;
-    const name = kind === "codex" ? "Codex" : "Gemini";
+    const name = cliName(kind);
     setBusy(true); setError("");
     try {
       const queued = await post<{ operation_id: string }>(`/servers/${server.id}/ai-clis/${kind}/install`, { version });
@@ -84,7 +86,7 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
     finally { setBusy(false); setConfirmation(null); }
   };
   const confirmingItem = items.find(item => item.kind === confirmation?.kind);
-  const confirmingName = confirmation?.kind === "codex" ? "Codex" : "Gemini";
+  const confirmingName = confirmation ? cliName(confirmation.kind) : "Claude";
   return <><Dialog open title={t("server.manageCLITitle", { name: server.name })} onClose={onClose} dismissDisabled={busy} closeLabel={t("common.close")} wide>
     <div className="server-cli-manager">
       <div className="server-cli-heading"><p className="muted">{t("server.cliDescription")}</p><button type="button" className="icon-button" aria-label={t("server.cliRefresh")} title={t("server.cliRefresh")} disabled={busy || !!confirmation || kinds.some(kind => versions[kind].loading)} onClick={() => setRefresh(current => current + 1)}><RefreshCw size={16} className={kinds.some(kind => versions[kind].loading) ? "spin" : undefined} /></button></div>
@@ -95,7 +97,7 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
         <tbody>{kinds.map(kind => {
           const item = items.find(entry => entry.kind === kind);
           const active = pending(item?.operation?.status);
-          const label = kind === "codex" ? "Codex" : "Gemini";
+          const label = cliName(kind);
           const threads = item?.active_threads ?? [];
           const maintenance = !!item?.blocking_operations?.length;
           const choices = versions[kind];
@@ -116,13 +118,12 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
       </table></div>
       {kinds.map(kind => {
         const item = items.find(entry => entry.kind === kind);
-        const label = kind === "codex" ? "Codex" : "Gemini";
+        const label = cliName(kind);
         const threads = item?.active_threads ?? [];
         return <div className="server-cli-feedback" key={kind}>
           {versions[kind].error && <div className="error-banner" role="alert">{label}: {versions[kind].error}</div>}
-          {item && !item.supported && <p className="warning-list">{label}: {t("server.cliUpgradeAgent")}</p>}
+          {item && !item.supported && <p className="warning-list">{label}: {t(kind === "claude" ? "settings.claudeUpgradeAgent" : "server.cliUpgradeAgent")}</p>}
           {threads.length > 0 && <div className="server-cli-blockers" role="status"><p>{t("server.cliFinishTurns", { name: label })}</p><ul>{threads.map(thread => <li key={thread.id}><a href={`?view=${kind}&thread=${encodeURIComponent(thread.id)}`}>{thread.title || thread.id}</a><span className="muted">{t(`status.${thread.status}`)}</span></li>)}</ul></div>}
-          {!!item?.blocking_operations?.length && <p className="warning-list">{label}: {t("server.cliMaintenanceNotice")}</p>}
           {item?.operation?.status === "failed" && <div className="error-banner" role="alert">{label}: {failureMessage(new Error(item.operation.result || t("server.cliFailed")))}</div>}
         </div>;
       })}

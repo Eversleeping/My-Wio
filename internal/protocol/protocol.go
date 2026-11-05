@@ -37,6 +37,8 @@ type Heartbeat struct {
 	CodexReady    bool     `json:"codex_ready"`
 	GeminiVersion string   `json:"gemini_version"`
 	GeminiReady   bool     `json:"gemini_ready"`
+	ClaudeVersion string   `json:"claude_version"`
+	ClaudeReady   bool     `json:"claude_ready"`
 	ScanRoots     []string `json:"scan_roots"`
 	ManagedRoots  []string `json:"managed_roots,omitempty"`
 }
@@ -676,6 +678,12 @@ func (c *connectClient) Recv() (*ControlEnvelope, error) {
 
 // Gemini credentials are dispatched independently from Codex and Git.
 type ConfigureGeminiCredentialsCommand struct {
+	Endpoint string `json:"endpoint"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+}
+
+type ConfigureClaudeCredentialsCommand struct {
 	Endpoint string `json:"endpoint"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`

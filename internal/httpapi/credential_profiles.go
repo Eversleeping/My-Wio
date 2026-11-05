@@ -98,8 +98,8 @@ func (a *API) saveCredentialProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateCredentialProfile(input credentialProfileInput) error {
-	if input.Kind != "codex" && input.Kind != "gemini" && input.Kind != "git" {
-		return errors.New("credential profile kind must be codex, gemini or git")
+	if input.Kind != "codex" && input.Kind != "gemini" && input.Kind != "claude" && input.Kind != "git" {
+		return errors.New("credential profile kind must be codex, gemini, claude or git")
 	}
 	if input.Name == "" || utf8.RuneCountInString(input.Name) > 128 {
 		return errors.New("credential profile name is required")
@@ -110,7 +110,11 @@ func validateCredentialProfile(input credentialProfileInput) error {
 		return errors.New("credential profile endpoint is invalid")
 	}
 	if input.Kind != "git" {
-		if !credentialModelPattern.MatchString(input.Model) {
+		model := input.Model
+		if input.Kind == "claude" {
+			model = strings.TrimSuffix(model, "[1m]")
+		}
+		if len(input.Model) > 128 || !credentialModelPattern.MatchString(model) {
 			return errors.New("AI model is invalid")
 		}
 		if input.Username != "" {
