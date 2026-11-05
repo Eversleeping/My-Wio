@@ -938,7 +938,11 @@ input:focus, select:focus, textarea:focus {
 .claude-composer .composer-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; }
 .claude-composer .composer-bar > .claude-composer-options { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 7px; }
 .claude-composer .claude-composer-options > input, .claude-composer .claude-composer-options > select { width: 100%; min-width: 0; max-width: none; min-height: 36px; text-overflow: ellipsis; }
-.claude-composer .composer-action { min-height: 36px; white-space: nowrap; }
+.claude-composer-options .claude-model-select { grid-column: 1; grid-row: 1; }
+.claude-composer-options .claude-effort-select { grid-column: 2; grid-row: 1; }
+.claude-composer-options .claude-permission-select { grid-column: 3; grid-row: 1; }
+.claude-composer-options .claude-custom-model { grid-column: 1 / -1; grid-row: 2; }
+.claude-composer .composer-action { min-height: 36px; white-space: nowrap; align-self: start; }
 @media (max-width: 760px) {
   .claude-options { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .claude-composer .composer-bar, .claude-composer .composer-bar > .claude-composer-options { gap: 4px; }
@@ -2515,3 +2519,7 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 [data-theme="light"] .deployment-review-row code { color: #1e293b; }
 [data-theme="light"] .deployment-review-row code:last-child { color: #065f46; }
 [data-theme="light"] .deployment-public-link { color: #047857; }
+
+@media (max-width: 400px) { .claude-composer .composer-action { padding: 5px 8px; } .claude-composer .composer-action span { display: none; } .claude-composer .composer-action > svg { display: block; } }
+
+.slash-command-status { margin: 0; padding: 10px 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }

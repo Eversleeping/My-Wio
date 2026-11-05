@@ -314,7 +314,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	var resultData json.RawMessage
 	refreshInventory := false
 	var err error
-	if (envelope.Kind == "gemini.thread.fork" || envelope.Kind == "git.worktree.create") && c.agentUpdatePending() {
+	if (envelope.Kind == "claude.thread.fork" || envelope.Kind == "gemini.thread.fork" || envelope.Kind == "git.worktree.create") && c.agentUpdatePending() {
 		err = errors.New("Agent update is in progress; retry the task after it reconnects")
 	} else if envelope.Kind == "agent.update" {
 		var command protocol.AgentUpdateCommand
@@ -355,6 +355,15 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 						resultData, err = json.Marshal(result)
 					}
 				}
+			}
+		}
+	} else if envelope.Kind == "claude.skills.list" {
+		var command protocol.ClaudeSkillsCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			var result protocol.ClaudeSkillsResult
+			result, err = c.listClaudeSkills(ctx, command)
+			if err == nil {
+				resultData, err = json.Marshal(result)
 			}
 		}
 	} else if envelope.Kind == "gemini.skills.list" {
@@ -508,6 +517,18 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 		}
+	} else if envelope.Kind == "claude.thread.fork" {
+		var command protocol.ClaudeForkCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			_, err = scanner.ResolveWorkspaceRoot(command.SourceWorkspace, c.inventoryRoots())
+			if err == nil {
+				var fork protocol.ClaudeForkResult
+				fork, err = claudeadapter.Snapshot(ctx, c.config.StateDir, command)
+				if err == nil {
+					resultData, err = json.Marshal(fork)
+				}
+			}
+		}
 	} else if envelope.Kind == "gemini.thread.fork" {
 		var command protocol.GeminiForkCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
@@ -532,6 +553,23 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitWorktreeCreateResult
 			result, err = gitworktree.Create(ctx, command, c.inventoryRoots())
+			if err == nil && command.ClaudeFork != nil {
+				if command.ClaudeFork.SourceWorkspace != command.SourcePath || command.ClaudeFork.Workspace != result.Path {
+					err = errors.New("invalid Claude worktree paths")
+				} else {
+					var fork protocol.ClaudeForkResult
+					fork, err = claudeadapter.Snapshot(ctx, c.config.StateDir, *command.ClaudeFork)
+					result.ClaudeSnapshotID = fork.SnapshotID
+				}
+				if err != nil {
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					cleanupErr := gitworktree.Remove(cleanupCtx, command.SourcePath, result.Path, command.Branch, c.inventoryRoots())
+					cancel()
+					if cleanupErr != nil {
+						err = fmt.Errorf("Claude fork failed: %v; cleanup: %w", err, cleanupErr)
+					}
+				}
+			}
 			if err == nil && command.GeminiFork != nil {
 				sourceRoot, rootErr := scanner.ResolveWorkspaceRoot(command.SourcePath, c.inventoryRoots())
 				if rootErr != nil || sourceRoot != command.GeminiFork.SourceWorkspace || command.GeminiFork.Workspace != result.Path {
@@ -894,6 +932,15 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return errors.New("Claude configuration or installation is in progress")
 		}
 		defer c.claudeMu.RUnlock()
+		if command.ForkSnapshotID != "" && command.SessionID == "" {
+			if command.ForkSnapshotID != command.ThreadID {
+				return errors.New("Claude snapshot does not match thread")
+			}
+			command.ResumePath, err = claudeadapter.SnapshotPath(c.config.StateDir, command.ForkSnapshotID)
+			if err != nil {
+				return err
+			}
+		}
 		environment, err := c.claudeEnvironment()
 		if err != nil {
 			return err

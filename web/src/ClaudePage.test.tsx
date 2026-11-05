@@ -1,23 +1,30 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { compressImage } from "./imageCompression";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import ClaudePage from "./pages/ClaudePage";
 import { I18nProvider } from "./i18n";
 
-const baseThread = { id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
+vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
-function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean } = {}) {
+const baseThread = { input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
+
+function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; events?: unknown[] } = {}) {
   window.localStorage.setItem("wio_language", "en");
-  const thread = { ...baseThread, effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
+  const thread = { ...baseThread, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
   const requests: Array<{ url: string; body: unknown }> = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input); let body: unknown = [];
-    if (init.method === "POST") { requests.push({ url, body: JSON.parse(String(init.body)) }); body = url === "/api/claude/threads" ? thread : { ok: true }; }
+    if(url.endsWith("/claude/skills")) { requests.push({url,body:{}}); return new Response(JSON.stringify({operation_id:"skill-op"}), {status:202}); }
+    if(url.endsWith("/claude/skills/skill-op")) return new Response(JSON.stringify(options.skillsError ? {status:"failed",error:"Could not initialize CLI"} : {status:"succeeded",skills:options.skills ?? []}),{status:200});
+    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); body = url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
+    else if (url.startsWith("/api/operations/")) body={status:"succeeded"};
+    else if (url === "/api/workspaces/workspace-1/claude/models") body = { configured: true, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
     else if (url === "/api/workspaces") body = [{ id: "workspace-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
     else if (url.startsWith("/api/claude/threads?") && options.selected) body = [thread];
     else if (url === "/api/claude/threads/claude-1") body = thread;
-    else if (url.startsWith("/api/claude/threads/claude-1/events")) body = [
+    else if (url.startsWith("/api/claude/threads/claude-1/events")) body = options.events ?? [
       { event_id: "u", stream_id: thread.id, sequence: 1, kind: "claude.user.message", payload: { text: "Hello" } },
       { event_id: "a1", stream_id: thread.id, sequence: 2, kind: "claude.message", payload: { text: "Hi " } },
       { event_id: "a2", stream_id: thread.id, sequence: 3, kind: "claude.message", payload: { text: "there" } }
@@ -30,6 +37,50 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
+
+test("discovers skills before the first turn and sends namespaced native commands", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const { user, requests } = setup({ selected: true, events: [], skills: [{ name: "plugin:code.review", description: "Review project changes", argument_hint: "[scope]" }] });
+  const input = await screen.findByRole("textbox", { name: "Ask Claude to work on this project…" });
+  await user.type(input, "/skill");
+  await user.keyboard("{Enter}");
+  const skill = await within(screen.getByRole("listbox")).findByRole("option", { name: /plugin:code.review.*Review project changes.*\[scope\]/ });
+  await user.click(skill);
+  expect(input).toHaveValue("/plugin:code.review ");
+  expect(requests.filter(request => request.url.endsWith("/turns"))).toHaveLength(0);
+  await user.type(input, "src");
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/turns", body: expect.objectContaining({ prompt: "/plugin:code.review src" }) }));
+  expect(requests.filter(request => request.url.endsWith("/claude/skills"))).toHaveLength(1);
+});
+
+test.each([false, true])("shows skill empty or failure state and allows refresh (failure=%s)", async failure => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const { user, requests } = setup({ selected: true, events: [], skills: [], skillsError: failure });
+  const input = await screen.findByRole("textbox", { name: "Ask Claude to work on this project…" });
+  await user.type(input, "/skills");
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(within(screen.getByRole("listbox")).getByRole("status")).toHaveTextContent(failure ? "Could not load skills" : "No skills found"));
+  await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Refresh skills" }));
+  await waitFor(() => expect(requests.filter(request => request.url.endsWith("/claude/skills"))).toHaveLength(2));
+  expect(requests.filter(request => request.url.endsWith("/turns"))).toHaveLength(0);
+});
+
+test("selects an upstream model and accepts a custom model with reasoning effort", async () => {
+  const { user, requests } = setup({ selected: true });
+  await screen.findByRole("option", { name: "Custom upstream model · custom-upstream-model" });
+  const select = screen.getByLabelText("Claude model or alias");
+  expect(select.tagName).toBe("SELECT");
+  await user.selectOptions(select, "custom-upstream-model");
+  expect(select).toHaveValue("custom-upstream-model");
+  await user.selectOptions(select, "__custom__");
+  const custom = screen.getByLabelText("Custom model name");
+  await user.type(custom, "my-custom-model");
+  await user.selectOptions(screen.getByLabelText("Reasoning effort"), "max");
+  await user.type(screen.getByRole("textbox", { name: "Ask Claude to work on this project…" }), "Review");
+  await user.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/turns", body: expect.objectContaining({ model: "my-custom-model", effort: "max" }) }));
+});
 
 test("creates a Claude session for a workspace with the selected permissions", async () => {
   const { user, requests, onSelectThread } = setup();
@@ -130,4 +181,97 @@ test("allows resetting a saved effort when an older Agent cannot apply it", asyn
   await user.type(screen.getByRole("textbox", { name: "Ask Claude to work on this project…" }), "Use the default");
   await user.click(screen.getByRole("button", { name: "Send" }));
   await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/turns", body: { prompt: "Use the default", model: "sonnet", permission_mode: "default", effort: "" } }));
+});
+
+
+test("offers the complete project and task menus and queues an independent continuation",async()=>{
+ const {user,requests,onSelectThread}=setup({selected:true,nativeID:"native-claude"});
+ await user.click(await screen.findByRole("button",{name:"Task menu for Claude"}));
+ for(const label of ["Pin task","Rename session","Create scheduled task","Continue in new task","Continue in new worktree","Archive session","Copy working directory","Copy Wio session ID","Copy Claude session ID","Copy deep link","Open in new window"]){expect(screen.getByRole("menuitem",{name:label})).toBeInTheDocument();}
+ await user.click(screen.getByRole("menuitem",{name:"Continue in new task"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/fork",body:{}}));
+ await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("fork-target"));
+ await user.click(screen.getByRole("button",{name:/Workspace menu/}));
+ for(const label of ["New session","Pin project","Rename project","Create permanent worktree","Archive all project tasks","Hide project"]){expect(screen.getByRole("menuitem",{name:label})).toBeInTheDocument();}
+ await user.click(screen.getByRole("menuitem",{name:"Rename project"}));
+ const dialog=screen.getByRole("dialog",{name:"Rename project"});await user.clear(within(dialog).getByRole("textbox"));await user.type(within(dialog).getByRole("textbox"),"Renamed");await user.click(within(dialog).getByRole("button",{name:"Save"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/projects/project-1",body:{name:"Renamed",server_id:"server-1"}}));
+});
+
+test("pastes and removes images, sends image-only input, and previews image history",async()=>{
+ const dataURL="data:image/png;base64,aGVsbG8=";vi.mocked(compressImage).mockResolvedValue(dataURL);
+ const {user,requests}=setup({selected:true,events:[{event_id:"image-history",sequence:1,kind:"claude.user.message",payload:{text:"previous",images:[{data_url:dataURL}]}}]});
+ const input=await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});
+ expect(document.querySelector(".message.user img")).toHaveAttribute("src",dataURL);
+ const paste=()=>fireEvent.paste(input,{clipboardData:{items:[{type:"image/png",getAsFile:()=>new File(["image"],"example.png",{type:"image/png"})}]}});
+ paste();await waitFor(()=>expect(document.querySelector(".composer-images img")).toHaveAttribute("src",dataURL));
+ await user.click(document.querySelector<HTMLButtonElement>(".composer-images button")!);expect(document.querySelector(".composer-images img")).toBeNull();
+ paste();await waitFor(()=>expect(document.querySelector(".composer-images img")).toBeInTheDocument());await user.click(screen.getByRole("button",{name:"Send"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns",body:{prompt:"",model:"sonnet",permission_mode:"default",effort:"high",images:[{data_url:dataURL}]}}));
+ expect(document.querySelector(".composer-images img")).toBeNull();
+});
+
+test("uses keyboard slash options locally and sends discovered native skills",async()=>{
+ Element.prototype.scrollIntoView=vi.fn();
+ const {user,requests}=setup({selected:true,events:[{event_id:"init",sequence:1,kind:"claude.init",payload:{skills:["review-code"]}}]});
+ const input=await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});
+ await user.type(input,"/effort");await user.keyboard("{Enter}");expect(screen.getByRole("listbox")).toBeInTheDocument();
+ await user.click(within(screen.getByRole("listbox")).getByRole("option",{name:"Max"}));expect(screen.getByLabelText("Reasoning effort")).toHaveValue("max");expect(requests).toHaveLength(0);
+ await user.type(input,"/plan");await user.keyboard("{Enter}");expect(screen.getByLabelText("Tool permissions")).toHaveValue("plan");expect(requests).toHaveLength(0);
+ await user.type(input,"/review-code");await user.keyboard("{Enter}");expect(input).toHaveValue("/review-code ");await user.type(input,"inspect changes");await user.keyboard("{Enter}");
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns",body:{prompt:"/review-code inspect changes",model:"sonnet",permission_mode:"plan",effort:"max"}}));
+});
+
+test("creates a scheduled Claude task with custom model, effort and permissions",async()=>{
+ const {user,requests}=setup({selected:true});await user.click(await screen.findByRole("button",{name:"Task menu for Claude"}));await user.click(screen.getByRole("menuitem",{name:"Create scheduled task"}));
+ const dialog=screen.getByRole("dialog");await user.type(within(dialog).getByLabelText("Name"),"Daily review");await user.type(within(dialog).getByLabelText("Prompt"),"Review the repository");await user.type(within(dialog).getByLabelText("Claude model or alias"),"custom-model");await user.selectOptions(within(dialog).getByLabelText("Reasoning effort"),"max");await user.selectOptions(within(dialog).getByLabelText("Tool permissions"),"plan");await user.click(within(dialog).getByRole("button",{name:"Save"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/scheduled-tasks",body:expect.objectContaining({agent_kind:"claude",thread_id:"claude-1",model:"custom-model",reasoning_effort:"max",approval_mode:"plan",prompt:"Review the repository"})}));
+});
+
+
+test("applies explicit slash option arguments without creating a model turn",async()=>{
+ const {user,requests}=setup({selected:true});const input=await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});Element.prototype.scrollIntoView=vi.fn();
+ for(const command of ["/model custom-model","/effort max","/permissions plan"]){await user.type(input,command);await user.keyboard("{Enter}");expect(input).toHaveValue("");}
+ expect(screen.getByLabelText("Claude model or alias")).toHaveValue("custom-model");expect(screen.getByLabelText("Reasoning effort")).toHaveValue("max");expect(screen.getByLabelText("Tool permissions")).toHaveValue("plan");expect(requests).toHaveLength(0);
+ await user.type(input,"/effort invalid");await user.keyboard("{Enter}");expect(requests).toHaveLength(0);expect(await screen.findByText(/Invalid command option/)).toBeInTheDocument();
+});
+
+
+test("offers refreshed upstream models in slash menu while preserving the current choice", async () => {
+  const { user, requests } = setup({ selected: true });
+  const input = await screen.findByRole("textbox", { name: "Ask Claude to work on this project…" });
+  await screen.findByRole("option", { name: "Custom upstream model · custom-upstream-model" });
+  expect(screen.getByLabelText("Claude model or alias")).toHaveValue("sonnet");
+  Element.prototype.scrollIntoView = vi.fn();
+  await user.type(input, "/model");
+  await user.keyboard("{Enter}");
+  await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /custom-upstream-model/ }));
+  expect(screen.getByLabelText("Claude model or alias")).toHaveValue("custom-upstream-model");
+  expect(requests).toHaveLength(0);
+});
+
+test("collapses commands between replies and expands paired parameters and output", async () => {
+  const entries = [
+    ["message", { text: "I will inspect the project" }],
+    ["tool_use", { id: "one", name: "Bash", input: { command: "git status" } }],
+    ["tool_result", { id: "one", content: "working tree clean" }],
+    ["tool_use", { id: "two", name: "Read", input: { file_path: "README.md" } }],
+    ["tool_result", { id: "two", content: "project documentation" }],
+    ["message", { text: "The project is ready" }],
+    ["tool_use", { id: "three", name: "Bash", input: { command: "git log -1" } }],
+  ];
+  const { user } = setup({ selected: true, events: entries.map(([kind, payload], index) => ({ event_id: `group-${index}`, sequence: index + 1, kind: `claude.${kind}`, payload })) });
+  const summary = await screen.findByText("Ran 2 commands");
+  const group = summary.closest("details")!;
+  expect(group).not.toHaveAttribute("open");
+  expect(screen.getByText("Ran 1 commands").closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("I will inspect the project")).toBeVisible();
+  expect(screen.getByText("The project is ready")).toBeVisible();
+  await user.click(summary);
+  expect(group).toHaveAttribute("open");
+  await user.click(within(group).getByText("Tool: Bash"));
+  expect(within(group).getByText("working tree clean")).toBeVisible();
+  expect(within(group).getByText(/git status/)).toBeVisible();
+  await user.click(summary);
+  expect(group).not.toHaveAttribute("open");
 });

@@ -1,16 +1,58 @@
 package protocol
 
+import "regexp"
+
 const ClaudeOwnershipLostMessage = "Agent no longer owns this Claude task; verify the old CLI process before recovering the session"
+
+type ClaudeSkillsCommand struct {
+	Workspace string `json:"workspace"`
+}
+
+type ClaudeSkill struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	ArgumentHint string `json:"argument_hint,omitempty"`
+}
+
+type ClaudeSkillsResult struct {
+	Skills []ClaudeSkill `json:"skills"`
+}
+
+var claudeSkillNamePattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$`)
+
+func ValidClaudeSkillName(name string) bool {
+	return len(name) <= 128 && claudeSkillNamePattern.MatchString(name)
+}
 
 // ClaudeTurnCommand contains no credentials. The CLI authenticates as the Agent account.
 type ClaudeTurnCommand struct {
-	ThreadID       string `json:"thread_id"`
-	Workspace      string `json:"workspace"`
-	SessionID      string `json:"session_id"`
-	Prompt         string `json:"prompt"`
-	Model          string `json:"model"`
-	PermissionMode string `json:"permission_mode"`
-	Effort         string `json:"effort,omitempty"`
+	Images         []TurnImage `json:"images,omitempty"`
+	ForkSnapshotID string      `json:"fork_snapshot_id,omitempty"`
+	ForkSessionID  string      `json:"fork_session_id,omitempty"`
+	ResumePath     string      `json:"-"`
+	ThreadID       string      `json:"thread_id"`
+	Workspace      string      `json:"workspace"`
+	SessionID      string      `json:"session_id"`
+	Prompt         string      `json:"prompt"`
+	Model          string      `json:"model"`
+	PermissionMode string      `json:"permission_mode"`
+	Effort         string      `json:"effort,omitempty"`
+}
+
+// A fork snapshots the transcript without starting a model turn. The first
+// target turn uses the documented --resume <path> --fork-session interface.
+type ClaudeForkCommand struct {
+	SourceThreadID  string `json:"source_thread_id"`
+	TargetThreadID  string `json:"target_thread_id"`
+	SessionID       string `json:"session_id"`
+	SourceWorkspace string `json:"source_workspace"`
+	WorkspaceID     string `json:"workspace_id"`
+	Workspace       string `json:"workspace"`
+	Title           string `json:"title"`
+	CutoffSequence  int64  `json:"cutoff_sequence"`
+}
+type ClaudeForkResult struct {
+	SnapshotID string `json:"snapshot_id"`
 }
 
 func ValidClaudeEffort(effort string) bool {

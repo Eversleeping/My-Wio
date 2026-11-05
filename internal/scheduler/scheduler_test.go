@@ -179,3 +179,85 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 		})
 	}
 }
+
+func TestTickQueuesClaudeAndSkipsUnsafeStates(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	_, err = db.CreateEnrollment(ctx, "claude", []string{"/srv"}, "claude-token", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollment, _ := db.ConsumeEnrollment(ctx, "claude-token")
+	server, err := db.EnrollServer(ctx, enrollment, "claude.local", "agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.93"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude", Name: "claude"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, _ := db.ListWorkspaces(ctx)
+	thread, err := db.CreateClaudeThread(ctx, workspaces[0].ID, "custom-model", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.CreateScheduledTask(ctx, store.ScheduledTaskInput{AgentKind: "claude", ThreadID: thread.ID, Name: "review", Prompt: "review the code", Schedule: "@hourly", Timezone: "UTC", Enabled: true, ApprovalMode: "plan", ReasoningEffort: "max"}, time.Now().UTC().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := agentgateway.New(db, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	runner := &Runner{store: db, gateway: gateway, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	runner.tick(ctx)
+	saved, err := db.ScheduledTask(ctx, task.ID)
+	if err != nil || saved.LastRunStatus != "queued" || saved.LastOperationID == "" {
+		t.Fatalf("not dispatched: %+v %v", saved, err)
+	}
+	op, _ := db.Operation(ctx, saved.LastOperationID)
+	var c protocol.ClaudeTurnCommand
+	if json.Unmarshal([]byte(op.Payload), &c) != nil || c.Model != "custom-model" || c.PermissionMode != "plan" || c.Effort != "max" {
+		t.Fatalf("bad command: %+v", c)
+	}
+	for _, state := range []string{"busy", "archived", "offline", "old-agent"} {
+		if state != "busy" {
+			thread, _ = db.ClaudeThread(ctx, thread.ID)
+			if thread.Status == "queued" {
+				if err = db.InterruptClaudeTurn(ctx, thread); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if state == "archived" {
+			if err = db.UpdateClaudeThread(ctx, thread.ID, "review", true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if state == "offline" {
+			_ = db.UpdateClaudeThread(ctx, thread.ID, "review", false)
+			_, err = db.DB.ExecContext(ctx, db.Q("UPDATE servers SET last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-time.Hour), server.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if state == "old-agent" {
+			_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.92"})
+		}
+		if _, err = db.DB.ExecContext(ctx, db.Q("UPDATE claude_scheduled_tasks SET next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
+			t.Fatal(err)
+		}
+		runner.tick(ctx)
+		saved, _ = db.ScheduledTask(ctx, task.ID)
+		expected := "skipped"
+		if state == "old-agent" {
+			expected = "failed"
+		}
+		if saved.LastRunStatus != expected {
+			t.Fatalf("%s: %+v", state, saved)
+		}
+	}
+}

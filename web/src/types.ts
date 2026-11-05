@@ -37,14 +37,14 @@ export interface GeminiThread {
   pinned_at?: string;
   project_pinned_at?: string;
   project_hidden_at?: string; id: string; workspace_id: string; session_id: string; title: string; model: string; approval_mode: string; status: string; operation_id: string; archived_at: string | null; created_at: string; updated_at: string; path: string; project_id: string; project_name: string; server_id: string; server_name: string; server_status: string; rewrite_supported: boolean }
-export interface ClaudeThread { effort: string; effort_supported: boolean; project_pinned_at?: string | null; project_hidden_at?: string | null; id: string; workspace_id: string; session_id: string; title: string; model: string; permission_mode: string; status: string; operation_id: string; archived_at: string | null; created_at: string; updated_at: string; path: string; project_id: string; project_name: string; server_id: string; server_name: string; server_status: string; recovery_pending: boolean }
+export interface ClaudeThread { skills_supported?: boolean; input_supported: boolean; pinned_at?: string | null; effort: string; effort_supported: boolean; project_pinned_at?: string | null; project_hidden_at?: string | null; id: string; workspace_id: string; session_id: string; title: string; model: string; permission_mode: string; status: string; operation_id: string; archived_at: string | null; created_at: string; updated_at: string; path: string; project_id: string; project_name: string; server_id: string; server_name: string; server_status: string; recovery_pending: boolean }
 export type CodexSnapshotState = "idle" | "loading" | "refreshing" | "succeeded" | "failed" | "unsupported";
 export interface CodexSnapshot<T> { status: CodexSnapshotState; supported: boolean; reason: string; codex_version: string; data: T | null; error: string; requested_at: string | null; updated_at: string | null }
 export interface CodexGoal { thread_id: string; objective: string; status: string; token_budget: number | null; tokens_used: number; time_used_seconds: number; created_at: number; updated_at: number }
 export interface GeminiGoal { id: string; thread_id: string; objective: string; status: "active" | "paused" | "blocked" | "completed" | "cancelled"; operation_id: string; continuations: number; max_continuations: number; max_seconds: number; evidence: string; message: string; created_at: string; updated_at: string }
 export interface ScheduledTask {
  thinking_level?: string;
-  agent_kind?: "codex" | "gemini";
+  agent_kind?: "codex" | "gemini" | "claude";
   id: string;
   thread_id: string;
   thread_title: string;

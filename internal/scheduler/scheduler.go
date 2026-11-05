@@ -69,6 +69,10 @@ func (r *Runner) tick(ctx context.Context) {
 }
 
 func (r *Runner) enqueue(ctx context.Context, task store.ScheduledTask, now time.Time) {
+	if task.AgentKind == "claude" {
+		r.enqueueClaude(ctx, task, now)
+		return
+	}
 	if task.AgentKind == "gemini" {
 		r.enqueueGemini(ctx, task, now)
 		return
@@ -184,4 +188,38 @@ func (r *Runner) enqueueGemini(ctx context.Context, task store.ScheduledTask, no
 	_ = json.Unmarshal(event.Payload, &p)
 	_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "queued", "", p.OperationID, now)
 	r.gateway.Wake(thread.ServerID)
+}
+
+func (r *Runner) enqueueClaude(ctx context.Context, task store.ScheduledTask, now time.Time) {
+	t, err := r.store.ClaudeThread(ctx, task.ThreadID)
+	if err != nil {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "Claude session no longer exists", "", now)
+		return
+	}
+	if t.ServerStatus != "online" || t.ArchivedAt != nil || t.RecoveryPending || t.Status == "queued" || t.Status == "running" || t.Status == "interrupting" {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Claude session is offline, archived or active", "", now)
+		return
+	}
+	if !buildinfo.SupportsClaudeInput(t.AgentVersion) {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Claude Agent to "+buildinfo.MinimumClaudeInputVersion, "", now)
+		return
+	}
+	model, mode := task.Model, task.ApprovalMode
+	if model == "" {
+		model = t.Model
+	}
+	if mode == "" {
+		mode = t.PermissionMode
+	}
+	event, err := r.store.QueueClaudeTurn(ctx, t, task.Prompt, model, mode, task.ReasoningEffort)
+	if err != nil {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Claude workspace is busy or unavailable", "", now)
+		return
+	}
+	var p struct {
+		OperationID string `json:"operation_id"`
+	}
+	_ = json.Unmarshal(event.Payload, &p)
+	_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "queued", "", p.OperationID, now)
+	r.gateway.Wake(t.ServerID)
 }

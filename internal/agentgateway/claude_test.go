@@ -3,9 +3,11 @@ package agentgateway
 import (
 	"context"
 	"encoding/json"
+	"github.com/wio-platform/wio/internal/store"
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
@@ -239,5 +241,102 @@ func TestClaudeCompletionDuringInterruptPublishesStoredStatus(t *testing.T) {
 	}
 	if thread.Status != "interrupted" || completion.Status != thread.Status {
 		t.Fatalf("status mismatch: stored=%q event=%q", thread.Status, completion.Status)
+	}
+}
+
+func TestClaudeForkCompletionAndScheduledNativeIdentity(t *testing.T) {
+	for _, worktree := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same-workspace", true: "worktree"}[worktree], func(t *testing.T) {
+			db, server := gatewayTestServer(t, "claude-fork")
+			ctx := context.Background()
+			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.93"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude-fork", Name: "claude"}}}); err != nil {
+				t.Fatal(err)
+			}
+			workspaces, _ := db.ListWorkspaces(ctx)
+			w := workspaces[0]
+			source, err := db.CreateClaudeThread(ctx, w.ID, "sonnet", "default", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			native := "550e8400-e29b-41d4-a716-446655440000"
+			if _, err = db.DB.ExecContext(ctx, db.Q("UPDATE claude_threads SET session_id=? WHERE id=?"), native, source.ID); err != nil {
+				t.Fatal(err)
+			}
+			source, _ = db.ClaudeThread(ctx, source.ID)
+			var wt *protocol.GitWorktreeCreateCommand
+			if worktree {
+				wt = &protocol.GitWorktreeCreateCommand{SourceWorkspaceID: w.ID, TargetWorkspaceID: store.NewID(), ProjectID: w.ProjectID, SourcePath: w.Path, TargetPath: "/srv/claude-continued", Branch: "continued"}
+			}
+			op, target, err := db.QueueClaudeFork(ctx, source, wt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resultData, _ := json.Marshal(protocol.ClaudeForkResult{SnapshotID: target})
+			if wt != nil {
+				resultData, _ = json.Marshal(protocol.GitWorktreeCreateResult{Path: wt.TargetPath, Branch: wt.Branch, CommitSHA: "abc", ClaudeSnapshotID: target})
+			}
+			g := New(db, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			result, _ := json.Marshal(protocol.OperationResult{OperationID: op, Status: "succeeded", Data: resultData})
+			for i := 0; i < 2; i++ {
+				if err = g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: result}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			source, _ = db.ClaudeThread(ctx, source.ID)
+			branch, err := db.ClaudeThread(ctx, target)
+			if err != nil || source.Status != "idle" || branch.ForkSnapshotID != target || branch.SessionID != "" {
+				t.Fatalf("bad fork: source=%+v target=%+v %v", source, branch, err)
+			}
+			task, err := db.CreateScheduledTask(ctx, store.ScheduledTaskInput{AgentKind: "claude", ThreadID: target, Name: "review", Prompt: "review", Schedule: "@hourly", Timezone: "UTC", Enabled: true}, time.Now().UTC().Add(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.QueueClaudeTurn(ctx, branch, "continue", "sonnet", "default", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			branch, _ = db.ClaudeThread(ctx, target)
+			if err = db.MarkScheduledTaskRun(ctx, task.ID, "queued", "", branch.OperationID, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			init := func(session string) error {
+				payload, _ := json.Marshal(map[string]string{"operation_id": branch.OperationID, "session_id": session})
+				raw, _ := json.Marshal(protocol.StreamEvent{StreamID: target, Kind: "claude.init", Payload: payload})
+				return g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "claude_event", PayloadJSON: raw})
+			}
+			if err = init(native); err == nil {
+				t.Fatal("fork reused source native ID")
+			}
+			independent := "550e8400-e29b-41d4-a716-446655440001"
+			if err = init(independent); err != nil {
+				t.Fatal(err)
+			}
+			saved, _ := db.ScheduledTask(ctx, task.ID)
+			if saved.LastRunStatus != "running" {
+				t.Fatalf("not running: %+v", saved)
+			}
+			result, _ = json.Marshal(protocol.OperationResult{OperationID: branch.OperationID, Status: "succeeded"})
+			if err = g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: result}); err != nil {
+				t.Fatal(err)
+			}
+			saved, _ = db.ScheduledTask(ctx, task.ID)
+			branch, _ = db.ClaudeThread(ctx, target)
+			if saved.LastRunStatus != "succeeded" || branch.SessionID != independent || branch.Status != "idle" {
+				t.Fatalf("completion lost: %+v %+v", saved, branch)
+			}
+			if _, err = db.QueueClaudeTurn(ctx, branch, "next", "sonnet", "default", ""); err != nil {
+				t.Fatal(err)
+			}
+			branch, _ = db.ClaudeThread(ctx, target)
+			operation, _ := db.Operation(ctx, branch.OperationID)
+			var command protocol.ClaudeTurnCommand
+			_ = json.Unmarshal([]byte(operation.Payload), &command)
+			if command.SessionID != independent || command.ForkSnapshotID != "" {
+				t.Fatalf("fork repeated instead of resuming: %+v", command)
+			}
+		})
 	}
 }

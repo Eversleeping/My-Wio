@@ -11,6 +11,20 @@ import (
 
 var ErrClaudeCredentialsBusy = errors.New("finish active Claude turns, installations and configuration changes first")
 
+// ClaudeModelConfig identifies the successfully applied credential snapshot.
+// It contains binding metadata only, never a key or key hash.
+type ClaudeModelConfig struct {
+	ProfileID       string    `db:"profile_id"`
+	ProfileRevision string    `db:"profile_revision"`
+	AppliedAt       time.Time `db:"updated_at"`
+}
+
+func (s *Store) ClaudeModelConfiguration(ctx context.Context, serverID string) (ClaudeModelConfig, error) {
+	var config ClaudeModelConfig
+	err := s.DB.GetContext(ctx, &config, s.Q(`SELECT COALESCE(profile_id,'') AS profile_id,profile_revision,updated_at FROM server_claude_credential_profiles WHERE server_id=?`), serverID)
+	return config, err
+}
+
 func (s *Store) QueueClaudeCredentialUpdate(ctx context.Context, serverID, profileID, ciphertext, model string, profileUpdatedAt ...time.Time) (string, error) {
 	if !strings.HasPrefix(ciphertext, "v1:") {
 		return "", errors.New("encrypted credential payload required")

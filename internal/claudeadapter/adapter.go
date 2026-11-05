@@ -4,6 +4,7 @@ package claudeadapter
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,28 +42,47 @@ func Run(parent context.Context, executable, operationID string, command protoco
 	}
 	if command.SessionID != "" {
 		args = append(args, "--resume", command.SessionID)
+	} else if command.ResumePath != "" {
+		args = append(args, "--resume", command.ResumePath, "--fork-session")
+	}
+	input := command.Prompt
+	if len(command.Images) > 0 {
+		if len(command.Images) > 4 {
+			return errors.New("too many Claude images")
+		}
+		total := 0
+		blocks := []any{}
+		if command.Prompt != "" {
+			blocks = append(blocks, map[string]string{"type": "text", "text": command.Prompt})
+		}
+		for _, image := range command.Images {
+			prefix, data, ok := strings.Cut(image.DataURL, ",")
+			if !ok || (prefix != "data:image/png;base64" && prefix != "data:image/jpeg;base64" && prefix != "data:image/webp;base64") {
+				return errors.New("invalid Claude image")
+			}
+			decoded, err := base64.StdEncoding.DecodeString(data)
+			if err != nil || len(decoded) == 0 || len(decoded) > 2<<20 {
+				return errors.New("invalid Claude image data")
+			}
+			total += len(decoded)
+			if total > 4<<20 {
+				return errors.New("Claude images are too large")
+			}
+			blocks = append(blocks, map[string]any{"type": "image", "source": map[string]string{"type": "base64", "media_type": strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64"), "data": data}})
+		}
+		raw, err := json.Marshal(map[string]any{"type": "user", "session_id": "", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": blocks}})
+		if err != nil {
+			return err
+		}
+		input = string(raw) + "\n"
+		args = append(args, "--input-format", "stream-json")
 	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, args...)
-	if len(environment) != 0 {
-		// Remove inherited values before adding managed credentials and Git
-		// settings so only the selected server profile reaches this process.
-		overridden := make(map[string]bool, len(environment))
-		for _, entry := range environment {
-			key, _, _ := strings.Cut(entry, "=")
-			overridden[strings.ToUpper(key)] = true
-		}
-		for _, entry := range os.Environ() {
-			key, _, _ := strings.Cut(entry, "=")
-			if !overridden[strings.ToUpper(key)] {
-				cmd.Env = append(cmd.Env, entry)
-			}
-		}
-		cmd.Env = append(cmd.Env, environment...)
-	}
+	configureEnvironment(cmd, environment)
 	cmd.Dir = command.Workspace
-	cmd.Stdin = strings.NewReader(command.Prompt)
+	cmd.Stdin = strings.NewReader(input)
 	configureProcess(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -73,7 +93,7 @@ func Run(parent context.Context, executable, operationID string, command protoco
 		return fmt.Errorf("start Claude Code CLI (install claude for the Agent account): %w", err)
 	}
 	scan := bufio.NewScanner(stdout)
-	scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	scan.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	gotInit, gotResult, success, partial := false, false, false, false
 	var streamErr error
 	send := func(kind string, data map[string]any) error {
@@ -92,6 +112,7 @@ func Run(parent context.Context, executable, operationID string, command protoco
 			Type              string          `json:"type"`
 			Subtype           string          `json:"subtype"`
 			SessionID         string          `json:"session_id"`
+			Skills            []string        `json:"skills"`
 			ParentToolUseID   *string         `json:"parent_tool_use_id"`
 			IsError           bool            `json:"is_error"`
 			Result            string          `json:"result"`
@@ -113,18 +134,18 @@ func Run(parent context.Context, executable, operationID string, command protoco
 			streamErr = errors.New("Claude Code returned invalid stream-json output")
 			break
 		}
-		if data.ParentToolUseID != nil {
+		if data.ParentToolUseID != nil && !strings.HasPrefix(*data.ParentToolUseID, "forked-command-") {
 			continue
 		}
 		switch data.Type {
 		case "system":
 			if data.Subtype == "init" {
-				if _, err := uuid.Parse(data.SessionID); err != nil || (command.SessionID != "" && command.SessionID != data.SessionID) {
+				if _, err := uuid.Parse(data.SessionID); err != nil || (command.SessionID != "" && command.SessionID != data.SessionID) || (command.ResumePath != "" && command.ForkSessionID == data.SessionID) {
 					streamErr = errors.New("Claude Code returned an invalid or unexpected session ID")
 					break
 				}
 				gotInit = true
-				streamErr = send("init", map[string]any{"session_id": data.SessionID})
+				streamErr = send("init", map[string]any{"session_id": data.SessionID, "skills": data.Skills})
 			} else if data.Subtype == "permission_denied" {
 				streamErr = send("notice", map[string]any{"text": "Claude Code denied a tool request that required approval."})
 			}
@@ -214,4 +235,23 @@ func Run(parent context.Context, executable, operationID string, command protoco
 		return errors.New("Claude Code turn failed; see the session result")
 	}
 	return nil
+}
+
+func configureEnvironment(cmd *exec.Cmd, environment []string) {
+	if len(environment) != 0 {
+		// Remove inherited values before adding managed credentials and Git
+		// settings so only the selected server profile reaches this process.
+		overridden := make(map[string]bool, len(environment))
+		for _, entry := range environment {
+			key, _, _ := strings.Cut(entry, "=")
+			overridden[strings.ToUpper(key)] = true
+		}
+		for _, entry := range os.Environ() {
+			key, _, _ := strings.Cut(entry, "=")
+			if !overridden[strings.ToUpper(key)] {
+				cmd.Env = append(cmd.Env, entry)
+			}
+		}
+		cmd.Env = append(cmd.Env, environment...)
+	}
 }

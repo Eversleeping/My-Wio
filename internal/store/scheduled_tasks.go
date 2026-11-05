@@ -65,9 +65,13 @@ const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,'' AS thinking_le
 	JOIN servers s ON s.id=st.server_id`
 
 var geminiScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'gemini' AS agent_kind"), "codex_scheduled_tasks", "gemini_scheduled_tasks"), "JOIN codex_threads", "JOIN gemini_threads")
-var scheduledTaskSelect = "SELECT * FROM (" + codexScheduledTaskSelect + " UNION ALL " + strings.ReplaceAll(strings.ReplaceAll(geminiScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id"), "'' AS thinking_level", "st.thinking_level") + ") st"
+var claudeScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'claude' AS agent_kind"), "codex_scheduled_tasks", "claude_scheduled_tasks"), "JOIN codex_threads", "JOIN claude_threads")
+var scheduledTaskSelect = "SELECT * FROM (" + codexScheduledTaskSelect + " UNION ALL " + strings.ReplaceAll(strings.ReplaceAll(geminiScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id"), "'' AS thinking_level", "st.thinking_level") + " UNION ALL " + strings.ReplaceAll(claudeScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id") + ") st"
 
 func scheduledTable(kind string) string {
+	if kind == "claude" {
+		return "claude_scheduled_tasks"
+	}
 	if kind == "gemini" {
 		return "gemini_scheduled_tasks"
 	}
@@ -78,6 +82,10 @@ func (s *Store) scheduledTableForID(ctx context.Context, id string) (string, err
 	return scheduledTable(task.AgentKind), err
 }
 func (s *Store) scheduledThread(ctx context.Context, kind, id string) (string, string, error) {
+	if kind == "claude" {
+		t, e := s.ClaudeThread(ctx, id)
+		return t.ID, t.ServerID, e
+	}
 	if kind == "gemini" {
 		t, e := s.GeminiThread(ctx, id)
 		return t.ID, t.ServerID, e
@@ -196,7 +204,7 @@ func (s *Store) MarkScheduledTaskByOperation(ctx context.Context, operationID, s
 	if strings.TrimSpace(operationID) == "" {
 		return nil
 	}
-	for _, table := range []string{"codex_scheduled_tasks", "gemini_scheduled_tasks"} {
+	for _, table := range []string{"codex_scheduled_tasks", "gemini_scheduled_tasks", "claude_scheduled_tasks"} {
 		if _, err := s.DB.ExecContext(ctx, s.Q("UPDATE "+table+" SET last_run_status=?,last_run_message=?,updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), status, message, time.Now().UTC(), operationID); err != nil {
 			return err
 		}

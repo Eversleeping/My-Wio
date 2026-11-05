@@ -37,11 +37,14 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 	}
 	switch event.Kind {
 	case "claude.init":
-		if _, err := uuid.Parse(payload.SessionID); err != nil || (thread.SessionID != "" && thread.SessionID != payload.SessionID) {
+		if _, err := uuid.Parse(payload.SessionID); err != nil || (thread.SessionID != "" && thread.SessionID != payload.SessionID) || (thread.SessionID == "" && thread.ForkSessionID != "" && thread.ForkSessionID == payload.SessionID) {
 			return errors.New("invalid Claude session ID")
 		}
 		_, err = g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE claude_threads SET session_id=?,status=CASE WHEN status IN ('interrupting','interrupted') THEN status ELSE 'running' END,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting','interrupted') AND EXISTS (SELECT 1 FROM agent_operations WHERE id=? AND status IN ('queued','delivered','running'))`), payload.SessionID, time.Now().UTC(), thread.ID, payload.OperationID, payload.OperationID)
 		if err != nil {
+			return err
+		}
+		if err := g.store.MarkScheduledTaskByOperation(ctx, payload.OperationID, "running", ""); err != nil {
 			return err
 		}
 	case "claude.message", "claude.tool_use", "claude.tool_result", "claude.notice", "claude.result":
@@ -109,6 +112,9 @@ func (g *Gateway) completeClaudeOperation(ctx context.Context, op store.Operatio
 		return err
 	}
 	raw, _ := json.Marshal(map[string]string{"status": status, "message": result.Message, "operation_id": op.ID})
+	if err := g.store.MarkScheduledTaskByOperation(ctx, op.ID, result.Status, result.Message); err != nil {
+		return err
+	}
 	return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":completed", StreamID: command.ThreadID, Kind: "claude.turn.completed", Payload: security.RedactJSON(raw)})
 }
 

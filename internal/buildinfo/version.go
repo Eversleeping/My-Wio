@@ -5,7 +5,15 @@ import (
 	"strings"
 )
 
-var Version = "0.2.92"
+var Version = "0.2.94"
+
+const MinimumClaudeSkillsVersion = "0.2.94"
+
+func SupportsClaudeSkills(version string) bool { return atLeast(version, MinimumClaudeSkillsVersion) }
+
+const MinimumClaudeInputVersion = "0.2.93"
+
+func SupportsClaudeInput(version string) bool { return atLeast(version, MinimumClaudeInputVersion) }
 
 const MinimumClaudeEffortVersion = "0.2.92"
 

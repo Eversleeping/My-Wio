@@ -632,6 +632,20 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				result.Status, result.Message = "failed", "could not persist fork: "+err.Error()
 			}
 		}
+		if operation.Kind == "claude.thread.fork" && result.Status == "succeeded" {
+			var c protocol.ClaudeForkCommand
+			var fork protocol.ClaudeForkResult
+			if err = json.Unmarshal([]byte(operation.Payload), &c); err != nil {
+				return err
+			}
+			if json.Unmarshal(result.Data, &fork) != nil {
+				result.Status = "failed"
+				result.Message = "invalid Claude fork result"
+			} else if e := g.store.CommitClaudeFork(ctx, c, fork.SnapshotID); e != nil {
+				result.Status = "failed"
+				result.Message = "could not save Claude fork: " + e.Error()
+			}
+		}
 		if operation.Kind == "gemini.thread.fork" && result.Status == "succeeded" {
 			var command protocol.GeminiForkCommand
 			var fork protocol.GeminiForkResult
@@ -687,6 +701,24 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		if (geminiInterrupted || operation.Kind == "claude.turn.start") && !geminiCompletionClaimed {
 			return nil
+		}
+		if operation.Kind == "claude.thread.fork" || operation.Kind == "git.worktree.create" {
+			var c protocol.ClaudeForkCommand
+			if operation.Kind == "claude.thread.fork" {
+				_ = json.Unmarshal([]byte(operation.Payload), &c)
+			} else {
+				var w protocol.GitWorktreeCreateCommand
+				_ = json.Unmarshal([]byte(operation.Payload), &w)
+				if w.ClaudeFork != nil {
+					c = *w.ClaudeFork
+				}
+			}
+			if c.SourceThreadID != "" {
+				if _, err = g.store.DB.ExecContext(ctx, g.store.Q("UPDATE claude_threads SET status='idle',updated_at=? WHERE id=? AND operation_id=?"), time.Now().UTC(), c.SourceThreadID, operation.ID); err != nil {
+					return err
+				}
+				_ = g.publish(ctx, protocol.StreamEvent{StreamID: c.SourceThreadID, Kind: "claude.thread.updated", Payload: json.RawMessage(`{}`)})
+			}
 		}
 		if operation.Kind == "gemini.thread.fork" || operation.Kind == "git.worktree.create" {
 			var command protocol.GeminiForkCommand

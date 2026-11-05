@@ -121,4 +121,54 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 		t.Fatalf("effort not cleared: %+v", command)
 	}
 
+	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	imageBody := `{"images":[{"data_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII="}]}`
+	if w := request("POST", path, imageBody, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.2.93") {
+		t.Fatalf("old Agent accepted images: %d %s", w.Code, w.Body.String())
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.93"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{`{"images":[{"data_url":"data:image/png;base64,aGVsbG8="}]}`, `{"images":[{"data_url":"https://example.com/test.png"}]}`, `{"images":[{"data_url":"data:image/svg+xml;base64,PHN2Zz4="}]}`} {
+		if w := request("POST", path, invalid, true); w.Code != 400 {
+			t.Fatalf("invalid image accepted: %d", w.Code)
+		}
+	}
+	if w := request("POST", path, imageBody, true); w.Code != 202 {
+		t.Fatalf("image-only turn: %d %s", w.Code, w.Body.String())
+	}
+	thread, _ = db.ClaudeThread(ctx, thread.ID)
+	op, _ = db.Operation(ctx, thread.OperationID)
+	command = protocol.ClaudeTurnCommand{}
+	if json.Unmarshal([]byte(op.Payload), &command) != nil || len(command.Images) != 1 || command.Prompt != "" {
+		t.Fatalf("images lost: %+v", command)
+	}
+	if w := request("PATCH", "/api/claude/threads/"+thread.ID, `{"pinned":true}`, true); w.Code != 200 {
+		t.Fatalf("active pin: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("POST", "/api/claude/threads/"+thread.ID+"/fork", `{}`, true); w.Code != 409 {
+		t.Fatal("forked active thread")
+	}
+	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE claude_threads SET session_id=? WHERE id=?"), "550e8400-e29b-41d4-a716-446655440000", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("POST", "/api/claude/threads/"+thread.ID+"/fork", `{}`, true); w.Code != 202 {
+		t.Fatalf("fork: %d %s", w.Code, w.Body.String())
+	}
+	scheduleBody := `{"agent_kind":"claude","thread_id":"` + thread.ID + `","name":"review","prompt":"review","schedule":"@hourly","timezone":"Asia/Shanghai","reasoning_effort":"max","approval_mode":"plan","model":"custom-model"}`
+	if w := request("POST", "/api/scheduled-tasks", scheduleBody, true); w.Code != 201 {
+		t.Fatalf("Claude schedule: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("POST", "/api/scheduled-tasks", strings.ReplaceAll(scheduleBody, `"plan"`, `"never"`), true); w.Code != 400 {
+		t.Fatal("accepted invalid Claude permission")
+	}
+	if w := request("POST", "/api/scheduled-tasks", strings.ReplaceAll(scheduleBody, `"max"`, `"invalid"`), true); w.Code != 400 {
+		t.Fatal("accepted invalid Claude effort")
+	}
+
 }

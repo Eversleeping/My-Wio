@@ -189,6 +189,7 @@ type ProjectRemoteResult struct {
 }
 
 type GitWorktreeCreateCommand struct {
+	ClaudeFork        *ClaudeForkCommand `json:"claude_fork,omitempty"`
 	GeminiFork        *GeminiForkCommand `json:"gemini_fork,omitempty"`
 	SourceWorkspaceID string             `json:"source_workspace_id"`
 	TargetWorkspaceID string             `json:"target_workspace_id"`
@@ -204,11 +205,12 @@ type GitWorktreeCreateCommand struct {
 }
 
 type GitWorktreeCreateResult struct {
-	GeminiSessionID string `json:"gemini_session_id,omitempty"`
-	Path            string `json:"path"`
-	Branch          string `json:"branch"`
-	CommitSHA       string `json:"commit_sha"`
-	CodexThread     string `json:"codex_thread_id,omitempty"`
+	ClaudeSnapshotID string `json:"claude_snapshot_id,omitempty"`
+	GeminiSessionID  string `json:"gemini_session_id,omitempty"`
+	Path             string `json:"path"`
+	Branch           string `json:"branch"`
+	CommitSHA        string `json:"commit_sha"`
+	CodexThread      string `json:"codex_thread_id,omitempty"`
 }
 
 type GitWorktreeCleanupCommand struct {

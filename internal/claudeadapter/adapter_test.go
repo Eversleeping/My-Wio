@@ -22,6 +22,10 @@ func init() {
 	if mode == "" {
 		return
 	}
+	if strings.HasPrefix(mode, "skills") {
+		runSkillsTestChild(mode)
+		os.Exit(0)
+	}
 	stdin, _ := io.ReadAll(os.Stdin)
 	raw, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin)})
 	_ = os.WriteFile(os.Getenv("WIO_CLAUDE_TEST_RECORD"), raw, 0600)

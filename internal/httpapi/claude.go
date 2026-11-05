@@ -133,12 +133,13 @@ func (a *API) startClaudeTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Prompt         string  `json:"prompt"`
-		Model          string  `json:"model"`
-		PermissionMode string  `json:"permission_mode"`
-		Effort         *string `json:"effort"`
+		Prompt         string               `json:"prompt"`
+		Images         []protocol.TurnImage `json:"images"`
+		Model          string               `json:"model"`
+		PermissionMode string               `json:"permission_mode"`
+		Effort         *string              `json:"effort"`
 	}
-	if !decodeJSONLimit(w, r, &input, 300<<10) {
+	if !decodeJSONLimit(w, r, &input, 7<<20) {
 		return
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
@@ -152,7 +153,7 @@ func (a *API) startClaudeTurn(w http.ResponseWriter, r *http.Request) {
 	if input.PermissionMode == "" {
 		input.PermissionMode = thread.PermissionMode
 	}
-	if input.Prompt == "" || len(input.Prompt) > 256*1024 || !validClaudeOptions(input.Model, input.PermissionMode) || !protocol.ValidClaudeEffort(effort) {
+	if (input.Prompt == "" && len(input.Images) == 0) || !validTurnImages(input.Images) || len(input.Prompt) > 256*1024 || !validClaudeOptions(input.Model, input.PermissionMode) || !protocol.ValidClaudeEffort(effort) {
 		writeError(w, 400, "invalid prompt, Claude model, permission mode or effort")
 		return
 	}
@@ -168,7 +169,11 @@ func (a *API) startClaudeTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumClaudeEffortVersion+" or newer to select Claude effort")
 		return
 	}
-	event, err := a.store.QueueClaudeTurn(r.Context(), thread, input.Prompt, input.Model, input.PermissionMode, effort)
+	if (len(input.Images) > 0 || (thread.SessionID == "" && thread.ForkSnapshotID != "")) && !thread.InputSupported {
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumClaudeInputVersion+" or newer to use Claude images and session forks")
+		return
+	}
+	event, err := a.store.QueueClaudeTurn(r.Context(), thread, input.Prompt, input.Model, input.PermissionMode, effort, input.Images...)
 	if err != nil {
 		writeError(w, 409, "could not queue Claude turn; check session and active workspace operations")
 		return
@@ -227,6 +232,7 @@ func (a *API) updateClaudeThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Title    *string `json:"title"`
 		Archived *bool   `json:"archived"`
+		Pinned   *bool   `json:"pinned"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -242,9 +248,17 @@ func (a *API) updateClaudeThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid session title")
 		return
 	}
-	if err := a.store.UpdateClaudeThread(r.Context(), thread.ID, title, archived); err != nil {
-		writeError(w, 409, "finish or interrupt the Claude turn first")
-		return
+	if input.Title != nil || input.Archived != nil {
+		if err := a.store.UpdateClaudeThread(r.Context(), thread.ID, title, archived); err != nil {
+			writeError(w, 409, "finish or interrupt the Claude turn first")
+			return
+		}
+	}
+	if input.Pinned != nil {
+		if err := a.store.PinClaudeThread(r.Context(), thread.ID, *input.Pinned); err != nil {
+			writeError(w, 500, "could not pin Claude session")
+			return
+		}
 	}
 	a.auditClaude(r, "claude.thread.update", thread.ID)
 	a.publishClaudeChange(r, thread.ID, "claude.thread.updated")

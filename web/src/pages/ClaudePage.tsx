@@ -1,7 +1,16 @@
 import { type CSSProperties, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, EyeOff, Folder, Pin, PinOff, ArrowUp, Bot, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, WorkspaceFilesPanel, message, type FilePreviewSelection } from "../App";
+import { SlashCommandMenu, type SlashCommandItem } from "../SlashCommandMenu";
+import { compressImage } from "../imageCompression";
+import { MessageImages } from "../components/MessageImages";
+import { ClaudeModelPicker } from "../components/ClaudeModelPicker";
+import { ClaudeToolGroup } from "../components/ClaudeToolGroup";
+import { claudeDisplayEvents } from "../claudeContent";
+import { useClaudeSkills, validClaudeSkillName, type ClaudeSkill } from "../claudeSkills";
+import { useClaudeModels, type ClaudeModel } from "../claudeModels";
+import { useClaudeManagement } from "./claudeManagement";
 import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
 import { HiddenProjectsButton } from "../components/HiddenProjectsButton";
 import { SidebarHeightDivider, readSidebarHeight } from "../components/SidebarHeightDivider";
@@ -23,7 +32,6 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const [sidebarHeight, setSidebarHeight] = useState(() => readSidebarHeight("wio_claude_sidebar_height"));
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [hiding, setHiding] = useState<ClaudeThread | null>(null);
   useEffect(() => { try { localStorage.setItem("wio_claude_sidebar_height", String(sidebarHeight)); } catch { /* Keep resizing available without storage. */ } }, [sidebarHeight]);
   const [tick, setTick] = useState(0);
   const [archived, setArchived] = useState(false);
@@ -38,10 +46,11 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const [title, setTitle] = useState("");
   const [deleting, setDeleting] = useState<ClaudeThread | null>(null);
   const [mobile, setMobile] = useState("sessions");
+  const newModels = useClaudeModels(createOpen ? workspaceID : "", "create");
   const dependency = `${realtime}:${tick}`;
   const threads = useData<ClaudeThread[]>(`/claude/threads?archived=${archived}`, dependency);
   const selected = useData<ClaudeThread>(selectedThreadID ? `/claude/threads/${selectedThreadID}` : null, dependency);
-  const workspaces = useData<Workspace[]>("/workspaces", realtime);
+  const workspaces = useData<Workspace[]>("/workspaces", dependency);
   const servers = useData<Server[]>("/servers", realtime);
   const thread = threads.data?.find(item => item.id === selectedThreadID) ?? selected.data;
   const previews = useSessionPreviews(`${selectedThreadID}:${thread?.workspace_id ?? ""}`, thread?.workspace_id ?? "");
@@ -74,33 +83,39 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const newSession = (id = thread?.workspace_id ?? "") => { const previous = threads.data?.find(item => item.workspace_id === id); setWorkspaceID(id); setModel(modelForWorkspace(id)); setEffort(previous?.effort ?? ""); setMode(previous?.permission_mode ?? "default"); setError(""); setCreateOpen(true); };
 
   const groups = useMemo(() => {
-    const result = new Map<string, { name: string; path: string; threads: ClaudeThread[] }>();
+    const result = new Map<string, { name: string; path: string; context: ClaudeThread; threads: ClaudeThread[] }>();
     const byID = new Map((workspaces.data ?? []).map(item => [item.id, item]));
     for (const item of threads.data ?? []) {
       if (item.project_hidden_at) continue;
       const workspace = byID.get(item.workspace_id);
       const path = workspace?.path || item.path;
       const identity = [workspace?.display_name?.trim(), workspace?.branch?.trim(), path.split(/[\\/]/).filter(Boolean).at(-1)].find(value => value && value !== item.project_name);
-      const group = result.get(item.workspace_id) ?? { name: identity ? `${item.project_name} · ${identity}` : item.project_name, path, threads: [] };
+      const group = result.get(item.workspace_id) ?? { name: identity ? `${item.project_name} · ${identity}` : item.project_name, path, context: item, threads: [] };
       group.threads.push(item); result.set(item.workspace_id, group);
     }
+    if (!archived) for (const workspace of workspaces.data ?? []) {
+      if (result.has(workspace.id) || workspace.status !== "ready" || workspace.kind !== "worktree") continue;
+      const source = threads.data?.find(item => item.project_id === workspace.project_id && item.server_id === workspace.server_id && !item.project_hidden_at);
+      if (!source) continue;
+      const identity = workspace.display_name?.trim() || workspace.branch?.trim() || workspace.path.split(/[\\/]/).filter(Boolean).at(-1);
+      result.set(workspace.id, { name: identity ? `${source.project_name} · ${identity}` : source.project_name, path: workspace.path, context: {...source, workspace_id:workspace.id, path:workspace.path}, threads: [] });
+    }
     const query = search.trim().toLocaleLowerCase();
-    return [...result.entries()].sort(([,a],[,b]) => Number(!a.threads[0].project_pinned_at) - Number(!b.threads[0].project_pinned_at) || (b.threads[0].project_pinned_at ?? "").localeCompare(a.threads[0].project_pinned_at ?? "")).flatMap(([id, group]) => {
+    return [...result.entries()].sort(([,a],[,b]) => Number(!a.context.project_pinned_at) - Number(!b.context.project_pinned_at) || (b.context.project_pinned_at ?? "").localeCompare(a.context.project_pinned_at ?? "")).flatMap(([id, group]) => {
       if (!query || `${group.name} ${group.path}`.toLocaleLowerCase().includes(query)) return [[id, group] as const];
       const matching = group.threads.filter(item => `${item.title} ${item.server_name} ${item.id} ${item.session_id}`.toLocaleLowerCase().includes(query));
       return matching.length ? [[id, { ...group, threads: matching }] as const] : [];
     });
-  }, [search, threads.data, workspaces.data]);
-  const updateProject = async (target: ClaudeThread, values: object) => {
-    setBusy(true);
-    try { await patch(`/projects/${target.project_id}`, { server_id: target.server_id, ...values }); setHiding(null); refresh(); }
-    catch (err) { notify(message(err)); } finally { setBusy(false); }
-  };
-  const threadActions = (item: ClaudeThread): ContextMenuAction[] => [
+  }, [search, threads.data, workspaces.data, archived]);
+  const management = useClaudeManagement({ workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify });
+  const threadActions = (item: ClaudeThread): ContextMenuAction[] => { const actions=management.threadActions(item); return [
+    ...actions.filter(action => action.id === "pin"),
     { id: "rename", label: t("gemini.rename"), icon: Pencil, disabled: busy || activeTurn(item) || item.recovery_pending, onSelect: () => { setRenaming(item); setTitle(item.title); } },
-    { id: "archive", label: t(item.archived_at ? "gemini.restore" : "gemini.archive"), icon: item.archived_at ? ArchiveRestore : Archive, disabled: busy || activeTurn(item) || item.recovery_pending, onSelect: () => change(item, { archived: !item.archived_at }) },
-    { id: "copy-path", label: t("codex.copyWorkingDirectory"), icon: Copy, separatorBefore: true, onSelect: () => { void navigator.clipboard.writeText(item.path).then(() => notify(t("codex.workingDirectoryCopied"))).catch(err => notify(message(err))); } },
-  ];
+    ...actions.filter(action => ["schedule","fork","fork-worktree"].includes(action.id)),
+    { id: "archive", danger: !item.archived_at, separatorBefore: true, label: t(item.archived_at ? "gemini.restore" : "gemini.archive"), icon: item.archived_at ? ArchiveRestore : Archive, disabled: busy || activeTurn(item) || item.recovery_pending, onSelect: () => change(item, { archived: !item.archived_at }) },
+    ...actions.filter(action => action.id.startsWith("copy-") || action.id === "new-window"),
+  ]; };
+
 
   return <div className={`codex-layout gemini-layout gemini-mobile-${mobile}`}>
     <div className="gemini-mobile-tabs">{["sessions", "files", "conversation"].map(view => <button key={view} className={mobile === view ? "active" : ""} onClick={() => setMobile(view)}>{t(`gemini.${view}`)}</button>)}</div>
@@ -113,16 +128,15 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
         </div></div>
         <input className="gemini-session-search" type="search" aria-label={t("gemini.searchSessions")} placeholder={t("gemini.searchSessions")} value={search} onChange={event => setSearch(event.target.value)} />
         <div className="thread-items">{threads.error ? <ErrorState error={threads.error} reload={threads.reload} /> : threads.loading ? <p className="gemini-hint">{t("common.loading")}</p> : groups.length ? groups.map(([id, group]) => {
-          const first = group.threads[0];
+          const first = group.context;
           const heading = <button type="button" className="thread-project-toggle" aria-expanded={!collapsed.has(id)} title={`${t(collapsed.has(id) ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${first.server_name} · ${group.path}`} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })}>{collapsed.has(id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong><span>{group.name}</span><small>{first.server_name}</small></strong>{first.project_pinned_at && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span></button>;
           return <section className="thread-project" key={id}>
             {archived ? <div className="thread-project-heading">{heading}</div> : <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.name })} actions={[
               { id: "new-session", label: t("codex.createSessionHere"), icon: Plus, disabled: busy, onSelect: () => newSession(id) },
-              { id: "pin", label: t(first.project_pinned_at ? "codex.unpinProject" : "codex.pinProject"), icon: first.project_pinned_at ? PinOff : Pin, disabled: busy, onSelect: () => updateProject(first, { pinned: !first.project_pinned_at }) },
-              { id: "hide", label: t("codex.hideProject"), icon: EyeOff, disabled: busy, danger: true, onSelect: () => setHiding(first) },
+              ...management.projectActions(first),
             ]}>{heading}</ContextMenu>}
-            {!collapsed.has(id) && <div className="project-threads">{group.threads.map(item => <ContextMenu key={item.id} className={`thread ${thread?.id === item.id ? "active" : ""}`} label={t("codex.threadMenu", { name: item.title })} actions={threadActions(item)}>
-              <button className="thread-select" onClick={() => { onSelectThread(item.id); setMobile("conversation"); }}><span><strong>{item.title}</strong><small>{item.server_name}</small></span></button>
+            {!collapsed.has(id) && <div className="project-threads">{[...group.threads].sort((a,b)=>Number(!a.pinned_at)-Number(!b.pinned_at) || (b.pinned_at ?? "").localeCompare(a.pinned_at ?? "")).map(item => <ContextMenu key={item.id} className={`thread ${thread?.id === item.id ? "active" : ""}`} label={t("codex.threadMenu", { name: item.title })} actions={threadActions(item)}>
+              <button className="thread-select" onClick={() => { onSelectThread(item.id); setMobile("conversation"); }}><span><strong>{item.pinned_at && <Pin size={12} />}{item.title}</strong><small>{item.server_name}</small></span></button>
               <div className="thread-actions"><Status value={item.status} /><button className="icon-button danger thread-delete" aria-label={t("claude.delete")} disabled={busy || activeTurn(item) || item.recovery_pending} onClick={() => setDeleting(item)}><Trash2 size={14} /></button></div>
             </ContextMenu>)}</div>}
           </section>;
@@ -134,56 +148,37 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
     <div className="gemini-main">{thread ? <>
       <SessionPreviewTabs previews={previews} />
       <SessionPreviewPanels previews={previews} workspaceID={thread.workspace_id} workspaceRoot={thread.path} writable realtime={realtime + tick} notify={notify} onOpenFile={openFile}>
-        <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} />
+        <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} onSchedule={() => management.schedule(thread)} onFork={() => management.fork(thread)} onNew={() => newSession(thread.workspace_id)} />
       </SessionPreviewPanels>
     </> : selectedThreadID && selected.error ? <ErrorState error={selected.error} reload={selected.reload} /> : <div className="gemini-welcome"><Bot size={40} /><h2>Claude</h2><p>{t("claude.intro")}</p><button className="primary-button" onClick={() => newSession()}><Plus size={17} />{t("claude.newSession")}</button></div>}</div>
     <Dialog open={createOpen} title={t("claude.newSession")} onClose={() => { if (!busy) setCreateOpen(false); }}><form onSubmit={create}>
       {workspaces.error && <ErrorState error={workspaces.error} reload={workspaces.reload} />}
       <Field label={t("gemini.workspace")}><select required value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); setModel(modelForWorkspace(event.target.value)); setEffort(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{(workspaces.data ?? []).filter(item => item.status === "ready").map(item => <option key={item.id} value={item.id}>{item.project_name} · {item.server_name} · {item.path}</option>)}</select></Field>
-      <ClaudeOptions model={model} mode={mode} effort={effort} setEffort={setEffort} setModel={setModel} setMode={setMode} disabled={busy} effortSupported={Boolean(servers.data?.find(item => item.id === workspaces.data?.find(workspace => workspace.id === workspaceID)?.server_id)?.claude_effort_supported)} />
+      <ClaudeOptions availableModels={newModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} setModel={setModel} setMode={setMode} disabled={busy} effortSupported={Boolean(servers.data?.find(item => item.id === workspaces.data?.find(workspace => workspace.id === workspaceID)?.server_id)?.claude_effort_supported)} />
       <p className="gemini-hint">{t("claude.permissionsHelp")}</p>{error && <ErrorBanner text={error} />}
       <DialogActions><button className="primary-button" disabled={busy || !workspaceID || !model.trim()}>{t("claude.newSession")}</button></DialogActions>
     </form></Dialog>
     <Dialog open={Boolean(renaming)} title={t("gemini.rename")} onClose={() => { if (!busy) setRenaming(null); }}><form onSubmit={event => { event.preventDefault(); if (renaming) void change(renaming, { title: title.trim() }); }}><Field label={t("gemini.title")}><input required maxLength={180} value={title} onChange={event => setTitle(event.target.value)} /></Field><DialogActions><button className="primary-button" disabled={busy || !title.trim()}>{t("common.save")}</button></DialogActions></form></Dialog>
-    <ConfirmDialog open={Boolean(hiding)} danger title={t("codex.hideProject")} impact={t("codex.confirmHideProject", { name: hiding?.project_name ?? "" })} confirmLabel={t("codex.hideProject")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setHiding(null)} onConfirm={() => hiding ? updateProject(hiding, { hidden: true }) : undefined} />
+    {management.dialogs}
     <ConfirmDialog open={Boolean(deleting)} danger title={t("claude.delete")} impact={t("claude.deleteImpact")} confirmLabel={t("common.delete")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setDeleting(null)} onConfirm={deleteSession} />
   </div>;
 }
 
-function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disabled, compact = false, effortSupported = true }: { model: string; mode: string; effort: string; setModel: (value: string) => void; setMode: (value: string) => void; setEffort: (value: string) => void; disabled: boolean; compact?: boolean; effortSupported?: boolean }) {
+function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disabled, compact = false, effortSupported = true, availableModels = [], requestCustom = 0 }: { model: string; mode: string; effort: string; setModel: (value: string) => void; setMode: (value: string) => void; setEffort: (value: string) => void; disabled: boolean; compact?: boolean; effortSupported?: boolean; availableModels?: ClaudeModel[]; requestCustom?: number }) {
   const { t } = useI18n();
   const controls = [
-    <input key="model" aria-label={t("claude.model")} title={model} required maxLength={128} value={model} disabled={disabled} onChange={event => setModel(event.target.value)} />,
-    <select key="effort" aria-label={t("claude.effort")} title={t(effortSupported ? "claude.effort" : "claude.effortUpgrade")} value={effort} disabled={disabled} onChange={event => setEffort(event.target.value)}>{["", "low", "medium", "high", "xhigh", "max"].map(value => <option key={value} value={value} disabled={!!value && !effortSupported}>{t(`claude.effort.${value || "default"}`)}</option>)}</select>,
-    <select key="mode" aria-label={t("claude.permission")} title={t("claude.permissionsHelp")} value={mode} disabled={disabled} onChange={event => setMode(event.target.value)}>{modes.map(value => <option key={value} value={value}>{t(`claude.permission.${value}`)}</option>)}</select>,
+    <ClaudeModelPicker key="model" value={model} onChange={setModel} models={availableModels} disabled={disabled} requestCustom={requestCustom} />,
+    <select className="claude-effort-select" key="effort" aria-label={t("claude.effort")} title={t(effortSupported ? "claude.effort" : "claude.effortUpgrade")} value={effort} disabled={disabled} onChange={event => setEffort(event.target.value)}>{["", "low", "medium", "high", "xhigh", "max"].map(value => <option key={value} value={value} disabled={!!value && !effortSupported}>{t(`claude.effort.${value || "default"}`)}</option>)}</select>,
+    <select className="claude-permission-select" key="mode" aria-label={t("claude.permission")} title={t("claude.permissionsHelp")} value={mode} disabled={disabled} onChange={event => setMode(event.target.value)}>{modes.map(value => <option key={value} value={value}>{t(`claude.permission.${value}`)}</option>)}</select>,
   ];
   return compact ? <div className="claude-composer-options">{controls}</div> : <div className="claude-options">{controls.map((control, index) => <Field key={control.key} label={t(["claude.model", "claude.effort", "claude.permission"][index])}>{control}</Field>)}</div>;
 }
 
-type DisplayItem = { id: string; role: "user" | "assistant" | "tool" | "notice"; text: string; detail?: string };
-function displayEvents(events: StreamEvent[], denied: string): DisplayItem[] {
-  const items: DisplayItem[] = [];
-  for (const event of events) {
-    const p = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
-    const text = typeof p.text === "string" ? p.text : "";
-    if (event.kind === "claude.message") {
-      const previous = items.at(-1);
-      if (previous?.role === "assistant") previous.text += text;
-      else if (text) items.push({ id: event.event_id, role: "assistant", text });
-    } else if (event.kind === "claude.user.message") items.push({ id: event.event_id, role: "user", text });
-    else if (event.kind === "claude.tool_use") items.push({ id: event.event_id, role: "tool", text: String(p.name ?? "Tool"), detail: JSON.stringify(p.input ?? {}, null, 2) });
-    else if (event.kind === "claude.tool_result") items.push({ id: event.event_id, role: "tool", text: "", detail: typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "", null, 2) });
-    else if (event.kind === "claude.notice") items.push({ id: event.event_id, role: "notice", text });
-    else if (event.kind === "claude.result") {
-      if (Array.isArray(p.permission_denials) && p.permission_denials.length) items.push({ id: `${event.event_id}-denied`, role: "notice", text: denied });
-      if (Array.isArray(p.errors) && p.errors.length) items.push({ id: `${event.event_id}-errors`, role: "notice", text: p.errors.join("\n") });
-    } else if (event.kind === "claude.turn.completed" && typeof p.message === "string" && p.message) items.push({ id: event.event_id, role: "notice", text: p.message });
-  }
-  return items;
-}
-
-function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive }: { thread: ClaudeThread; revision: string; onChanged: () => void; onOpenFile: (selection: FilePreviewSelection) => void; onArchive: () => void }) {
+function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onSchedule, onFork, onNew }: { thread: ClaudeThread; revision: string; onChanged: () => void; onOpenFile: (selection: FilePreviewSelection) => void; onArchive: () => void; onSchedule: () => void; onFork: () => void; onNew: () => void }) {
   const { t } = useI18n();
+  const availableModels = useClaudeModels(thread.workspace_id, thread.id);
+  const skillDiscovery = useClaudeSkills(thread.workspace_id, thread.id, Boolean(thread.skills_supported) && thread.server_status === "online");
+  const [requestCustomModel, setRequestCustomModel] = useState(0);
   const [prompt, setPrompt] = useState(""); const [model, setModel] = useState(thread.model); const [mode, setMode] = useState(thread.permission_mode); const [effort, setEffort] = useState(thread.effort ?? "");
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [confirming, setConfirming] = useState(false);
   const [allEvents, setAllEvents] = useState<StreamEvent[]>([]); const [historyBusy, setHistoryBusy] = useState(false);
@@ -219,12 +214,53 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive }: {
     })().catch(err => { if (!controller.signal.aborted) setError(message(err)); });
     return () => controller.abort();
   }, [events.data, mergeEvents, thread.id]);
-  const items = useMemo(() => displayEvents(allEvents, t("claude.denied")), [allEvents, t]);
-  useEffect(() => { if (follow.current && stream.current) stream.current.scrollTop = stream.current.scrollHeight; }, [items]);
   const running = activeTurn(thread); const blocked = running || thread.recovery_pending || Boolean(thread.archived_at) || thread.server_status !== "online";
+  const [images,setImages]=useState<{id:string;dataURL:string}[]>([]);
+  const [imageBusy,setImageBusy]=useState(false);
+  const imageWork=useRef<AbortController|null>(null);
+  const promptRef=useRef<HTMLTextAreaElement>(null);
+  const slashKeyboardRef=useRef<((event:React.KeyboardEvent<HTMLTextAreaElement>)=>boolean)|null>(null);
+  const [slashDismissed,setSlashDismissed]=useState("");
+  const [slashSection,setSlashSection]=useState("");
+  const [helpOpen,setHelpOpen]=useState(false);
+  useEffect(()=>()=>imageWork.current?.abort(),[]);
+  const addImages=async(files:File[])=>{
+    if (blocked || busy || imageBusy) return;
+    if (!thread.input_supported) {setError(t("claude.inputUpgrade"));return;}
+    const available=4-images.length;if(available<=0){setError(t("codex.imageLimit"));return;}
+    const controller=new AbortController();imageWork.current=controller;setImageBusy(true);setError("");
+    try {const prepared:{id:string;dataURL:string}[]=[];for(const file of files.slice(0,available)){prepared.push({id:crypto.randomUUID(),dataURL:await compressImage(file,{signal:controller.signal})});}
+      if(!controller.signal.aborted){setImages(current=>[...current,...prepared].slice(0,4));if(files.length>available)setError(t("codex.imageLimit"));}
+    } catch {if(!controller.signal.aborted)setError(t("codex.imageFailed"));}
+    finally {if(imageWork.current===controller){imageWork.current=null;setImageBusy(false);}}
+  };
+  const slashOpen=!blocked && !busy && /^\/[A-Za-z0-9_.:/-]*$/.test(prompt) && prompt!==slashDismissed;
+  const finishSlash=(action:()=>void)=>{setPrompt("");setSlashSection("");action();};
+  const latestInit = [...allEvents].reverse().find(event => event.kind === "claude.init");
+  const historicalSkills = (latestInit?.payload as { skills?: unknown[] })?.skills;
+  const nativeSkills: ClaudeSkill[] = skillDiscovery.skills ?? [...new Set(Array.isArray(historicalSkills) ? historicalSkills.filter((name): name is string => typeof name === "string" && validClaudeSkillName(name)) : [])].map(name => ({ name, description: t("claude.nativeSkill") }));
+  const skillItem = (skill: ClaudeSkill): SlashCommandItem => ({ id: `skill:${skill.name}`, name: `/${skill.name}`, description: skill.description || t("claude.nativeSkill"), detail: skill.argument_hint, icon: ListChecks, onSelect: () => { setSlashSection(""); setPrompt(`/${skill.name} `); promptRef.current?.focus(); } });
+  const skillsStatus = skillDiscovery.loading ? t("claude.skillsLoading") : skillDiscovery.error ? `${t("claude.skillsFailed")} ${skillDiscovery.error}` : !thread.skills_supported ? t("claude.skillsUpgrade") : thread.server_status !== "online" ? t("claude.skillsOffline") : !nativeSkills.length ? t("claude.skillsEmpty") : "";
+  const slashItems:SlashCommandItem[]=slashSection==="skills" ? [...nativeSkills.map(skillItem), ...(thread.skills_supported && thread.server_status === "online" ? [{ id: "refresh-skills", name: t("claude.skillsRefresh"), description: "", icon: ListChecks, onSelect: () => { if (!skillDiscovery.loading) skillDiscovery.reload(); } }] : [])] : slashSection==="effort" ? ["","low","medium","high","xhigh","max"].filter(value=>!value || thread.effort_supported).map(value=>({id:value||"default",name:t(`claude.effort.${value||"default"}`),description:"",icon:Gauge,selected:effort===value,onSelect:()=>finishSlash(()=>setEffort(value))})) : slashSection==="permissions" ? modes.map(value=>({id:value,name:t(`claude.permission.${value}`),description:"",icon:Settings2,selected:mode===value,onSelect:()=>finishSlash(()=>setMode(value))})) : slashSection==="model" ? [...new Set([model,thread.model,...availableModels.models.map(item=>item.id),"sonnet","opus","haiku"])].filter(Boolean).map(value=>({id:value,name:value,description:availableModels.models.find(item=>item.id===value)?.name ?? "",icon:Bot,selected:model===value,onSelect:()=>finishSlash(()=>setModel(value))})).concat([{id:"custom",name:t("gemini.customModel"),description:"",icon:Bot,selected:false,onSelect:()=>finishSlash(()=>setRequestCustomModel(value=>value+1))}]) : [
+    {id:"model",name:"/model",description:t("claude.model"),icon:Bot,onSelect:()=>{setSlashSection("model");setPrompt("/");}},
+    {id:"effort",name:"/effort",description:t("claude.effort"),icon:Gauge,onSelect:()=>{setSlashSection("effort");setPrompt("/");}},
+    {id:"permissions",name:"/permissions",description:t("claude.permission"),icon:Settings2,onSelect:()=>{setSlashSection("permissions");setPrompt("/");}},
+    ...["skill", "skills"].map(command => ({ id: command, name: `/${command}`, description: t("codex.slashSkillsDescription"), icon: ListChecks, onSelect: () => { setSlashSection("skills"); setPrompt("/"); } })),
+    {id:"plan",name:"/plan",description:t("claude.permission.plan"),icon:ListChecks,onSelect:()=>finishSlash(()=>setMode("plan"))},
+    {id:"new",name:"/new",description:t("claude.newSession"),icon:Plus,onSelect:()=>finishSlash(onNew)},
+    {id:"schedule",name:"/schedule",description:t("codex.createScheduledTask"),icon:CalendarClock,onSelect:()=>finishSlash(onSchedule)},
+    ...(thread.input_supported && thread.session_id ? [{id:"fork",name:"/fork",description:t("codex.continueInNewTask"),icon:GitFork,onSelect:()=>finishSlash(onFork)}] : []),
+    {id:"help",name:"/help",description:t("claude.commandsHelp"),icon:MessageSquare,onSelect:()=>finishSlash(()=>setHelpOpen(true))},
+    ...nativeSkills.filter(skill=>!["model","effort","permissions","skill","skills","plan","new","schedule","fork","help"].includes(skill.name)).map(skillItem),
+  ];
+  const items = useMemo(() => claudeDisplayEvents(allEvents, t("claude.denied")), [allEvents, t]);
+  useEffect(() => { if (follow.current && stream.current) stream.current.scrollTop = stream.current.scrollHeight; }, [items]);
   const send = async (event: FormEvent) => {
-    event.preventDefault(); if (blocked || busy || !prompt.trim()) return; setBusy(true); setError("");
-    try { await post(`/claude/threads/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort }); setPrompt(""); follow.current = true; onChanged(); }
+    event.preventDefault(); if (blocked || busy || imageBusy || slashOpen || (!prompt.trim() && !images.length)) return;
+    const option=/^\/(model|effort|permissions)\s+(\S+)\s*$/.exec(prompt);
+    if(option){const [,command,value]=option;if(command==="model")setModel(value);else if(command==="effort" && ["default","low","medium","high","xhigh","max"].includes(value) && (value==="default" || thread.effort_supported))setEffort(value==="default"?"":value);else if(command==="permissions" && modes.includes(value))setMode(value);else {setError(t("claude.invalidCommandOption"));return;}setPrompt("");setError("");return;}
+    setBusy(true); setError("");
+    try { await post(`/claude/threads/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:images.map(image=>({data_url:image.dataURL}))} : {}) }); setPrompt(""); setImages([]); follow.current = true; onChanged(); }
     catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
   const interrupt = async () => { setBusy(true); setError(""); try { await post(`/claude/threads/${thread.id}/interrupt`, {}); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
@@ -239,10 +275,16 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive }: {
       {allEvents.length > 0 && allEvents[0].sequence > 1 && <button className="secondary-button" disabled={historyBusy} onClick={() => void earlier()}>{t("claude.loadEarlier")}</button>}
       {events.error && <ErrorState error={events.error} reload={events.reload} />}
       {!items.length && <Empty icon={<Bot size={30} />} text={t("claude.startPrompt")} />}
-      {items.map(item => item.role === "tool" ? <details className="gemini-tool" key={item.id}><summary>{item.text ? `${t("claude.tool")}: ${item.text}` : t("claude.toolResult")}</summary><pre>{item.detail}</pre></details> : <article className={`message ${item.role === "notice" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Claude"}</strong></header><MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} /></article>)}
+      {items.map(item => item.role === "toolGroup" ? <ClaudeToolGroup key={item.id} tools={item.tools ?? []} /> : <article className={`message ${item.role === "notice" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Claude"}</strong></header>{!!item.images?.length && <MessageImages sources={item.images} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} /></article>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "claude.interrupting" : "claude.working")}</p>}
     </div>
-    <form className="composer gemini-composer claude-composer" onSubmit={send}>{error && <ErrorBanner text={error} />}{thread.recovery_pending && <><p className="gemini-hint" role="status">{t("claude.recovery")}</p><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>{t("claude.confirmStopped")}</button></>}{thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}{thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <><textarea aria-label={t("claude.prompt")} placeholder={t("claude.prompt")} value={prompt} disabled={busy || blocked} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-bar"><ClaudeOptions compact model={model} mode={mode} effort={effort} setEffort={setEffort} effortSupported={thread.effort_supported} setModel={setModel} setMode={setMode} disabled={busy || blocked} />{running ? <button type="button" className="secondary-button danger composer-action" aria-label={t("gemini.interrupt")} disabled={busy || thread.status === "interrupting" || thread.server_status !== "online"} onClick={() => void interrupt()}><Square size={15} /><span>{t("gemini.interrupt")}</span></button> : <button className="primary-button composer-action" disabled={busy || blocked || !prompt.trim() || !model.trim()}><ArrowUp size={16} /><span>{t("codex.send")}</span></button>}</div></>}</form>
+    <form className="composer gemini-composer claude-composer" onSubmit={send}>{error && <ErrorBanner text={error} />}{thread.recovery_pending && <><p className="gemini-hint" role="status">{t("claude.recovery")}</p><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>{t("claude.confirmStopped")}</button></>}{thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}{thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <>
+      {images.length>0 && <div className="composer-images">{images.map(image=><figure key={image.id}><img src={image.dataURL} alt=""/><button type="button" aria-label={t("common.close")} disabled={busy} onClick={()=>setImages(current=>current.filter(item=>item.id!==image.id))}><X size={13}/></button></figure>)}</div>}
+      {imageBusy && <p className="gemini-hint" role="status">{t("gemini.preparingImages")}</p>}
+      {slashOpen && <SlashCommandMenu status={slashSection === "skills" ? skillsStatus : undefined} items={slashItems} query={slashSection ? "" : prompt.slice(1)} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashSection?()=>{setSlashSection("");setPrompt("/");}:undefined} onDismiss={()=>{setSlashDismissed(prompt);setSlashSection("");}} keyboardRef={slashKeyboardRef}/>}
+      {availableModels.error && <small className="gemini-model-error" role="status">{t("claude.modelsRefreshFailed")} {availableModels.error}</small>}
+      <textarea ref={promptRef} onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.type.startsWith("image/")).map(item=>item.getAsFile()).filter((file):file is File=>file!==null);if(files.length){event.preventDefault();void addImages(files);}}} aria-label={t("claude.prompt")} placeholder={t("claude.prompt")} value={prompt} disabled={busy || blocked} onChange={event => {setPrompt(event.target.value);setSlashDismissed("");if(!event.target.value.startsWith("/"))setSlashSection("");}} onKeyDown={event => { if(slashOpen && slashKeyboardRef.current?.(event))return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-bar"><ClaudeOptions compact requestCustom={requestCustomModel} availableModels={availableModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} effortSupported={thread.effort_supported} setModel={setModel} setMode={setMode} disabled={busy || blocked} />{running ? <button type="button" className="secondary-button danger composer-action" aria-label={t("gemini.interrupt")} disabled={busy || thread.status === "interrupting" || thread.server_status !== "online"} onClick={() => void interrupt()}><Square size={15} /><span>{t("gemini.interrupt")}</span></button> : <button className="primary-button composer-action" aria-label={t("codex.send")} disabled={busy || blocked || imageBusy || slashOpen || (!prompt.trim() && !images.length) || !model.trim()}><ArrowUp size={16} /><span>{t("codex.send")}</span></button>}</div></>}</form>
+    <Dialog open={helpOpen} title={t("claude.commandsHelp")} onClose={()=>setHelpOpen(false)}><p>{t("claude.commandsDescription")}</p><p><a href="https://code.claude.com/docs/en/headless" target="_blank" rel="noreferrer">Claude Code</a></p></Dialog>
     <ConfirmDialog open={confirming} danger title={t("claude.confirmStopped")} impact={t("claude.confirmStoppedImpact")} confirmLabel={t("claude.confirmStopped")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setConfirming(false)} onConfirm={confirmStopped} />
   </section>;
 }

@@ -12,10 +12,11 @@ export type SlashCommandItem = {
   onSelect: () => void;
 };
 
-export function SlashCommandMenu({ items, query, label, backLabel, onBack, onDismiss, keyboardRef }: {
+export function SlashCommandMenu({ items, query, label, status, backLabel, onBack, onDismiss, keyboardRef }: {
   items: SlashCommandItem[];
   query: string;
   label: string;
+  status?: string;
   backLabel?: string;
   onBack?: () => void;
   onDismiss: () => void;
@@ -46,6 +47,7 @@ export function SlashCommandMenu({ items, query, label, backLabel, onBack, onDis
 
   return <div className="slash-command-menu" role="listbox" aria-label={label}>
     {onBack && <button type="button" className="slash-command-back" onMouseDown={event => event.preventDefault()} onClick={onBack}><ArrowLeft size={15} />{backLabel}</button>}
+    {status && <p role="status" className="slash-command-status">{status}</p>}
     <div className="slash-command-items">
       {filtered.map((item, index) => { const Icon = item.icon; const previous = filtered[index - 1]; return <div className="slash-command-entry" key={item.id}>{item.section && item.section !== previous?.section && <div className="slash-command-section">{item.section}</div>}<button type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} ref={node => { itemRefs.current[index] = node; }} onMouseEnter={() => setActiveIndex(index)} onMouseDown={event => event.preventDefault()} onClick={item.onSelect}><Icon size={18} /><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.detail && <em>{item.detail}</em>}{item.selected && <Check size={16} />}</button></div>; })}
     </div>

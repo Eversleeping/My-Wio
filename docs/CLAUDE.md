@@ -20,7 +20,24 @@
 5. 同一会话同时只能运行一轮。Claude 任务与使用 Wio 工作区写锁的 Gemini 和 Git 等操作互斥；Codex 当前不使用该写锁，应自行避免同时修改同一工作区。
 6. Agent 失联且无法确认原进程状态时，Wio 不会自动重放任务或释放工作区写锁。请先在目标服务器核实原 Claude 进程确实已退出，再使用页面上的 **确认进程已停止**。历史每批加载最多 500 条事件，可继续加载更早记录。
 
-Claude 页面目前不提供图片输入、交互审批、Goal、运行中追加指令或定时任务。
+## 项目、会话菜单和输入（Agent 0.2.93+）
+
+- 项目菜单支持新建会话、置顶、重命名、创建永久 worktree、归档项目全部任务和隐藏。项目名称、置顶、隐藏及批量归档均按服务器隔离；批量归档跳过正在运行或待确认停止的任务。
+- 会话菜单支持置顶、重命名、创建定时任务、继续到新任务／新 worktree、归档、复制工作目录、Wio ID、Claude 原生 ID、深度链接和在新窗口打开。永久 worktree 复用现有 Git 创建、失败清理和工作区写锁。
+- 继续会话先在 Agent 的 `claude/forks/` 保存当前原生 transcript 快照并复制 Wio 历史；快照期间锁住源任务。首次发送时使用官方 `--resume <snapshot.jsonl> --fork-session` 创建独立原生会话，之后按新 ID 续聊。仅创建分支不会调用模型。原生 ID 在首次发送后生成；原任务之后的内容不会加入快照。保留 Agent 状态目录和 Claude 配置目录（默认 `~/.claude`，可由 `CLAUDE_CONFIG_DIR` 指定）才能恢复历史。快照不包含未提交文件的副本；新 worktree 的文件来自所选 Git 引用。
+- 两次回复之间连续的命令和工具调用默认合并折叠，显示执行数量；展开后可查看每次调用的参数、结果和失败状态。按原生工具 ID 配对结果，不重复计数；不同回复、用户消息及错误提示会分开显示。
+- 图片可通过粘贴添加，支持 PNG、JPEG、WebP，每次最多 4 张；浏览器复用现有压缩逻辑，可预览和删除，允许只发送图片。服务端校验 MIME 和实际文件类型，单张上限 2 MiB、合计 4 MiB，传输使用 `--input-format stream-json` 的 `image` / `base64` 内容块。历史中保留图片预览。
+- 每次进入或切换会话时自动刷新一次当前服务器已应用凭据对应的可用模型，使用官方 `GET /v1/models` 并处理分页；模型下拉框和 `/model` 菜单同步展示结果。实时消息和定期刷新会话记录不会重复请求模型列表，也不会覆盖当前模型。下拉框末尾提供“自定义模型…”及独立输入框；刷新失败仍可选择自定义模型输入；未应用托管凭据、仅使用 CLI 登录时保留默认别名和自定义输入。编辑凭据预设后须重新应用，避免查询的凭据与 Agent 实际使用的凭据不一致。
+- 输入 `/` 可使用键盘选择 `/model`、`/effort`、`/permissions`、`/skill`、`/skills`、`/plan`、`/new`、`/fork`、`/schedule`、`/help`。选项命令在网页生效；进入会话时主动通过 CLI SDK initialize 协议读取当前账号、项目和插件的原生技能与提示命令（要求 Agent **0.2.94+**），不发送用户消息、不调用模型、不创建持久会话。`/skill` 与 `/skills` 都能打开列表，显示描述和参数提示，支持插件命名空间及手动刷新。新发现的空列表会清除历史缓存；发现失败或旧 Agent 使用最近一次初始化的技能作为后备，并显示状态或升级提示。选择后可补充参数再发送，也可手动输入 `/skill-name `。技能由 Claude Code 原生展开。交互式终端专用命令不保证在 print 模式可用。
+- 定时任务使用控制端现有调度器，支持时区、重复频率、模型覆盖、思考程度和工具权限；可在设置中编辑、启停、删除并查看最近执行状态。Agent 离线、会话归档、忙碌或待恢复时跳过执行；旧版 Agent 要求升级。定时器保存在独立 Claude 表中，保留旧控制端读取兼容性。
+
+Claude 页面目前不提供交互审批、Goal 或运行中追加指令。上述新增功能已使用官方 Claude Code 2.1.318 对隔离的本地模拟 API 验证图片请求、同目录／新 worktree 的原生分支和技能展开；不会因此调用付费模型。
+
+## 运行中调整方向（调研）
+
+Claude Code 原生支持在工作中接收新指令。官方 SDK 的流式 `SDKUserMessage` 可设置 `priority: "next"`（默认，在当前工具完成后读取）、`"later"`（当前轮结束后处理）或 `"now"`。`now` 配合 `origin: {kind: "human"}` 可将支持后台运行的工具移至后台并在同轮读取新消息；纯文本生成或不能后台执行的工具可能需要中断当前轮。该能力从 Claude Code 2.1.286 起提供，2.1.287 扩展到 WebFetch/WebSearch；当前已验证版本 2.1.318 满足要求。
+
+Wio 当前 adapter 每轮使用一次性 stdin，发送后关闭输入流，网页运行中也会锁定输入框，因此本版本尚未接入 steer。后续需要保持双向输入、校验运行 operation ID，并补充消息队列和回执，才能正确呈现立即调整与排队状态。
 
 ## 官方参考
 
@@ -29,3 +46,12 @@ Claude 页面目前不提供图片输入、交互审批、Goal、运行中追加
 - [无头与程序化运行](https://code.claude.com/docs/en/headless)
 - [CLI 参数](https://code.claude.com/docs/en/cli-reference)
 - [权限模式](https://code.claude.com/docs/en/permissions)
+
+- [会话与分支](https://code.claude.com/docs/en/sessions)
+- [技能与斜杠命令](https://code.claude.com/docs/en/skills)
+- [结构化图片输入](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)
+
+- [Models API 与官方 SDK](https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/resources/models.py)
+
+- [工作期间消息队列](https://code.claude.com/docs/en/interactive-mode#queue-messages-while-claude-works)
+- [SDKUserMessage 与 priority](https://code.claude.com/docs/en/agent-sdk/typescript#sdkusermessage)

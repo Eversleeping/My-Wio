@@ -11,6 +11,7 @@ import (
 )
 
 type ClaudeThread struct {
+	SkillsSupported bool       `db:"-" json:"skills_supported"`
 	ID              string     `db:"id" json:"id"`
 	WorkspaceID     string     `db:"workspace_id" json:"workspace_id"`
 	SessionID       string     `db:"session_id" json:"session_id"`
@@ -19,6 +20,10 @@ type ClaudeThread struct {
 	PermissionMode  string     `db:"permission_mode" json:"permission_mode"`
 	Effort          string     `db:"effort" json:"effort"`
 	EffortSupported bool       `json:"effort_supported"`
+	InputSupported  bool       `json:"input_supported"`
+	PinnedAt        *time.Time `db:"pinned_at" json:"pinned_at"`
+	ForkSnapshotID  string     `db:"fork_snapshot_id" json:"-"`
+	ForkSessionID   string     `db:"fork_session_id" json:"-"`
 	ProjectPinnedAt *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
 	ProjectHiddenAt *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
 	Status          string     `db:"status" json:"status"`
@@ -36,10 +41,10 @@ type ClaudeThread struct {
 	RecoveryPending bool       `db:"recovery_pending" json:"recovery_pending"`
 }
 
-const claudeThreadSelect = `SELECT t.*,COALESCE(cto.effort,'') AS effort,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,
+const claudeThreadSelect = `SELECT t.*,cm.pinned_at,COALESCE(cm.fork_snapshot_id,'') AS fork_snapshot_id,COALESCE(cm.fork_session_id,'') AS fork_session_id,COALESCE(cto.effort,'') AS effort,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,
  w.server_id,s.name AS server_name,s.agent_version,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status,
  CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending
- FROM claude_threads t LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id` + projectServerJoin
+ FROM claude_threads t LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id` + projectServerJoin
 
 func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThread, error) {
 	condition := "t.archived_at IS NULL"
@@ -47,9 +52,11 @@ func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThrea
 		condition = "t.archived_at IS NOT NULL"
 	}
 	threads := []ClaudeThread{}
-	err := s.DB.SelectContext(ctx, &threads, s.Q(claudeThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &threads, s.Q(claudeThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN cm.pinned_at IS NULL THEN 1 ELSE 0 END,cm.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range threads {
 		threads[i].EffortSupported = buildinfo.SupportsClaudeEffort(threads[i].AgentVersion)
+		threads[i].SkillsSupported = buildinfo.SupportsClaudeSkills(threads[i].AgentVersion)
+		threads[i].InputSupported = buildinfo.SupportsClaudeInput(threads[i].AgentVersion)
 	}
 	return threads, err
 }
@@ -58,6 +65,8 @@ func (s *Store) ClaudeThread(ctx context.Context, id string) (ClaudeThread, erro
 	var thread ClaudeThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(claudeThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	thread.EffortSupported = buildinfo.SupportsClaudeEffort(thread.AgentVersion)
+	thread.SkillsSupported = buildinfo.SupportsClaudeSkills(thread.AgentVersion)
+	thread.InputSupported = buildinfo.SupportsClaudeInput(thread.AgentVersion)
 	return thread, err
 }
 
@@ -92,7 +101,7 @@ func (s *Store) CreateClaudeThread(ctx context.Context, workspaceID, model, mode
 }
 
 // QueueClaudeTurn atomically claims the thread and the shared workspace write lock.
-func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt, model, mode, effort string) (protocol.StreamEvent, error) {
+func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt, model, mode, effort string, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return protocol.StreamEvent{}, err
@@ -118,6 +127,9 @@ func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt
 	}
 	opID, now := NewID(), time.Now().UTC()
 	title := []rune(prompt)
+	if len(title) == 0 {
+		title = []rune("Image")
+	}
 	if len(title) > 60 {
 		title = title[:60]
 	}
@@ -137,6 +149,11 @@ func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt
 		return protocol.StreamEvent{}, err
 	}
 	command := protocol.ClaudeTurnCommand{ThreadID: thread.ID, Workspace: thread.Path, SessionID: sessionID, Prompt: prompt, Model: model, PermissionMode: mode, Effort: effort}
+	command.Images = images
+	if sessionID == "" {
+		command.ForkSnapshotID = thread.ForkSnapshotID
+		command.ForkSessionID = thread.ForkSessionID
+	}
 	payload, err := json.Marshal(command)
 	if err != nil {
 		return protocol.StreamEvent{}, err
@@ -145,7 +162,7 @@ func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt
 	if err != nil {
 		return protocol.StreamEvent{}, err
 	}
-	raw, _ := json.Marshal(map[string]string{"text": prompt, "operation_id": opID})
+	raw, _ := json.Marshal(map[string]any{"text": prompt, "images": images, "operation_id": opID})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "claude.user.message", OccurredAt: now, Payload: raw}
 	if err := tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), thread.ID); err != nil {
 		return event, err
@@ -180,6 +197,9 @@ func (s *Store) InterruptClaudeTurn(ctx context.Context, thread ClaudeThread) er
 	status := "interrupting"
 	if count == 1 {
 		status = "interrupted"
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE claude_scheduled_tasks SET last_run_status='cancelled',last_run_message='Cancelled before dispatch',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
+			return err
+		}
 	}
 	result, err = tx.ExecContext(ctx, s.Q("UPDATE claude_threads SET status=?,updated_at=? WHERE id=? AND operation_id=? AND (status IN ('queued','running') OR (status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('delivered','running'))))"), status, time.Now().UTC(), thread.ID, thread.OperationID)
 	if err != nil {
@@ -219,6 +239,9 @@ func (s *Store) ConfirmClaudeStopped(ctx context.Context, threadID, operationID 
 		return ErrThreadActive
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',result=?,completed_at=? WHERE id=?"), "Process exit confirmed by user", time.Now().UTC(), operationID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE claude_scheduled_tasks SET last_run_status='cancelled',last_run_message='Process exit confirmed by user',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), operationID); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -12,6 +12,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/geminiapi"
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/schedule"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -138,7 +139,7 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 			return store.ScheduledTaskInput{}, errors.New("scheduled Agent kind cannot be changed")
 		}
 	}
-	if kind != "codex" && kind != "gemini" {
+	if kind != "codex" && kind != "gemini" && kind != "claude" {
 		return store.ScheduledTaskInput{}, errors.New("invalid Agent kind")
 	}
 	threadID := value(request.ThreadID, "")
@@ -175,7 +176,7 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 			approval = existing.ApprovalMode
 		}
 	}
-	if kind == "gemini" && existing == nil && request.ApprovalMode == nil {
+	if (kind == "gemini" || kind == "claude") && existing == nil && request.ApprovalMode == nil {
 		approval = "default"
 	}
 	if timezone == "" {
@@ -203,13 +204,13 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	if utf8.RuneCountInString(model) > 128 {
 		return store.ScheduledTaskInput{}, errors.New("model is too long")
 	}
-	if kind == "codex" && level != "" {
+	if kind != "gemini" && level != "" {
 		return store.ScheduledTaskInput{}, errors.New("thinking_level is only supported for Gemini")
 	}
 	if kind == "gemini" && reasoning != "" {
 		return store.ScheduledTaskInput{}, errors.New("Gemini does not support Codex reasoning_effort")
 	}
-	if reasoning != "" && !validReasoningEffort(reasoning) {
+	if reasoning != "" && ((kind == "claude" && !protocol.ValidClaudeEffort(reasoning)) || (kind != "claude" && !validReasoningEffort(reasoning))) {
 		return store.ScheduledTaskInput{}, errors.New("invalid reasoning_effort")
 	}
 	if (kind == "codex" && approval != "on-request" && approval != "untrusted" && approval != "never") || (kind == "gemini" && approval != "default" && approval != "auto_edit" && approval != "yolo") {
@@ -238,6 +239,21 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 		}
 		if model != "" && !credentialModelPattern.MatchString(model) {
 			return store.ScheduledTaskInput{}, errors.New("invalid Gemini model")
+		}
+	} else if kind == "claude" {
+		thread, err := a.store.ClaudeThread(r.Context(), threadID)
+		if err != nil {
+			return store.ScheduledTaskInput{}, errors.New("Claude session not found")
+		}
+		if !buildinfo.SupportsClaudeInput(thread.AgentVersion) {
+			return store.ScheduledTaskInput{}, errors.New("update Claude Agent to " + buildinfo.MinimumClaudeInputVersion + " or newer")
+		}
+		selectedModel := model
+		if selectedModel == "" {
+			selectedModel = thread.Model
+		}
+		if !validClaudeOptions(selectedModel, approval) || !protocol.ValidClaudeEffort(reasoning) {
+			return store.ScheduledTaskInput{}, errors.New("invalid Claude model, effort or permission mode")
 		}
 	} else if _, err := a.store.Thread(r.Context(), threadID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
