@@ -59,7 +59,7 @@ func init() {
 	if mode == "failed" {
 		fmt.Println(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["model unavailable"]}`)
 	} else if mode != "missing-result" {
-		fmt.Println(`{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":2},"permission_denials":[]}`)
+		fmt.Println(`{"type":"result","uuid":"result-uuid","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":2},"permission_denials":[]}`)
 	}
 	os.Exit(0)
 }
@@ -98,6 +98,9 @@ func TestRunStreamsResumesAndKeepsPromptOffArguments(t *testing.T) {
 		kinds += event.Kind + " "
 		if event.Kind == "claude.message" {
 			text += payload["text"].(string)
+		}
+		if event.Kind == "claude.result" && payload["result_id"] != "result-uuid" {
+			t.Fatalf("native result identifier missing: %s", event.Payload)
 		}
 	}
 	if text != "Hello world" || !strings.Contains(kinds, "claude.tool_use") || !strings.Contains(kinds, "claude.tool_result") || !strings.Contains(kinds, "claude.result") {

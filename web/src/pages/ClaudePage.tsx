@@ -5,6 +5,7 @@ import { Dialog, ErrorBanner, Field, WorkspaceFilesPanel, message, type FilePrev
 import { SlashCommandMenu, type SlashCommandItem } from "../SlashCommandMenu";
 import { compressImage } from "../imageCompression";
 import { MessageImages } from "../components/MessageImages";
+import { SessionUsage } from "../components/SessionUsage";
 import { ClaudeModelPicker } from "../components/ClaudeModelPicker";
 import { ClaudeToolGroup } from "../components/ClaudeToolGroup";
 import { claudeDisplayEvents } from "../claudeContent";
@@ -295,7 +296,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     try { const older = await api<StreamEvent[]>(`/claude/threads/${thread.id}/events?before=${allEvents[0].sequence}`); mergeEvents(older); }
     catch (err) { setError(message(err)); } finally { setHistoryBusy(false); }
   };
-  return <section className="session-panel gemini-session"><header className="session-header"><div><h2>{thread.title}</h2><span>{thread.server_name}<i />{thread.path}</span></div><div className="session-actions"><Status value={thread.status} /><button className="icon-button" title={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} aria-label={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} disabled={busy || running || thread.recovery_pending} onClick={onArchive}><Archive size={16} /></button></div></header>
+  return <section className="session-panel gemini-session"><header className="session-header"><div className="session-heading"><h2>{thread.title}</h2><span className="session-meta" title={`${thread.server_name} · ${thread.path}`}>{thread.server_name}<i />{thread.path}</span></div><div className="session-actions"><Status value={thread.status} /><button className="icon-button" title={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} aria-label={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} disabled={busy || running || thread.recovery_pending} onClick={onArchive}><Archive size={16} /></button></div><SessionUsage provider="claude" threadID={thread.id} revision={revision} running={running} /></header>
     <div ref={stream} className="gemini-stream conversation-stream" role="log" aria-label={t("gemini.conversation")} onScroll={() => { if (stream.current) follow.current = stream.current.scrollHeight - stream.current.scrollTop - stream.current.clientHeight < 100; }}>
       {allEvents.length > 0 && allEvents[0].sequence > 1 && <button className="secondary-button" disabled={historyBusy} onClick={() => void earlier()}>{t("claude.loadEarlier")}</button>}
       {events.error && <ErrorState error={events.error} reload={events.reload} />}

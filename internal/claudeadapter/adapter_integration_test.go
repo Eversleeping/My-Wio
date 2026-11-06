@@ -83,15 +83,27 @@ func TestRealClaudeCLIWithLocalAPI(t *testing.T) {
 	var toolDetails []string
 	run := func() {
 		t.Helper()
+		var resultID string
 		err := Run(ctx, cli, "local-op", command, func(event protocol.StreamEvent) error {
 			var data struct {
 				Text      string `json:"text"`
 				SessionID string `json:"session_id"`
+				ResultID  string `json:"result_id"`
+				Usage     struct {
+					InputTokens  int64 `json:"input_tokens"`
+					OutputTokens int64 `json:"output_tokens"`
+				} `json:"usage"`
 			}
 			if err := json.Unmarshal(event.Payload, &data); err != nil {
 				return err
 			}
 			text += data.Text
+			if event.Kind == "claude.result" {
+				resultID = data.ResultID
+				if resultID == "" || data.Usage.InputTokens <= 0 || data.Usage.OutputTokens <= 0 {
+					return fmt.Errorf("native result identifier or token usage missing: %s", event.Payload)
+				}
+			}
 			toolUse = toolUse || event.Kind == "claude.tool_use"
 			toolResult = toolResult || (event.Kind == "claude.tool_result" && strings.Contains(string(event.Payload), "local-read-marker"))
 			if event.Kind == "claude.tool_use" || event.Kind == "claude.tool_result" {
@@ -105,7 +117,7 @@ func TestRealClaudeCLIWithLocalAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CLI failed with local API after %d requests: %v", requests.Load(), err)
 		}
-		if text != "Hello from local API." || session == "" {
+		if text != "Hello from local API." || session == "" || resultID == "" {
 			t.Fatalf("unexpected CLI stream: text=%q session=%q", text, session)
 		}
 	}

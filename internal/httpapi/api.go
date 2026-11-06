@@ -104,6 +104,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/claude/threads", api.createClaudeThread)
 			private.Get("/claude/threads/{threadID}", api.claudeThread)
 			private.Get("/claude/threads/{threadID}/events", api.claudeEvents)
+			private.Get("/claude/threads/{threadID}/usage", api.claudeUsage)
 			private.Post("/claude/threads/{threadID}/turns", api.startClaudeTurn)
 			private.Post("/claude/threads/{threadID}/fork", api.forkClaudeThread)
 			private.Post("/claude/threads/{threadID}/fork-worktree", api.forkClaudeWorktree)

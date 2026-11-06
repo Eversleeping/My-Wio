@@ -21,6 +21,19 @@ func (a *API) geminiUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, usage)
 }
 
+func (a *API) claudeUsage(w http.ResponseWriter, r *http.Request) {
+	thread, ok := a.loadClaudeThread(w, r)
+	if !ok {
+		return
+	}
+	usage, err := a.store.SessionUsage(r.Context(), thread.ID, "claude", thread.Status == "running" || thread.Status == "interrupting")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load session usage")
+		return
+	}
+	writeJSON(w, http.StatusOK, usage)
+}
+
 func (a *API) threadUsage(w http.ResponseWriter, r *http.Request) {
 	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
 	if errors.Is(err, sql.ErrNoRows) {

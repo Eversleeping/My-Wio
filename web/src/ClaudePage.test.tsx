@@ -25,6 +25,7 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
     else if (url === "/api/workspaces") body = [{ id: "workspace-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
     else if (url.startsWith("/api/claude/threads?") && options.selected) body = [thread];
     else if (url === "/api/claude/threads/claude-1") body = thread;
+    else if (url === "/api/claude/threads/claude-1/usage") body = {input_tokens:18626887,output_tokens:89133,output_per_second:26.24,partial:false};
     else if (url.startsWith("/api/claude/threads/claude-1/events")) body = options.events ?? [
       { event_id: "u", stream_id: thread.id, sequence: 1, kind: "claude.user.message", payload: { text: "Hello" } },
       { event_id: "a1", stream_id: thread.id, sequence: 2, kind: "claude.message", payload: { text: "Hi " } },
@@ -38,6 +39,16 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
+
+test("shows token totals and average output below the Claude session title", async () => {
+  setup({selected:true});
+  await screen.findByRole("heading",{name:"Claude",level:2});
+  const header = document.querySelector(".gemini-session .session-header")! as HTMLElement;
+  expect(await within(header).findByText("Input 18,626,887 tokens")).toBeInTheDocument();
+  expect(within(header).getByText("Output 89,133 tokens")).toBeInTheDocument();
+  expect(within(header).getByText("Average output 26.24 tokens/sec")).toBeInTheDocument();
+  expect(within(header).getByText("In 18.63M")).toHaveAttribute("title","Input 18,626,887 tokens");
+});
 
 test("steers a running Claude task and switches between stopping and sending", async () => {
   const { user, requests } = setup({selected:true,status:"running",steerSupported:true,steerReady:true});

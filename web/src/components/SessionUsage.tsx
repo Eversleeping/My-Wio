@@ -26,7 +26,7 @@ export function formatUsageRate(value: unknown, language: string) {
   return new Intl.NumberFormat(language, value > 0 && value < 0.01 ? { maximumSignificantDigits: 2 } : { maximumFractionDigits: 2 }).format(value);
 }
 
-export function SessionUsage({ provider, threadID, revision, running }: { provider: "gemini" | "codex"; threadID: string; revision: unknown; running: boolean }) {
+export function SessionUsage({ provider, threadID, revision, running }: { provider: "gemini" | "codex" | "claude"; threadID: string; revision: unknown; running: boolean }) {
   const { t, language } = useI18n();
   const [tick, setTick] = useState(0);
   const throttled = useThrottledValue(revision, 1500);
@@ -35,7 +35,7 @@ export function SessionUsage({ provider, threadID, revision, running }: { provid
     const timer = window.setInterval(() => { if (!document.hidden) setTick(value => value + 1); }, 5000);
     return () => window.clearInterval(timer);
   }, [running]);
-  const path = provider === "gemini" ? `/gemini/threads/${threadID}/usage` : `/threads/${threadID}/usage`;
+  const path = provider === "codex" ? `/threads/${threadID}/usage` : `/${provider}/threads/${threadID}/usage`;
   const usage = useData<Usage>(path, `${throttled}:${tick}`);
   const input = formatUsageNumber(usage.data?.input_tokens, language);
   const output = formatUsageNumber(usage.data?.output_tokens, language);

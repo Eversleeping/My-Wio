@@ -5,7 +5,7 @@ import { formatCompactUsageNumber, formatUsageRate, SessionUsage } from "./Sessi
 
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
-test.each(["gemini", "codex"] as const)("shows %s session totals and an unavailable rate for incomplete history", async provider => {
+test.each(["gemini", "codex", "claude"] as const)("shows %s session totals and an unavailable rate for incomplete history", async provider => {
   window.localStorage.setItem("wio_language", "en");
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ input_tokens: 1234567, output_tokens: 8910, output_per_second: null, partial: true }), { status: 200 }));
   vi.stubGlobal("fetch", fetcher);
@@ -16,10 +16,10 @@ test.each(["gemini", "codex"] as const)("shows %s session totals and an unavaila
   expect(screen.getByText("Out 8.91K")).toHaveAttribute("title", "Output 8,910 tokens");
   expect(screen.getByText("Average output — tokens/sec")).toBeInTheDocument();
   expect(screen.getByText("Incomplete records")).toBeInTheDocument();
-  expect(fetcher).toHaveBeenCalledWith(`/api/${provider === "gemini" ? "gemini/" : ""}threads/thread-1/usage`, expect.anything());
+  expect(fetcher).toHaveBeenCalledWith(`/api/${provider === "codex" ? "" : `${provider}/`}threads/thread-1/usage`, expect.anything());
 });
 
-test.each(["gemini", "codex"] as const)("shows the %s average output rate per second", async provider => {
+test.each(["gemini", "codex", "claude"] as const)("shows the %s average output rate per second", async provider => {
   window.localStorage.setItem("wio_language", "zh-CN");
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ input_tokens: 999999, output_tokens: 100, output_per_second: 2.345, partial: false }), { status: 200 })));
   render(<I18nProvider><SessionUsage provider={provider} threadID="thread-1" revision={0} running={false} /></I18nProvider>);

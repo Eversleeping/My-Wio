@@ -250,7 +250,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 		case "result":
 			gotResult = true
 			success = !data.IsError && data.Subtype == "success"
-			streamErr = send("result", map[string]any{"success": success, "errors": data.Errors, "usage": data.Usage, "permission_denials": data.PermissionDenials})
+			streamErr = send("result", map[string]any{"result_id": data.UUID, "success": success, "errors": data.Errors, "usage": data.Usage, "permission_denials": data.PermissionDenials})
 			if streamErr == nil && live != nil {
 				streamErr = live.result(data.QueuedTurnCount)
 			}

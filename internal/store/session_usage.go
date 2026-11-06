@@ -33,6 +33,9 @@ func usageCount(values ...json.RawMessage) *int64 {
 }
 
 func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, running bool) (SessionUsage, error) {
+	if provider == "claude" {
+		return s.claudeSessionUsage(ctx, threadID, running)
+	}
 	usage := SessionUsage{}
 	kinds := "'gemini.init','gemini.result','gemini.goal.usage','gemini.turn.completed'"
 	if provider == "codex" {
