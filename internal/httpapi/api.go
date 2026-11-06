@@ -264,6 +264,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Get("/deployments", api.deployments)
 			private.Get("/operations", api.operations)
 			private.Get("/operations/{operationID}", api.operationStatus)
+			private.Post("/operations/{operationID}/interrupt", api.interruptOperation)
 			private.Get("/deployments/{deploymentID}", api.deploymentDetails)
 			private.Delete("/deployments/{deploymentID}", api.deleteDeployment)
 			private.Post("/deployment-targets/{targetID}/deploy", api.startDeployment)

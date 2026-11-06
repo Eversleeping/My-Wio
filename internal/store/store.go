@@ -21,6 +21,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -1792,26 +1793,30 @@ type Operation struct {
 }
 
 type OperationSummary struct {
-	ID            string     `db:"id" json:"id"`
-	ServerID      string     `db:"server_id" json:"server_id"`
-	ServerName    string     `db:"server_name" json:"server_name"`
-	ProjectID     string     `db:"project_id" json:"project_id"`
-	ProjectName   string     `db:"project_name" json:"project_name"`
-	WorkspaceID   string     `db:"workspace_id" json:"workspace_id"`
-	WorkspacePath string     `db:"workspace_path" json:"workspace_path"`
-	WorkspaceName string     `db:"workspace_name" json:"workspace_name"`
-	ThreadID      string     `db:"thread_id" json:"thread_id"`
-	ThreadTitle   string     `db:"thread_title" json:"thread_title"`
-	ResourceType  string     `db:"resource_type" json:"resource_type"`
-	ResourceID    string     `db:"resource_id" json:"resource_id"`
-	Kind          string     `db:"kind" json:"kind"`
-	Status        string     `db:"status" json:"status"`
-	Result        string     `db:"result" json:"result"`
-	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt     string     `db:"updated_at" json:"updated_at"`
-	DeliveredAt   *time.Time `db:"delivered_at" json:"delivered_at"`
-	StartedAt     *time.Time `db:"started_at" json:"started_at"`
-	CompletedAt   *time.Time `db:"completed_at" json:"completed_at"`
+	AgentVersion       string     `db:"agent_version" json:"-"`
+	InterruptSupported bool       `json:"interrupt_supported"`
+	InterruptStatus    string     `db:"interrupt_status" json:"interrupt_status"`
+	InterruptError     string     `db:"interrupt_error" json:"interrupt_error"`
+	ID                 string     `db:"id" json:"id"`
+	ServerID           string     `db:"server_id" json:"server_id"`
+	ServerName         string     `db:"server_name" json:"server_name"`
+	ProjectID          string     `db:"project_id" json:"project_id"`
+	ProjectName        string     `db:"project_name" json:"project_name"`
+	WorkspaceID        string     `db:"workspace_id" json:"workspace_id"`
+	WorkspacePath      string     `db:"workspace_path" json:"workspace_path"`
+	WorkspaceName      string     `db:"workspace_name" json:"workspace_name"`
+	ThreadID           string     `db:"thread_id" json:"thread_id"`
+	ThreadTitle        string     `db:"thread_title" json:"thread_title"`
+	ResourceType       string     `db:"resource_type" json:"resource_type"`
+	ResourceID         string     `db:"resource_id" json:"resource_id"`
+	Kind               string     `db:"kind" json:"kind"`
+	Status             string     `db:"status" json:"status"`
+	Result             string     `db:"result" json:"result"`
+	CreatedAt          time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt          string     `db:"updated_at" json:"updated_at"`
+	DeliveredAt        *time.Time `db:"delivered_at" json:"delivered_at"`
+	StartedAt          *time.Time `db:"started_at" json:"started_at"`
+	CompletedAt        *time.Time `db:"completed_at" json:"completed_at"`
 }
 
 var ErrInvalidOperationStatus = errors.New("invalid operation status")
@@ -1833,7 +1838,10 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 	}
 	limit = operationListLimit(limit)
 	const updatedAt = "COALESCE(o.completed_at,o.started_at,o.delivered_at,o.created_at)"
-	query := `SELECT o.id,o.server_id,COALESCE(s.name,'') server_name,COALESCE(o.project_id,'') project_id,COALESCE(p.name,'') project_name,
+	query := `SELECT o.id,o.server_id,COALESCE(s.name,'') server_name,COALESCE(s.agent_version,'') agent_version,
+		COALESCE((SELECT i.status FROM agent_operations i WHERE i.kind='operation.interrupt' AND i.idempotency_key>='operation-interrupt:' || o.id || ':' AND i.idempotency_key<'operation-interrupt:' || o.id || ';' ORDER BY i.created_at DESC,i.id DESC LIMIT 1),'') interrupt_status,
+		COALESCE((SELECT i.result FROM agent_operations i WHERE i.kind='operation.interrupt' AND i.idempotency_key>='operation-interrupt:' || o.id || ':' AND i.idempotency_key<'operation-interrupt:' || o.id || ';' ORDER BY i.created_at DESC,i.id DESC LIMIT 1),'') interrupt_error,
+		COALESCE(o.project_id,'') project_id,COALESCE(p.name,'') project_name,
 		COALESCE(o.workspace_id,'') workspace_id,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,
 		COALESCE(o.thread_id,'') thread_id,COALESCE(t.title,'') thread_title,
 		CASE WHEN o.thread_id IS NOT NULL THEN 'thread' WHEN o.workspace_id IS NOT NULL THEN 'workspace' WHEN o.project_id IS NOT NULL THEN 'project' ELSE 'server' END resource_type,
@@ -1850,6 +1858,9 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 	if err := s.DB.SelectContext(ctx, &out, s.Q(query), status, canceledStatus, status, limit); err != nil {
 		return nil, err
 	}
+	for i := range out {
+		out[i].InterruptSupported = protocol.CanInterruptOperation(out[i].Kind) && buildinfo.SupportsOperationInterrupt(out[i].AgentVersion)
+	}
 	return out, nil
 }
 
@@ -1863,7 +1874,8 @@ func (s *Store) Operation(ctx context.Context, id string) (Operation, error) {
 
 func (s *Store) PendingOperations(ctx context.Context, serverID string) ([]Operation, error) {
 	var out []Operation
-	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+" WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<? AND kind NOT IN ('gemini.turn.start','gemini.turn.rewrite','claude.turn.start'))) ORDER BY created_at LIMIT 100"), serverID, time.Now().UTC().Add(-30*time.Second))
+	cutoff := time.Now().UTC().Add(-30 * time.Second)
+	err := s.DB.SelectContext(ctx, &out, s.Q(operationSelect+" WHERE server_id=? AND (status='queued' OR (status='delivered' AND delivered_at<? AND kind NOT IN ('gemini.turn.start','gemini.turn.rewrite','claude.turn.start')) OR (kind='operation.interrupt' AND status='running' AND COALESCE(started_at,delivered_at,created_at)<?)) ORDER BY CASE WHEN kind='operation.interrupt' THEN 0 ELSE 1 END,created_at LIMIT 100"), serverID, cutoff, cutoff)
 	return out, err
 }
 

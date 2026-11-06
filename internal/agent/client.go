@@ -289,7 +289,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			c.seenMu.Lock()
 			result := execution.result
 			c.seenMu.Unlock()
-			_ = c.queue("operation_result", result, true)
+			c.replayOperationResult(parent, envelope, result)
 		case <-parent.Done():
 		}
 		return
@@ -300,7 +300,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if err != nil {
 			result = protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: "could not read previous operation result; refusing to repeat operation"}
 		}
-		_ = c.queue("operation_result", result, true)
+		c.replayOperationResult(parent, envelope, result)
 		return
 	}
 	ctx, cancel := operationContext(parent, envelope.Kind)
@@ -317,6 +317,13 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	var err error
 	if (envelope.Kind == "claude.thread.fork" || envelope.Kind == "gemini.thread.fork" || envelope.Kind == "git.worktree.create") && c.agentUpdatePending() {
 		err = errors.New("Agent update is in progress; retry the task after it reconnects")
+	} else if envelope.Kind == "operation.interrupt" {
+		var command protocol.OperationInterruptCommand
+		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+			stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
+			err = c.interruptOperation(stopContext, command)
+			stopCancel()
+		}
 	} else if envelope.Kind == "agent.update" {
 		var command protocol.AgentUpdateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
@@ -639,6 +646,9 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	message := ""
 	if err != nil {
 		status = "failed"
+		if protocol.CanInterruptOperation(envelope.Kind) && errors.Is(ctx.Err(), context.Canceled) {
+			status = "cancelled"
+		}
 		if (envelope.Kind == "gemini.turn.start" || envelope.Kind == "gemini.turn.rewrite" || envelope.Kind == "claude.turn.start") && (errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
 			status = "interrupted"
 		}
@@ -1211,6 +1221,9 @@ func (c *Client) enqueueMetrics(ctx context.Context) error {
 func (c *Client) enqueueInventory(ctx context.Context) error {
 	inventory, err := scanner.Discover(ctx, c.inventoryRoots(), 200)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return c.queue("inventory", inventory, false)

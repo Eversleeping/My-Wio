@@ -5,7 +5,13 @@ import (
 	"strings"
 )
 
-var Version = "0.2.95"
+var Version = "0.2.96"
+
+const MinimumOperationInterruptVersion = "0.2.96"
+
+func SupportsOperationInterrupt(version string) bool {
+	return atLeast(version, MinimumOperationInterruptVersion)
+}
 
 const MinimumClaudeSteerVersion = "0.2.95"
 

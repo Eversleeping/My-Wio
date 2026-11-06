@@ -311,6 +311,13 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
 			return nil
 		}
+		if result.Status == "cancelled" && protocol.CanInterruptOperation(operation.Kind) {
+			completed, err := g.store.CompleteInterruptedOperation(ctx, operation, result)
+			if err != nil || !completed {
+				return err
+			}
+			return publishOperationResult(ctx, g, serverID, result)
+		}
 		geminiTurn := operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "claude.turn.start"
 		geminiInterrupted := geminiTurn && (result.Status == "interrupted" || result.Status == "cancelled" || (result.Status == "failed" && result.Message == context.Canceled.Error()))
 		if geminiInterrupted {
