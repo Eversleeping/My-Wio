@@ -1,16 +1,25 @@
+import type { Question, QuestionValue } from "./components/UserInputPrompt";
 import type { StreamEvent } from "./types";
 
 export type ClaudeToolItem = { id: string; name: string; input?: string; output?: string; failed?: boolean };
-export type ClaudeDisplayItem = { id: string; endEventID?: string; role: "user" | "assistant" | "toolGroup" | "notice"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
+export type ClaudeDisplayItem = { id: string; endEventID?: string; operationID?: string; questions?: Question[]; answers?: Record<string, QuestionValue>; cancelled?: boolean; role: "user" | "assistant" | "toolGroup" | "notice" | "question"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
 
 export function claudeDisplayEvents(events: StreamEvent[], denied: string): ClaudeDisplayItem[] {
   const items: ClaudeDisplayItem[] = [];
+  const questionTools = new Set(events.filter(event=>event.kind==="claude.tool_use" && (event.payload as {name?:string}).name==="AskUserQuestion").map(event=>(event.payload as {id?:string}).id));
   let toolOperation = "";
   let toolsByID = new Map<string, ClaudeToolItem>();
   for (const event of events) {
     const p = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
     const text = typeof p.text === "string" ? p.text : "";
-    if (event.kind === "claude.tool_use" || event.kind === "claude.tool_result") {
+    if (event.kind === "claude.question") {
+      items.push({ id:event.event_id,role:"question",text:"",operationID:String(p.operation_id ?? ""),questions:Array.isArray(p.questions) ? p.questions as Question[] : [] });
+    } else if (event.kind === "claude.question.answered" || event.kind === "claude.question.cancelled") {
+      const item=items.find(item=>item.role==="question" && item.id===p.request_id);
+      if(item && event.kind === "claude.question.cancelled")item.cancelled=true;
+      if(item && p.answers && typeof p.answers==="object")item.answers=Object.fromEntries(Object.entries(p.answers).map(([id,value])=>{ const answers=(value as {answers?:string[]}).answers ?? []; return [id,item.questions?.find(q=>q.id===id)?.multiSelect ? answers : answers[0] ?? ""]; }));
+    } else if (event.kind === "claude.tool_use" || event.kind === "claude.tool_result") {
+      if (questionTools.has(p.id as string)) continue;
       const operation = typeof p.operation_id === "string" ? p.operation_id : "";
       let group = items.at(-1);
       if (group?.role !== "toolGroup" || toolOperation !== operation) {

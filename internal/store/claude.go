@@ -11,39 +11,40 @@ import (
 )
 
 type ClaudeThread struct {
-	RewriteSupported bool       `db:"-" json:"rewrite_supported"`
-	SteerSupported   bool       `db:"-" json:"steer_supported"`
-	SteerReady       bool       `db:"-" json:"steer_ready"`
-	ClaudeVersion    string     `db:"claude_version" json:"-"`
-	SteerState       string     `db:"steer_state" json:"-"`
-	SkillsSupported  bool       `db:"-" json:"skills_supported"`
-	ID               string     `db:"id" json:"id"`
-	WorkspaceID      string     `db:"workspace_id" json:"workspace_id"`
-	SessionID        string     `db:"session_id" json:"session_id"`
-	Title            string     `db:"title" json:"title"`
-	Model            string     `db:"model" json:"model"`
-	PermissionMode   string     `db:"permission_mode" json:"permission_mode"`
-	Effort           string     `db:"effort" json:"effort"`
-	EffortSupported  bool       `json:"effort_supported"`
-	InputSupported   bool       `json:"input_supported"`
-	PinnedAt         *time.Time `db:"pinned_at" json:"pinned_at"`
-	ForkSnapshotID   string     `db:"fork_snapshot_id" json:"-"`
-	ForkSessionID    string     `db:"fork_session_id" json:"-"`
-	ProjectPinnedAt  *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
-	ProjectHiddenAt  *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
-	Status           string     `db:"status" json:"status"`
-	OperationID      string     `db:"operation_id" json:"operation_id"`
-	ArchivedAt       *time.Time `db:"archived_at" json:"archived_at"`
-	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt        time.Time  `db:"updated_at" json:"updated_at"`
-	Path             string     `db:"path" json:"path"`
-	ProjectID        string     `db:"project_id" json:"project_id"`
-	ProjectName      string     `db:"project_name" json:"project_name"`
-	ServerID         string     `db:"server_id" json:"server_id"`
-	ServerName       string     `db:"server_name" json:"server_name"`
-	ServerStatus     string     `db:"server_status" json:"server_status"`
-	AgentVersion     string     `db:"agent_version" json:"-"`
-	RecoveryPending  bool       `db:"recovery_pending" json:"recovery_pending"`
+	QuestionsSupported bool       `db:"-" json:"questions_supported"`
+	RewriteSupported   bool       `db:"-" json:"rewrite_supported"`
+	SteerSupported     bool       `db:"-" json:"steer_supported"`
+	SteerReady         bool       `db:"-" json:"steer_ready"`
+	ClaudeVersion      string     `db:"claude_version" json:"-"`
+	SteerState         string     `db:"steer_state" json:"-"`
+	SkillsSupported    bool       `db:"-" json:"skills_supported"`
+	ID                 string     `db:"id" json:"id"`
+	WorkspaceID        string     `db:"workspace_id" json:"workspace_id"`
+	SessionID          string     `db:"session_id" json:"session_id"`
+	Title              string     `db:"title" json:"title"`
+	Model              string     `db:"model" json:"model"`
+	PermissionMode     string     `db:"permission_mode" json:"permission_mode"`
+	Effort             string     `db:"effort" json:"effort"`
+	EffortSupported    bool       `json:"effort_supported"`
+	InputSupported     bool       `json:"input_supported"`
+	PinnedAt           *time.Time `db:"pinned_at" json:"pinned_at"`
+	ForkSnapshotID     string     `db:"fork_snapshot_id" json:"-"`
+	ForkSessionID      string     `db:"fork_session_id" json:"-"`
+	ProjectPinnedAt    *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
+	ProjectHiddenAt    *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
+	Status             string     `db:"status" json:"status"`
+	OperationID        string     `db:"operation_id" json:"operation_id"`
+	ArchivedAt         *time.Time `db:"archived_at" json:"archived_at"`
+	CreatedAt          time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time  `db:"updated_at" json:"updated_at"`
+	Path               string     `db:"path" json:"path"`
+	ProjectID          string     `db:"project_id" json:"project_id"`
+	ProjectName        string     `db:"project_name" json:"project_name"`
+	ServerID           string     `db:"server_id" json:"server_id"`
+	ServerName         string     `db:"server_name" json:"server_name"`
+	ServerStatus       string     `db:"server_status" json:"server_status"`
+	AgentVersion       string     `db:"agent_version" json:"-"`
+	RecoveryPending    bool       `db:"recovery_pending" json:"recovery_pending"`
 }
 
 const claudeThreadSelect = `SELECT t.*,cm.pinned_at,COALESCE(cm.fork_snapshot_id,'') AS fork_snapshot_id,COALESCE(cm.fork_session_id,'') AS fork_session_id,COALESCE(cto.effort,'') AS effort,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,
@@ -62,6 +63,7 @@ func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThrea
 	for i := range threads {
 		threads[i].RewriteSupported = buildinfo.SupportsClaudeRewrite(threads[i].AgentVersion)
 		threads[i].setSteerCapability()
+		threads[i].QuestionsSupported = buildinfo.SupportsClaudeQuestions(threads[i].AgentVersion, threads[i].ClaudeVersion)
 		threads[i].EffortSupported = buildinfo.SupportsClaudeEffort(threads[i].AgentVersion)
 		threads[i].SkillsSupported = buildinfo.SupportsClaudeSkills(threads[i].AgentVersion)
 		threads[i].InputSupported = buildinfo.SupportsClaudeInput(threads[i].AgentVersion)
@@ -73,6 +75,7 @@ func (s *Store) ClaudeThread(ctx context.Context, id string) (ClaudeThread, erro
 	var thread ClaudeThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(claudeThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	thread.setSteerCapability()
+	thread.QuestionsSupported = buildinfo.SupportsClaudeQuestions(thread.AgentVersion, thread.ClaudeVersion)
 	thread.RewriteSupported = buildinfo.SupportsClaudeRewrite(thread.AgentVersion)
 	thread.EffortSupported = buildinfo.SupportsClaudeEffort(thread.AgentVersion)
 	thread.SkillsSupported = buildinfo.SupportsClaudeSkills(thread.AgentVersion)
@@ -168,6 +171,7 @@ func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editI
 	}
 	command := protocol.ClaudeTurnCommand{ThreadID: thread.ID, Workspace: thread.Path, SessionID: sessionID, Prompt: prompt, Model: model, PermissionMode: mode, Effort: effort}
 	command.Steer = thread.SteerSupported
+	command.Questions = thread.QuestionsSupported
 	command.Images = images
 	if editID != "" {
 		target, err := s.claudeRewriteTarget(ctx, tx, thread.ID, editID)

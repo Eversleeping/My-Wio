@@ -5,7 +5,11 @@ import (
 	"strings"
 )
 
-var Version = "0.2.97"
+var Version = "0.2.98"
+
+func SupportsClaudeQuestions(agent, cli string) bool {
+	return atLeast(agent, "0.2.98") && atLeast(strings.TrimSpace(strings.SplitN(cli, " ", 2)[0]), "2.1.286")
+}
 
 const MinimumClaudeRewriteVersion = "0.2.97"
 

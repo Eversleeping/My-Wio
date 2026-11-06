@@ -112,6 +112,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/projects/{projectID}/claude/threads/archive", api.archiveClaudeProject)
 			private.Post("/claude/threads/{threadID}/interrupt", api.interruptClaudeTurn)
 			private.Post("/claude/threads/{threadID}/steer", api.steerClaudeTurn)
+			private.Post("/claude/threads/{threadID}/questions/{requestID}/answer", api.answerClaudeQuestion)
 			private.Post("/claude/threads/{threadID}/confirm-stopped", api.confirmClaudeStopped)
 			private.Patch("/claude/threads/{threadID}", api.updateClaudeThread)
 			private.Delete("/claude/threads/{threadID}", api.deleteClaudeThread)

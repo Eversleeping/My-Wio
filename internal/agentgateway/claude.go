@@ -85,7 +85,7 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 			data["message"] = protocol.ClaudeSteerUnconfirmedMessage
 		}
 		event.Payload, _ = json.Marshal(data)
-	case "claude.message", "claude.tool_use", "claude.tool_result", "claude.notice", "claude.result":
+	case "claude.question", "claude.question.answered", "claude.question.cancelled", "claude.message", "claude.tool_use", "claude.tool_result", "claude.notice", "claude.result":
 	default:
 		return errors.New("unsupported Claude event")
 	}
@@ -97,6 +97,9 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 }
 
 func (g *Gateway) completeClaudeOperation(ctx context.Context, op store.Operation, result protocol.OperationResult) error {
+	if op.Kind == "claude.question.answer" {
+		return nil
+	}
 	if op.Kind == "claude.turn.steer" {
 		if result.Status == "succeeded" {
 			return nil

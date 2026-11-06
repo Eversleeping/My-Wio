@@ -7,7 +7,7 @@ import { I18nProvider } from "./i18n";
 
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
-const baseThread = { input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
+const baseThread = { questions_supported: true, input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
 
 function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; steerSupported?:boolean; steerReady?:boolean; steerFailures?:number; rewriteSupported?:boolean; rewriteFailures?:number; events?: unknown[] } = {}) {
   window.localStorage.setItem("wio_language", "en");
@@ -19,7 +19,7 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
     const url = String(input); let body: unknown = [];
     if(url.endsWith("/claude/skills")) { requests.push({url,body:{}}); return new Response(JSON.stringify({operation_id:"skill-op"}), {status:202}); }
     if(url.endsWith("/claude/skills/skill-op")) return new Response(JSON.stringify(options.skillsError ? {status:"failed",error:"Could not initialize CLI"} : {status:"succeeded",skills:options.skills ?? []}),{status:200});
-    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/rewrite") && rewriteFailures-->0)return new Response(JSON.stringify({error:"Rewrite temporarily failed"}),{status:503}); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
+    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/rewrite") && rewriteFailures-->0)return new Response(JSON.stringify({error:"Rewrite temporarily failed"}),{status:503}); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url.endsWith("/answer") ? {operation_id:"answer-op"} : url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
     else if (url.startsWith("/api/operations/")) body={status:"succeeded"};
     else if (url === "/api/workspaces/workspace-1/claude/models") body = { configured: true, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
@@ -419,4 +419,50 @@ test("removes the discarded tail when a rewrite changes the native session", asy
   expect(screen.getByText("Keep prefix")).toBeInTheDocument();
   expect(screen.queryByText("Discard input")).not.toBeInTheDocument();
   expect(screen.queryByText("Discard reply")).not.toBeInTheDocument();
+});
+
+const questionEvent = { event_id: "op-1:req", stream_id: "claude-1", sequence: 1, kind: "claude.question", payload: { operation_id: "op-1", request_id: "op-1:req", questions: [
+  {id:"0",header:"Database",question:"Choose a database",isOther:true,options:[{label:"PostgreSQL",description:"SQL"},{label:"SQLite",description:"Embedded"}]},
+  {id:"1",header:"Deliverables",question:"Choose deliverables",multiSelect:true,isOther:true,options:[{label:"Tests",description:"Verify"},{label:"Docs",description:"Explain"}]}
+] } };
+
+test("answers Claude native questions with single, multiple and custom choices", async()=>{
+  const {user,requests}=setup({selected:true,status:"running",events:[questionEvent]});
+  expect(await screen.findByText("Claude needs your input")).toBeInTheDocument();
+  const submit=screen.getByRole("button",{name:"Submit answers"});
+  expect(submit).toBeDisabled();
+  await user.click(screen.getByRole("radio",{name:"PostgreSQL SQL"}));
+  await user.click(screen.getByRole("checkbox",{name:"Tests Verify"}));
+  await user.click(screen.getByRole("checkbox",{name:"Docs Explain"}));
+  await user.type(screen.getAllByLabelText("Your answer")[1],"Include examples");
+  await user.click(submit);
+  expect(await screen.findByRole("button",{name:"Answers sent"})).toBeDisabled();
+  expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/questions/op-1:req/answer",body:{answers:{"0":{answers:["PostgreSQL"]},"1":{answers:["Tests","Docs","Include examples"]}}}});
+  expect(requests.filter(request=>request.url.endsWith("/turns") || request.url.endsWith("/steer"))).toHaveLength(0);
+});
+
+test("restores answered Claude questions from persisted events without duplicate tool cards", async()=>{
+  setup({selected:true,status:"idle",events:[
+    {...questionEvent,sequence:2},
+    {event_id:"tool",stream_id:"claude-1",sequence:1,kind:"claude.tool_use",payload:{id:"q-tool",name:"AskUserQuestion",input:{}}},
+    {event_id:"receipt",stream_id:"claude-1",sequence:3,kind:"claude.question.answered",payload:{request_id:"op-1:req",answers:{"0":{answers:["PostgreSQL"]},"1":{answers:["Tests","custom-marker"]}}}},
+    {event_id:"result",stream_id:"claude-1",sequence:4,kind:"claude.tool_result",payload:{id:"q-tool",content:"Answers"}}
+  ]});
+  expect(await screen.findByRole("button",{name:"Answers sent"})).toBeDisabled();
+  expect(screen.getByRole("radio",{name:"PostgreSQL SQL"})).toBeChecked();
+  expect(screen.getByRole("checkbox",{name:"Tests Verify"})).toBeChecked();
+  expect(screen.getAllByLabelText("Your answer")[1]).toHaveValue("custom-marker");
+  expect(document.querySelector(".claude-tool-group")).not.toBeInTheDocument();
+});
+
+test.each(["idle","interrupting","interrupted"])("does not answer expired Claude questions (status=%s)",async status=>{
+  setup({selected:true,status,events:[questionEvent]});
+  expect(await screen.findByRole("radio",{name:"PostgreSQL SQL"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Submit answers"})).toBeDisabled();
+});
+
+test("disables a cancelled Claude question while its task is still running",async()=>{
+ setup({selected:true,status:"running",events:[questionEvent,{event_id:"cancelled",stream_id:"claude-1",sequence:2,kind:"claude.question.cancelled",payload:{request_id:"op-1:req"}}]});
+ expect(await screen.findByText("This question cannot be answered now. Check the task status.")).toBeInTheDocument();
+ expect(screen.getByRole("radio",{name:"PostgreSQL SQL"})).toBeDisabled();
 });

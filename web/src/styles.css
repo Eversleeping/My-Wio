@@ -1238,6 +1238,7 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .approval-prompt { width: min(82%, 820px); align-self: flex-start; margin: 0 0 14px; padding: 12px 14px; color: #fde68a; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-left: 3px solid #f59e0b; border-radius: 6px; }
 .approval-prompt header { display: flex; align-items: center; gap: 7px; font-size: 12px; }
 
+.claude-question { min-width: 0; width: 100%; align-self: flex-start; }
 .user-input-prompt { width: min(100%, 820px); min-width: 0; padding: 12px 14px; margin: 0 0 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--cyan); border-radius: 6px; font-size: 13px; line-height: 1.65; }
 .message .user-input-prompt { width: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; }
 .question-heading { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -1252,7 +1253,7 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .user-input-prompt .user-input-option { display: flex; align-items: flex-start; gap: 9px; min-width: 0; margin: 0; padding: 8px 10px; background: #0e131d; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; transition: border-color .15s, background .15s; }
 .user-input-prompt fieldset:not(:disabled) .user-input-option:hover { background: #141b28; border-color: rgba(6, 182, 212, 0.4); }
 .user-input-prompt .user-input-option.selected { background: rgba(6, 182, 212, 0.12); border-color: #06b6d4; }
-.user-input-option input[type="radio"] { width: 15px; height: 15px; min-height: 15px; flex: 0 0 15px; margin: 3px 0 0; padding: 0; accent-color: var(--cyan); box-shadow: none; }
+.user-input-option input[type="radio"], .user-input-option input[type="checkbox"] { width: 15px; height: 15px; min-height: 15px; flex: 0 0 15px; margin: 3px 0 0; padding: 0; accent-color: var(--cyan); box-shadow: none; }
 .user-input-option > span { min-width: 0; overflow-wrap: anywhere; }
 .user-input-option strong { font-size: 12px; font-weight: 500; line-height: 1.55; color: #ffffff; }
 .user-input-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.5; }

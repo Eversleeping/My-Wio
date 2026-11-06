@@ -757,7 +757,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if operation.Kind == "claude.turn.start" || operation.Kind == "claude.turn.interrupt" || operation.Kind == "claude.turn.steer" {
+		if operation.Kind == "claude.turn.start" || operation.Kind == "claude.turn.interrupt" || operation.Kind == "claude.turn.steer" || operation.Kind == "claude.question.answer" {
 			if err := g.completeClaudeOperation(ctx, operation, result); err != nil {
 				return err
 			}

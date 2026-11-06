@@ -53,6 +53,13 @@ Wio 保持同一个 Claude 进程的双向 stream-json 输入，使用官方 `SD
 
 已使用官方 Claude Code 2.1.318 与隔离的本地模拟 API 验证文本生成期间调整、运行中 shell 后台处理、原生消息回执与多次结果收尾，无需调用付费模型。
 
+## 会话内提问（Agent 0.2.98+）
+
+- 目标 Agent 需更新至 **0.2.98+**，Claude Code 需 **2.1.286+**。Claude 调用原生 `AskUserQuestion` 时，会话内显示与 Codex 相同的提问卡片，支持一次多题、单选、多选和自定义文字；手机端沿用自适应问答布局。
+- 任务在同一 CLI 进程内等待回答。网页通过操作中心分派答案，Agent 使用官方 SDK 的 `can_use_tool` 控制请求与 `control_response`，将原始问题及按问题原文映射的 `updatedInput.answers` 回传；不创建新聊天、不通过追加普通消息模拟回答。默认、计划、允许编辑和跳过权限检查四种模式已用真实 CLI 2.1.318 与隔离模拟 API 验证。
+- 问题及已提交答案保存在会话事件中，刷新可恢复。每次回答绑定原会话、问题和任务；重复提交同一答案返回原操作，不重复发送，修改已提交答案会被拒绝。CLI 取消问题、任务结束、停止、Agent 离线或会话归档后不能继续回答。等待期间仍可停止任务，工作区写锁保持到原任务结束。
+- 此功能只处理提问。其他需要审批的工具继续拒绝，不会自动批准工具或持久化权限规则。原有 Agent 保留原先行为；升级后从下一轮任务启用提问。
+
 ## 官方参考
 
 - [Claude Code 安装](https://code.claude.com/docs/en/setup)
@@ -71,3 +78,5 @@ Wio 保持同一个 Claude 进程的双向 stream-json 输入，使用官方 `SD
 
 - [工作期间消息队列](https://code.claude.com/docs/en/interactive-mode#queue-messages-while-claude-works)
 - [SDKUserMessage 与 priority](https://code.claude.com/docs/en/agent-sdk/typescript#sdkusermessage)
+
+- [Agent SDK 会话内提问与答案格式](https://code.claude.com/docs/en/agent-sdk/user-input)

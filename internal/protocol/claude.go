@@ -31,6 +31,7 @@ func ValidClaudeSkillName(name string) bool {
 
 // ClaudeTurnCommand contains no credentials. The CLI authenticates as the Agent account.
 type ClaudeTurnCommand struct {
+	Questions      bool                 `json:"questions,omitempty"`
 	Rewrite        *ClaudeRewriteTarget `json:"rewrite,omitempty"`
 	ResumeAt       string               `json:"-"`
 	Steer          bool                 `json:"steer,omitempty"`
@@ -45,6 +46,13 @@ type ClaudeTurnCommand struct {
 	Model          string               `json:"model"`
 	PermissionMode string               `json:"permission_mode"`
 	Effort         string               `json:"effort,omitempty"`
+}
+
+type ClaudeAnswerCommand struct {
+	ThreadID    string                     `json:"thread_id"`
+	OperationID string                     `json:"operation_id"`
+	RequestID   string                     `json:"request_id"`
+	Answers     map[string]UserInputAnswer `json:"answers"`
 }
 
 type ClaudeRewriteTarget struct {

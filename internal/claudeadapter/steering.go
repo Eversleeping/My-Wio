@@ -27,6 +27,8 @@ type liveInput struct {
 }
 
 type liveTurn struct {
+	questions   map[string]*liveQuestion
+	steering    bool
 	mu          sync.Mutex
 	writeMu     sync.Mutex
 	threadID    string
@@ -44,10 +46,10 @@ type liveTurn struct {
 }
 
 func (s *Sessions) Run(ctx context.Context, executable, operationID string, command protocol.ClaudeTurnCommand, emit func(protocol.StreamEvent) error, environment ...string) error {
-	if !command.Steer {
+	if !command.Steer && !command.Questions {
 		return Run(ctx, executable, operationID, command, emit, environment...)
 	}
-	live := &liveTurn{threadID: command.ThreadID, operationID: operationID, inputs: map[string]*liveInput{}}
+	live := &liveTurn{threadID: command.ThreadID, operationID: operationID, steering: command.Steer, inputs: map[string]*liveInput{}, questions: map[string]*liveQuestion{}}
 	s.mu.Lock()
 	if s.turns == nil {
 		s.turns = map[string]*liveTurn{}
@@ -154,6 +156,9 @@ func (live *liveTurn) initialized() error {
 	live.mu.Lock()
 	defer live.mu.Unlock()
 	live.ready = true
+	if !live.steering {
+		return nil
+	}
 	return live.emit("steer.ready", map[string]any{"ready": true})
 }
 
@@ -198,6 +203,11 @@ func (live *liveTurn) result(queued int) error {
 	live.queued = queued
 	if live.background > 0 {
 		return nil
+	}
+	for _, question := range live.questions {
+		if question.answers == nil && !question.cancelled {
+			return nil
+		}
 	}
 	pending := false
 	for _, input := range live.inputs {

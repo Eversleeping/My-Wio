@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -68,6 +69,12 @@ func run(parent context.Context, executable, operationID string, command protoco
 	if live != nil {
 		args = append(args, "--replay-user-messages")
 	}
+	if command.Questions {
+		if live == nil {
+			return errors.New("Claude questions require a live input stream")
+		}
+		args = append(args, "--permission-prompt-tool", "stdio")
+	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, args...)
@@ -101,13 +108,31 @@ func run(parent context.Context, executable, operationID string, command protoco
 		if err != nil {
 			return err
 		}
-		return emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: "claude." + kind, Payload: raw})
+		event := protocol.StreamEvent{StreamID: command.ThreadID, Kind: "claude." + kind, Payload: raw}
+		if kind == "question" {
+			event.EventID, _ = data["request_id"].(string)
+		}
+		if kind == "question.answered" || kind == "question.cancelled" {
+			id, _ := data["request_id"].(string)
+			event.EventID = id + ":" + kind
+		}
+		return emit(event)
 	}
+	initializeID := ""
+	var initializeTimer *time.Timer
 	if live != nil {
 		live.mu.Lock()
 		live.emit = send
 		live.mu.Unlock()
-		if _, err := live.stdin.Write([]byte(input)); err != nil {
+		initial := []byte(input)
+		if command.Questions {
+			initializeID = uuid.NewString()
+			initial, _ = json.Marshal(map[string]any{"type": "control_request", "request_id": initializeID, "request": map[string]any{"subtype": "initialize"}})
+			initial = append(initial, '\n')
+			initializeTimer = time.AfterFunc(30*time.Second, cancel)
+			defer initializeTimer.Stop()
+		}
+		if _, err := live.stdin.Write(initial); err != nil {
 			cancel()
 			_ = cmd.Wait()
 			return errors.New("could not send initial Claude input")
@@ -116,6 +141,45 @@ func run(parent context.Context, executable, operationID string, command protoco
 	for scan.Scan() {
 		if len(strings.TrimSpace(scan.Text())) == 0 {
 			continue
+		}
+		if command.Questions {
+			var frame struct {
+				Type      string `json:"type"`
+				RequestID string `json:"request_id"`
+				Response  struct {
+					RequestID string `json:"request_id"`
+					Subtype   string `json:"subtype"`
+				} `json:"response"`
+			}
+			if json.Unmarshal(scan.Bytes(), &frame) == nil {
+				if frame.Type == "control_response" && frame.Response.RequestID == initializeID && initializeID != "" {
+					initializeTimer.Stop()
+					initializeID = ""
+					if frame.Response.Subtype != "success" {
+						streamErr = errors.New("could not initialize Claude question support")
+						break
+					}
+					_, streamErr = live.stdin.Write([]byte(input))
+					if streamErr != nil {
+						break
+					}
+					continue
+				}
+				if frame.Type == "control_request" {
+					streamErr = live.questionRequest(scan.Bytes())
+					if streamErr != nil {
+						break
+					}
+					continue
+				}
+				if frame.Type == "control_cancel_request" {
+					streamErr = live.cancelQuestion(frame.RequestID)
+					if streamErr != nil {
+						break
+					}
+					continue
+				}
+			}
 		}
 		var data struct {
 			Type              string          `json:"type"`

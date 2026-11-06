@@ -14,7 +14,7 @@ export function GeminiQuestion({ item, threadID, readOnly, onAnswered }: { item:
     const deadline = Date.now() + 30_000;
     const timeout = setTimeout(() => controller.abort(), 30_000);
     try {
-      const result = await api<{operation_id:string}>(`/gemini/threads/${threadID}/questions/${item.id}/answer`, { method: "POST", signal: controller.signal, body: JSON.stringify({ answers: Object.fromEntries(Object.entries(values).map(([id, answer]) => [id, { answers: [answer] }])) }) });
+      const result = await api<{operation_id:string}>(`/gemini/threads/${threadID}/questions/${item.id}/answer`, { method: "POST", signal: controller.signal, body: JSON.stringify({ answers: Object.fromEntries(Object.entries(values).map(([id, answer]) => [id, { answers: Array.isArray(answer) ? answer : [answer] }])) }) });
       while (!controller.signal.aborted) {
         const operation = await api<Operation>(`/operations/${result.operation_id}`, { signal: controller.signal });
         if (operation.status === "succeeded") { onAnswered(); return; }

@@ -971,13 +971,21 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		environment = append(environment, gitEnvironment...)
-		command.Steer = command.Steer && buildinfo.SupportsClaudeSteering(buildinfo.Version, c.currentClaudeVersion(ctx, effectiveClaudePath(c.config.StateDir)))
+		cliVersion := c.currentClaudeVersion(ctx, effectiveClaudePath(c.config.StateDir))
+		command.Questions = command.Questions && buildinfo.SupportsClaudeQuestions(buildinfo.Version, cliVersion)
+		command.Steer = command.Steer && buildinfo.SupportsClaudeSteering(buildinfo.Version, cliVersion)
 		return c.claudeTurns.Run(ctx, effectiveClaudePath(c.config.StateDir), envelope.OperationID, command, func(event protocol.StreamEvent) error {
 			if event.EventID == "" {
 				event.EventID = uuid.NewString()
 			}
 			return c.queue("claude_event", event, true)
 		}, environment...)
+	case "claude.question.answer":
+		var command protocol.ClaudeAnswerCommand
+		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+			return err
+		}
+		return c.claudeTurns.Answer(ctx, command)
 	case "gemini.question.answer":
 		var command protocol.GeminiAnswerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
