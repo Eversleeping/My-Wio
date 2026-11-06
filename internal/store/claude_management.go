@@ -27,7 +27,7 @@ func (s *Store) ArchiveClaudeProject(ctx context.Context, projectID, serverID st
 	}
 	return r.RowsAffected()
 }
-func (s *Store) QueueClaudeFork(ctx context.Context, t ClaudeThread, w *protocol.GitWorktreeCreateCommand) (string, string, error) {
+func (s *Store) QueueClaudeFork(ctx context.Context, t ClaudeThread, w *protocol.GitWorktreeCreateCommand, eventID ...string) (string, string, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return "", "", err
@@ -55,6 +55,15 @@ func (s *Store) QueueClaudeFork(ctx context.Context, t ClaudeThread, w *protocol
 		return "", "", ErrThreadActive
 	}
 	c := protocol.ClaudeForkCommand{SourceThreadID: t.ID, TargetThreadID: target, SessionID: t.SessionID, SourceWorkspace: t.Path, WorkspaceID: t.WorkspaceID, Workspace: t.Path, Title: t.Title + " (continued)"}
+	if len(eventID) > 0 && eventID[0] != "" {
+		var latest struct {
+			ID   string `db:"event_id"`
+			Kind string `db:"kind"`
+		}
+		if err := tx.GetContext(ctx, &latest, s.Q("SELECT event_id,kind FROM events WHERE stream_id=? AND kind IN ('claude.message','claude.user.message','claude.steer.applied') ORDER BY sequence DESC LIMIT 1"), t.ID); err != nil || latest.ID != eventID[0] || latest.Kind != "claude.message" {
+			return "", "", ErrInvalidEditTarget
+		}
+	}
 	if err = tx.GetContext(ctx, &c.CutoffSequence, s.Q("SELECT COALESCE(MAX(sequence),0) FROM events WHERE stream_id=?"), t.ID); err != nil {
 		return "", "", err
 	}

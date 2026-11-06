@@ -2491,6 +2491,8 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 [data-theme="light"] .status-tag.development { color: #075985; }
 
 [data-theme="light"] .session-usage strong { color: #334155; }
+[data-theme="light"] .claude-composer .composer-editing { color: #92400e; }
+[data-theme="light"] .claude-session .message-action:hover { color: #0f172a; background: #e2e8f0; }
 [data-theme="light"] .session-header .session-usage .session-usage-partial { color: #92400e; }
 [data-theme="light"] .tool-event summary strong,
 [data-theme="light"] .raw-event summary strong,

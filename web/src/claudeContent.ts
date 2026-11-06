@@ -1,7 +1,7 @@
 import type { StreamEvent } from "./types";
 
 export type ClaudeToolItem = { id: string; name: string; input?: string; output?: string; failed?: boolean };
-export type ClaudeDisplayItem = { id: string; role: "user" | "assistant" | "toolGroup" | "notice"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
+export type ClaudeDisplayItem = { id: string; endEventID?: string; role: "user" | "assistant" | "toolGroup" | "notice"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
 
 export function claudeDisplayEvents(events: StreamEvent[], denied: string): ClaudeDisplayItem[] {
   const items: ClaudeDisplayItem[] = [];
@@ -36,8 +36,8 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
     } else if (event.kind === "claude.message") {
       if (!text) continue;
       const previous = items.at(-1);
-      if (previous?.role === "assistant") previous.text += text;
-      else items.push({ id: event.event_id, role: "assistant", text });
+      if (previous?.role === "assistant") { previous.text += text; previous.endEventID = event.event_id; }
+      else items.push({ id: event.event_id, endEventID: event.event_id, role: "assistant", text });
     } else if (event.kind === "claude.user.message" || event.kind === "claude.steer.applied") {
       items.push({ id: event.event_id, role: "user", text, images: Array.isArray(p.images) ? p.images.flatMap(image => typeof image?.data_url === "string" ? [image.data_url] : []) : [] });
     } else if (event.kind === "claude.notice") items.push({ id: event.event_id, role: "notice", text });

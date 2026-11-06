@@ -9,16 +9,17 @@ vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const baseThread = { input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
 
-function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; steerSupported?:boolean; steerReady?:boolean; steerFailures?:number; events?: unknown[] } = {}) {
+function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; steerSupported?:boolean; steerReady?:boolean; steerFailures?:number; rewriteSupported?:boolean; rewriteFailures?:number; events?: unknown[] } = {}) {
   window.localStorage.setItem("wio_language", "en");
-  const thread = { ...baseThread, steer_supported: options.steerSupported ?? false, steer_ready:options.steerReady ?? false, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
+  const thread = { ...baseThread, rewrite_supported: options.rewriteSupported ?? true, steer_supported: options.steerSupported ?? false, steer_ready:options.steerReady ?? false, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
   const requests: Array<{ url: string; body: unknown }> = [];
   let steerFailures=options.steerFailures??0;
+  let rewriteFailures=options.rewriteFailures??0;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input); let body: unknown = [];
     if(url.endsWith("/claude/skills")) { requests.push({url,body:{}}); return new Response(JSON.stringify({operation_id:"skill-op"}), {status:202}); }
     if(url.endsWith("/claude/skills/skill-op")) return new Response(JSON.stringify(options.skillsError ? {status:"failed",error:"Could not initialize CLI"} : {status:"succeeded",skills:options.skills ?? []}),{status:200});
-    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
+    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/rewrite") && rewriteFailures-->0)return new Response(JSON.stringify({error:"Rewrite temporarily failed"}),{status:503}); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
     else if (url.startsWith("/api/operations/")) body={status:"succeeded"};
     else if (url === "/api/workspaces/workspace-1/claude/models") body = { configured: true, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
@@ -34,8 +35,9 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
   const onSelectThread = vi.fn();
-  render(<I18nProvider><ClaudePage realtime={0} notify={vi.fn()} selectedThreadID={options.selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>);
-  return { user: userEvent.setup(), requests, onSelectThread };
+  const view = (realtime: number) => <I18nProvider><ClaudePage realtime={realtime} notify={vi.fn()} selectedThreadID={options.selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
+  const rendered = render(view(0)); let revision = 0;
+  return { user: userEvent.setup(), requests, onSelectThread, thread, refresh: () => rendered.rerender(view(++revision)) };
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
@@ -209,7 +211,7 @@ test("fills every missing event page after a large realtime gap", async () => {
     if (url.startsWith("/api/claude/threads?") || url === "/api/claude/threads/claude-1") body = url.includes("?") ? [baseThread] : baseThread;
     else if (url.endsWith("/events?after=1")) body = Array.from({ length: 500 }, (_, index) => index === 248 ? event(250, "claude.message", "middle ") : event(index + 2));
     else if (url.endsWith("/events?after=501")) body = [event(502), event(503)];
-    else if (url.endsWith("/events")) body = jumped ? [event(504), event(505, "claude.message", "end")] : [event(1, "claude.user.message", "Start")];
+    else if (url.includes("/events?session=")) body = jumped ? [event(504), event(505, "claude.message", "end")] : [event(1, "claude.user.message", "Start")];
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
   const view = (realtime: number) => <I18nProvider><ClaudePage realtime={realtime} notify={vi.fn()} selectedThreadID={baseThread.id} onSelectThread={vi.fn()} /></I18nProvider>;
@@ -348,4 +350,73 @@ test("collapses commands between replies and expands paired parameters and outpu
   expect(within(group).getByText(/git status/)).toBeVisible();
   await user.click(summary);
   expect(group).not.toHaveAttribute("open");
+});
+
+test("branches the last streamed reply using its final event and selects the new chat", async () => {
+  const {user, requests, onSelectThread} = setup({selected:true, nativeID:"native"});
+  expect(await screen.findByText("Hi there")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name:"Message actions"}));
+  await user.click(screen.getByRole("menuitem", {name:"Branch to new chat"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/fork",body:{event_id:"a2"}}));
+  await waitFor(() => expect(onSelectThread).toHaveBeenCalledWith("fork-target"));
+});
+
+test("does not offer a reply branch after a newer user message", async () => {
+  setup({selected:true, nativeID:"native", events:[
+    {event_id:"a",sequence:1,kind:"claude.message",payload:{text:"Earlier reply"}},
+    {event_id:"u",sequence:2,kind:"claude.user.message",payload:{text:"Next input"}},
+  ]});
+  expect(await screen.findByText("Earlier reply")).toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"Message actions"})).not.toBeInTheDocument();
+});
+
+test("edits a user message with images, keeps a failed draft and retries the rewrite endpoint", async () => {
+  Element.prototype.scrollIntoView=vi.fn();
+  const image="data:image/png;base64,aGVsbG8=";
+  const {user,requests}=setup({selected:true,nativeID:"native",rewriteFailures:1,events:[{event_id:"user-image",sequence:1,kind:"claude.user.message",payload:{text:"Original input",images:[{data_url:image}]}}]});
+  await user.click(await screen.findByRole("button",{name:"Edit and resend"}));
+  const input=screen.getByRole("textbox",{name:"Ask Claude to work on this project…"});
+  expect(input).toHaveValue("Original input");
+  expect(document.querySelector(".composer-images img")).toHaveAttribute("src",image);
+  expect(screen.getByText("Editing an earlier message; later replies will be discarded")).toBeInTheDocument();
+  await user.clear(input); await user.type(input,"/model revised");
+  await user.click(screen.getByRole("button",{name:"Send"}));
+  expect(await screen.findByText("Rewrite temporarily failed")).toBeInTheDocument();
+  expect(input).toHaveValue("/model revised");
+  expect(document.querySelector(".composer-images img")).toHaveAttribute("src",image);
+  await user.click(screen.getByRole("button",{name:"Send"}));
+  await waitFor(()=>expect(input).toHaveValue(""));
+  expect(requests.filter(r=>r.url.endsWith("/rewrite"))).toEqual(Array(2).fill({url:"/api/claude/threads/claude-1/events/user-image/rewrite",body:{prompt:"/model revised",model:"sonnet",permission_mode:"default",effort:"high",images:[{data_url:image}]}}));
+  expect(requests.some(r=>r.url.endsWith("/turns"))).toBe(false);
+});
+
+test("cancels a message edit", async () => {
+  Element.prototype.scrollIntoView=vi.fn();
+  const {user}=setup({selected:true,nativeID:"native"});
+  await user.click(await screen.findByRole("button",{name:"Edit and resend"}));
+  await user.click(screen.getByRole("button",{name:"Cancel editing"}));
+  expect(screen.getByRole("textbox",{name:"Ask Claude to work on this project…"})).toHaveValue("");
+  expect(screen.queryByText("Editing an earlier message; later replies will be discarded")).not.toBeInTheDocument();
+});
+
+test.each([{status:"running",steerSupported:true,steerReady:true},{rewriteSupported:false},{nativeID:""}])("disables message editing when unavailable (%j)",async options=>{
+  setup({selected:true,nativeID:"native",...options});
+  expect(await screen.findByRole("button",{name:"Edit and resend"})).toBeDisabled();
+});
+
+test("removes the discarded tail when a rewrite changes the native session", async () => {
+  const options={selected:true,nativeID:"original",events:[
+    {event_id:"u",sequence:1,kind:"claude.user.message",payload:{text:"Keep prefix"}},
+    {event_id:"a",sequence:2,kind:"claude.message",payload:{text:"Retained reply"}},
+    {event_id:"u2",sequence:3,kind:"claude.user.message",payload:{text:"Discard input"}},
+    {event_id:"a2",sequence:4,kind:"claude.message",payload:{text:"Discard reply"}},
+  ]};
+  const {thread,refresh}=setup(options);
+  expect(await screen.findByText("Discard reply")).toBeInTheDocument();
+  options.events=[...options.events.slice(0,2),{event_id:"replacement",sequence:7,kind:"claude.user.message",payload:{text:"Revised input",history_rewritten:true,replaced_sequence:3} as {text:string}},{event_id:"new-answer",sequence:8,kind:"claude.message",payload:{text:"New reply"}}];
+  thread.session_id="replacement"; refresh();
+  expect(await screen.findByText("New reply",{}, {timeout:3000})).toBeInTheDocument();
+  expect(screen.getByText("Keep prefix")).toBeInTheDocument();
+  expect(screen.queryByText("Discard input")).not.toBeInTheDocument();
+  expect(screen.queryByText("Discard reply")).not.toBeInTheDocument();
 });

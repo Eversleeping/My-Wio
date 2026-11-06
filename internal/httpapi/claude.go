@@ -173,13 +173,31 @@ func (a *API) startClaudeTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "update Agent to "+buildinfo.MinimumClaudeInputVersion+" or newer to use Claude images and session forks")
 		return
 	}
-	event, err := a.store.QueueClaudeTurn(r.Context(), thread, input.Prompt, input.Model, input.PermissionMode, effort, input.Images...)
+	editID := chi.URLParam(r, "eventID")
+	if editID != "" && !thread.RewriteSupported {
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumClaudeRewriteVersion+" or newer to edit Claude messages")
+		return
+	}
+	var event protocol.StreamEvent
+	var err error
+	if editID != "" {
+		event, err = a.store.QueueClaudeRewrite(r.Context(), thread, editID, input.Prompt, input.Model, input.PermissionMode, effort, input.Images...)
+	} else {
+		event, err = a.store.QueueClaudeTurn(r.Context(), thread, input.Prompt, input.Model, input.PermissionMode, effort, input.Images...)
+	}
 	if err != nil {
 		writeError(w, 409, "could not queue Claude turn; check session and active workspace operations")
 		return
 	}
-	a.hub.Publish(event)
-	a.auditClaude(r, "claude.turn.start", thread.ID)
+	if event.EventID != "" {
+		a.hub.Publish(event)
+	}
+	if editID != "" {
+		a.auditClaude(r, "claude.turn.rewrite", thread.ID)
+		a.publishClaudeChange(r, thread.ID, "claude.thread.updated")
+	} else {
+		a.auditClaude(r, "claude.turn.start", thread.ID)
+	}
 	a.gateway.Wake(thread.ServerID)
 	writeJSON(w, 202, map[string]bool{"ok": true})
 }

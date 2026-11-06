@@ -110,3 +110,11 @@ func TestGeminiRewriteRequiresNewAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeRewriteRequiresNewAgent(t *testing.T) {
+	for version, want := range map[string]bool{"0.2.96": false, "0.2.97": true, "v0.3.0": true, "dev": false} {
+		if SupportsClaudeRewrite(version) != want {
+			t.Fatalf("Claude rewrite %s: want %v", version, want)
+		}
+	}
+}

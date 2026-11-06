@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -39,12 +42,18 @@ func TestRealClaudeCLIWithLocalAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	var requests atomic.Int32
+	var bodyMu sync.Mutex
+	var lastBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/messages") {
 			http.NotFound(w, r)
 			return
 		}
 		request := requests.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		bodyMu.Lock()
+		lastBody = string(body)
+		bodyMu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_local\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n")
 		if request == 1 {
@@ -75,16 +84,18 @@ func TestRealClaudeCLIWithLocalAPI(t *testing.T) {
 	} {
 		t.Setenv(key, value)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	command := protocol.ClaudeTurnCommand{ThreadID: "local", Workspace: workspace, Prompt: "Say hello.", Model: "sonnet", PermissionMode: "default"}
 	var text, session string
 	var toolUse, toolResult bool
 	var toolDetails []string
+	operationID := uuid.NewString()
+	firstID := operationID
 	run := func() {
 		t.Helper()
 		var resultID string
-		err := Run(ctx, cli, "local-op", command, func(event protocol.StreamEvent) error {
+		err := Run(ctx, cli, operationID, command, func(event protocol.StreamEvent) error {
 			var data struct {
 				Text      string `json:"text"`
 				SessionID string `json:"session_id"`
@@ -127,9 +138,61 @@ func TestRealClaudeCLIWithLocalAPI(t *testing.T) {
 	}
 	command.SessionID = session
 	command.Prompt = "Say hello again."
+	operationID = uuid.NewString()
+	editID := operationID
 	text = ""
 	run()
 	if requests.Load() < 2 {
 		t.Fatalf("expected at least two model requests, got %d", requests.Load())
+	}
+	originalSession := session
+	state := t.TempDir()
+	command.Rewrite = &protocol.ClaudeRewriteTarget{MessageID: editID, Prompt: command.Prompt}
+	command.Prompt = "Revised second prompt."
+	operationID = uuid.NewString()
+	if err := PrepareRewrite(ctx, state, operationID, &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.ResumeAt == "" {
+		t.Fatal("missing assistant resume boundary")
+	}
+	text = ""
+	run()
+	bodyMu.Lock()
+	body := lastBody
+	bodyMu.Unlock()
+	if session == originalSession || !strings.Contains(body, "Say hello.") || !strings.Contains(body, command.Prompt) || strings.Contains(body, "Say hello again.") || strings.Count(body, "Hello from local API.") != 1 {
+		t.Fatalf("native rewrite did not fork the correct prefix: %s", body)
+	}
+	// The original session still contains the discarded prompt.
+	command.Rewrite = nil
+	command.ResumeAt = ""
+	command.ResumePath = ""
+	command.SessionID = originalSession
+	command.Prompt = "Continue source."
+	text = ""
+	run()
+	bodyMu.Lock()
+	body = lastBody
+	bodyMu.Unlock()
+	if !strings.Contains(body, "Say hello again.") {
+		t.Fatal("rewrite changed the source transcript")
+	}
+	command.Rewrite = &protocol.ClaudeRewriteTarget{MessageID: firstID}
+	command.Prompt = "Revised first prompt."
+	operationID = uuid.NewString()
+	if err := PrepareRewrite(ctx, state, operationID, &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.ResumeAt != "" || command.ResumePath != "" {
+		t.Fatal("first message should start with an empty prefix")
+	}
+	text = ""
+	run()
+	bodyMu.Lock()
+	body = lastBody
+	bodyMu.Unlock()
+	if strings.Contains(body, "Say hello.") || strings.Contains(body, "Say hello again.") || strings.Contains(body, "Continue source.") || !strings.Contains(body, command.Prompt) {
+		t.Fatalf("first edit retained old history: %s", body)
 	}
 }

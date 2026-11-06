@@ -5,7 +5,11 @@ import (
 	"strings"
 )
 
-var Version = "0.2.96"
+var Version = "0.2.97"
+
+const MinimumClaudeRewriteVersion = "0.2.97"
+
+func SupportsClaudeRewrite(version string) bool { return atLeast(version, MinimumClaudeRewriteVersion) }
 
 const MinimumOperationInterruptVersion = "0.2.96"
 

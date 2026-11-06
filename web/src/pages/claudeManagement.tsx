@@ -34,8 +34,8 @@ export function useClaudeManagement({ workspaces, busy, setBusy, refresh, select
   }
   throw new Error(t("codex.worktreeTimeout"));
  };
- const fork = (thread: ClaudeThread) => action(async () => {
-  const result = await post<{ operation_id: string; target_thread_id: string }>(`/claude/threads/${thread.id}/fork`, {});
+ const fork = (thread: ClaudeThread, eventID?: string) => action(async () => {
+  const result = await post<{ operation_id: string; target_thread_id: string }>(`/claude/threads/${thread.id}/fork`, eventID ? { event_id: eventID } : {});
   await wait(result.operation_id); select(result.target_thread_id); notify(t("codex.continueInNewTask"));
  });
  const openWorktree = (workspaceID: string, thread?: ClaudeThread) => { setError(""); setForm({ branch: "", path: "", base_ref: "HEAD" }); setWorktree({ workspaceID, thread }); };

@@ -948,6 +948,11 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return errors.New("Claude configuration or installation is in progress")
 		}
 		defer c.claudeMu.RUnlock()
+		if command.Rewrite != nil {
+			if err := claudeadapter.PrepareRewrite(ctx, c.config.StateDir, envelope.OperationID, &command); err != nil {
+				return err
+			}
+		}
 		if command.ForkSnapshotID != "" && command.SessionID == "" {
 			if command.ForkSnapshotID != command.ThreadID {
 				return errors.New("Claude snapshot does not match thread")

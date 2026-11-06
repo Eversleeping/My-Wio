@@ -31,18 +31,28 @@ func ValidClaudeSkillName(name string) bool {
 
 // ClaudeTurnCommand contains no credentials. The CLI authenticates as the Agent account.
 type ClaudeTurnCommand struct {
-	Steer          bool        `json:"steer,omitempty"`
-	Images         []TurnImage `json:"images,omitempty"`
-	ForkSnapshotID string      `json:"fork_snapshot_id,omitempty"`
-	ForkSessionID  string      `json:"fork_session_id,omitempty"`
-	ResumePath     string      `json:"-"`
-	ThreadID       string      `json:"thread_id"`
-	Workspace      string      `json:"workspace"`
-	SessionID      string      `json:"session_id"`
-	Prompt         string      `json:"prompt"`
-	Model          string      `json:"model"`
-	PermissionMode string      `json:"permission_mode"`
-	Effort         string      `json:"effort,omitempty"`
+	Rewrite        *ClaudeRewriteTarget `json:"rewrite,omitempty"`
+	ResumeAt       string               `json:"-"`
+	Steer          bool                 `json:"steer,omitempty"`
+	Images         []TurnImage          `json:"images,omitempty"`
+	ForkSnapshotID string               `json:"fork_snapshot_id,omitempty"`
+	ForkSessionID  string               `json:"fork_session_id,omitempty"`
+	ResumePath     string               `json:"-"`
+	ThreadID       string               `json:"thread_id"`
+	Workspace      string               `json:"workspace"`
+	SessionID      string               `json:"session_id"`
+	Prompt         string               `json:"prompt"`
+	Model          string               `json:"model"`
+	PermissionMode string               `json:"permission_mode"`
+	Effort         string               `json:"effort,omitempty"`
+}
+
+type ClaudeRewriteTarget struct {
+	EventID   string `json:"event_id"`
+	MessageID string `json:"message_id"`
+	Prompt    string `json:"prompt"`
+	StartedAt string `json:"started_at"`
+	Before    string `json:"before,omitempty"`
 }
 
 // A fork snapshots the transcript without starting a model turn. The first

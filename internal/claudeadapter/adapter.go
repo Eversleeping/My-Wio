@@ -49,15 +49,22 @@ func run(parent context.Context, executable, operationID string, command protoco
 	} else if command.ResumePath != "" {
 		args = append(args, "--resume", command.ResumePath, "--fork-session")
 	}
-	input := command.Prompt
-	if len(command.Images) > 0 || live != nil {
-		raw, err := claudeUserInput(command.Prompt, command.Images, uuid.NewString(), "next")
-		if err != nil {
-			return err
+	if command.ResumeAt != "" {
+		if _, err := uuid.Parse(command.ResumeAt); err != nil || command.ResumePath == "" {
+			return errors.New("invalid Claude resume boundary")
 		}
-		input = string(raw)
-		args = append(args, "--input-format", "stream-json")
+		args = append(args, "--resume-session-at", command.ResumeAt)
 	}
+	id := operationID
+	if _, err := uuid.Parse(id); err != nil {
+		id = uuid.NewString()
+	}
+	raw, err := claudeUserInput(command.Prompt, command.Images, id, "next")
+	if err != nil {
+		return err
+	}
+	input := string(raw)
+	args = append(args, "--input-format", "stream-json")
 	if live != nil {
 		args = append(args, "--replay-user-messages")
 	}

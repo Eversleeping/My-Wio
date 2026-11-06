@@ -42,7 +42,10 @@ func (a *API) queueClaudeFork(w http.ResponseWriter, r *http.Request, worktree b
 		writeError(w, 409, "Claude fork requires an initialized online session and Agent "+buildinfo.MinimumClaudeInputVersion+" or newer")
 		return
 	}
-	var input createWorktreeInput
+	var input struct {
+		createWorktreeInput
+		EventID string `json:"event_id"`
+	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
@@ -53,14 +56,14 @@ func (a *API) queueClaudeFork(w http.ResponseWriter, r *http.Request, worktree b
 			writeError(w, 404, "workspace not found")
 			return
 		}
-		c, err := newWorktreeCommand(workspace, input)
+		c, err := newWorktreeCommand(workspace, input.createWorktreeInput)
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
 		command = &c
 	}
-	op, target, err := a.store.QueueClaudeFork(r.Context(), t, command)
+	op, target, err := a.store.QueueClaudeFork(r.Context(), t, command, input.EventID)
 	if err != nil {
 		writeError(w, 409, "finish the current turn and other workspace operations before continuing")
 		return

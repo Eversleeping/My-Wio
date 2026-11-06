@@ -86,7 +86,7 @@ func TestRunStreamsResumesAndKeepsPromptOffArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := strings.Join(captured.Args, " ")
-	if captured.Stdin != "private prompt" || strings.Contains(args, "private prompt") || !strings.Contains(args, "--resume "+nativeSession) || !strings.Contains(args, "--permission-mode acceptEdits") || !strings.Contains(args, "--include-partial-messages") {
+	if !strings.Contains(captured.Stdin, `"text":"private prompt"`) || !strings.Contains(captured.Stdin, `"type":"user"`) || strings.Contains(args, "private prompt") || !strings.Contains(args, "--resume "+nativeSession) || !strings.Contains(args, "--permission-mode acceptEdits") || !strings.Contains(args, "--include-partial-messages") {
 		t.Fatalf("incorrect invocation: %+v", captured)
 	}
 	var text, kinds string

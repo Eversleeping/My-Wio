@@ -38,6 +38,27 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 	}
 	switch event.Kind {
 	case "claude.init":
+		op, lookupErr := g.store.Operation(ctx, payload.OperationID)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		var command protocol.ClaudeTurnCommand
+		if json.Unmarshal([]byte(op.Payload), &command) != nil || op.Kind != "claude.turn.start" || op.ServerID != serverID {
+			return errors.New("invalid Claude init operation")
+		}
+		if command.Rewrite != nil {
+			replacement, added, err := g.store.CommitClaudeRewrite(ctx, thread.ID, op.ID, payload.SessionID)
+			if errors.Is(err, store.ErrThreadActive) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if added {
+				g.hub.Publish(replacement)
+			}
+			thread.SessionID = payload.SessionID
+		}
 		if _, err := uuid.Parse(payload.SessionID); err != nil || (thread.SessionID != "" && thread.SessionID != payload.SessionID) || (thread.SessionID == "" && thread.ForkSessionID != "" && thread.ForkSessionID == payload.SessionID) {
 			return errors.New("invalid Claude session ID")
 		}

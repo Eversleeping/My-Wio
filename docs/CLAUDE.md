@@ -34,6 +34,15 @@
 
 Claude 页面目前不提供交互审批或 Goal。上述新增功能已使用官方 Claude Code 2.1.318 对隔离的本地模拟 API 验证图片请求、同目录／新 worktree 的原生分支和技能展开；不会因此调用付费模型。
 
+## 消息分支与编辑重发（Agent 0.2.97+）
+
+- 最后一次 Claude 回复下方的 **… → 分支到新聊天** 会复制当前对话到独立聊天，继承模型、思考程度和权限；完成后自动打开新聊天。源聊天保持原样，首次在新聊天发送消息时才生成新的 Claude 原生会话。更早的回复或已有更新用户输入的回复不提供此入口。
+- 用户消息下方的铅笔按钮可编辑并重新发送，原文字和图片会回填到输入框，支持删除、补充图片或取消编辑。发送后保留此前对话，并重新生成该消息及之后的回复；任务运行、离线、归档或尚未生成原生会话时不能编辑。旧 Agent 会提示升级至 0.2.97。
+- 编辑前先在目标 Agent 保存不可变原生快照，按用户消息 UUID 找到前一条助手消息，使用 `--resume <snapshot.jsonl> --fork-session --resume-session-at <assistant-uuid>` 恢复；编辑首条消息时从空历史开始。Wio 在收到新原生会话初始化后才更新网页历史，准备失败或启动前取消会保留原记录。重复初始化和旧操作的迟到输出不会恢复已丢弃内容。
+- 新消息使用操作 UUID 作为原生输入 UUID。旧消息仅在原文及该轮时间范围可唯一定位时兼容编辑；记录缺失、匹配歧义或工具调用边界无法安全恢复时会拒绝操作并保留历史。原生文件不被改写，项目文件也不会随消息编辑回退。
+
+已使用官方 Claude Code 2.1.318 和隔离的模拟 API 验证首条／中间消息恢复、旧会话继续使用及发送给模型的历史边界。
+
 ## 运行中调整方向（Agent 0.2.95+）
 
 控制端与目标服务器的 Wio Agent 均更新至 **0.2.95+**，并安装 **Claude Code 2.1.286+**，即可在任务运行且输入流就绪时继续输入，发送补充文字或粘贴图片。有内容时按钮变为“追加指令”，清空草稿后仍可停止任务；运行中模型、思考程度和权限保持原设置。旧 Agent 或旧 CLI 保留原有会话与停止功能。
@@ -53,6 +62,8 @@ Wio 保持同一个 Claude 进程的双向 stream-json 输入，使用官方 `SD
 - [权限模式](https://code.claude.com/docs/en/permissions)
 
 - [会话与分支](https://code.claude.com/docs/en/sessions)
+- [Agent SDK 会话与分支恢复](https://code.claude.com/docs/en/agent-sdk/sessions)
+- [Agent SDK resumeSessionAt 与 forkSession](https://code.claude.com/docs/en/agent-sdk/typescript)
 - [技能与斜杠命令](https://code.claude.com/docs/en/skills)
 - [结构化图片输入](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)
 

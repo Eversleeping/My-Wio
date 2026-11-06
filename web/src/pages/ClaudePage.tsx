@@ -1,5 +1,5 @@
 import { type CSSProperties, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound } from "lucide-react";
+import { Copy, MoreHorizontal, Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, WorkspaceFilesPanel, message, type FilePreviewSelection } from "../App";
 import { SlashCommandMenu, type SlashCommandItem } from "../SlashCommandMenu";
@@ -149,7 +149,7 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
     <div className="gemini-main">{thread ? <>
       <SessionPreviewTabs previews={previews} />
       <SessionPreviewPanels previews={previews} workspaceID={thread.workspace_id} workspaceRoot={thread.path} writable realtime={realtime + tick} notify={notify} onOpenFile={openFile}>
-        <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} onSchedule={() => management.schedule(thread)} onFork={() => management.fork(thread)} onNew={() => newSession(thread.workspace_id)} />
+        <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} onSchedule={() => management.schedule(thread)} onFork={eventID => management.fork(thread, eventID)} notify={notify} onNew={() => newSession(thread.workspace_id)} />
       </SessionPreviewPanels>
     </> : selectedThreadID && selected.error ? <ErrorState error={selected.error} reload={selected.reload} /> : <div className="gemini-welcome"><Bot size={40} /><h2>Claude</h2><p>{t("claude.intro")}</p><button className="primary-button" onClick={() => newSession()}><Plus size={17} />{t("claude.newSession")}</button></div>}</div>
     <Dialog open={createOpen} title={t("claude.newSession")} onClose={() => { if (!busy) setCreateOpen(false); }}><form onSubmit={create}>
@@ -175,20 +175,31 @@ function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disa
   return compact ? <div className="claude-composer-options">{controls}</div> : <div className="claude-options">{controls.map((control, index) => <Field key={control.key} label={t(["claude.model", "claude.effort", "claude.permission"][index])}>{control}</Field>)}</div>;
 }
 
-function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onSchedule, onFork, onNew }: { thread: ClaudeThread; revision: string; onChanged: () => void; onOpenFile: (selection: FilePreviewSelection) => void; onArchive: () => void; onSchedule: () => void; onFork: () => void; onNew: () => void }) {
+function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onSchedule, onFork, onNew, notify }: { thread: ClaudeThread; revision: string; onChanged: () => void; onOpenFile: (selection: FilePreviewSelection) => void; onArchive: () => void; onSchedule: () => void; onFork: (eventID?: string) => void; onNew: () => void; notify: (text: string) => void }) {
   const { t } = useI18n();
   const availableModels = useClaudeModels(thread.workspace_id, thread.id);
   const skillDiscovery = useClaudeSkills(thread.workspace_id, thread.id, Boolean(thread.skills_supported) && thread.server_status === "online");
   const [requestCustomModel, setRequestCustomModel] = useState(0);
   const [prompt, setPrompt] = useState(""); const [model, setModel] = useState(thread.model); const [mode, setMode] = useState(thread.permission_mode); const [effort, setEffort] = useState(thread.effort ?? "");
+  const [editingEventID, setEditingEventID] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [confirming, setConfirming] = useState(false);
   const [allEvents, setAllEvents] = useState<StreamEvent[]>([]); const [historyBusy, setHistoryBusy] = useState(false);
   const allEventsRef = useRef<StreamEvent[]>([]);
   const stream = useRef<HTMLDivElement>(null); const follow = useRef(true);
   const throttledRevision = useThrottledValue(revision, 750);
-  const events = useData<StreamEvent[]>(`/claude/threads/${thread.id}/events`, throttledRevision);
+  const historySession = useRef(thread.session_id);
+  useEffect(() => {
+    if (historySession.current === thread.session_id) return;
+    historySession.current = thread.session_id;
+    allEventsRef.current = []; setAllEvents([]);
+  }, [thread.session_id]);
+  const events = useData<StreamEvent[]>(`/claude/threads/${thread.id}/events?session=${encodeURIComponent(thread.session_id)}`, throttledRevision);
   const mergeEvents = useCallback((incoming: StreamEvent[]) => {
-    const merged = new Map(allEventsRef.current.map(event => [event.event_id, event]));
+    const lastSequence = allEventsRef.current.at(-1)?.sequence ?? 0;
+    const replacement = [...incoming].reverse().find(event => event.sequence > lastSequence && (event.payload as {history_rewritten?: boolean}).history_rewritten);
+    const cutoff = (replacement?.payload as {replaced_sequence?: number} | undefined)?.replaced_sequence;
+    const retained = cutoff ? allEventsRef.current.filter(event => event.sequence < cutoff) : allEventsRef.current;
+    const merged = new Map(retained.map(event => [event.event_id, event]));
     for (const event of incoming) merged.set(event.event_id, event);
     allEventsRef.current = [...merged.values()].sort((a, b) => a.sequence - b.sequence);
     setAllEvents(allEventsRef.current);
@@ -198,7 +209,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     const incoming = events.data;
     let cursor = allEventsRef.current.at(-1)?.sequence ?? 0;
     const first = incoming[0].sequence;
-    if (!cursor || first <= cursor + 1) { mergeEvents(incoming); return; }
+    if (!cursor || first <= cursor + 1 || incoming.some(event => (event.payload as {history_rewritten?:boolean}).history_rewritten)) { mergeEvents(incoming); return; }
     // A recent-events refresh can skip more than one page while the tab is
     // inactive. Fill the gap before appending the recent tail.
     const controller = new AbortController();
@@ -214,11 +225,11 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
       mergeEvents(incoming);
     })().catch(err => { if (!controller.signal.aborted) setError(message(err)); });
     return () => controller.abort();
-  }, [events.data, mergeEvents, thread.id]);
+  }, [events.data, mergeEvents, thread.id, thread.session_id]);
   const running = activeTurn(thread);
   const steerState = [...allEvents].reverse().find(event => ["claude.steer.ready", "claude.steer.closed"].includes(event.kind) && (event.payload as {operation_id?:string}).operation_id === thread.operation_id);
   const steerReady = thread.status === "running" && Boolean(thread.steer_supported) && (steerState ? steerState.kind === "claude.steer.ready" : Boolean(thread.steer_ready));
-  const blocked = (running && !steerReady) || thread.recovery_pending || Boolean(thread.archived_at) || thread.server_status !== "online";
+  const blocked = (running && (!steerReady || Boolean(editingEventID))) || thread.recovery_pending || Boolean(thread.archived_at) || thread.server_status !== "online";
   const steeringRequest = useRef<{operation:string;prompt:string;images:string;id:string}>();
   const [images,setImages]=useState<{id:string;dataURL:string}[]>([]);
   const [imageBusy,setImageBusy]=useState(false);
@@ -239,7 +250,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     } catch {if(!controller.signal.aborted)setError(t("codex.imageFailed"));}
     finally {if(imageWork.current===controller){imageWork.current=null;setImageBusy(false);}}
   };
-  const slashOpen=!running && !blocked && !busy && /^\/[A-Za-z0-9_.:/-]*$/.test(prompt) && prompt!==slashDismissed;
+  const slashOpen=!editingEventID && !running && !blocked && !busy && /^\/[A-Za-z0-9_.:/-]*$/.test(prompt) && prompt!==slashDismissed;
   const finishSlash=(action:()=>void)=>{setPrompt("");setSlashSection("");action();};
   const latestInit = [...allEvents].reverse().find(event => event.kind === "claude.init");
   const historicalSkills = (latestInit?.payload as { skills?: unknown[] })?.skills;
@@ -266,11 +277,12 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     if(receipt?.kind==="claude.steer.applied")return [];
     return [{...payload,id:event.event_id,state:receipt?.kind.split(".").at(-1) ?? "queued"}];
   });
+  const latestMessage = [...allEvents].reverse().find(event => ["claude.message", "claude.user.message", "claude.steer.applied"].includes(event.kind));
   const items = useMemo(() => claudeDisplayEvents(allEvents, t("claude.denied")), [allEvents, t]);
   useEffect(() => { if (follow.current && stream.current) stream.current.scrollTop = stream.current.scrollHeight; }, [items]);
   const send = async (event: FormEvent) => {
     event.preventDefault(); if (blocked || busy || imageBusy || slashOpen || (!prompt.trim() && !images.length)) return;
-    const option=!running && /^\/(model|effort|permissions)\s+(\S+)\s*$/.exec(prompt);
+    const option=!editingEventID && !running && /^\/(model|effort|permissions)\s+(\S+)\s*$/.exec(prompt);
     if(option){const [,command,value]=option;if(command==="model")setModel(value);else if(command==="effort" && ["default","low","medium","high","xhigh","max"].includes(value) && (value==="default" || thread.effort_supported))setEffort(value==="default"?"":value);else if(command==="permissions" && modes.includes(value))setMode(value);else {setError(t("claude.invalidCommandOption"));return;}setPrompt("");setError("");return;}
     setBusy(true); setError("");
     try {
@@ -283,9 +295,9 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
         steeringRequest.current=undefined;
       } else {
         if (steeringRequest.current) { setError(t("claude.steerTaskEnded")); return; }
-        await post(`/claude/threads/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:imagePayload} : {}) });
+        await post(editingEventID ? `/claude/threads/${thread.id}/events/${editingEventID}/rewrite` : `/claude/threads/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:imagePayload} : {}) });
       }
-      setPrompt(""); setImages([]); follow.current=true; onChanged();
+      setPrompt(""); setImages([]); setEditingEventID(""); follow.current=true; onChanged();
     }
     catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
@@ -293,20 +305,25 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
   const confirmStopped = async () => { setBusy(true); try { await post(`/claude/threads/${thread.id}/confirm-stopped`, { operation_id: thread.operation_id, confirmed: true }); setConfirming(false); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
   const earlier = async () => {
     if (!allEvents.length || historyBusy) return; setHistoryBusy(true);
-    try { const older = await api<StreamEvent[]>(`/claude/threads/${thread.id}/events?before=${allEvents[0].sequence}`); mergeEvents(older); }
+    try { const session = historySession.current; const older = await api<StreamEvent[]>(`/claude/threads/${thread.id}/events?before=${allEvents[0].sequence}`); if (historySession.current === session) mergeEvents(older); }
     catch (err) { setError(message(err)); } finally { setHistoryBusy(false); }
   };
-  return <section className="session-panel gemini-session"><header className="session-header"><div className="session-heading"><h2>{thread.title}</h2><span className="session-meta" title={`${thread.server_name} · ${thread.path}`}>{thread.server_name}<i />{thread.path}</span></div><div className="session-actions"><Status value={thread.status} /><button className="icon-button" title={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} aria-label={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} disabled={busy || running || thread.recovery_pending} onClick={onArchive}><Archive size={16} /></button></div><SessionUsage provider="claude" threadID={thread.id} revision={revision} running={running} /></header>
+  return <section className="session-panel gemini-session claude-session"><header className="session-header"><div className="session-heading"><h2>{thread.title}</h2><span className="session-meta" title={`${thread.server_name} · ${thread.path}`}>{thread.server_name}<i />{thread.path}</span></div><div className="session-actions"><Status value={thread.status} /><button className="icon-button" title={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} aria-label={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} disabled={busy || running || thread.recovery_pending} onClick={onArchive}><Archive size={16} /></button></div><SessionUsage provider="claude" threadID={thread.id} revision={revision} running={running} /></header>
     <div ref={stream} className="gemini-stream conversation-stream" role="log" aria-label={t("gemini.conversation")} onScroll={() => { if (stream.current) follow.current = stream.current.scrollHeight - stream.current.scrollTop - stream.current.clientHeight < 100; }}>
       {allEvents.length > 0 && allEvents[0].sequence > 1 && <button className="secondary-button" disabled={historyBusy} onClick={() => void earlier()}>{t("claude.loadEarlier")}</button>}
       {events.error && <ErrorState error={events.error} reload={events.reload} />}
       {!items.length && <Empty icon={<Bot size={30} />} text={t("claude.startPrompt")} />}
-      {items.map(item => item.role === "toolGroup" ? <ClaudeToolGroup key={item.id} tools={item.tools ?? []} /> : <article className={`message ${item.role === "notice" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Claude"}</strong></header>{!!item.images?.length && <MessageImages sources={item.images} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} /></article>)}
+      {items.map(item => item.role === "toolGroup" ? <ClaudeToolGroup key={item.id} tools={item.tools ?? []} /> : <article className={`message ${item.role === "notice" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Claude"}</strong></header>{!!item.images?.length && <MessageImages sources={item.images} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{(item.role === "user" || item.role === "assistant") && <div className="message-actions">
+        <button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(err => notify(message(err))); }}><Copy size={14} /></button>
+        {item.role === "user" && !thread.archived_at && <button type="button" className="message-action" title={t(thread.rewrite_supported ? "codex.editMessage" : "claude.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} disabled={busy || blocked || running || !thread.rewrite_supported || !thread.session_id} onClick={() => { imageWork.current?.abort(); imageWork.current = null; setImageBusy(false); setPrompt(item.text); setImages((item.images ?? []).map(dataURL => ({ id: crypto.randomUUID(), dataURL }))); setEditingEventID(item.id); steeringRequest.current = undefined; setSlashSection(""); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}
+        {item.role === "assistant" && item.endEventID === latestMessage?.event_id && <ContextMenu className="message-menu" label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.branchToNewChat"), icon: GitFork, disabled: busy || blocked || running || !thread.input_supported || !thread.session_id, onSelect: () => onFork(item.endEventID) }]}>{null}</ContextMenu>}
+      </div>}</article>)}
       {queuedInstructions.map(instruction=><div key={instruction.id} className="claude-steer-instruction" role="status"><strong>{t(`claude.steer.${instruction.state}`)}</strong><p>{instruction.text}</p>{!!instruction.images?.length && <MessageImages sources={instruction.images.map(image=>image.data_url)} />}{instruction.state==="rejected" && <button type="button" className="text-button" disabled={busy || Boolean(prompt.trim()) || images.length>0} onClick={()=>{setPrompt(instruction.text);setImages((instruction.images??[]).map(image=>({id:crypto.randomUUID(),dataURL:image.data_url})));steeringRequest.current=undefined;promptRef.current?.focus();}}>{t("claude.steerRestore")}</button>}</div>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "claude.interrupting" : "claude.working")}</p>}
     </div>
     <form className="composer gemini-composer claude-composer" onSubmit={send}>{error && <ErrorBanner text={error} />}{thread.recovery_pending && <><p className="gemini-hint" role="status">{t("claude.recovery")}</p><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>{t("claude.confirmStopped")}</button></>}{thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}{thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <>
       {running && thread.status!=="interrupting" && <p className="gemini-hint" role="status">{t(steerReady ? "claude.steerHint" : thread.steer_supported ? "claude.steerStarting" : "claude.steerUpgrade")}</p>}
+      {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} disabled={busy} onClick={() => { imageWork.current?.abort(); imageWork.current = null; setImageBusy(false); setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length>0 && <div className="composer-images">{images.map(image=><figure key={image.id}><img src={image.dataURL} alt=""/><button type="button" aria-label={t("common.close")} disabled={busy} onClick={()=>setImages(current=>current.filter(item=>item.id!==image.id))}><X size={13}/></button></figure>)}</div>}
       {imageBusy && <p className="gemini-hint" role="status">{t("gemini.preparingImages")}</p>}
       {slashOpen && <SlashCommandMenu status={slashSection === "skills" ? skillsStatus : undefined} items={slashItems} query={slashSection ? "" : prompt === "/skills" ? "skill" : prompt.slice(1)} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashSection?()=>{setSlashSection("");setPrompt("/");}:undefined} onDismiss={()=>{setSlashDismissed(prompt);setSlashSection("");}} keyboardRef={slashKeyboardRef}/>}

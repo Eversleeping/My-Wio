@@ -157,6 +157,57 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE claude_threads SET session_id=? WHERE id=?"), "550e8400-e29b-41d4-a716-446655440000", thread.ID); err != nil {
 		t.Fatal(err)
 	}
+	history, err := db.Events(ctx, thread.ID, 0, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target protocol.StreamEvent
+	for _, event := range history {
+		if event.Kind == "claude.user.message" {
+			target = event
+		}
+	}
+	rewritePath := "/api/claude/threads/" + thread.ID + "/events/" + target.EventID + "/rewrite"
+	if w := request("POST", rewritePath, imageBody, false); w.Code != 401 {
+		t.Fatalf("unauthenticated rewrite: %d", w.Code)
+	}
+	if w := request("POST", rewritePath, imageBody, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.2.97") {
+		t.Fatalf("old rewrite Agent: %d %s", w.Code, w.Body.String())
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.97"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("POST", rewritePath, `{"prompt":""}`, true); w.Code != 400 {
+		t.Fatalf("empty edit: %d", w.Code)
+	}
+	if w := request("POST", "/api/claude/threads/"+thread.ID+"/events/foreign/rewrite", `{"prompt":"edit"}`, true); w.Code != 409 {
+		t.Fatalf("foreign edit: %d", w.Code)
+	}
+	if w := request("POST", rewritePath, imageBody, true); w.Code != 202 {
+		t.Fatalf("image-only rewrite: %d %s", w.Code, w.Body.String())
+	}
+	thread, _ = db.ClaudeThread(ctx, thread.ID)
+	op, _ = db.Operation(ctx, thread.OperationID)
+	command = protocol.ClaudeTurnCommand{}
+	if json.Unmarshal([]byte(op.Payload), &command) != nil || command.Rewrite == nil || command.Rewrite.EventID != target.EventID || len(command.Images) != 1 {
+		t.Fatalf("rewrite command: %+v", command)
+	}
+	if w := request("POST", rewritePath, imageBody, true); w.Code != 409 {
+		t.Fatal("rewrote an active thread")
+	}
+	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	after, _ := db.Events(ctx, thread.ID, 0, 500)
+	retained := map[string]bool{}
+	for _, event := range after {
+		retained[event.EventID] = true
+	}
+	for _, event := range history {
+		if !retained[event.EventID] {
+			t.Fatal("cancelled edit removed history", event.EventID)
+		}
+	}
 	if w := request("POST", "/api/claude/threads/"+thread.ID+"/fork", `{}`, true); w.Code != 202 {
 		t.Fatalf("fork: %d %s", w.Code, w.Body.String())
 	}
