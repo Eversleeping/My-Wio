@@ -83,6 +83,42 @@ test("shows modified, added, untracked, and deleted files", () => {
   expect(container.querySelector(".change-file-status.deleted")).toHaveTextContent("D");
 });
 
+test("polls pending changes and Git inspection without realtime events, then stops", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let complete = false;
+  let changeReads = 0;
+  let gitReads = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "POST") return jsonResponse({ operation_id: "scan" }, 202);
+    if (url.endsWith("/changes")) {
+      changeReads++;
+      return jsonResponse({ ...changesSnapshot, changes: complete ? changesSnapshot.changes : [], status: complete ? "succeeded" : "scanning" });
+    }
+    if (url.endsWith("/git")) {
+      gitReads++;
+      return jsonResponse({ ...gitSnapshot, status: complete ? "succeeded" : "refreshing" });
+    }
+    return jsonResponse({ workspace_id: "workspace-1", files: [], status: "succeeded" });
+  }));
+  const { unmount } = render(<I18nProvider><WorkspaceFilesPanel workspaceID="workspace-1" taskID="task-1" taskStatus="running" realtime={0} notify={vi.fn()} activePath="" activeMode="file" onOpenFile={vi.fn()} /></I18nProvider>);
+  await userEvent.click(screen.getByRole("button", { name: "Show file changes" }));
+  await screen.findByText("Scanning file changes");
+  complete = true;
+  const before = { changeReads, gitReads };
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  expect(await screen.findByText("modified.ts")).toBeInTheDocument();
+  expect(changeReads).toBeGreaterThan(before.changeReads);
+  expect(gitReads).toBeGreaterThan(before.gitReads);
+  expect(screen.getByTitle("Refresh file changes")).toBeEnabled();
+  const settled = { changeReads, gitReads };
+  await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+  expect({ changeReads, gitReads }).toEqual(settled);
+  unmount();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 test("rescans whenever changes are opened and after the active task finishes", async () => {
   window.localStorage.setItem("wio_language", "en");
   const requests: Array<{ method: string; url: string }> = [];

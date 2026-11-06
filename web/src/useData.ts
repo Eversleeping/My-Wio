@@ -34,26 +34,54 @@ export function useData<T>(path: string | null, dependency: unknown, cache = fal
   const [settledPath, setSettledPath] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion(value => value + 1), []);
+  const request = useRef<((dependency: unknown, force: boolean) => void) | null>(null);
 
   useEffect(() => {
     if (!path) { setSettledPath(null); return; }
-    const cached = cache ? dataCache.get(path) : undefined;
-    if (version === 0 && cached && Object.is(cached.dependency, dependency)) {
-      setFailure({ path, text: "" });
-      setSettledPath(path);
-      return;
-    }
-    const controller = new AbortController();
-    api<T>(path, { signal: controller.signal }).then(value => {
-      if (cache) dataCache.set(path, { data: value, dependency });
-      setResult({ path, data: value });
-      setFailure({ path, text: "" });
-    }).catch(error => {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setFailure({ path, text: error instanceof Error ? error.message : "Request failed" });
-    }).finally(() => { if (!controller.signal.aborted) setSettledPath(path); });
-    return () => controller.abort();
-  }, [path, dependency, version, cache]);
+    let stopped = false;
+    let controller: AbortController | null = null;
+    let running = false;
+    let pending: { dependency: unknown } | null = null;
+    const refresh = (dependency: unknown, force: boolean) => {
+      // Let the current response paint, then catch up once with the latest
+      // invalidation. Repeated events must not starve a slow initial load.
+      if (running) { pending = { dependency }; return; }
+      const cached = cache ? dataCache.get(path) : undefined;
+      if (!force && cached && Object.is(cached.dependency, dependency)) {
+        setFailure({ path, text: "" });
+        setSettledPath(path);
+        return;
+      }
+      running = true;
+      controller = new AbortController();
+      api<T>(path, { signal: controller.signal }).then(value => {
+        if (stopped) return;
+        if (cache) dataCache.set(path, { data: value, dependency });
+        setResult({ path, data: value });
+        setFailure({ path, text: "" });
+      }).catch(error => {
+        if (stopped) return;
+        setFailure({ path, text: error instanceof Error ? error.message : "Request failed" });
+      }).finally(() => {
+        if (stopped) return;
+        running = false;
+        setSettledPath(path);
+        if (pending) {
+          const next = pending;
+          pending = null;
+          refresh(next.dependency, true);
+        }
+      });
+    };
+    request.current = refresh;
+    return () => {
+      stopped = true;
+      controller?.abort();
+      request.current = null;
+    };
+  }, [path, cache]);
+
+  useEffect(() => { if (path) request.current?.(dependency, version !== 0); }, [path, dependency, version, cache]);
 
   const cached = cache && path ? dataCache.get(path) : undefined;
   const cachedData = cached && Object.is(cached.dependency, dependency) ? cached.data as T : null;

@@ -269,14 +269,22 @@ export default function App() {
     let active = true;
     (async () => {
       try {
+        // Start authentication alongside setup discovery to avoid an extra
+        // network round trip for returning users. Handle rejection immediately
+        // even when a new installation exits through the setup screen.
+        const sessionRequest = api<Session>("/auth/session").then(
+          value => ({ value, error: null }),
+          error => ({ value: null, error })
+        );
         const status = await api<{ configured: boolean; auth_mode?: AuthMode }>("/setup/status");
         if (!status.configured) {
           if (active) setAuth("setup");
           return;
         }
         if (active && status.auth_mode) setAuthMode(status.auth_mode);
-        const current = await api<Session>("/auth/session");
-        if (active) authenticate(current);
+        const current = await sessionRequest;
+        if (current.error) throw current.error;
+        if (active) authenticate(current.value);
       } catch (error) {
         if (active) setAuth(error instanceof APIError && error.status === 401 ? "login" : "login");
       }
@@ -654,6 +662,17 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
     const timer = window.setInterval(snapshot.reload, 5000);
     return () => window.clearInterval(timer);
   }, [fileScanning, snapshot.reload, workspaceID]);
+  useEffect(() => {
+    if (!workspaceID || mode !== "changes" || (!changeScanning && currentGit?.status !== "refreshing")) return;
+    // Realtime delivery may be delayed or disconnected. Poll only outstanding
+    // scans so the UI still picks up completion without another page refresh.
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      if (changeScanning) changes.reload();
+      if (currentGit?.status === "refreshing") git.reload();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [changeScanning, changes.reload, currentGit?.status, git.reload, mode, workspaceID]);
   const refreshFiles = useCallback(async (silent = false) => {
     if (!workspaceID) return;
     try {

@@ -105,6 +105,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer scans.Close()
+	assertPostgresInteractiveConnections(t, scans)
 	assertWorkspaceFileScanTimeoutAndRetry(t, scans)
 	assertOperationInterruptLifecycle(t, scans)
 	assertCodexSnapshotTimeoutAndRetry(t, scans)
@@ -122,6 +123,24 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertGeminiGoalOnPostgres(t, scans)
 	assertGeminiModelConfigRevision(t, scans)
 	assertGeminiModelConfigMigration(t, scans)
+}
+
+func assertPostgresInteractiveConnections(t *testing.T, database *Store) {
+	t.Helper()
+	ctx := context.Background()
+	// Hold connections simultaneously so this covers new pool connections,
+	// rather than only the connection used by Open and the migrations.
+	for i := 0; i < 3; i++ {
+		conn, err := database.DB.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		var jit string
+		if err := conn.QueryRowContext(ctx, "SHOW jit").Scan(&jit); err != nil || jit != "off" {
+			t.Fatalf("interactive PostgreSQL connection %d: jit=%q, error=%v", i, jit, err)
+		}
+	}
 }
 
 func assertGeminiGoalOnPostgres(t *testing.T, database *Store) {

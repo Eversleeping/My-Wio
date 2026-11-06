@@ -17,7 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 
@@ -47,12 +48,25 @@ const (
 
 func Open(databaseURL string) (*Store, error) {
 	driver, dsn := "sqlite", databaseURL
+	var db *sqlx.DB
+	var err error
 	if strings.HasPrefix(databaseURL, "postgres://") || strings.HasPrefix(databaseURL, "postgresql://") {
 		driver = "pgx"
+		config, parseErr := pgx.ParseConfig(databaseURL)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		// These are short, interactive queries. Compilation can take seconds
+		// when estimates for small, sparsely analyzed tables trigger PostgreSQL
+		// JIT. Apply this to every pooled connection, including replacements.
+		config.RuntimeParams["jit"] = "off"
+		db = sqlx.NewDb(stdlib.OpenDB(*config), driver)
 	} else if dsn == "" {
 		dsn = "wio.db?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 	}
-	db, err := sqlx.Open(driver, dsn)
+	if db == nil {
+		db, err = sqlx.Open(driver, dsn)
+	}
 	if err != nil {
 		return nil, err
 	}
