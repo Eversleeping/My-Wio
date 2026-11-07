@@ -2,7 +2,8 @@ import type { Question, QuestionValue } from "./components/UserInputPrompt";
 import type { StreamEvent } from "./types";
 
 export type ClaudeToolItem = { id: string; name: string; operationID?: string; occurredAt?: string; status?: "running" | "completed" | "failed" | "interrupted" | "unknown"; input?: string; output?: string; failed?: boolean };
-export type ClaudeDisplayItem = { id: string; occurredAt?: string; endEventID?: string; operationID?: string; questions?: Question[]; answers?: Record<string, QuestionValue>; cancelled?: boolean; role: "user" | "assistant" | "toolGroup" | "notice" | "question"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
+export type ClaudeCompaction = { status: "running" | "completed" | "failed" | "interrupted" | "unknown"; trigger?: "auto" | "manual"; preTokens?: number; postTokens?: number };
+export type ClaudeDisplayItem = { id: string; occurredAt?: string; endEventID?: string; operationID?: string; compaction?: ClaudeCompaction; questions?: Question[]; answers?: Record<string, QuestionValue>; cancelled?: boolean; role: "user" | "assistant" | "toolGroup" | "notice" | "question" | "compaction"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
 
 export function claudeDisplayEvents(events: StreamEvent[], denied: string): ClaudeDisplayItem[] {
   const items: ClaudeDisplayItem[] = [];
@@ -10,11 +11,26 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
   let toolOperation = "";
   let toolsByID = new Map<string, ClaudeToolItem>();
   const pendingTools = new Set<ClaudeToolItem>();
+  const pendingCompactions = new Map<string, ClaudeDisplayItem>();
   for (const event of events) {
     const occurredAt = event.occurred_at && Number.isFinite(Date.parse(event.occurred_at)) ? event.occurred_at : undefined;
     const p = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
     const text = typeof p.text === "string" ? p.text : "";
-    if (event.kind === "claude.question") {
+    if (["claude.compaction.started", "claude.compaction.completed", "claude.compaction.failed"].includes(event.kind)) {
+      const operationID = typeof p.operation_id === "string" ? p.operation_id : "";
+      let item = pendingCompactions.get(operationID);
+      if (!item) {
+        item = { id: event.event_id, occurredAt, operationID, role: "compaction", text: "", compaction: { status: "running" } };
+        items.push(item);
+      }
+      if (event.kind === "claude.compaction.started") pendingCompactions.set(operationID, item);
+      else {
+        const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+        item.compaction = { status: event.kind === "claude.compaction.completed" ? "completed" : "failed", trigger: p.trigger === "auto" || p.trigger === "manual" ? p.trigger : undefined, preTokens: count(p.pre_tokens), postTokens: count(p.post_tokens) };
+        item.occurredAt = occurredAt ?? item.occurredAt;
+        pendingCompactions.delete(operationID);
+      }
+    } else if (event.kind === "claude.question") {
       items.push({ id:event.event_id,occurredAt,role:"question",text:"",operationID:String(p.operation_id ?? ""),questions:Array.isArray(p.questions) ? p.questions as Question[] : [] });
     } else if (event.kind === "claude.question.answered" || event.kind === "claude.question.cancelled") {
       const item=items.find(item=>item.role==="question" && item.id===p.request_id);
@@ -59,6 +75,11 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
       if (Array.isArray(p.permission_denials) && p.permission_denials.length) items.push({ id: `${event.event_id}-denied`, occurredAt, role: "notice", text: denied });
       if (Array.isArray(p.errors) && p.errors.length) items.push({ id: `${event.event_id}-errors`, occurredAt, role: "notice", text: p.errors.join("\n") });
     } else if (event.kind === "claude.turn.completed") {
+      const compaction = pendingCompactions.get(String(p.operation_id ?? ""));
+      if (compaction) {
+        compaction.compaction!.status = p.status === "interrupted" ? "interrupted" : p.status === "failed" ? "failed" : "unknown";
+        pendingCompactions.delete(String(p.operation_id ?? ""));
+      }
       for (const tool of pendingTools) {
         if (tool.operationID !== p.operation_id) continue;
         tool.status = p.status === "interrupted" ? "interrupted" : p.status === "failed" ? "failed" : "unknown";

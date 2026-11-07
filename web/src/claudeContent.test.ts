@@ -4,6 +4,31 @@ import type { StreamEvent } from "./types";
 
 const event = (kind: string, payload: Record<string, unknown>, sequence: number): StreamEvent => ({ event_id: `e${sequence}`, stream_id: "claude-1", kind: `claude.${kind}`, sequence, occurred_at: "2026-11-05T00:00:00Z", payload });
 
+test("pairs compaction progress with the matching operation and separates replies at the boundary", () => {
+  const items = claudeDisplayEvents([
+    event("message", { text: "Before" }, 1),
+    event("compaction.started", { operation_id: "one" }, 2),
+    event("compaction.started", { operation_id: "one" }, 3),
+    event("compaction.started", { operation_id: "two" }, 4),
+    event("compaction.completed", { operation_id: "one", trigger: "auto", pre_tokens: 180000, post_tokens: 24000 }, 5),
+    event("message", { text: "After" }, 6),
+    event("turn.completed", { operation_id: "two", status: "interrupted" }, 7),
+    event("compaction.completed", { operation_id: "one", trigger: "manual", pre_tokens: 0 }, 8),
+  ], "Denied");
+  expect(items.map(item => item.role)).toEqual(["assistant", "compaction", "compaction", "assistant", "compaction"]);
+  expect(items[1].compaction).toEqual({ status: "completed", trigger: "auto", preTokens: 180000, postTokens: 24000 });
+  expect(items[2].compaction?.status).toBe("interrupted");
+  expect(items[4].compaction).toEqual({ status: "completed", trigger: "manual", preTokens: 0, postTokens: undefined });
+});
+
+test.each(["failed", "idle"])("does not report compaction success without a native boundary (%s)", status => {
+  const items = claudeDisplayEvents([event("compaction.started", { operation_id: "one" }, 1), event("turn.completed", { operation_id: "other", status: "idle" }, 2), event("turn.completed", { operation_id: "one", status }, 3), event("compaction.started", { operation_id: "one" }, 4), event("compaction.failed", { operation_id: "one" }, 5)], "Denied");
+  expect(items[0].compaction?.status).toBe(status === "failed" ? "failed" : "unknown");
+  expect(items[1].compaction?.status).toBe("failed");
+  const invalid = claudeDisplayEvents([event("compaction.completed", { trigger: "future", pre_tokens: -1, post_tokens: "123" }, 1)], "Denied")[0];
+  expect(invalid.compaction).toEqual({ status: "completed", trigger: undefined, preTokens: undefined, postTokens: undefined });
+});
+
 test("retains the first timestamp while streaming and starts a new one after a tool", () => {
   const first = event("message", { text: "Checking" }, 2);
   const later = { ...event("message", { text: " now" }, 3), occurred_at: "2026-11-05T00:00:10Z" };

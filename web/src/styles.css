@@ -1241,6 +1241,12 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .context-compaction-event header, .subagent-event header { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--muted); font-size: 11px; }
 .context-compaction-event header time, .subagent-event header time { margin-left: auto; }
 .context-compaction-event .message-content, .subagent-event .message-content { font-size: 12px; }
+.claude-compaction-event.failed { border-left-color: var(--red); }
+.claude-compaction-event.interrupted, .claude-compaction-event.unknown { border-left-color: var(--muted); }
+.claude-compaction-event header > svg { flex-shrink: 0; }
+.claude-compaction-event header strong { min-width: 0; overflow-wrap: anywhere; }
+.claude-compaction-event header time { white-space: nowrap; }
+.claude-compaction-tokens { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .subagent-event p { max-width: 100%; margin: 8px 0 0; color: #cbd5e1; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
 .subagent-event code { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .approval-prompt { width: min(82%, 820px); align-self: flex-start; margin: 0 0 14px; padding: 12px 14px; color: #fde68a; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-left: 3px solid #f59e0b; border-radius: 6px; }

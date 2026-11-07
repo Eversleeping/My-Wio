@@ -85,7 +85,7 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 			data["message"] = protocol.ClaudeSteerUnconfirmedMessage
 		}
 		event.Payload, _ = json.Marshal(data)
-	case "claude.question", "claude.question.answered", "claude.question.cancelled", "claude.message", "claude.tool_use", "claude.tool_result", "claude.notice", "claude.result":
+	case "claude.compaction.started", "claude.compaction.completed", "claude.compaction.failed", "claude.question", "claude.question.answered", "claude.question.cancelled", "claude.message", "claude.tool_use", "claude.tool_result", "claude.notice", "claude.result":
 	default:
 		return errors.New("unsupported Claude event")
 	}

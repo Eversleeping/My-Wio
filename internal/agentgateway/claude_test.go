@@ -14,6 +14,62 @@ import (
 	"github.com/wio-platform/wio/internal/security"
 )
 
+func TestClaudeCompactionEventsPersistAndDeduplicateWithoutCompletingTurn(t *testing.T) {
+	db, server := gatewayTestServer(t, "claude-compaction")
+	ctx := context.Background()
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.03"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/compaction", Name: "compaction"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, _ := db.ListWorkspaces(ctx)
+	thread, err := db.CreateClaudeThread(ctx, workspaces[0].ID, "sonnet", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueClaudeTurn(ctx, thread, "work", "sonnet", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	thread, _ = db.ClaudeThread(ctx, thread.ID)
+	g := New(db, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	send := func(id, kind, operationID, serverID string) error {
+		payload, _ := json.Marshal(map[string]any{"operation_id": operationID, "trigger": "auto", "pre_tokens": 180000, "post_tokens": 24000})
+		raw, _ := json.Marshal(protocol.StreamEvent{EventID: id, StreamID: thread.ID, Kind: kind, Payload: payload})
+		return g.handleClaudeEvent(ctx, serverID, raw)
+	}
+	for _, kind := range []string{"claude.compaction.started", "claude.compaction.completed", "claude.compaction.failed"} {
+		if err := send(kind, kind, thread.OperationID, "foreign"); err == nil {
+			t.Fatal("foreign compaction event accepted")
+		}
+		if err := send(kind+"-stale", kind, "previous-operation", server.ID); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			if err := send(kind, kind, thread.OperationID, server.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	events, err := db.Events(ctx, thread.ID, 0, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, event := range events {
+		counts[event.Kind]++
+	}
+	for _, kind := range []string{"claude.compaction.started", "claude.compaction.completed", "claude.compaction.failed"} {
+		if counts[kind] != 1 {
+			t.Fatalf("lost or duplicated compaction event: %+v", counts)
+		}
+	}
+	current, _ := db.ClaudeThread(ctx, thread.ID)
+	if current.Status != thread.Status || current.OperationID != thread.OperationID {
+		t.Fatal("compaction event changed task execution state")
+	}
+}
+
 func TestClaudeSessionStreamsResumesAndSharesWorkspaceLock(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude")
 	ctx := context.Background()

@@ -116,6 +116,11 @@ func run(parent context.Context, executable, operationID string, command protoco
 			id, _ := data["request_id"].(string)
 			event.EventID = id + ":" + kind
 		}
+		if strings.HasPrefix(kind, "compaction.") {
+			if id, _ := data["native_id"].(string); id != "" {
+				event.EventID = "claude-compaction:" + operationID + ":" + id + ":" + kind
+			}
+		}
 		return emit(event)
 	}
 	initializeID := ""
@@ -189,6 +194,9 @@ func run(parent context.Context, executable, operationID string, command protoco
 			UserMessageUUIDs  []string        `json:"user_message_uuids"`
 			QueuedTurnCount   int             `json:"queued_turn_count"`
 			Subtype           string          `json:"subtype"`
+			Status            string          `json:"status"`
+			CompactResult     string          `json:"compact_result"`
+			CompactMetadata   json.RawMessage `json:"compact_metadata"`
 			SessionID         string          `json:"session_id"`
 			Skills            []string        `json:"skills"`
 			ParentToolUseID   *string         `json:"parent_tool_use_id"`
@@ -253,6 +261,30 @@ func run(parent context.Context, executable, operationID string, command protoco
 				if streamErr == nil && live != nil {
 					streamErr = live.initialized()
 				}
+			} else if data.Subtype == "status" && data.Status == "compacting" {
+				streamErr = send("compaction.started", map[string]any{"native_id": data.UUID})
+			} else if data.Subtype == "status" && data.CompactResult == "failed" {
+				// Native diagnostics can contain provider data. Only publish the state.
+				streamErr = send("compaction.failed", map[string]any{"native_id": data.UUID})
+			} else if data.Subtype == "compact_boundary" {
+				payload := map[string]any{"native_id": data.UUID}
+				var metadata struct {
+					Trigger    string `json:"trigger"`
+					PreTokens  *int64 `json:"pre_tokens"`
+					PostTokens *int64 `json:"post_tokens"`
+				}
+				if json.Unmarshal(data.CompactMetadata, &metadata) == nil {
+					if metadata.Trigger == "auto" || metadata.Trigger == "manual" {
+						payload["trigger"] = metadata.Trigger
+					}
+					if metadata.PreTokens != nil && *metadata.PreTokens >= 0 {
+						payload["pre_tokens"] = *metadata.PreTokens
+					}
+					if metadata.PostTokens != nil && *metadata.PostTokens >= 0 {
+						payload["post_tokens"] = *metadata.PostTokens
+					}
+				}
+				streamErr = send("compaction.completed", payload)
 			} else if data.Subtype == "background_tasks_changed" && live != nil {
 				count := 0
 				for _, task := range data.Tasks {

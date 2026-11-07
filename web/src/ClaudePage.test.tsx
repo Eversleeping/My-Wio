@@ -326,6 +326,29 @@ test("offers refreshed upstream models in slash menu while preserving the curren
   expect(requests).toHaveLength(0);
 });
 
+test("shows automatic compaction once in history with time and reported token counts", async () => {
+  setup({selected:true,events:[
+    {event_id:"before",sequence:1,kind:"claude.message",payload:{text:"Before compaction"}},
+    {event_id:"start",sequence:2,kind:"claude.compaction.started",payload:{operation_id:"op-1"}},
+    {event_id:"complete",sequence:3,kind:"claude.compaction.completed",occurred_at:"2026-11-07T00:01:02Z",payload:{operation_id:"op-1",trigger:"auto",pre_tokens:180000,post_tokens:24000}},
+    {event_id:"after",sequence:4,kind:"claude.message",payload:{text:"After compaction"}},
+  ]});
+  expect(await screen.findByText("Context automatically compacted")).toBeVisible();
+  const cards=document.querySelectorAll(".context-compaction-event");
+  expect(cards).toHaveLength(1);
+  expect(cards[0].querySelector("time")).toHaveAttribute("datetime","2026-11-07T00:01:02Z");
+  expect(within(cards[0] as HTMLElement).getByText("Before: 180,000 tokens")).toBeVisible();
+  expect(within(cards[0] as HTMLElement).getByText("After: 24,000 tokens")).toBeVisible();
+  expect(screen.queryByText("Compacting context")).not.toBeInTheDocument();
+  expect(screen.getByText("Before compaction").closest("article")).not.toBe(screen.getByText("After compaction").closest("article"));
+});
+
+test.each(["running","idle"])("only shows active compaction progress while its operation is running (%s)",async status=>{
+  setup({selected:true,status,events:[{event_id:"start",sequence:1,kind:"claude.compaction.started",payload:{operation_id:"op-1"}}]});
+  expect(await screen.findByText(status==="running" ? "Compacting context" : "Context compaction not confirmed")).toBeVisible();
+  expect(screen.queryByText("Context automatically compacted")).not.toBeInTheDocument();
+});
+
 test("collapses commands between replies and expands paired parameters and output", async () => {
   const entries = [
     ["message", { text: "I will inspect the project" }],

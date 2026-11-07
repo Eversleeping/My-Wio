@@ -46,6 +46,27 @@ func init() {
 		session = "550e8400-e29b-41d4-a716-446655440001"
 	}
 	fmt.Printf("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":%q}\n", session)
+	if strings.HasPrefix(mode, "compaction-") {
+		frames := map[string][]string{
+			"compaction-auto": {
+				`{"type":"system","subtype":"status","status":"compacting","uuid":"start"}`,
+				`{"type":"system","subtype":"status","status":null,"compact_result":"success"}`,
+				`{"type":"system","subtype":"compact_boundary","uuid":"boundary","compact_metadata":{"trigger":"auto","pre_tokens":180000,"post_tokens":24000,"preserved_messages":{"uuids":["do-not-forward"]}}}`,
+				`{"type":"system","subtype":"compact_boundary","uuid":"boundary","compact_metadata":{"trigger":"auto","pre_tokens":180000,"post_tokens":24000}}`,
+				`{"type":"system","subtype":"compact_boundary","parent_tool_use_id":"child","compact_metadata":{"trigger":"auto","pre_tokens":1}}`,
+			},
+			"compaction-manual": {`{"type":"system","subtype":"compact_boundary","uuid":"manual","compact_metadata":{"trigger":"manual","pre_tokens":1000}}`},
+			"compaction-failed": {
+				`{"type":"system","subtype":"status","status":"compacting","uuid":"start"}`,
+				`{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"private-provider-diagnostic","uuid":"failure"}`,
+			},
+			"compaction-unknown": {`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"future","pre_tokens":-1}}`},
+		}
+		for _, frame := range frames[mode] {
+			fmt.Println(frame)
+		}
+		fmt.Println(`{"type":"system","subtype":"status","status":"requesting"}`)
+	}
 	if mode == "wait" {
 		time.Sleep(time.Hour)
 		os.Exit(1)
@@ -62,6 +83,55 @@ func init() {
 		fmt.Println(`{"type":"result","uuid":"result-uuid","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":2},"permission_denials":[]}`)
 	}
 	os.Exit(0)
+}
+
+func TestRunForwardsNativeCompactionStates(t *testing.T) {
+	binary, _ := os.Executable()
+	for _, mode := range []string{"auto", "manual", "failed", "unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("WIO_CLAUDE_TEST_CHILD", "compaction-"+mode)
+			t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+			var events []protocol.StreamEvent
+			if err := Run(context.Background(), binary, "operation", protocol.ClaudeTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), PermissionMode: "default"}, func(event protocol.StreamEvent) error {
+				if strings.HasPrefix(event.Kind, "claude.compaction.") {
+					events = append(events, event)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			expected := map[string]int{"auto": 3, "manual": 1, "failed": 2, "unknown": 1}[mode]
+			if len(events) != expected {
+				t.Fatalf("unexpected compaction states: %+v", events)
+			}
+			last := events[len(events)-1]
+			var payload map[string]any
+			if json.Unmarshal(last.Payload, &payload) != nil || payload["operation_id"] != "operation" || last.StreamID != "thread" {
+				t.Fatalf("invalid routing: %+v", last)
+			}
+			if strings.Contains(string(last.Payload), "private-provider-diagnostic") || strings.Contains(string(last.Payload), "do-not-forward") {
+				t.Fatal("unnecessary native diagnostics leaked")
+			}
+			switch mode {
+			case "auto":
+				if events[0].Kind != "claude.compaction.started" || last.Kind != "claude.compaction.completed" || payload["trigger"] != "auto" || payload["pre_tokens"] != float64(180000) || payload["post_tokens"] != float64(24000) || events[1].EventID != last.EventID || last.EventID == "" {
+					t.Fatalf("lost native boundary metadata or replay identity: %+v", events)
+				}
+			case "manual":
+				if payload["trigger"] != "manual" || payload["pre_tokens"] != float64(1000) || payload["post_tokens"] != nil {
+					t.Fatalf("invented missing post-compaction count: %s", last.Payload)
+				}
+			case "failed":
+				if last.Kind != "claude.compaction.failed" {
+					t.Fatal("failed compaction reported as success")
+				}
+			case "unknown":
+				if last.Kind != "claude.compaction.completed" || payload["trigger"] != nil || payload["pre_tokens"] != nil {
+					t.Fatalf("invalid metadata accepted: %s", last.Payload)
+				}
+			}
+		})
+	}
 }
 
 func TestRunStreamsResumesAndKeepsPromptOffArguments(t *testing.T) {
