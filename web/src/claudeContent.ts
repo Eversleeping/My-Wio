@@ -2,7 +2,7 @@ import type { Question, QuestionValue } from "./components/UserInputPrompt";
 import type { StreamEvent } from "./types";
 
 export type ClaudeToolItem = { id: string; name: string; input?: string; output?: string; failed?: boolean };
-export type ClaudeDisplayItem = { id: string; endEventID?: string; operationID?: string; questions?: Question[]; answers?: Record<string, QuestionValue>; cancelled?: boolean; role: "user" | "assistant" | "toolGroup" | "notice" | "question"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
+export type ClaudeDisplayItem = { id: string; occurredAt?: string; endEventID?: string; operationID?: string; questions?: Question[]; answers?: Record<string, QuestionValue>; cancelled?: boolean; role: "user" | "assistant" | "toolGroup" | "notice" | "question"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
 
 export function claudeDisplayEvents(events: StreamEvent[], denied: string): ClaudeDisplayItem[] {
   const items: ClaudeDisplayItem[] = [];
@@ -10,10 +10,11 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
   let toolOperation = "";
   let toolsByID = new Map<string, ClaudeToolItem>();
   for (const event of events) {
+    const occurredAt = event.occurred_at && Number.isFinite(Date.parse(event.occurred_at)) ? event.occurred_at : undefined;
     const p = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
     const text = typeof p.text === "string" ? p.text : "";
     if (event.kind === "claude.question") {
-      items.push({ id:event.event_id,role:"question",text:"",operationID:String(p.operation_id ?? ""),questions:Array.isArray(p.questions) ? p.questions as Question[] : [] });
+      items.push({ id:event.event_id,occurredAt,role:"question",text:"",operationID:String(p.operation_id ?? ""),questions:Array.isArray(p.questions) ? p.questions as Question[] : [] });
     } else if (event.kind === "claude.question.answered" || event.kind === "claude.question.cancelled") {
       const item=items.find(item=>item.role==="question" && item.id===p.request_id);
       if(item && event.kind === "claude.question.cancelled")item.cancelled=true;
@@ -23,7 +24,7 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
       const operation = typeof p.operation_id === "string" ? p.operation_id : "";
       let group = items.at(-1);
       if (group?.role !== "toolGroup" || toolOperation !== operation) {
-        group = { id: event.event_id, role: "toolGroup", text: "", tools: [] };
+        group = { id: event.event_id, occurredAt, role: "toolGroup", text: "", tools: [] };
         items.push(group);
         toolsByID = new Map();
         toolOperation = operation;
@@ -46,14 +47,14 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
       if (!text) continue;
       const previous = items.at(-1);
       if (previous?.role === "assistant") { previous.text += text; previous.endEventID = event.event_id; }
-      else items.push({ id: event.event_id, endEventID: event.event_id, role: "assistant", text });
+      else items.push({ id: event.event_id, occurredAt, endEventID: event.event_id, role: "assistant", text });
     } else if (event.kind === "claude.user.message" || event.kind === "claude.steer.applied") {
-      items.push({ id: event.event_id, role: "user", text, images: Array.isArray(p.images) ? p.images.flatMap(image => typeof image?.data_url === "string" ? [image.data_url] : []) : [] });
-    } else if (event.kind === "claude.notice") items.push({ id: event.event_id, role: "notice", text });
+      items.push({ id: event.event_id, occurredAt, role: "user", text, images: Array.isArray(p.images) ? p.images.flatMap(image => typeof image?.data_url === "string" ? [image.data_url] : []) : [] });
+    } else if (event.kind === "claude.notice") items.push({ id: event.event_id, occurredAt, role: "notice", text });
     else if (event.kind === "claude.result") {
-      if (Array.isArray(p.permission_denials) && p.permission_denials.length) items.push({ id: `${event.event_id}-denied`, role: "notice", text: denied });
-      if (Array.isArray(p.errors) && p.errors.length) items.push({ id: `${event.event_id}-errors`, role: "notice", text: p.errors.join("\n") });
-    } else if (event.kind === "claude.turn.completed" && typeof p.message === "string" && p.message) items.push({ id: event.event_id, role: "notice", text: p.message });
+      if (Array.isArray(p.permission_denials) && p.permission_denials.length) items.push({ id: `${event.event_id}-denied`, occurredAt, role: "notice", text: denied });
+      if (Array.isArray(p.errors) && p.errors.length) items.push({ id: `${event.event_id}-errors`, occurredAt, role: "notice", text: p.errors.join("\n") });
+    } else if (event.kind === "claude.turn.completed" && typeof p.message === "string" && p.message) items.push({ id: event.event_id, occurredAt, role: "notice", text: p.message });
   }
   return items;
 }

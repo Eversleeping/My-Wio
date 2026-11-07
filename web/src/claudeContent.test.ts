@@ -4,6 +4,22 @@ import type { StreamEvent } from "./types";
 
 const event = (kind: string, payload: Record<string, unknown>, sequence: number): StreamEvent => ({ event_id: `e${sequence}`, stream_id: "claude-1", kind: `claude.${kind}`, sequence, occurred_at: "2026-11-05T00:00:00Z", payload });
 
+test("retains the first timestamp while streaming and starts a new one after a tool", () => {
+  const first = event("message", { text: "Checking" }, 2);
+  const later = { ...event("message", { text: " now" }, 3), occurred_at: "2026-11-05T00:00:10Z" };
+  const next = { ...event("message", { text: "Done" }, 5), occurred_at: "2026-11-05T00:01:00Z" };
+  const before = claudeDisplayEvents([event("user.message", { text: "Hi" }, 1), first], "Denied");
+  const after = claudeDisplayEvents([event("user.message", { text: "Hi" }, 1), first, later, event("tool_use", { id: "tool", name: "Read" }, 4), next], "Denied");
+  expect(after[1]).toMatchObject({ text: "Checking now", occurredAt: before[1].occurredAt, endEventID: "e3" });
+  expect(after[0].occurredAt).toBe(first.occurred_at);
+  expect(after[3].occurredAt).toBe(next.occurred_at);
+});
+
+test.each([undefined, "", "invalid"])("does not invent a timestamp for incomplete history (%s)", occurred_at => {
+  const item = { ...event("message", { text: "Old reply" }, 1), occurred_at } as StreamEvent;
+  expect(claudeDisplayEvents([item], "Denied")[0].occurredAt).toBeUndefined();
+});
+
 test("groups consecutive commands and pairs results without counting them twice", () => {
   const items = claudeDisplayEvents([
     event("message", { text: "Checking" }, 1),
