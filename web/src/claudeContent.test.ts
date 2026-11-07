@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { claudeDisplayEvents } from "./claudeContent";
+import { claudeDisplayEvents, claudeToolPresentation } from "./claudeContent";
 import type { StreamEvent } from "./types";
 
 const event = (kind: string, payload: Record<string, unknown>, sequence: number): StreamEvent => ({ event_id: `e${sequence}`, stream_id: "claude-1", kind: `claude.${kind}`, sequence, occurred_at: "2026-11-05T00:00:00Z", payload });
@@ -57,4 +57,37 @@ test("keeps different operations separate and retains output-only history", () =
   expect(items).toHaveLength(2);
   expect(items[0].tools?.[0].output).toBe("older output");
   expect(items[1].tools?.[0]).toMatchObject({ name: "Read", output: "new output" });
+});
+
+test("formats native Bash commands and text blocks without JSON escaping or losing options", () => {
+  const command = 'npx prettier --check README.md 2>&1 | grep -v "npm notice" | tail -2';
+  const display = claudeToolPresentation({ id: "bash", name: "Bash", input: JSON.stringify({ command, description: "Recheck README formatting", timeout: 120000, run_in_background: false }), output: JSON.stringify([{ type: "text", text: "Checking formatting…" }, { type: "text", text: "All files match." }]) });
+  expect(display).toMatchObject({ title: command, kind: "shell", input: `${command}\n(Recheck README formatting)\ntimeout: 120000\nrun_in_background: false`, output: "Checking formatting…\nAll files match." });
+});
+
+test("summarizes file and search tools and preserves unfamiliar parameters and mixed output", () => {
+  const read = claudeToolPresentation({ id: "read", name: "Read", input: JSON.stringify({ file_path: "/project/README.md", offset: 0, limit: 50 }) });
+  expect(read).toMatchObject({ title: "Read: /project/README.md", kind: "read", input: "file_path: /project/README.md\noffset: 0\nlimit: 50" });
+  expect(claudeToolPresentation({ id: "grep", name: "Grep", input: JSON.stringify({ pattern: "TODO", path: "/project" }) })).toMatchObject({ title: "Grep: TODO", kind: "search" });
+  const input = JSON.stringify({ options: { safe: true }, text: "first\nsecond", old_string: "", values: [1, 2] });
+  const output = JSON.stringify([{ type: "text", text: "Screenshot" }, { type: "image", data: "retained" }]);
+  const unknown = claudeToolPresentation({ id: "mcp", name: "mcp__custom", input, output });
+  expect(unknown.input).toContain('options: {\n  "safe": true\n}');
+  expect(unknown.input).toContain("text: first\nsecond\nold_string: \nvalues: [");
+  expect(unknown.output).toBe(output);
+  expect(claudeToolPresentation({ id: "old", name: "Legacy", input: "unstructured", output: "plain output" })).toMatchObject({ input: "unstructured", output: "plain output" });
+});
+
+test("keeps start times and result states and closes pending tools only for the matching operation", () => {
+  const items = claudeDisplayEvents([
+    event("tool_use", { id: "one", operation_id: "one", name: "Bash" }, 1),
+    { ...event("tool_result", { id: "one", operation_id: "one", content: "", is_error: false }, 2), occurred_at: "2026-11-05T00:00:10Z" },
+    event("tool_use", { id: "two", operation_id: "one", name: "Bash" }, 3),
+    event("tool_use", { id: "three", operation_id: "two", name: "Read" }, 4),
+    event("turn.completed", { operation_id: "one", status: "interrupted" }, 5),
+    event("tool_result", { id: "three", operation_id: "two", content: "error", is_error: true }, 6),
+  ], "Denied");
+  expect(items[0].tools?.[0]).toMatchObject({ occurredAt: "2026-11-05T00:00:00Z", output: "", status: "completed" });
+  expect(items[0].tools?.[1].status).toBe("interrupted");
+  expect(items[1].tools?.[0].status).toBe("failed");
 });

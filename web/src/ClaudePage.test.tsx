@@ -345,9 +345,9 @@ test("collapses commands between replies and expands paired parameters and outpu
   expect(screen.getByText("The project is ready")).toBeVisible();
   await user.click(summary);
   expect(group).toHaveAttribute("open");
-  await user.click(within(group).getByText("Tool: Bash"));
+  await user.click(within(group).getByText("git status", { selector: ".gemini-tool-title" }));
   expect(within(group).getByText("working tree clean")).toBeVisible();
-  expect(within(group).getByText(/git status/)).toBeVisible();
+  expect(within(group).getByText("git status", { selector: "pre" })).toBeVisible();
   await user.click(summary);
   expect(group).not.toHaveAttribute("open");
 });

@@ -931,6 +931,13 @@ input:focus, select:focus, textarea:focus {
 .gemini-tool section > strong { color: var(--muted); font-size: 11px; }
 .gemini-tool section pre { margin: 4px 0 0; padding: 0; }
 .gemini-tool pre { max-height: 300px; overflow: auto; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: #06090e; color: #e6edf3; }
+.claude-tool .gemini-tool-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: pre-wrap; }
+@media (max-width: 480px) {
+  .claude-tool > summary { display: grid; grid-template-columns: 14px 15px minmax(0, 1fr) auto; gap: 6px; }
+  .claude-tool > summary .gemini-tool-title { grid-column: 3 / -1; }
+  .claude-tool > summary .gemini-tool-status { grid-column: 3; }
+  .claude-tool > summary time { grid-column: 4; }
+}
 .gemini-usage, .gemini-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .gemini-hint { margin: 10px 12px; }
 .gemini-working { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
