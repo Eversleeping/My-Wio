@@ -85,6 +85,61 @@ func TestInvalidCredentialCommandLeavesExistingFilesUnchanged(t *testing.T) {
 	}
 }
 
+func TestGitOnlyCredentialsDoNotReadOrReconfigureCodex(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, ".codex", "config.toml")
+	if err := os.WriteFile(config, []byte("[invalid Codex config"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// No Codex adapter or API key exists. Git must work independently of both.
+	client := &Client{config: Config{StateDir: root, CodexAPIKeyFile: filepath.Join(root, "absent.key")}}
+	command := protocol.ConfigureCredentialsCommand{Scope: "git", GitCredentials: []protocol.GitCredential{{Endpoint: "https://github.com", Username: "user", Token: "test-token", CommitName: "User", CommitEmail: "user@example.com"}}}
+	if err := client.configureCredentials(command); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git-credentials")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.configureCredentials(protocol.ConfigureCredentialsCommand{Scope: "git", RemoveGit: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git-credentials")); !os.IsNotExist(err) {
+		t.Fatal("Git removal failed")
+	}
+	if data, _ := os.ReadFile(config); string(data) != "[invalid Codex config" {
+		t.Fatal("Git changed Codex configuration")
+	}
+	if _, err := os.Stat(client.config.CodexAPIKeyFile); !os.IsNotExist(err) {
+		t.Fatal("Git created a Codex key")
+	}
+}
+
+func TestCodexOnlyCredentialsPreserveGit(t *testing.T) {
+	root := t.TempDir()
+	gitFiles := []string{filepath.Join(root, ".gitconfig"), filepath.Join(root, ".git-credentials")}
+	for _, path := range gitFiles {
+		if err := os.WriteFile(path, []byte("preserve Git file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := NewClient(Config{StateDir: root, CodexAPIKeyFile: filepath.Join(root, "codex.key")}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = client.codex.Close() })
+	if err := client.configureCredentials(protocol.ConfigureCredentialsCommand{Scope: "codex", CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "test-codex-secret", CodexModel: "gpt-5.6-sol"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range gitFiles {
+		if data, _ := os.ReadFile(path); string(data) != "preserve Git file" {
+			t.Fatal("Codex changed Git credentials")
+		}
+	}
+	if data, _ := os.ReadFile(client.config.CodexAPIKeyFile); string(data) != "test-codex-secret\n" {
+		t.Fatal("Codex key was not applied")
+	}
+}
+
 func TestConfigureCredentialsWritesMultipleGitCredentials(t *testing.T) {
 	root := t.TempDir()
 	keyFile := filepath.Join(root, "codex.key")

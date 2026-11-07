@@ -705,6 +705,7 @@ type Server struct {
 	CodexUpdateSupported       bool                `db:"-" json:"codex_update_supported"`
 	CLIManagementSupported     bool                `db:"-" json:"cli_management_supported"`
 	ExactRollbackSupported     bool                `db:"-" json:"exact_rollback_supported"`
+	ScopedCredentialsSupported bool                `db:"-" json:"scoped_credentials_supported"`
 	GeminiCredentialsSupported bool                `db:"-" json:"gemini_credentials_supported"`
 	ClaudeEffortSupported      bool                `db:"-" json:"claude_effort_supported"`
 	ClaudeCredentialsSupported bool                `db:"-" json:"claude_credentials_supported"`

@@ -9,12 +9,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/gitidentity"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
 
 type serverCredentialProfilesInput struct {
+	Scope          string   `json:"scope"`
 	CodexProfileID string   `json:"codex_profile_id"`
 	GitProfileID   string   `json:"git_profile_id"`
 	GitProfileIDs  []string `json:"git_profile_ids"`
@@ -27,7 +29,15 @@ func (a *API) updateServerCredentialProfiles(w http.ResponseWriter, r *http.Requ
 	}
 	input.CodexProfileID = strings.TrimSpace(input.CodexProfileID)
 	input.GitProfileIDs = normalizedProfileIDs(input.GitProfileIDs, input.GitProfileID)
-	if input.CodexProfileID == "" {
+	if input.Scope != "" && input.Scope != "codex" && input.Scope != "git" {
+		writeError(w, http.StatusBadRequest, "invalid credential scope")
+		return
+	}
+	if (input.Scope == "git" && input.CodexProfileID != "") || (input.Scope == "codex" && len(input.GitProfileIDs) > 0) {
+		writeError(w, http.StatusBadRequest, "only credentials for the selected scope may be changed")
+		return
+	}
+	if input.Scope != "git" && input.CodexProfileID == "" {
 		writeError(w, http.StatusBadRequest, "Codex credential profile is required")
 		return
 	}
@@ -45,17 +55,13 @@ func (a *API) updateServerCredentialProfiles(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusConflict, "server must be online to update credentials")
 		return
 	}
-	active, err := a.store.HasActiveOperation(r.Context(), serverID, "credentials.configure")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not check credential update state")
+	if input.Scope != "" && !buildinfo.SupportsScopedCredentials(server.AgentVersion) {
+		writeError(w, http.StatusConflict, "independent Codex and Git credentials require Agent 0.3.02 or later")
 		return
 	}
-	if active {
-		writeError(w, http.StatusConflict, "a credential update is already queued for this server")
-		return
-	}
-	command, gitProfiles, err := a.resolveServerCredentialProfiles(r.Context(), input.CodexProfileID, input.GitProfileIDs)
-	if err != nil || command.CodexAPIKey == "" {
+
+	command, gitProfiles, err := a.resolveServerCredentialProfiles(r.Context(), input.CodexProfileID, input.GitProfileIDs, input.Scope)
+	if err != nil || input.Scope != "git" && command.CodexAPIKey == "" {
 		writeError(w, http.StatusBadRequest, "the selected credential profile is unavailable or invalid")
 		return
 	}
@@ -64,7 +70,11 @@ func (a *API) updateServerCredentialProfiles(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "could not protect credential update")
 		return
 	}
-	operationID, err := a.store.QueueCredentialUpdate(r.Context(), serverID, ciphertext, input.CodexProfileID, input.GitProfileIDs, "credentials:"+store.NewID())
+	operationID, err := a.store.QueueCredentialUpdate(r.Context(), serverID, ciphertext, input.CodexProfileID, input.GitProfileIDs, "credentials:"+store.NewID(), input.Scope)
+	if errors.Is(err, store.ErrThreadActive) {
+		writeError(w, http.StatusConflict, "a credential update is already queued for this server")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue credential update")
 		return
@@ -72,7 +82,7 @@ func (a *API) updateServerCredentialProfiles(w http.ResponseWriter, r *http.Requ
 	a.gateway.Wake(serverID)
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "server.credentials.update", "server", serverID, map[string]any{
-		"operation_id": operationID, "codex_profile_id": input.CodexProfileID,
+		"operation_id": operationID, "scope": input.Scope, "codex_profile_id": input.CodexProfileID,
 		"git_profile_ids": input.GitProfileIDs, "git_profile_names": credentialProfileNames(gitProfiles), "remove_git": command.RemoveGit,
 	}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "status": "queued"})
@@ -95,19 +105,26 @@ func normalizedProfileIDs(ids []string, legacyID string) []string {
 	return normalized
 }
 
-func (a *API) resolveServerCredentialProfiles(ctx context.Context, codexProfileID string, gitProfileIDs []string) (protocol.ConfigureCredentialsCommand, []store.CredentialProfile, error) {
+func (a *API) resolveServerCredentialProfiles(ctx context.Context, codexProfileID string, gitProfileIDs []string, scopes ...string) (protocol.ConfigureCredentialsCommand, []store.CredentialProfile, error) {
+	scope := ""
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
 	if a.vault == nil {
 		return protocol.ConfigureCredentialsCommand{}, nil, errCredentialProfile
 	}
-	codex, err := a.store.CredentialProfile(ctx, codexProfileID)
-	if err != nil || codex.Kind != "codex" {
-		return protocol.ConfigureCredentialsCommand{}, nil, errCredentialProfile
+	command := protocol.ConfigureCredentialsCommand{Scope: scope, RemoveGit: scope != "codex" && len(gitProfileIDs) == 0}
+	if scope != "git" {
+		codex, err := a.store.CredentialProfile(ctx, codexProfileID)
+		if err != nil || codex.Kind != "codex" {
+			return protocol.ConfigureCredentialsCommand{}, nil, errCredentialProfile
+		}
+		if err := a.vault.Decrypt(codex.Ciphertext, &command.CodexAPIKey); err != nil {
+			return protocol.ConfigureCredentialsCommand{}, nil, errCredentialProfile
+		}
+		command.CodexAPIURL, command.CodexModel = codex.Endpoint, codex.Model
 	}
-	var codexAPIKey string
-	if err := a.vault.Decrypt(codex.Ciphertext, &codexAPIKey); err != nil {
-		return protocol.ConfigureCredentialsCommand{}, nil, errCredentialProfile
-	}
-	command := protocol.ConfigureCredentialsCommand{CodexAPIURL: codex.Endpoint, CodexAPIKey: codexAPIKey, CodexModel: codex.Model, RemoveGit: len(gitProfileIDs) == 0}
+
 	gitProfiles := make([]store.CredentialProfile, 0, len(gitProfileIDs))
 	for _, profileID := range gitProfileIDs {
 		profile, err := a.store.CredentialProfile(ctx, profileID)

@@ -90,15 +90,30 @@ func (s *Store) SetServerCredentialProfileIDs(ctx context.Context, serverID, cod
 	return tx.Commit()
 }
 
-func (s *Store) setServerCredentialProfileIDs(ctx context.Context, tx *sqlx.Tx, serverID, codexProfileID string, gitProfileIDs []string) error {
+func (s *Store) setServerCredentialProfileIDs(ctx context.Context, tx *sqlx.Tx, serverID, codexProfileID string, gitProfileIDs []string, scopes ...string) error {
+	scope := ""
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
 	gitProfileIDs = normalizedProfileIDs(gitProfileIDs)
 	primaryGitProfileID := ""
 	if len(gitProfileIDs) > 0 {
 		primaryGitProfileID = gitProfileIDs[0]
 	}
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,?,NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`), serverID, codexProfileID, primaryGitProfileID, time.Now().UTC()); err != nil {
+	query := `INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,NULLIF(?,''),NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`
+	if scope == "codex" {
+		query = `INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,NULLIF(?,''),NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,updated_at=excluded.updated_at`
+	}
+	if scope == "git" {
+		query = `INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,NULLIF(?,''),NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(query), serverID, codexProfileID, primaryGitProfileID, time.Now().UTC()); err != nil {
 		return err
 	}
+	if scope == "codex" {
+		return nil
+	}
+
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM server_git_credential_profiles WHERE server_id=?"), serverID); err != nil {
 		return err
 	}
@@ -124,7 +139,18 @@ func normalizedProfileIDs(ids []string) []string {
 	return normalized
 }
 
-func (s *Store) QueueCredentialUpdate(ctx context.Context, serverID, ciphertext, codexProfileID string, gitProfileIDs []string, idempotency string) (string, error) {
+func (s *Store) QueueCredentialUpdate(ctx context.Context, serverID, ciphertext, codexProfileID string, gitProfileIDs []string, idempotency string, scopes ...string) (string, error) {
+	scope := ""
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
+	kind := "credentials.configure"
+	if scope != "" {
+		if scope != "codex" && scope != "git" {
+			return "", errors.New("invalid credential scope")
+		}
+		kind = scope + ".credentials.configure"
+	}
 	if !strings.HasPrefix(ciphertext, "v1:") {
 		return "", errors.New("encrypted operation payload must use a supported Vault format")
 	}
@@ -138,16 +164,26 @@ func (s *Store) QueueCredentialUpdate(ctx context.Context, serverID, ciphertext,
 		return "", err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), serverID); err != nil {
+		return "", err
+	}
+	var active int
+	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('credentials.configure','codex.credentials.configure','git.credentials.configure') AND status IN ('queued','delivered','running')"), serverID); err != nil {
+		return "", err
+	}
+	if active > 0 {
+		return "", ErrThreadActive
+	}
 	operationID := NewID()
 	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, serverID, "credentials.configure", ciphertext, idempotency, now); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), operationID, serverID, kind, ciphertext, idempotency, now); err != nil {
 		return "", err
 	}
 	primaryGitProfileID := ""
 	if len(gitProfileIDs) > 0 {
 		primaryGitProfileID = gitProfileIDs[0]
 	}
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO server_credential_updates(operation_id,server_id,codex_profile_id,git_profile_id,git_profile_ids,created_at) VALUES(?,?,?,NULLIF(?,''),?,?)"), operationID, serverID, codexProfileID, primaryGitProfileID, string(gitProfileIDsJSON), now); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO server_credential_updates(operation_id,server_id,codex_profile_id,git_profile_id,git_profile_ids,created_at) VALUES(?,?,NULLIF(?,''),NULLIF(?,''),?,?)"), operationID, serverID, codexProfileID, primaryGitProfileID, string(gitProfileIDsJSON), now); err != nil {
 		return "", err
 	}
 	return operationID, tx.Commit()
@@ -168,18 +204,26 @@ func (s *Store) CompleteCredentialUpdate(ctx context.Context, result protocol.Op
 	}
 	if result.Status == "succeeded" {
 		var update struct {
+			Kind           string `db:"kind"`
 			ServerID       string `db:"server_id"`
 			CodexProfileID string `db:"codex_profile_id"`
 			GitProfileIDs  string `db:"git_profile_ids"`
 		}
-		if err := tx.GetContext(ctx, &update, s.Q("SELECT server_id,COALESCE(codex_profile_id,'') codex_profile_id,git_profile_ids FROM server_credential_updates WHERE operation_id=?"), result.OperationID); err != nil {
+		if err := tx.GetContext(ctx, &update, s.Q("SELECT o.kind,u.server_id,COALESCE(u.codex_profile_id,'') codex_profile_id,u.git_profile_ids FROM server_credential_updates u JOIN agent_operations o ON o.id=u.operation_id WHERE operation_id=?"), result.OperationID); err != nil {
 			return err
 		}
 		var gitProfileIDs []string
 		if err := json.Unmarshal([]byte(update.GitProfileIDs), &gitProfileIDs); err != nil {
 			return fmt.Errorf("decode Git credential profile IDs: %w", err)
 		}
-		if err := s.setServerCredentialProfileIDs(ctx, tx, update.ServerID, update.CodexProfileID, gitProfileIDs); err != nil {
+		scope := ""
+		if update.Kind == "codex.credentials.configure" {
+			scope = "codex"
+		}
+		if update.Kind == "git.credentials.configure" {
+			scope = "git"
+		}
+		if err := s.setServerCredentialProfileIDs(ctx, tx, update.ServerID, update.CodexProfileID, gitProfileIDs, scope); err != nil {
 			return err
 		}
 	}

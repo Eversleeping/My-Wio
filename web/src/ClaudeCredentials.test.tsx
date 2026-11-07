@@ -9,7 +9,7 @@ const response = (body: unknown, status = 200) => new Response(JSON.stringify(bo
 function setup(result = "success", supported = true, claudeOnly = false) {
   window.localStorage.setItem("wio_language", "en");
   const requests: Array<{url:string; body:unknown}> = [];
-  const server = {id:"server-1",name:"Production",status:"online",claude_credentials_supported:supported,claude_profile_id:"claude-1",claude_profile_name:"Claude",codex_profile_id:claudeOnly ? "" : "codex-1",codex_profile_name:claudeOnly ? "" : "Codex",git_profiles:[{id:"git-1",name:"GitHub",username:"user"}]};
+  const server = {id:"server-1",name:"Production",status:"online",scoped_credentials_supported:true,claude_credentials_supported:supported,claude_profile_id:"claude-1",claude_profile_name:"Claude",codex_profile_id:claudeOnly ? "" : "codex-1",codex_profile_name:claudeOnly ? "" : "Codex",git_profiles:[{id:"git-1",name:"GitHub",username:"user"}]};
   vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     if (init.method === "POST") {
@@ -41,14 +41,14 @@ test.each(["success","rejected","failed"])("applies Claude through the server cr
   expect(screen.queryByText("Claude · Claude")).not.toBeInTheDocument();
 });
 
-test("preserves Codex and Git application in the same dialog",async () => {
+test("applies only Codex from its own tab",async () => {
   const {user,requests} = setup();
   await user.click(await screen.findByTitle("Change server credentials"));
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByRole("combobox",{name:"Codex API profile"})).toHaveValue("codex-1");
   await user.click(within(dialog).getByRole("button",{name:"Apply credentials"}));
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  expect(requests).toEqual([{url:"/api/servers/server-1/credential-profiles",body:{codex_profile_id:"codex-1",git_profile_ids:["git-1"]}}]);
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests).toEqual([{url:"/api/servers/server-1/credential-profiles",body:{scope:"codex",codex_profile_id:"codex-1"}}]);
 });
 
 test("blocks Claude on an unsupported Agent",async () => {
@@ -68,7 +68,7 @@ test("prevents duplicate submissions while Claude credentials are being applied"
   await user.click(within(dialog).getByRole("tab",{name:"Claude API"}));
   await user.dblClick(within(dialog).getByRole("button",{name:"Apply credentials"}));
   expect(await within(dialog).findByRole("button",{name:"Applying"})).toBeDisabled();
-  expect(within(dialog).getByRole("tab",{name:"Codex / Git"})).toBeDisabled();
+  expect(within(dialog).getByRole("tab",{name:"Codex API"})).toBeDisabled();
   expect(requests).toHaveLength(1);
 });
 

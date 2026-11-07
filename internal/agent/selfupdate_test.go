@@ -30,8 +30,8 @@ func TestStageAgentUpdateDownloadsAndVerifiesPackage(t *testing.T) {
 
 	stateDir := t.TempDir()
 	client := &Client{config: Config{ControlURL: server.URL, AgentToken: "agent-token", StateDir: stateDir}}
-	command := protocol.AgentUpdateCommand{Version: "0.3.0", Packages: map[string]protocol.AgentUpdatePackage{
-		runtime.GOARCH: {URL: "/api/agent/update-package/" + runtime.GOARCH + "?version=0.3.0", SHA256: expectedSHA, Size: int64(len(packageBody))},
+	command := protocol.AgentUpdateCommand{Version: "1.0.0", Packages: map[string]protocol.AgentUpdatePackage{
+		runtime.GOARCH: {URL: "/api/agent/update-package/" + runtime.GOARCH + "?version=1.0.0", SHA256: expectedSHA, Size: int64(len(packageBody))},
 	}}
 	path, err := client.stageAgentUpdate(context.Background(), command)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestStageAgentUpdateRejectsChecksumMismatch(t *testing.T) {
 
 	stateDir := t.TempDir()
 	client := &Client{config: Config{ControlURL: server.URL, AgentToken: "agent-token", StateDir: stateDir}}
-	_, err := client.stageAgentUpdate(context.Background(), protocol.AgentUpdateCommand{Version: "0.3.0", Packages: map[string]protocol.AgentUpdatePackage{
+	_, err := client.stageAgentUpdate(context.Background(), protocol.AgentUpdateCommand{Version: "1.0.0", Packages: map[string]protocol.AgentUpdatePackage{
 		runtime.GOARCH: {URL: "/api/agent/update-package/" + runtime.GOARCH, SHA256: hex.EncodeToString(expected[:]), Size: int64(len(packageBody))},
 	}})
 	if err == nil {
@@ -124,7 +124,7 @@ func TestActivateCurrentUpdateRollsBackAnUnconfirmedAttempt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(binaryDir, "wio-agent"), packageBody, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAgentUpdateManifest(updatesRoot, agentUpdateManifest{Version: "0.3.0", Binary: filepath.ToSlash(filepath.Join(checksum, "wio-agent")), SHA256: checksum, State: "attempting"}); err != nil {
+	if err := writeAgentUpdateManifest(updatesRoot, agentUpdateManifest{Version: "1.0.0", Binary: filepath.ToSlash(filepath.Join(checksum, "wio-agent")), SHA256: checksum, State: "attempting"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ActivateCurrentUpdate(stateDir); err == nil {

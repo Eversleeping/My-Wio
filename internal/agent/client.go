@@ -1052,10 +1052,13 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.configureClaudeCredentials(command)
-	case "credentials.configure":
+	case "credentials.configure", "codex.credentials.configure", "git.credentials.configure":
 		var command protocol.ConfigureCredentialsCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
+		}
+		if envelope.Kind != "credentials.configure" && envelope.Kind != command.Scope+".credentials.configure" {
+			return errors.New("credential update scope mismatch")
 		}
 		return c.configureCredentials(command)
 	case "codex.update":

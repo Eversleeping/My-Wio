@@ -696,7 +696,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			err = g.store.CompleteGeminiCredentialUpdate(ctx, result)
 		} else if operation.Kind == "claude.credentials.configure" {
 			err = g.store.CompleteClaudeCredentialUpdate(ctx, result)
-		} else if operation.Kind == "credentials.configure" {
+		} else if operation.Kind == "credentials.configure" || operation.Kind == "codex.credentials.configure" || operation.Kind == "git.credentials.configure" {
 			err = g.store.CompleteCredentialUpdate(ctx, result)
 		} else if geminiInterrupted || operation.Kind == "claude.turn.start" {
 			geminiCompletionClaimed, err = g.store.CompleteOperationIfActive(ctx, result)

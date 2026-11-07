@@ -507,6 +507,7 @@ type GitCredential struct {
 }
 
 type ConfigureCredentialsCommand struct {
+	Scope          string          `json:"scope,omitempty"`
 	CodexAPIURL    string          `json:"codex_api_url"`
 	CodexAPIKey    string          `json:"codex_api_key"`
 	CodexModel     string          `json:"codex_model"`

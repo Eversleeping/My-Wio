@@ -148,3 +148,86 @@ func serverCredentialRequest(t *testing.T, serverID string, body any, handler ht
 		handler(w, r.WithContext(requestContext))
 	})
 }
+
+func TestScopedCredentialsKeepAssignmentsIndependent(t *testing.T) {
+	db := openBootstrapTestStore(t)
+	a := resourceTestAPI(db)
+	ctx := context.Background()
+	server := enrollResourceTestServer(t, db, "scoped-credentials")
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.02"}); err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := a.vault.Encrypt("test-credential-secret")
+	git, err := db.SaveCredentialProfile(ctx, store.CredentialProfile{Kind: "git", Name: "Git", Endpoint: "https://github.com", Username: "user", CommitName: "User", CommitEmail: "user@example.com"}, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, err := db.SaveCredentialProfile(ctx, store.CredentialProfile{Kind: "codex", Name: "Codex", Endpoint: "https://api.example.com/v1", Model: "gpt-5.6-sol"}, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := func(body map[string]any, scope, status string) protocol.ConfigureCredentialsCommand {
+		t.Helper()
+		response := serverCredentialRequest(t, server.ID, body, a.updateServerCredentialProfiles)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("queue: %d %s", response.Code, response.Body.String())
+		}
+		var queued struct {
+			OperationID string `json:"operation_id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &queued); err != nil {
+			t.Fatal(err)
+		}
+		op, err := db.Operation(ctx, queued.OperationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if op.Kind != scope+".credentials.configure" || !strings.HasPrefix(op.Payload, "v1:") {
+			t.Fatal("incorrect operation kind or unprotected secrets")
+		}
+		var command protocol.ConfigureCredentialsCommand
+		if err := a.vault.Decrypt(op.Payload, &command); err != nil {
+			t.Fatal(err)
+		}
+		duplicate := serverCredentialRequest(t, server.ID, body, a.updateServerCredentialProfiles)
+		if duplicate.Code != http.StatusConflict {
+			t.Fatal("overlapping credential updates accepted")
+		}
+		if err := db.CompleteCredentialUpdate(ctx, protocol.OperationResult{OperationID: op.ID, Status: status}); err != nil {
+			t.Fatal(err)
+		}
+		return command
+	}
+	gitBody := map[string]any{"scope": "git", "git_profile_ids": []string{git.ID}}
+	apply(gitBody, "git", "failed")
+	current, _ := db.Server(ctx, server.ID)
+	if current.GitProfileID != "" {
+		t.Fatal("failed operation changed bindings")
+	}
+	gitCommand := apply(gitBody, "git", "succeeded")
+	current, _ = db.Server(ctx, server.ID)
+	if gitCommand.CodexAPIKey != "" || gitCommand.Scope != "git" || current.CodexProfileID != "" || current.GitProfileID != git.ID {
+		t.Fatal("Git requires or changes Codex")
+	}
+	codexCommand := apply(map[string]any{"scope": "codex", "codex_profile_id": codex.ID}, "codex", "succeeded")
+	current, _ = db.Server(ctx, server.ID)
+	if codexCommand.GitToken != "" || len(codexCommand.GitCredentials) != 0 || codexCommand.RemoveGit || current.CodexProfileID != codex.ID || len(current.GitProfiles) != 1 || current.GitProfileID != git.ID {
+		t.Fatal("Codex changes Git")
+	}
+	remove := apply(map[string]any{"scope": "git", "git_profile_ids": []string{}}, "git", "succeeded")
+	current, _ = db.Server(ctx, server.ID)
+	if !remove.RemoveGit || current.CodexProfileID != codex.ID || len(current.GitProfiles) != 0 || current.GitProfileID != "" {
+		t.Fatal("Git removal changes Codex or retains Git")
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.99"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := serverCredentialRequest(t, server.ID, gitBody, a.updateServerCredentialProfiles); got.Code != http.StatusConflict {
+		t.Fatal("old Agent accepted scoped credentials")
+	}
+	for _, body := range []map[string]any{{"scope": "invalid"}, {"scope": "git", "codex_profile_id": codex.ID}, {"scope": "codex", "codex_profile_id": codex.ID, "git_profile_ids": []string{git.ID}}} {
+		if got := serverCredentialRequest(t, server.ID, body, a.updateServerCredentialProfiles); got.Code != http.StatusBadRequest {
+			t.Fatal("invalid mixed scope accepted")
+		}
+	}
+}

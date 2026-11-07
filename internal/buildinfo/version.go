@@ -5,7 +5,9 @@ import (
 	"strings"
 )
 
-var Version = "0.3.01"
+var Version = "0.3.02"
+
+func SupportsScopedCredentials(version string) bool { return atLeast(version, "0.3.02") }
 
 func SupportsClaudeQuestions(agent, cli string) bool {
 	return atLeast(agent, "0.2.98") && atLeast(strings.TrimSpace(strings.SplitN(cli, " ", 2)[0]), "2.1.286")
