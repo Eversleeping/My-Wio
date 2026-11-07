@@ -59,6 +59,30 @@ func TestRedactJSON(t *testing.T) {
 	}
 }
 
+func TestRedactJSONClaudeCacheCounters(t *testing.T) {
+	for _, key := range []string{"cache_creation_input_tokens", "cache_read_input_tokens"} {
+		for _, value := range []string{"0", "135", `"secret"`, `{"api_key":"secret"}`, "-1", "1.5", "null", "true"} {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				raw := []byte(`{"usage":{"` + key + `":` + value + `},"cache_read_input_tokens_secret":123}`)
+				var got struct {
+					Usage  map[string]json.RawMessage `json:"usage"`
+					Secret string                     `json:"cache_read_input_tokens_secret"`
+				}
+				if err := json.Unmarshal(RedactJSON(raw), &got); err != nil {
+					t.Fatal(err)
+				}
+				want := `"[REDACTED]"`
+				if value == "0" || value == "135" {
+					want = value
+				}
+				if string(got.Usage[key]) != want || got.Secret != "[REDACTED]" {
+					t.Fatalf("unexpected redaction: %s", RedactJSON(raw))
+				}
+			})
+		}
+	}
+}
+
 func TestRecoveryCodesAreHashed(t *testing.T) {
 	codes, hashes, err := GenerateRecoveryCodes(3)
 	if err != nil {

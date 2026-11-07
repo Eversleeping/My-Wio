@@ -99,6 +99,82 @@ func TestClaudeSessionStreamsResumesAndSharesWorkspaceLock(t *testing.T) {
 	}
 }
 
+func TestClaudeUsageSurvivesGatewayRedaction(t *testing.T) {
+	db, server := gatewayTestServer(t, "claude-usage")
+	ctx := context.Background()
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.99"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/usage", Name: "usage"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := db.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("workspaces: %+v %v", workspaces, err)
+	}
+	thread, err := db.CreateClaudeThread(ctx, workspaces[0].ID, "sonnet", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueClaudeTurn(ctx, thread, "count usage", "sonnet", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	thread, err = db.ClaudeThread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := New(db, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	start := time.Now().UTC().Add(-time.Minute)
+	send := func(id, kind string, at time.Time, payload map[string]any) {
+		t.Helper()
+		payload["operation_id"] = thread.OperationID
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(protocol.StreamEvent{EventID: id, StreamID: thread.ID, Kind: kind, OccurredAt: at, Payload: body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := g.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "claude_event", PayloadJSON: raw}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send("usage-init", "claude.init", start, map[string]any{"session_id": "550e8400-e29b-41d4-a716-446655440000"})
+	send("usage-result", "claude.result", start.Add(10*time.Second), map[string]any{
+		"result_id": "native-result", "success": true,
+		"usage":   map[string]any{"input_tokens": 5, "cache_creation_input_tokens": 30, "cache_read_input_tokens": 100, "output_tokens": 20},
+		"api_key": "must-remain-private",
+	})
+	got, err := db.SessionUsage(ctx, thread.ID, "claude", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InputTokens == nil || *got.InputTokens != 135 || got.OutputTokens == nil || *got.OutputTokens != 20 || got.Partial || got.OutputPerSecond == nil || *got.OutputPerSecond != 2 {
+		t.Fatalf("gateway lost native usage: %+v", got)
+	}
+	events, err := db.Events(ctx, thread.ID, 0, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind != "claude.result" {
+			continue
+		}
+		var payload struct {
+			APIKey string `json:"api_key"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.APIKey != "[REDACTED]" {
+			t.Fatal("credential was not redacted")
+		}
+		return
+	}
+	t.Fatal("usage event not persisted")
+}
+
 func TestClaudeLostOwnershipKeepsWorkspaceUntilConfirmed(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude-lost")
 	ctx := context.Background()

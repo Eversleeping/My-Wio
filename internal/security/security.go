@@ -172,7 +172,7 @@ func redactValue(v any) {
 			// CLI usage counts share "token" with credentials. Only preserve
 			// known, nonnegative integer counters; strings and other token keys
 			// still follow normal secret redaction.
-			if lower == "input_tokens" || lower == "output_tokens" || lower == "total_tokens" || lower == "cached_tokens" {
+			if lower == "input_tokens" || lower == "output_tokens" || lower == "total_tokens" || lower == "cached_tokens" || lower == "cache_creation_input_tokens" || lower == "cache_read_input_tokens" {
 				if count, ok := val.(float64); ok && count >= 0 && math.Trunc(count) == count {
 					continue
 				}

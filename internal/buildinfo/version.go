@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.2.99"
+var Version = "0.3.01"
 
 func SupportsClaudeQuestions(agent, cli string) bool {
 	return atLeast(agent, "0.2.98") && atLeast(strings.TrimSpace(strings.SplitN(cli, " ", 2)[0]), "2.1.286")
