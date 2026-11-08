@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -1025,8 +1026,8 @@ func (a *Adapter) stopLocked(reason error) {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
-	if process != nil && process.Process != nil {
-		_ = process.Process.Kill()
+	if process != nil {
+		killProcess(process)
 	}
 	a.resetProcess(process, reason)
 }
@@ -1045,6 +1046,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	// installations whose on-disk Codex configuration predates this feature.
 	process := exec.CommandContext(processContext, a.command, "app-server", "--listen", "stdio://", "-c", "features.default_mode_request_user_input=true")
 	process.Env = append(os.Environ(), a.environment...)
+	configureProcess(process)
 	stdout, err := process.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -1094,9 +1096,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	if err != nil {
 		cancel()
 		_ = stdin.Close()
-		if process.Process != nil {
-			_ = process.Process.Kill()
-		}
+		killProcess(process)
 		a.reset(err)
 		return fmt.Errorf("initialize Codex app-server: %w", err)
 	}
@@ -1107,7 +1107,7 @@ func (a *Adapter) clientInfo(ctx context.Context) map[string]string {
 	version := "unknown"
 	versionContext, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if output, err := exec.CommandContext(versionContext, a.command, "--version").Output(); err == nil {
+	if output, err := childprocess.Output(childprocess.CommandContext(versionContext, a.command, "--version")); err == nil {
 		version = strings.Join(strings.Fields(string(output)), " ")
 		if version == "" {
 			version = "unknown"

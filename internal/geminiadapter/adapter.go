@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -208,13 +209,10 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	cmd.Env = environment
 	cmd.Stdin = strings.NewReader(command.Prompt)
 	configureProcess(cmd)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
 	// stderr may include credentials or provider diagnostics. The structured
 	// stream carries user-facing errors; never persist raw stderr in operations.
-	if err := cmd.Start(); err != nil {
+	stdout, err := childprocess.StartStream(cmd)
+	if err != nil {
 		return fmt.Errorf("start Gemini CLI (install @google/gemini-cli for the Agent account): %w", err)
 	}
 	scanner := bufio.NewScanner(stdout)
@@ -271,7 +269,7 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	if streamErr != nil {
 		cancel()
 	}
-	waitErr := cmd.Wait()
+	waitErr := stdout.Wait()
 	if streamErr != nil {
 		return streamErr
 	}

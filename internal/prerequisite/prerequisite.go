@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wio-platform/wio/internal/childprocess"
 )
 
 const DefaultSocket = "/run/wio-prerequisites/helper.sock"
@@ -267,8 +269,8 @@ func commandWorks(ctx context.Context, runner Runner, command string, args ...st
 }
 
 func run(ctx context.Context, command string, args ...string) (string, error) {
-	process := exec.CommandContext(ctx, command, args...)
-	output, err := process.CombinedOutput()
+	process := childprocess.CommandContext(ctx, command, args...)
+	output, err := childprocess.CombinedOutput(process)
 	return strings.TrimSpace(string(output)), err
 }
 

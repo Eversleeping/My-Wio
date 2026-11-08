@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -128,7 +128,7 @@ func allowedPath(path string, roots []string, mustExist bool) (string, error) {
 
 func git(ctx context.Context, directory string, args ...string) ([]byte, error) {
 	commandArgs := append([]string{"-C", directory}, args...)
-	return exec.CommandContext(ctx, "git", commandArgs...).CombinedOutput()
+	return childprocess.CombinedOutput(childprocess.CommandContext(ctx, "git", commandArgs...))
 }
 
 func cleanGitError(output []byte, err error) string {

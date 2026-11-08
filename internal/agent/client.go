@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/claudeadapter"
 	"github.com/wio-platform/wio/internal/codexadapter"
 	"github.com/wio-platform/wio/internal/deployer"
@@ -1301,7 +1302,7 @@ func commandVersion(ctx context.Context, command string) string {
 func commandVersionWithTimeout(ctx context.Context, command string, timeout time.Duration) string {
 	versionContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	output, err := exec.CommandContext(versionContext, command, "--version").Output()
+	output, err := childprocess.Output(childprocess.CommandContext(versionContext, command, "--version"))
 	if err != nil {
 		return ""
 	}

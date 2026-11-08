@@ -8,13 +8,13 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -261,8 +261,8 @@ func inspect(ctx context.Context, repositoryPath string) protocol.Repository {
 
 func gitOutput(ctx context.Context, repositoryPath string, args ...string) string {
 	commandArgs := gitCommandArguments(repositoryPath, args...)
-	command := exec.CommandContext(ctx, "git", commandArgs...)
-	output, err := command.Output()
+	command := childprocess.CommandContext(ctx, "git", commandArgs...)
+	output, err := childprocess.Output(command)
 	if err != nil {
 		return ""
 	}
@@ -307,8 +307,8 @@ func Import(ctx context.Context, cloneRoot string, command protocol.GitImportCom
 	if err := os.Chmod(staging, 0o750); err != nil {
 		return "", err
 	}
-	process := exec.CommandContext(ctx, "git", "clone", "--", command.RemoteURL, staging)
-	output, err := process.CombinedOutput()
+	process := childprocess.CommandContext(ctx, "git", "clone", "--", command.RemoteURL, staging)
+	output, err := childprocess.CombinedOutput(process)
 	if err != nil {
 		return "", fmt.Errorf("git clone: %w: %s", err, truncate(string(output), 4096))
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -90,12 +91,9 @@ func run(parent context.Context, executable, operationID string, command protoco
 		live.start(stdin, cancel, nil)
 	}
 	configureProcess(cmd)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
 	// Stderr can contain credentials; do not persist it in operation errors.
-	if err := cmd.Start(); err != nil {
+	stdout, err := childprocess.StartStream(cmd)
+	if err != nil {
 		return fmt.Errorf("start Claude Code CLI (install claude for the Agent account): %w", err)
 	}
 	scan := bufio.NewScanner(stdout)
@@ -139,7 +137,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 		}
 		if _, err := live.stdin.Write(initial); err != nil {
 			cancel()
-			_ = cmd.Wait()
+			_ = stdout.Wait()
 			return errors.New("could not send initial Claude input")
 		}
 	}
@@ -368,7 +366,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 	if streamErr != nil {
 		cancel()
 	}
-	waitErr := cmd.Wait()
+	waitErr := stdout.Wait()
 	if streamErr != nil {
 		return streamErr
 	}

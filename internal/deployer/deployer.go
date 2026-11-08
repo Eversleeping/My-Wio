@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/deploymenttemplate"
 	"github.com/wio-platform/wio/internal/prerequisite"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -819,10 +819,10 @@ func run(ctx context.Context, environment []string, command string, args ...stri
 }
 
 func runIn(ctx context.Context, directory string, environment []string, command string, args ...string) (string, error) {
-	process := exec.CommandContext(ctx, command, args...)
+	process := childprocess.CommandContext(ctx, command, args...)
 	process.Dir = directory
 	process.Env = append(os.Environ(), environment...)
-	output, err := process.CombinedOutput()
+	output, err := childprocess.CombinedOutput(process)
 	return truncate(string(output), maximumProcessLogSize), err
 }
 

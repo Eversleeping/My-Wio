@@ -73,6 +73,9 @@ func run(log *slog.Logger, args []string) error {
 		if err := agent.ActivateCurrentUpdate(config.StateDir); err != nil {
 			log.Warn("could not activate current Agent update; continuing with installed binary", "error", err)
 		}
+		// Self-updates replace this image with syscall.Exec while keeping the
+		// PID. Reap children left by the previous image before starting any.
+		agent.ReapInheritedChildren(log)
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 		return agent.NewClient(config, log).Run(ctx)

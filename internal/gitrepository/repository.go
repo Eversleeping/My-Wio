@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/wio-platform/wio/internal/childprocess"
 )
 
 const (
@@ -823,9 +824,9 @@ func splitLines(output []byte) []string {
 
 func runGit(ctx context.Context, directory string, args ...string) ([]byte, error) {
 	commandArgs := gitCommandArguments(directory, args...)
-	command := exec.CommandContext(ctx, "git", commandArgs...)
+	command := childprocess.CommandContext(ctx, "git", commandArgs...)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
-	return command.CombinedOutput()
+	return childprocess.CombinedOutput(command)
 }
 
 func gitCommandArguments(directory string, args ...string) []string {

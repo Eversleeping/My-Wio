@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -16,7 +17,7 @@ import (
 const codexCurrentVersionFile = "current-version"
 
 var runCodexUpdateCommand = func(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Run()
+	return childprocess.Result(childprocess.CommandContext(ctx, name, args...).Run())
 }
 var findCodexUpdateCommand = exec.LookPath
 var readCodexUpdateVersion = commandVersion

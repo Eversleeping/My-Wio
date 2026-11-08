@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/wio-platform/wio/internal/childprocess"
 )
 
 // Gemini 0.65 disables global Git config and appends an empty generic helper
@@ -61,8 +63,7 @@ func (c *Client) geminiGitEnvironment(ctx context.Context) ([]string, error) {
 	config := filepath.Join(c.config.StateDir, ".gitconfig")
 	if info, err := os.Lstat(config); err == nil && info.Mode().IsRegular() {
 		for _, key := range []string{"user.name", "user.email"} {
-			cmd := exec.CommandContext(ctx, "git", "config", "--file", config, "--no-includes", "--get", key)
-			raw, err := cmd.Output()
+			raw, err := childprocess.Output(childprocess.CommandContext(ctx, "git", "config", "--file", config, "--no-includes", "--get", key))
 			if err != nil {
 				var exit *exec.ExitError
 				if errors.As(err, &exit) && exit.ExitCode() == 1 {
