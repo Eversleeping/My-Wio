@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	// Embed the IANA time zone database so task time zones resolve even on
+	// hosts or containers without /usr/share/zoneinfo.
+	_ "time/tzdata"
 )
 
 var ErrInvalid = errors.New("invalid schedule")
@@ -24,6 +27,10 @@ type Spec struct {
 type fieldSet struct {
 	values map[int]bool
 	any    bool
+	// star reports a field starting with "*" (including steps like "*/5").
+	// Vixie cron uses it to tell wildcard jobs from fixed-time jobs when
+	// handling daylight-saving transitions.
+	star bool
 }
 
 func Parse(expression string) (Spec, error) {
@@ -90,25 +97,70 @@ func Next(expression, timezone string, after time.Time) (time.Time, error) {
 			return time.Time{}, fmt.Errorf("%w: timezone: %v", ErrInvalid, err)
 		}
 	}
+	// Daylight-saving transitions follow Vixie cron: fixed-time jobs (both
+	// minute and hour restricted) run once when a wall-clock hour repeats and
+	// run at the end of a gap when their wall-clock time does not exist.
+	// Wildcard jobs simply run at every matching instant that exists.
+	fixed := !spec.Minute.star && !spec.Hour.star
 	candidate := after.In(location).Truncate(time.Minute).Add(time.Minute)
+	zoneStart, zoneEnd := candidate.ZoneBounds()
 	// Five years is enough to find every valid Gregorian cron expression while
 	// preventing malformed schedules from making the scheduler loop forever.
 	for i := 0; i < 5*366*24*60; i++ {
-		dayMatches := spec.Day.values[candidate.Day()]
-		weekdayMatches := spec.Weekday.values[int(candidate.Weekday())]
-		dayOfMonthAndWeekdayMatch := dayMatches && weekdayMatches
-		if !spec.Day.any && !spec.Weekday.any {
-			// Vixie cron semantics: when both fields are restricted, either
-			// field may match. If one is unrestricted, the restricted field
-			// remains an AND constraint with the rest of the expression.
-			dayOfMonthAndWeekdayMatch = dayMatches || weekdayMatches
+		if !zoneEnd.IsZero() && !candidate.Before(zoneEnd) {
+			zoneStart, zoneEnd = candidate.ZoneBounds()
 		}
-		if spec.Minute.values[candidate.Minute()] && spec.Hour.values[candidate.Hour()] && spec.Month.values[int(candidate.Month())] && dayOfMonthAndWeekdayMatch {
-			return candidate.UTC(), nil
+		shift := zoneShift(zoneStart)
+		if fixed && shift > 0 && candidate.Equal(zoneStart) {
+			// The clock jumped forward right before this instant. A fixed
+			// job whose wall-clock time fell in the gap runs now.
+			wallStart := wallClock(candidate)
+			for wall := wallStart.Add(-shift); wall.Before(wallStart); wall = wall.Add(time.Minute) {
+				if spec.matches(wall) {
+					return candidate.UTC(), nil
+				}
+			}
+		}
+		if spec.matches(wallClock(candidate)) {
+			repeated := shift < 0 && candidate.Sub(zoneStart) < -shift
+			if !fixed || !repeated {
+				return candidate.UTC(), nil
+			}
 		}
 		candidate = candidate.Add(time.Minute)
 	}
 	return time.Time{}, fmt.Errorf("%w: no matching time in the next five years", ErrInvalid)
+}
+
+// zoneShift returns how far the local clock moved at the start of a zone
+// period: positive for a gap (spring forward), negative for a repeated
+// interval (fall back), zero when no transition is known.
+func zoneShift(zoneStart time.Time) time.Duration {
+	if zoneStart.IsZero() {
+		return 0
+	}
+	_, before := zoneStart.Add(-time.Nanosecond).Zone()
+	_, after := zoneStart.Zone()
+	return time.Duration(after-before) * time.Second
+}
+
+// wallClock returns the local wall-clock fields of t as a UTC value, so wall
+// times can be compared and stepped without time zone effects.
+func wallClock(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, time.UTC)
+}
+
+func (spec Spec) matches(wall time.Time) bool {
+	dayMatches := spec.Day.values[wall.Day()]
+	weekdayMatches := spec.Weekday.values[int(wall.Weekday())]
+	dayOfMonthAndWeekdayMatch := dayMatches && weekdayMatches
+	if !spec.Day.any && !spec.Weekday.any {
+		// Vixie cron semantics: when both fields are restricted, either
+		// field may match. If one is unrestricted, the restricted field
+		// remains an AND constraint with the rest of the expression.
+		dayOfMonthAndWeekdayMatch = dayMatches || weekdayMatches
+	}
+	return spec.Minute.values[wall.Minute()] && spec.Hour.values[wall.Hour()] && spec.Month.values[int(wall.Month())] && dayOfMonthAndWeekdayMatch
 }
 
 func parseField(raw string, minimum, maximum int, sundaySeven bool) (fieldSet, error) {
@@ -174,5 +226,5 @@ func parseField(raw string, minimum, maximum int, sundaySeven bool) (fieldSet, e
 	if len(values) == 0 {
 		return fieldSet{}, errors.New("field has no values")
 	}
-	return fieldSet{values: values, any: raw == "*" || raw == "?"}, nil
+	return fieldSet{values: values, any: raw == "*" || raw == "?", star: strings.HasPrefix(raw, "*") || strings.HasPrefix(raw, "?")}, nil
 }

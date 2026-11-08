@@ -29,6 +29,12 @@ var steeringHook []byte
 // administrator policy. Its script and credentials exist only for one turn.
 const steeringHookCommand = `node -e "if(process.env.WIO_GEMINI_STEER_SCRIPT){require(process.env.WIO_GEMINI_STEER_SCRIPT)}else{process.stdout.write('{}')}"`
 
+// steeringConfigFile sits next to the per-turn hook script and holds the
+// queue endpoint and its bearer credential. Gemini's shell tools inherit the
+// CLI environment, so the credential must not travel in an environment
+// variable; only the path to the script does.
+const steeringConfigFile = "steering.json"
+
 func ensureSteeringHook(env []string) error {
 	thinkingSettingsMu.Lock()
 	defer thinkingSettingsMu.Unlock()
@@ -223,6 +229,14 @@ func (a *Adapter) startSteering(ctx context.Context, op, thread string, env []st
 		return nil, nil, err
 	}
 	token := uuid.NewString() + uuid.NewString()
+	config, _ := json.Marshal(map[string]string{"url": "http://" + listener.Addr().String(), "token": token})
+	// MkdirTemp created the directory 0700; the file is private to the Agent
+	// account as well and is removed with the directory when the turn ends.
+	if err = os.WriteFile(filepath.Join(dir, steeringConfigFile), config, 0600); err != nil {
+		_ = listener.Close()
+		cleanup()
+		return nil, nil, err
+	}
 	turn := &steeringTurn{ctx: ctx, thread: thread}
 	emit := func(kind, id string, payload map[string]any) error {
 		payload["operation_id"] = op
@@ -289,12 +303,12 @@ func (a *Adapter) startSteering(ctx context.Context, op, thread string, env []st
 		_ = server.Close()
 		cleanup()
 	}
-	result := make([]string, 0, len(env)+3)
+	result := make([]string, 0, len(env)+1)
 	for _, entry := range env {
 		if !strings.HasPrefix(entry, "WIO_GEMINI_STEER_") {
 			result = append(result, entry)
 		}
 	}
-	result = append(result, "WIO_GEMINI_STEER_SCRIPT="+script, "WIO_GEMINI_STEER_URL=http://"+listener.Addr().String(), "WIO_GEMINI_STEER_AUTH="+token)
+	result = append(result, "WIO_GEMINI_STEER_SCRIPT="+script)
 	return result, close, nil
 }

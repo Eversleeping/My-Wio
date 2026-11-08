@@ -56,6 +56,10 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if runtime.GOOS != "linux" {
 		return errors.New("Compose deployments are supported only on Linux agents")
 	}
+	ref, err := deploymentRef(command)
+	if err != nil {
+		return err
+	}
 	checks := d.Preflight(ctx, command)
 	if missingAutomaticPrerequisite(checks) {
 		status("preparing", "installing missing deployment prerequisites", "", "", "Missing Git, Docker, Docker Compose, or the Docker daemon will be configured automatically when supported.")
@@ -90,25 +94,50 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return err
 	}
-	if _, err := os.Stat(release); err == nil {
+	if _, err := os.Lstat(release); err == nil {
 		return errors.New("release already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
+	// The release running now is what a failed deployment has to bring back.
+	previous := ""
+	if _, current, err := currentRelease(command.ReleaseRoot, command.TargetID); err == nil {
+		previous = current
+	}
+	progress := &releaseProgress{}
+	if err := d.deployRelease(ctx, command, ref, status, root, release, progress); err != nil {
+		return d.abandonRelease(ctx, command, status, root, release, previous, progress, err)
+	}
+	return nil
+}
+
+// releaseProgress records how far a deployment got, for cleanup after a
+// failure.
+type releaseProgress struct {
+	workDir     string
+	composePath string
+	environment []string
+	// started is set once Docker Compose may have replaced the target's
+	// running containers with the new release.
+	started bool
+}
+
+func (d *Deployer) deployRelease(ctx context.Context, command protocol.DeployCommand, ref string, status StatusFunc, root, release string, progress *releaseProgress) error {
 	source := command.Repository
 	cloneArgs := []string{"clone", "--no-checkout", "--", source, release}
 	checkoutRef := "FETCH_HEAD"
 	if command.SourceType == "workspace" {
 		source = command.SourcePath
 		cloneArgs = []string{"clone", "--local", "--no-hardlinks", "--no-checkout", "--", source, release}
-		checkoutRef = command.CommitRef
-		if checkoutRef == "" {
-			checkoutRef = "HEAD"
-		}
-		resolvedSource, resolveErr := run(ctx, nil, "git", "-C", source, "rev-parse", "--verify", checkoutRef+"^{commit}")
+		resolvedSource, resolveErr := run(ctx, nil, "git", "-C", source, "rev-parse", "--verify", ref+"^{commit}")
 		if resolveErr != nil {
 			status("preparing", "workspace revision resolution failed", "", "", resolvedSource)
 			return fmt.Errorf("resolve workspace revision: %w: %s", resolveErr, resolvedSource)
 		}
 		checkoutRef = strings.TrimSpace(resolvedSource)
+		if !objectIDPattern.MatchString(checkoutRef) {
+			return fmt.Errorf("resolve workspace revision: unexpected Git output %q", checkoutRef)
+		}
 	}
 	if output, err := run(ctx, nil, "git", cloneArgs...); err != nil {
 		status("preparing", "repository clone failed", "", "", output)
@@ -118,7 +147,7 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	}
 	if command.SourceType == "workspace" {
 		status("preparing", "using server workspace", checkoutRef, "", source)
-	} else if output, err := run(ctx, nil, "git", "-C", release, "fetch", "--depth=1", "origin", command.CommitRef); err != nil {
+	} else if output, err := run(ctx, nil, "git", "-C", release, "fetch", "--depth=1", "--", "origin", ref); err != nil {
 		status("preparing", "commit fetch failed", "", "", output)
 		return fmt.Errorf("fetch commit: %w: %s", err, output)
 	} else {
@@ -162,8 +191,10 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if err != nil {
 		return err
 	}
+	progress.workDir, progress.composePath, progress.environment = workDir, composePath, environment
 	project := projectName(command.TargetID)
 	status("running", "starting Docker Compose project", resolved, "", "Compose project initialization started.")
+	args := []string{"up", "-d", "--remove-orphans"}
 	if command.BuildMode == "pull" {
 		if output, err := d.compose(ctx, workDir, environment, project, composePath, "pull"); err != nil {
 			status("running", "image pull failed", resolved, "", output)
@@ -171,11 +202,20 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 		} else {
 			status("running", "images pulled", resolved, "", output)
 		}
+	} else {
+		// Build before `up` so a failing build leaves the running release
+		// untouched.
+		if output, err := d.compose(ctx, workDir, environment, project, composePath, "build"); err != nil {
+			status("running", "image build failed", resolved, "", output)
+			return fmt.Errorf("docker compose build: %w: %s", err, output)
+		} else {
+			status("running", "images built", resolved, "", output)
+		}
+		args = append(args, "--no-build")
 	}
-	args := []string{"up", "-d", "--remove-orphans"}
-	if command.BuildMode != "pull" {
-		args = append(args, "--build")
-	}
+	// `up` replaces the containers of the previous release (same project), so
+	// every failure from here on has to restore it.
+	progress.started = true
 	if output, err := d.compose(ctx, workDir, environment, project, composePath, args...); err != nil {
 		status("running", "Docker Compose start failed", resolved, "", output)
 		return fmt.Errorf("docker compose up: %w: %s", err, output)
@@ -207,6 +247,83 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	}
 	status("succeeded", "deployment is healthy", resolved, detectedPublicURL, "Release promoted and marked as current.")
 	return nil
+}
+
+// releaseCleanupTimeout bounds the cleanup after a failed deployment. Cleanup
+// runs even when the deployment's own context was cancelled.
+const releaseCleanupTimeout = 10 * time.Minute
+
+// abandonRelease cleans up after a deployment that failed once its release
+// directory existed. If Docker Compose may already have replaced the running
+// containers, the previous release is started again exactly like a rollback
+// (or the failed project is stopped when there is no previous release). The
+// failed release's files and retained image tags are removed either way, and
+// the returned error says what happened to the running project.
+func (d *Deployer) abandonRelease(ctx context.Context, command protocol.DeployCommand, status StatusFunc, root, release, previous string, progress *releaseProgress, cause error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseCleanupTimeout)
+	defer cancel()
+	var outcomes []string
+	if progress.started {
+		outcomes = append(outcomes, d.recoverProject(cleanupCtx, command, status, root, release, previous, progress))
+	}
+	if failures := d.removeReleaseImageTags(cleanupCtx, release); len(failures) > 0 {
+		outcomes = append(outcomes, "some image tags of the failed release could not be removed: "+strings.Join(failures, "; "))
+	}
+	if err := os.RemoveAll(release); err != nil {
+		outcomes = append(outcomes, "the failed release files could not be removed: "+err.Error())
+	}
+	if len(outcomes) == 0 {
+		return cause
+	}
+	return fmt.Errorf("%w; %s", cause, strings.Join(outcomes, "; "))
+}
+
+// recoverProject brings the target back to its previous release after a
+// failed `up`, or stops the failed release when there is nothing to restore.
+// It returns a description of the outcome for the deployment error.
+func (d *Deployer) recoverProject(ctx context.Context, command protocol.DeployCommand, status StatusFunc, root, release, previous string, progress *releaseProgress) string {
+	project := projectName(command.TargetID)
+	if previous != "" {
+		status("running", "restoring previous release", "", "", "The deployment failed after Docker Compose started it; starting the previous release again.")
+		output, err := d.restoreRelease(ctx, previous, command.WorkingDir, command.ComposeFile, progress.environment, project)
+		if err != nil {
+			if output == "" {
+				output = err.Error()
+			}
+			status("running", "previous release restore failed", "", "", output)
+			return fmt.Sprintf("restoring the previous release failed, so the failed release may still be running: %v", err)
+		}
+		status("running", "previous release restored", "", "", output)
+		// A failed promotion can leave the current link missing.
+		currentLink := filepath.Join(root, "current")
+		if current, err := filepath.EvalSymlinks(currentLink); err != nil || filepath.Clean(current) != filepath.Clean(previous) {
+			if err := replaceSymlink(currentLink, previous); err != nil {
+				return "the previous release was restored but could not be marked as current: " + err.Error()
+			}
+		}
+		return "the previous release was restored"
+	}
+	status("running", "stopping failed release", "", "", "The deployment failed and there is no previous release to restore; stopping the failed release.")
+	output, err := d.compose(ctx, progress.workDir, progress.environment, project, progress.composePath, "down", "--remove-orphans")
+	if err != nil {
+		if output == "" {
+			output = err.Error()
+		}
+		status("running", "failed release could not be stopped", "", "", output)
+		return fmt.Sprintf("stopping the failed release failed, so it may still be running: %v: %s", err, output)
+	}
+	status("running", "failed release stopped", "", "", output)
+	return "there was no previous release to restore, so the failed release was stopped"
+}
+
+// restoreRelease starts a historical release from its pinned image snapshot,
+// exactly as a rollback does.
+func (d *Deployer) restoreRelease(ctx context.Context, release, workingDir, composeFile string, environment []string, project string) (string, error) {
+	workDir, composePath, err := composePaths(release, workingDir, composeFile)
+	if err != nil {
+		return "", err
+	}
+	return d.pinnedCompose(ctx, release, workDir, environment, project, composePath, "up", "-d", "--remove-orphans")
 }
 
 func missingAutomaticPrerequisite(checks []PreflightCheck) bool {
@@ -345,8 +462,7 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 	if current != "" && !within(root, current) {
 		return errors.New("current release points outside the target release root")
 	}
-	workDir, composePath, err := composePaths(release, command.WorkingDir, command.ComposeFile)
-	if err != nil {
+	if _, _, err := composePaths(release, command.WorkingDir, command.ComposeFile); err != nil {
 		return err
 	}
 	environment, err := composeEnvironment(command.Environment, command.PublicURL)
@@ -354,7 +470,7 @@ func (d *Deployer) Rollback(ctx context.Context, command protocol.RollbackComman
 		return err
 	}
 	status("running", "restoring selected Compose release", "", "", "Starting Docker Compose from the selected historical release.")
-	if output, err := d.pinnedCompose(ctx, release, workDir, environment, projectName(command.TargetID), composePath, "up", "-d", "--remove-orphans"); err != nil {
+	if output, err := d.restoreRelease(ctx, release, command.WorkingDir, command.ComposeFile, environment, projectName(command.TargetID)); err != nil {
 		status("running", "rollback Compose start failed", "", "", output)
 		return fmt.Errorf("docker compose rollback: %w: %s", err, output)
 	} else {
@@ -460,13 +576,40 @@ func (d *Deployer) deleteTarget(ctx context.Context, command protocol.ContainerA
 			return result, fmt.Errorf("docker compose delete: %w: %s", composeErr, output)
 		}
 	}
+	// The snapshots that name the retained image tags are deleted with the
+	// files, so the tags have to go first. Images are never force-removed.
+	tagFailures := d.removeTargetImageTags(ctx, root)
 	if err := os.RemoveAll(root); err != nil {
 		result.State = "failed"
 		result.Message = "Deployment release cleanup failed"
 		return result, fmt.Errorf("delete deployment target files: %w", err)
 	}
 	result.Message = "Docker Compose project and deployment files deleted"
+	if len(tagFailures) > 0 {
+		result.Message += "; some retained release images could not be removed"
+		result.Content = strings.TrimSpace(result.Content + "\n" + truncate(strings.Join(tagFailures, "\n"), maximumProcessLogSize))
+	}
 	return result, nil
+}
+
+// removeTargetImageTags removes the retained image tags of every release of a
+// deployment target and returns the tags that could not be removed.
+func (d *Deployer) removeTargetImageTags(ctx context.Context, root string) []string {
+	releasesRoot := filepath.Join(root, "releases")
+	entries, err := os.ReadDir(releasesRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return []string{fmt.Sprintf("list deployment releases: %v", err)}
+	}
+	var failures []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			failures = append(failures, d.removeReleaseImageTags(ctx, filepath.Join(releasesRoot, entry.Name()))...)
+		}
+	}
+	return failures
 }
 
 func deploymentTargetRoot(releaseRoot, targetID string) (string, error) {

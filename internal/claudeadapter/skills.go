@@ -24,7 +24,11 @@ func ListSkills(parent context.Context, executable, workspace string, environmen
 	}
 	cmd := exec.CommandContext(ctx, executable, "-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--no-session-persistence")
 	cmd.Dir = workspace
-	configureEnvironment(cmd, environment)
+	releaseEnvironment, err := configureEnvironment(cmd, environment)
+	if err != nil {
+		return protocol.ClaudeSkillsResult{}, errors.New("could not prepare Claude credentials for skill discovery")
+	}
+	defer releaseEnvironment()
 	configureProcess(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -35,7 +39,9 @@ func ListSkills(parent context.Context, executable, workspace string, environmen
 	if err != nil {
 		return protocol.ClaudeSkillsResult{}, errors.New("could not create Claude discovery output")
 	}
-	if cmd.Start() != nil {
+	startErr := cmd.Start()
+	releaseEnvironment()
+	if startErr != nil {
 		return protocol.ClaudeSkillsResult{}, errors.New("could not start Claude Code for skill discovery")
 	}
 	defer func() { _ = stdin.Close(); cancel(); _ = cmd.Wait() }()

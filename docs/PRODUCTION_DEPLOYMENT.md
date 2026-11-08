@@ -166,7 +166,19 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
   config
 ```
 
-在浏览器打开 `https://<public DNS name>` 并创建管理员。启用 TOTP 时，立即离线保存恢复码。登录后，在开发者工具中确认 `/api/ws` 返回 `101 Switching Protocols`；如使用宿主机 Caddy，日志中不应出现 `http2: invalid Upgrade request header`。
+创建管理员需要一次性设置令牌，防止第一个访问页面的人抢占管理员账户：
+
+- 未设置 `WIO_SETUP_TOKEN` 时，控制面只要启动时尚无管理员，就会生成随机令牌，并在 `controlplane` 容器日志中输出一条 `FIRST-RUN SETUP TOKEN` 警告，令牌位于 JSON 日志的 `setup_token` 字段。可用 `docker compose logs controlplane` 查看（完整命令如下）。令牌每次重启都会重新生成，请使用最新一条。
+
+  ```bash
+  docker compose -p "$WIO_COMPOSE_PROJECT" --env-file .env -f deploy/docker-compose.yml \
+    logs controlplane | grep setup_token
+  ```
+
+- 也可以提前在 `.env` 中设置 `WIO_SETUP_TOKEN`（建议使用 `openssl rand -base64 32` 生成的长随机值），此时不再生成令牌，且日志中不会出现该值。
+- 令牌在管理员创建后立即失效，之后可以把它从 `.env` 中删除。令牌错误或缺失时 `POST /api/setup` 返回 403。
+
+在浏览器打开 `https://<public DNS name>`，填写设置令牌并创建管理员。启用 TOTP 时，立即离线保存恢复码。登录后，在开发者工具中确认 `/api/ws` 返回 `101 Switching Protocols`；如使用宿主机 Caddy，日志中不应出现 `http2: invalid Upgrade request header`。
 
 ## 更新、回滚与备份
 

@@ -189,6 +189,9 @@ func (s *Store) QueueCredentialUpdate(ctx context.Context, serverID, ciphertext,
 	return operationID, tx.Commit()
 }
 
+// CompleteCredentialUpdate returns ErrOperationNotActive without binding the
+// profiles when the operation already finished, for example after it was
+// cancelled: a late result must not rebind the server's credentials.
 func (s *Store) CompleteCredentialUpdate(ctx context.Context, result protocol.OperationResult) error {
 	resultData, err := operationResultData(result.Data)
 	if err != nil {
@@ -199,7 +202,7 @@ func (s *Store) CompleteCredentialUpdate(ctx context.Context, result protocol.Op
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=?"), result.Status, result.Message, resultData, time.Now().UTC(), result.OperationID); err != nil {
+	if err := s.completeActiveOperation(ctx, tx, result.OperationID, result.Status, result.Message, resultData, time.Now().UTC()); err != nil {
 		return err
 	}
 	if result.Status == "succeeded" {

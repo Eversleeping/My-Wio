@@ -1,11 +1,15 @@
 // Per-process BeforeModel hook. Model requests stay in this process; only the
 // local queue is queried. Never write diagnostics or credentials to stdout.
+// The queue endpoint and its credential are read from the per-turn file next
+// to this script: Gemini's shell tools inherit the environment, not the file.
 const fs = require('node:fs');
+const path = require('node:path');
 (async () => {
   const input = JSON.parse(fs.readFileSync(0, 'utf8'));
   if (!Array.isArray(input.llm_request?.messages)) throw new Error('Unsupported hook request');
-  const response = await fetch(process.env.WIO_GEMINI_STEER_URL, {
-    method: 'POST', headers: { Authorization: 'Bearer ' + process.env.WIO_GEMINI_STEER_AUTH },
+  const { url, token } = JSON.parse(fs.readFileSync(path.join(__dirname, 'steering.json'), 'utf8'));
+  const response = await fetch(url, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token },
     signal: AbortSignal.timeout(4000),
   });
   if (!response.ok) throw new Error('Steering queue unavailable');

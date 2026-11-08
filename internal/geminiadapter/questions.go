@@ -82,19 +82,27 @@ func (a *Adapter) ask(ctx context.Context, op, thread string, questions []protoc
 // queued before releasing the model so a resumed response cannot overtake it.
 func (a *Adapter) Answer(command protocol.GeminiAnswerCommand) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	p := a.questions[command.RequestID]
 	if p == nil || p.ctx.Err() != nil || p.claimed || p.threadID != command.ThreadID || p.operationID != command.OperationID {
+		a.mu.Unlock()
 		return errors.New("Gemini question has expired or was already answered")
 	}
 	if err := protocol.ValidateUserInputAnswers(p.detail, command.Answers); err != nil {
+		a.mu.Unlock()
 		return err
 	}
+	// Claim under the lock so a concurrent answer cannot also succeed, but emit
+	// without it: emit can block for seconds while the Agent outbound queue is
+	// full, and every Gemini turn needs the adapter lock.
+	p.claimed = true
+	a.mu.Unlock()
 	raw, _ := json.Marshal(map[string]any{"operation_id": command.OperationID, "request_id": command.RequestID, "answers": command.Answers})
 	if err := a.emit(protocol.StreamEvent{EventID: command.RequestID + ":answered", StreamID: command.ThreadID, Kind: "gemini.question.answered", Payload: raw}); err != nil {
+		a.mu.Lock()
+		p.claimed = false
+		a.mu.Unlock()
 		return err
 	}
-	p.claimed = true
 	p.answer <- command.Answers
 	return nil
 }

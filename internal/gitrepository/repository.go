@@ -456,8 +456,8 @@ func ListRemotes(ctx context.Context, repositoryPath string, managedRoots []stri
 		if pushErr != nil {
 			return nil, fmt.Errorf("read push URLs for remote %q: %s", name, cleanGitError(pushOutput, pushErr))
 		}
-		fetchURLs := splitLines(fetchOutput)
-		pushURLs := splitLines(pushOutput)
+		fetchURLs := redactRemoteURLs(splitLines(fetchOutput))
+		pushURLs := redactRemoteURLs(splitLines(pushOutput))
 		if len(fetchURLs) == 0 || len(pushURLs) == 0 {
 			return nil, fmt.Errorf("parse remote %q: fetch and push URLs are required", name)
 		}
@@ -468,6 +468,58 @@ func ListRemotes(ctx context.Context, repositoryPath string, managedRoots []stri
 		})
 	}
 	return remotes, nil
+}
+
+// RedactRemoteURL removes credentials embedded in a remote URL before it is
+// reported to the control plane. SCP-like addresses (git@host:path) and local
+// paths are returned unchanged. URLs keep everything except their userinfo;
+// SSH URLs keep the user name, which selects the account rather than
+// authenticating it, and only lose a password.
+func RedactRemoteURL(raw string) string {
+	schemeEnd := strings.Index(raw, "://")
+	if schemeEnd <= 0 || !urlScheme(raw[:schemeEnd]) {
+		return raw
+	}
+	authorityStart := schemeEnd + len("://")
+	authorityEnd := len(raw)
+	if index := strings.IndexAny(raw[authorityStart:], "/?#"); index >= 0 {
+		authorityEnd = authorityStart + index
+	}
+	// Like Git and curl, the last "@" of the authority ends the userinfo.
+	at := strings.LastIndexByte(raw[authorityStart:authorityEnd], '@')
+	if at < 0 {
+		return raw
+	}
+	userinfo := raw[authorityStart : authorityStart+at]
+	kept := ""
+	switch strings.ToLower(raw[:schemeEnd]) {
+	case "ssh", "git+ssh", "ssh+git":
+		if user, _, _ := strings.Cut(userinfo, ":"); user != "" {
+			kept = user + "@"
+		}
+	}
+	return raw[:authorityStart] + kept + raw[authorityStart+at+1:]
+}
+
+func redactRemoteURLs(values []string) []string {
+	for index, value := range values {
+		values[index] = RedactRemoteURL(value)
+	}
+	return values
+}
+
+// urlScheme mirrors Git's URL detection: a letter followed by letters,
+// digits, "+", "-" or ".".
+func urlScheme(value string) bool {
+	for index, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z':
+		case index > 0 && (char >= '0' && char <= '9' || char == '+' || char == '-' || char == '.'):
+		default:
+			return false
+		}
+	}
+	return value != ""
 }
 
 func ListCommits(ctx context.Context, repositoryPath string, managedRoots []string, options CommitLogOptions) (CommitPage, error) {

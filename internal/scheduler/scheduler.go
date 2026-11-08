@@ -54,7 +54,14 @@ func (r *Runner) tick(ctx context.Context) {
 	for _, task := range tasks {
 		next, nextErr := schedule.Next(task.Schedule, task.Timezone, now)
 		if nextErr != nil {
-			_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", nextErr.Error(), "", now)
+			// The task cannot advance, so it would stay due forever and
+			// enough such tasks would fill every batch and starve valid ones.
+			disabled, err := r.store.DisableScheduledTask(ctx, task.ID, task.NextRunAt, "task disabled: "+nextErr.Error(), now)
+			if err != nil {
+				r.log.Warn("could not disable scheduled task with an invalid schedule", "task_id", task.ID, "error", err)
+			} else if disabled {
+				r.log.Warn("disabled scheduled task with an invalid schedule", "task_id", task.ID, "error", nextErr)
+			}
 			continue
 		}
 		claimed, claimErr := r.store.ClaimScheduledTask(ctx, task.ID, task.NextRunAt, next)
@@ -126,7 +133,7 @@ func (r *Runner) enqueue(ctx context.Context, task store.ScheduledTask, now time
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", eventErr.Error(), operationID, now)
 		return
 	}
-	if err := r.store.MarkScheduledTaskRun(ctx, task.ID, "queued", "", operationID, now); err != nil {
+	if err := r.store.MarkScheduledCodexRunQueued(ctx, task.ID, operationID, now); err != nil {
 		r.log.Warn("could not record scheduled Codex task run", "task_id", task.ID, "error", err)
 	}
 	r.gateway.Wake(thread.ServerID)
@@ -138,6 +145,27 @@ func normalizedApprovalMode(value string) string {
 		return value
 	}
 	return "on-request"
+}
+
+// markQueueError records why a Claude or Gemini turn was not queued. A busy
+// session, workspace or server skips this run; anything else, such as a
+// database error, is a failure.
+func (r *Runner) markQueueError(ctx context.Context, task store.ScheduledTask, agent string, err error, now time.Time) {
+	reason := ""
+	switch {
+	case errors.Is(err, store.ErrThreadActive):
+		reason = agent + " session or workspace is busy"
+	case errors.Is(err, store.ErrWorkspaceWriteActive):
+		reason = "workspace has another active write operation"
+	case errors.Is(err, store.ErrClaudeCredentialsBusy), errors.Is(err, store.ErrGeminiCredentialsBusy):
+		reason = agent + " credentials, CLI installation or Agent update in progress"
+	}
+	if reason != "" {
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", reason, "", now)
+		return
+	}
+	r.log.Warn("could not queue scheduled turn", "task_id", task.ID, "agent", agent, "error", err)
+	_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "could not queue "+agent+" turn: "+err.Error(), "", now)
 }
 
 func (r *Runner) enqueueGemini(ctx context.Context, task store.ScheduledTask, now time.Time) {
@@ -177,16 +205,13 @@ func (r *Runner) enqueueGemini(ctx context.Context, task store.ScheduledTask, no
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent to configure thinking", "", now)
 		return
 	}
-	event, err := r.store.QueueGeminiTurn(ctx, thread, task.Prompt, model, mode, level)
-	if err != nil {
-		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Gemini workspace is busy or unavailable", "", now)
+	// The run is recorded in the queueing transaction: a result that arrives
+	// right after the commit must find the task, and nothing may reset the
+	// run to "queued" afterwards.
+	if _, err := r.store.QueueScheduledGeminiTurn(ctx, task.ID, thread, task.Prompt, model, mode, level, now); err != nil {
+		r.markQueueError(ctx, task, "Gemini", err, now)
 		return
 	}
-	var p struct {
-		OperationID string `json:"operation_id"`
-	}
-	_ = json.Unmarshal(event.Payload, &p)
-	_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "queued", "", p.OperationID, now)
 	r.gateway.Wake(thread.ServerID)
 }
 
@@ -211,15 +236,9 @@ func (r *Runner) enqueueClaude(ctx context.Context, task store.ScheduledTask, no
 	if mode == "" {
 		mode = t.PermissionMode
 	}
-	event, err := r.store.QueueClaudeTurn(ctx, t, task.Prompt, model, mode, task.ReasoningEffort)
-	if err != nil {
-		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Claude workspace is busy or unavailable", "", now)
+	if _, err := r.store.QueueScheduledClaudeTurn(ctx, task.ID, t, task.Prompt, model, mode, task.ReasoningEffort, now); err != nil {
+		r.markQueueError(ctx, task, "Claude", err, now)
 		return
 	}
-	var p struct {
-		OperationID string `json:"operation_id"`
-	}
-	_ = json.Unmarshal(event.Payload, &p)
-	_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "queued", "", p.OperationID, now)
 	r.gateway.Wake(t.ServerID)
 }

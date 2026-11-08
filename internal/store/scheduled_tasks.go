@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 type ScheduledTask struct {
@@ -54,8 +56,12 @@ type ScheduledTaskInput struct {
 	ApprovalMode    string
 }
 
+// server_status is derived from the last heartbeat like everywhere else:
+// servers.status is only reset on a clean disconnect and stays "online" after
+// a control-plane crash or a hung Agent connection. Every branch of
+// scheduledTaskSelect takes the cutoff; see scheduledTaskArgs.
 const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,'' AS thinking_level,st.id,st.thread_id,t.title thread_title,t.workspace_id,w.project_id,p.name project_name,
-	st.server_id,s.name server_name,s.status server_status,t.codex_thread_id,w.path workspace_path,
+	st.server_id,s.name server_name,CASE WHEN s.revoked_at IS NULL AND s.last_seen_at>? THEN 'online' ELSE 'offline' END server_status,t.codex_thread_id,w.path workspace_path,
 	st.name,st.prompt,st.schedule,st.timezone,st.enabled,st.model,st.reasoning_effort,st.approval_mode,
 	st.next_run_at,st.last_run_at,st.last_run_status,st.last_run_message,st.last_operation_id,st.created_at,st.updated_at
 	FROM codex_scheduled_tasks st
@@ -67,6 +73,13 @@ const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,'' AS thinking_le
 var geminiScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'gemini' AS agent_kind"), "codex_scheduled_tasks", "gemini_scheduled_tasks"), "JOIN codex_threads", "JOIN gemini_threads")
 var claudeScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'claude' AS agent_kind"), "codex_scheduled_tasks", "claude_scheduled_tasks"), "JOIN codex_threads", "JOIN claude_threads")
 var scheduledTaskSelect = "SELECT * FROM (" + codexScheduledTaskSelect + " UNION ALL " + strings.ReplaceAll(strings.ReplaceAll(geminiScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id"), "'' AS thinking_level", "st.thinking_level") + " UNION ALL " + strings.ReplaceAll(claudeScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id") + ") st"
+
+// scheduledTaskArgs prepends the server heartbeat cutoff of each of the three
+// branches of scheduledTaskSelect to the arguments of the outer query.
+func scheduledTaskArgs(args ...any) []any {
+	cutoff := time.Now().UTC().Add(-ServerOnlineGracePeriod)
+	return append([]any{cutoff, cutoff, cutoff}, args...)
+}
 
 func scheduledTable(kind string) string {
 	if kind == "claude" {
@@ -99,13 +112,13 @@ func (s *Store) scheduledThread(ctx context.Context, kind, id string) (string, s
 
 func (s *Store) ListScheduledTasks(ctx context.Context) ([]ScheduledTask, error) {
 	rows := make([]ScheduledTask, 0)
-	err := s.DB.SelectContext(ctx, &rows, s.Q(scheduledTaskSelect+" ORDER BY st.enabled DESC,st.next_run_at,st.updated_at DESC"))
+	err := s.DB.SelectContext(ctx, &rows, s.Q(scheduledTaskSelect+" ORDER BY st.enabled DESC,st.next_run_at,st.updated_at DESC"), scheduledTaskArgs()...)
 	return rows, err
 }
 
 func (s *Store) ScheduledTask(ctx context.Context, id string) (ScheduledTask, error) {
 	var task ScheduledTask
-	err := s.DB.GetContext(ctx, &task, s.Q(scheduledTaskSelect+" WHERE st.id=?"), id)
+	err := s.DB.GetContext(ctx, &task, s.Q(scheduledTaskSelect+" WHERE st.id=?"), scheduledTaskArgs(id)...)
 	return task, err
 }
 
@@ -172,7 +185,7 @@ func (s *Store) DueScheduledTasks(ctx context.Context, now time.Time, limit int)
 		limit = 100
 	}
 	rows := make([]ScheduledTask, 0)
-	err := s.DB.SelectContext(ctx, &rows, s.Q(scheduledTaskSelect+" WHERE st.enabled=1 AND st.next_run_at<=? ORDER BY st.next_run_at LIMIT ?"), now.UTC(), limit)
+	err := s.DB.SelectContext(ctx, &rows, s.Q(scheduledTaskSelect+" WHERE st.enabled=1 AND st.next_run_at<=? ORDER BY st.next_run_at LIMIT ?"), scheduledTaskArgs(now.UTC(), limit)...)
 	return rows, err
 }
 
@@ -198,6 +211,95 @@ func (s *Store) MarkScheduledTaskRun(ctx context.Context, id, status, message, o
 	}
 	_, err = s.DB.ExecContext(ctx, s.Q(`UPDATE `+table+` SET last_run_at=?,last_run_status=?,last_run_message=?,last_operation_id=?,updated_at=? WHERE id=?`), at.UTC(), status, message, operationID, time.Now().UTC(), id)
 	return err
+}
+
+// DisableScheduledTask turns off a due task that can never run, such as one
+// whose schedule or time zone no longer parses. Left enabled, it would stay
+// due forever, and enough of them would fill every scheduler batch. Like
+// ClaimScheduledTask it only applies while the task is still due as read, so
+// an edit that fixed the schedule in the meantime is kept.
+func (s *Store) DisableScheduledTask(ctx context.Context, id string, expected time.Time, message string, at time.Time) (bool, error) {
+	table, err := s.scheduledTableForID(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE "+table+" SET enabled=0,last_run_at=?,last_run_status='failed',last_run_message=?,last_operation_id='',updated_at=? WHERE id=? AND enabled=1 AND next_run_at<=?"), at.UTC(), message, time.Now().UTC(), id, expected.UTC().Add(time.Nanosecond))
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count > 0, err
+}
+
+// scheduledRun is the scheduled task on whose behalf a Claude or Gemini turn
+// is queued. The queueing transaction records the run on the task, so the
+// Agent's result can never arrive before the task references its operation.
+type scheduledRun struct {
+	table       string
+	taskID      string
+	at          time.Time
+	operationID string
+}
+
+func (s *Store) recordScheduledRun(ctx context.Context, tx *sqlx.Tx, run *scheduledRun, operationID string) error {
+	if run == nil {
+		return nil
+	}
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE "+run.table+" SET last_run_at=?,last_run_status='queued',last_run_message='',last_operation_id=?,updated_at=? WHERE id=?"), run.at.UTC(), operationID, time.Now().UTC(), run.taskID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		// The task was deleted after it was claimed; do not start its turn.
+		return sql.ErrNoRows
+	}
+	run.operationID = operationID
+	return nil
+}
+
+// MarkScheduledCodexRunQueued records a scheduled Codex run whose turn was
+// queued in an earlier transaction. The Agent may already have reported the
+// result, which MarkScheduledTaskByOperation could not attribute to this task
+// yet. Locking the operation row makes a concurrent completion wait for this
+// write; a result that already arrived is carried over instead of being
+// overwritten with "queued".
+func (s *Store) MarkScheduledCodexRunQueued(ctx context.Context, id, operationID string, at time.Time) error {
+	return s.inTx(ctx, nil, func(tx *sqlx.Tx) error {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=?"), operationID); err != nil {
+			return err
+		}
+		var operation struct {
+			Status string `db:"status"`
+			Result string `db:"result"`
+		}
+		if err := tx.GetContext(ctx, &operation, s.Q("SELECT status,COALESCE(result,'') result FROM agent_operations WHERE id=?"), operationID); err != nil {
+			return err
+		}
+		status, message := "queued", ""
+		switch operation.Status {
+		case "failed", "cancelled":
+			status, message = operation.Status, operation.Result
+		case "succeeded":
+			// Codex reports success once the turn has started.
+			status = "running"
+		}
+		result, err := tx.ExecContext(ctx, s.Q("UPDATE codex_scheduled_tasks SET last_run_at=?,last_run_status=?,last_run_message=?,last_operation_id=?,updated_at=? WHERE id=?"), at.UTC(), status, message, operationID, time.Now().UTC(), id)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return sql.ErrNoRows
+		}
+		return nil
+	})
 }
 
 func (s *Store) MarkScheduledTaskByOperation(ctx context.Context, operationID, status, message string) error {

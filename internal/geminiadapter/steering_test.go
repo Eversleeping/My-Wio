@@ -57,6 +57,22 @@ func TestSteeringHookQueuesPersistsAndRejectsOtherTurns(t *testing.T) {
 			settingsPath = v
 		}
 	}
+	// Gemini's shell tools inherit this environment: the queue credential must
+	// only be in the private per-turn file the hook reads.
+	configPath := filepath.Join(filepath.Dir(settingsPath), steeringConfigFile)
+	info, err := os.Stat(configPath)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("steering credential file: %v %v", info, err)
+	}
+	var steeringConfig struct{ URL, Token string }
+	if raw, err := os.ReadFile(configPath); err != nil || json.Unmarshal(raw, &steeringConfig) != nil || steeringConfig.Token == "" || steeringConfig.URL == "" {
+		t.Fatalf("invalid steering credential file: %v", err)
+	}
+	for _, entry := range env {
+		if strings.Contains(entry, steeringConfig.Token) || strings.HasPrefix(entry, "WIO_GEMINI_STEER_AUTH=") || strings.HasPrefix(entry, "WIO_GEMINI_STEER_URL=") {
+			t.Fatalf("steering credential leaked into the CLI environment: %s", strings.SplitN(entry, "=", 2)[0])
+		}
+	}
 	request := protocol.GeminiSteerCommand{ThreadID: "thread", OperationID: "op", RequestID: "hint-1", Prompt: "Focus on tests"}
 	if a.Steer(request) == nil {
 		t.Fatal("accepted before the hook became ready")
@@ -125,8 +141,10 @@ func TestSteeringHookQueuesPersistsAndRejectsOtherTurns(t *testing.T) {
 		t.Fatal("accepted after cancellation")
 	}
 	close()
-	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
-		t.Fatal("temporary settings leaked")
+	for _, path := range []string{settingsPath, configPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("temporary steering files leaked")
+		}
 	}
 }
 

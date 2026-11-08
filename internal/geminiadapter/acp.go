@@ -1,13 +1,12 @@
 package geminiadapter
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -124,13 +123,24 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	messages := make(chan acpMessage, 32)
 	readError := make(chan error, 1)
 	go func() {
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 64<<10), 8<<20)
-		for scanner.Scan() {
-			var msg acpMessage
-			if json.Unmarshal(scanner.Bytes(), &msg) != nil {
-				readError <- errors.New("Gemini CLI returned invalid ACP output")
+		lines := newLineReader(stdout)
+		skipped := skippedOutput{mode: "acp"}
+		defer skipped.report()
+		for {
+			line, err := lines.next()
+			if err != nil {
+				readError <- err
 				return
+			}
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var msg acpMessage
+			// ACP frames are JSON-RPC objects. Any other stdout line is not part
+			// of the protocol and must not end the session.
+			if json.Unmarshal(line, &msg) != nil {
+				skipped.add(line)
+				continue
 			}
 			select {
 			case messages <- msg:
@@ -138,11 +148,6 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 				return
 			}
 		}
-		err := scanner.Err()
-		if err == nil {
-			err = io.EOF
-		}
-		readError <- err
 	}()
 	emit := func(kind string, payload map[string]any) error {
 		payload["operation_id"] = op

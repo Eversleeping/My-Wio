@@ -89,7 +89,7 @@ import {
   WifiOff,
   X
 } from "lucide-react";
-import { api, APIError, patch, post, put, remove, setSession, socketURL } from "./api";
+import { api, APIError, onUnauthorized, patch, post, put, remove, setSession, socketURL } from "./api";
 import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
@@ -98,7 +98,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
 import { VirtualizedItems, VirtualizedList } from "./components/VirtualizedList";
 import { clearCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
-import { safeImageSource, type FilePreviewSelection } from "./codexContent";
+import { remoteImageURL, safeImageSource, type FilePreviewSelection } from "./codexContent";
 import { formatDate, formatTime, relative, shortSHA } from "./format";
 import { currentLocale, useI18n } from "./i18n";
 import { compressImage } from "./imageCompression";
@@ -160,16 +160,22 @@ const HighlightedFile = lazy(() => import("./FilePreviewCode"));
 const HighlightedDiff = lazy(() => import("./FileDiffCode"));
 type StreamRevision = { revision: number; minimumSequence: number | null };
 type StreamRevisions = Record<string, StreamRevision>;
-type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean };
+// invalidatedFrom is the lowest sequence invalidated since the entry was stored:
+// undefined when nothing changed and null when the position is unknown.
+type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean; invalidatedFrom?: number | null };
 type ThreadListPage = { items: Thread[]; has_more: boolean; next: number | null };
 type AuditListPage = { items: AuditEntry[]; has_more: boolean; next: number | null };
 
 const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
+const threadEventsCacheThreadLimit = 8;
 const codexScrollPositions = new Map<string, number>();
 const codexAutoFollowThreshold = 96;
 const threadEventsPageSize = 500;
 const threadListPageSize = 50;
 const auditListPageSize = 50;
+const websocketReconnectBaseDelay = 1_000;
+const websocketReconnectMaximumDelay = 30_000;
+const websocketStableConnectionDelay = 30_000;
 const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "gemini", "claude", "deployments", "operations", "monitoring", "settings", "approvals"];
 const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, gemini: 0, claude: 0, deployments: 0, operations: 0, monitoring: 0, settings: 0, approvals: 0 });
 
@@ -211,6 +217,55 @@ export function clearCodexSessionMemory(threadID?: string) {
   for (const key of codexScrollPositions.keys()) {
     if (!threadID || key.startsWith(`${threadID}:`)) codexScrollPositions.delete(key);
   }
+}
+
+function lowestInvalidation(current: number | null | undefined, next: number | null | undefined) {
+  if (current === undefined) return next;
+  if (next === undefined) return current;
+  return current === null || next === null ? null : Math.min(current, next);
+}
+
+/**
+ * Keeps a running minimum of realtime invalidations on every cached view of a
+ * thread until that view reloads. A rewrite reinserts events at lower sequences,
+ * so a view opened later must not trust only the latest batch.
+ */
+export function invalidateThreadEvents(threadID: string, sequence: number | null) {
+  const prefix = `/threads/${threadID}/events?`;
+  for (const [path, entry] of threadEventsCache) {
+    if (path.startsWith(prefix)) entry.invalidatedFrom = lowestInvalidation(entry.invalidatedFrom, sequence);
+  }
+}
+
+function threadEventsCacheThread(path: string) {
+  return path.slice(0, path.indexOf("?") + 1);
+}
+
+// Marks every cached view of the thread as most recently used.
+function touchThreadEvents(path: string) {
+  const thread = threadEventsCacheThread(path);
+  for (const [key, entry] of Array.from(threadEventsCache)) {
+    if (threadEventsCacheThread(key) !== thread) continue;
+    threadEventsCache.delete(key);
+    threadEventsCache.set(key, entry);
+  }
+}
+
+// Stores a view and evicts the least recently used threads beyond the limit.
+function storeThreadEvents(path: string, entry: ThreadEventsCacheEntry) {
+  threadEventsCache.set(path, entry);
+  touchThreadEvents(path);
+  const threads = Array.from(new Set(Array.from(threadEventsCache.keys(), threadEventsCacheThread)));
+  const evicted = new Set(threads.slice(0, Math.max(0, threads.length - threadEventsCacheThreadLimit)));
+  for (const key of Array.from(threadEventsCache.keys())) {
+    if (evicted.has(threadEventsCacheThread(key))) threadEventsCache.delete(key);
+  }
+}
+
+/** Exponential reconnect delay with equal jitter: 0.5–1 s first, doubling up to 15–30 s. */
+export function websocketReconnectDelay(attempt: number, random = Math.random) {
+  const ceiling = Math.min(websocketReconnectMaximumDelay, websocketReconnectBaseDelay * 2 ** Math.max(0, attempt));
+  return Math.round(ceiling / 2 + random() * ceiling / 2);
 }
 
 
@@ -272,7 +327,7 @@ export default function App() {
         // Start authentication alongside setup discovery to avoid an extra
         // network round trip for returning users. Handle rejection immediately
         // even when a new installation exits through the setup screen.
-        const sessionRequest = api<Session>("/auth/session").then(
+        const sessionRequest = api<Session>("/auth/session", { ignoreUnauthorized: true }).then(
           value => ({ value, error: null }),
           error => ({ value: null, error })
         );
@@ -294,9 +349,17 @@ export default function App() {
 
   useEffect(() => {
     if (auth !== "authenticated") return;
+    // Any request rejected for an expired session returns the console to sign-in.
+    return onUnauthorized(() => authenticate(null));
+  }, [auth, authenticate]);
+
+  useEffect(() => {
+    if (auth !== "authenticated") return;
     let socket: WebSocket | null = null;
     let timer = 0;
     let refreshTimer = 0;
+    let stableTimer = 0;
+    let reconnectAttempt = 0;
     let stopped = false;
     const pendingStreams = new Map<string, number | null>();
     const pendingRealtimeScopes = new Set<RealtimeScope>();
@@ -326,6 +389,9 @@ export default function App() {
         if (pendingStreams.size > 0) {
           const streams = Array.from(pendingStreams.entries());
           pendingStreams.clear();
+          // Cached views keep the lowest sequence of every batch, including
+          // batches that arrive while another thread is shown.
+          for (const [streamID, minimumSequence] of streams) if (streamID !== "*") invalidateThreadEvents(streamID, minimumSequence);
           setStreamRevisions(current => {
             const next = { ...current };
             for (const [streamID, minimumSequence] of streams) next[streamID] = { revision: (next[streamID]?.revision ?? 0) + 1, minimumSequence };
@@ -334,10 +400,21 @@ export default function App() {
         }
       }, 100);
     };
+    const reconnect = () => {
+      if (stopped) return;
+      timer = window.setTimeout(connect, websocketReconnectDelay(reconnectAttempt));
+      reconnectAttempt += 1;
+    };
     const connect = () => {
       if (stopped) return;
+      let opened = false;
       socket = new WebSocket(socketURL());
-      socket.onopen = () => { setSocketConnected(true); markPendingStream("*"); markPendingRealtimeScopes(allRealtimeScopes); scheduleRefresh(); };
+      socket.onopen = () => {
+        opened = true;
+        // Only a connection that stays up restores the short initial retry delay.
+        stableTimer = window.setTimeout(() => { reconnectAttempt = 0; }, websocketStableConnectionDelay);
+        setSocketConnected(true); markPendingStream("*"); markPendingRealtimeScopes(allRealtimeScopes); scheduleRefresh();
+      };
       socket.onmessage = messageEvent => {
         try {
           const event = JSON.parse(String(messageEvent.data)) as Partial<StreamEvent>;
@@ -350,8 +427,13 @@ export default function App() {
         scheduleRefresh();
       };
       socket.onclose = () => {
+        clearTimeout(stableTimer);
         setSocketConnected(false);
-        if (!stopped) timer = window.setTimeout(connect, 2500);
+        if (stopped) return;
+        if (opened) { reconnect(); return; }
+        // Browsers hide the status of a rejected upgrade. Check the session first:
+        // a 401 signs out through the central handler instead of retrying forever.
+        api("/auth/session").then(reconnect, error => { if (!(error instanceof APIError && error.status === 401)) reconnect(); });
       };
     };
     connect();
@@ -359,6 +441,7 @@ export default function App() {
       stopped = true;
       clearTimeout(timer);
       clearTimeout(refreshTimer);
+      clearTimeout(stableTimer);
       socket?.close();
     };
   }, [auth]);
@@ -385,8 +468,13 @@ export default function App() {
   if (auth === "login") return <LoginScreen authMode={authMode} onLogin={authenticate} />;
 
   const logout = async () => {
-    await api("/auth/logout", { method: "POST" });
-    authenticate(null);
+    try {
+      await api("/auth/logout", { method: "POST" });
+    } catch {
+      // Sign out locally even when the server cannot be reached.
+    } finally {
+      authenticate(null);
+    }
   };
   const selectView = (next: View, threadID = "", replace = false) => {
     const nextThreadID = next === "codex" || next === "gemini" || next === "claude" ? threadID : "";
@@ -891,6 +979,8 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const [nativeBusy, setNativeBusy] = useState("");
   const [nativeError, setNativeError] = useState("");
   const goalRequestRef = useRef(0);
+  // Aborted when the session view changes thread or unmounts, ending native polling.
+  const nativeRequestsRef = useRef<AbortController | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const restoredScrollKeyRef = useRef("");
   const autoFollowStreamRef = useRef(true);
@@ -936,43 +1026,50 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     setPrompt("");
   };
   const loadSnapshot = async <T,>(kind: "status" | "mcp" | "skills", refresh = false) => {
+    const signal = nativeRequestsRef.current?.signal;
+    if (!signal || signal.aborted) return;
     const workspacePath = `/workspaces/${thread.workspace_id}/codex/${kind}`;
     const path = kind === "status" ? `/threads/${thread.id}/codex/status` : workspacePath;
     const setter = kind === "status" ? setStatusSnapshot : kind === "mcp" ? setMcpSnapshot : setSkillsSnapshot;
     setNativeBusy(kind); setNativeError("");
     try {
-      let next = await api<CodexSnapshot<unknown>>(path);
+      let next = await api<CodexSnapshot<unknown>>(path, { signal });
       const shouldRefresh = refresh || next.status === "idle";
-      if (shouldRefresh) { await post(`${path}/refresh`, {}); next = await api<CodexSnapshot<unknown>>(path); }
-      for (let attempt = 0; shouldRefresh && next.status === "loading" && attempt < 20; attempt++) { await waitForBackoff(attempt); next = await api<CodexSnapshot<unknown>>(path); }
+      if (shouldRefresh) { await post(`${path}/refresh`, {}, { signal }); next = await api<CodexSnapshot<unknown>>(path, { signal }); }
+      for (let attempt = 0; shouldRefresh && next.status === "loading" && attempt < 20; attempt++) { await waitForBackoff(attempt, undefined, undefined, signal); next = await api<CodexSnapshot<unknown>>(path, { signal }); }
       const normalized = { ...next, data: kind === "skills" ? normalizeSkills(next.data) : kind === "mcp" ? normalizeMCP(next.data) : normalizeStatus(next.data) } as CodexSnapshot<T>;
       setter(normalized as never);
     }
-    catch (error) { setNativeError(message(error)); }
-    finally { setNativeBusy(""); }
+    catch (error) { if (!signal.aborted) setNativeError(message(error)); }
+    finally { if (!signal.aborted) setNativeBusy(""); }
   };
   const loadGoal = async (refresh = false) => {
+    const signal = nativeRequestsRef.current?.signal;
+    if (!signal || signal.aborted) return;
     const requestID = ++goalRequestRef.current;
+    const current = () => requestID === goalRequestRef.current && !signal.aborted;
     setNativeBusy("goal"); setNativeError("");
     try {
-      let snapshot = await api<CodexSnapshot<unknown>>(`/threads/${thread.id}/goal`);
+      let snapshot = await api<CodexSnapshot<unknown>>(`/threads/${thread.id}/goal`, { signal });
       if (refresh) {
-        await post(`/threads/${thread.id}/goal/refresh`, {});
-        snapshot = await waitForGoalSnapshot(thread.id) ?? snapshot;
+        await post(`/threads/${thread.id}/goal/refresh`, {}, { signal });
+        snapshot = await waitForGoalSnapshot(thread.id, undefined, signal) ?? snapshot;
       }
-      if (requestID !== goalRequestRef.current) return;
+      if (!current()) return;
       const next = normalizeGoal(snapshot.data);
       setGoal(next);
       if (!snapshot.supported) setNativeError(snapshot.reason || t("codex.unsupported"));
     }
-    catch (error) { if (requestID === goalRequestRef.current) setNativeError(message(error)); }
-    finally { if (requestID === goalRequestRef.current) setNativeBusy(""); }
+    catch (error) { if (current()) setNativeError(message(error)); }
+    finally { if (current()) setNativeBusy(""); }
   };
   const syncGoalSnapshot = async (expected?: { objective?: string; status?: string; cleared?: boolean }) => {
+    const signal = nativeRequestsRef.current?.signal;
+    if (!signal || signal.aborted) return;
     const requestID = ++goalRequestRef.current;
     try {
-      const snapshot = await waitForGoalSnapshot(thread.id, expected);
-      if (!snapshot || requestID !== goalRequestRef.current) return;
+      const snapshot = await waitForGoalSnapshot(thread.id, expected, signal);
+      if (!snapshot || requestID !== goalRequestRef.current || signal.aborted) return;
       if (!snapshot.supported || snapshot.status === "failed" || snapshot.status === "unsupported") {
         setNativeError(snapshot.reason || snapshot.error || t("codex.unsupported"));
         return;
@@ -983,7 +1080,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
       setGoal(next);
       if (!snapshot.supported) setNativeError(snapshot.reason || t("codex.unsupported"));
     } catch (error) {
-      if (requestID === goalRequestRef.current) setNativeError(message(error));
+      if (requestID === goalRequestRef.current && !signal.aborted) setNativeError(message(error));
     }
   };
   const queueGoalTurn = async (objective: string) => {
@@ -1087,8 +1184,13 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   ];
   const skillItems: SlashCommandItem[] = (skillsSnapshot?.data ?? []).filter(skill => skill.enabled).map(skill => ({ id: `skill:${skill.name}`, name: `$${skill.name}`, description: skill.short_description || skill.description, detail: skill.scope, section: t("codex.availableSkills"), icon: Boxes, onSelect: () => finishSlash(() => { setPrompt(`$${skill.name} `); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.setSelectionRange(skill.name.length + 2, skill.name.length + 2); }); }) }));
   const slashItems = slashMode === "model" ? modelItems : slashMode === "reasoning" ? reasoningItems : [...commandItems, ...skillItems];
+  useEffect(() => {
+    const controller = new AbortController();
+    nativeRequestsRef.current = controller;
+    ++goalRequestRef.current; setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); setComposerMode("message"); setStatusVisible(false); setGoal(null); setStatusSnapshot(null); setMcpSnapshot(null); setSkillsSnapshot(null); setSubagentsOpen(false); setNativeBusy(""); void loadGoal();
+    return () => { controller.abort(); if (nativeRequestsRef.current === controller) nativeRequestsRef.current = null; };
+  }, [thread.id]);
   useEffect(() => { if (slashOpen && slashMode === "commands" && !skillsSnapshot && nativeBusy !== "skills") void loadSnapshot<CodexSkill[]>("skills"); }, [slashOpen, slashMode, thread.workspace_id]);
-  useEffect(() => { ++goalRequestRef.current; setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); setComposerMode("message"); setStatusVisible(false); setGoal(null); setStatusSnapshot(null); setMcpSnapshot(null); setSkillsSnapshot(null); setSubagentsOpen(false); void loadGoal(); }, [thread.id]);
   const scrollStateKey = `${thread.id}:${rawEvents ? "raw" : "conversation"}`;
   const eventsReady = events.data !== null;
   const scrollToLatestEvent = () => {
@@ -1295,17 +1397,17 @@ function SnapshotNotice({ snapshot, loading, error }: { snapshot?: CodexSnapshot
   return null;
 }
 
-async function waitForGoalSnapshot(threadID: string, expected?: { objective?: string; status?: string; cleared?: boolean }) {
+async function waitForGoalSnapshot(threadID: string, expected?: { objective?: string; status?: string; cleared?: boolean }, signal?: AbortSignal) {
   let latest: CodexSnapshot<unknown> | undefined;
   for (let attempt = 0; attempt < 120; attempt++) {
-    latest = await api<CodexSnapshot<unknown>>(`/threads/${threadID}/goal`);
+    latest = await api<CodexSnapshot<unknown>>(`/threads/${threadID}/goal`, { signal });
     if (latest.status === "failed" || latest.status === "unsupported") return latest;
     if (latest.status !== "loading") {
       if (!expected) return latest;
       const goal = normalizeGoal(latest.data);
       if (expected.cleared ? !goal : Boolean(goal && goal.objective === expected.objective && (!expected.status || goal.status === expected.status))) return latest;
     }
-    await waitForBackoff(attempt);
+    await waitForBackoff(attempt, undefined, undefined, signal);
   }
   return latest;
 }
@@ -1341,9 +1443,14 @@ export async function waitForWorkspace(workspaceID: string, timeoutMessage: stri
   throw new Error(timeoutMessage);
 }
 
-function waitForBackoff(attempt: number, base = 400, maximum = 2_500) {
+function waitForBackoff(attempt: number, base = 400, maximum = 2_500, signal?: AbortSignal) {
   const delay = Math.min(maximum, Math.round(base * Math.pow(1.55, Math.min(attempt, 6))));
-  return new Promise<void>(resolve => window.setTimeout(resolve, delay));
+  return new Promise<void>((resolve, reject) => {
+    const aborted = () => { window.clearTimeout(timer); reject(new DOMException("Polling cancelled", "AbortError")); };
+    const timer = window.setTimeout(() => { signal?.removeEventListener("abort", aborted); resolve(); }, delay);
+    if (signal?.aborted) aborted();
+    else signal?.addEventListener("abort", aborted, { once: true });
+  });
 }
 
 function normalizeGoal(value: unknown): CodexGoal | null {
@@ -1779,16 +1886,29 @@ function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown
     const currentMaximumSequence = latestEventSequence(cached?.events ?? []);
     const globalResync = !initialLoad && cached.globalRevision !== globalRevision;
     const streamChanged = !initialLoad && cached.streamRevision !== streamRevision;
-    const hasSafeIncrementalCursor = typeof invalidationSequence === "number" && Number.isInteger(invalidationSequence) && invalidationSequence > 0 && invalidationSequence > currentMaximumSequence;
-    const windowReload = globalResync || (streamChanged && !hasSafeIncrementalCursor);
-    const incrementalLoad = !initialLoad && !windowReload && (manuallyReloaded || streamChanged || !Object.is(cached.dependency, realtime));
+    const latestInvalidation = typeof invalidationSequence === "number" && Number.isInteger(invalidationSequence) && invalidationSequence > 0 ? invalidationSequence : null;
+    // The latest batch alone is not enough: batches recorded while this view was
+    // hidden may have rewound the stream below the cached tail.
+    const invalidatedFrom = lowestInvalidation(cached?.invalidatedFrom, streamChanged ? latestInvalidation : undefined);
+    const rewound = invalidatedFrom === null || (invalidatedFrom !== undefined && invalidatedFrom <= currentMaximumSequence);
+    const windowReload = !initialLoad && (globalResync || rewound);
+    const incrementalLoad = !initialLoad && !windowReload && (manuallyReloaded || streamChanged || invalidatedFrom !== undefined || !Object.is(cached.dependency, realtime));
     if (!initialLoad && !windowReload && !incrementalLoad) {
+      touchThreadEvents(path);
       setState({ path, data: cached.events, error: "", loading: false, loadingEarlier: false });
       return;
     }
 
     const controller = new AbortController();
     let active = true;
+    let settled = false;
+    // This load consumes the recorded invalidations. Restore them unless it
+    // completes, so an aborted or failed request cannot hide an earlier rewrite.
+    if (cached) cached.invalidatedFrom = undefined;
+    const restoreInvalidation = () => {
+      const latest = threadEventsCache.get(path);
+      if (latest) latest.invalidatedFrom = lowestInvalidation(latest.invalidatedFrom, invalidatedFrom);
+    };
     setState({ path, data: cached?.events ?? null, error: "", loading: !cached, loadingEarlier: false });
     const load = async () => {
       let events = initialLoad || windowReload ? [] : cached?.events ?? [];
@@ -1806,15 +1926,23 @@ function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown
         } while (true);
         if (!active) return;
         const hasEarlier = initialLoad || windowReload ? page.length >= threadEventsPageSize : cached?.hasEarlier ?? false;
-        threadEventsCache.set(path, { events, dependency: realtime, globalRevision, streamRevision, hasEarlier });
+        settled = true;
+        // Invalidations recorded while the request was in flight stay pending.
+        storeThreadEvents(path, { events, dependency: realtime, globalRevision, streamRevision, hasEarlier, invalidatedFrom: threadEventsCache.get(path)?.invalidatedFrom });
         setState({ path, data: events, error: "", loading: false, loadingEarlier: false });
       } catch (error) {
         if (!active || controller.signal.aborted) return;
+        settled = true;
+        restoreInvalidation();
         setState({ path, data: cached?.events ?? null, error: message(error), loading: false, loadingEarlier: false });
       }
     };
     void load();
-    return () => { active = false; controller.abort(); };
+    return () => {
+      active = false;
+      controller.abort();
+      if (!settled) restoreInvalidation();
+    };
   }, [path, realtime, globalRevision, streamRevision, invalidationSequence, reloadNonce]);
 
   const loadEarlier = useCallback(async () => {
@@ -1829,7 +1957,7 @@ function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown
       if (!current || current.globalRevision !== entry.globalRevision || current.streamRevision !== entry.streamRevision) return false;
       const events = mergeThreadEvents(page, current.events);
       const next = { ...current, events, hasEarlier: page.length >= threadEventsPageSize };
-      threadEventsCache.set(path, next);
+      storeThreadEvents(path, next);
       setState(currentState => currentState.path === path ? { path, data: events, error: "", loading: false, loadingEarlier: false } : currentState);
       return true;
     } catch (error) {
@@ -1952,12 +2080,16 @@ function isCommandEvent(event: StreamEvent) {
   return asRecord(payload?.item)?.type === "commandExecution";
 }
 function asRecord(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
+// Remote sources are kept so MessageImages can offer them as links; it never loads them inline.
+function messageImageSource(value: unknown) {
+  return safeImageSource(value) || remoteImageURL(value);
+}
 function extractImageSources(payload: unknown): string[] {
   const sources: string[] = [];
   const seenSources = new Set<string>();
   const seenObjects = new Set<object>();
   const visit = (value: unknown) => {
-    const directSource = safeImageSource(value);
+    const directSource = messageImageSource(value);
     if (directSource) {
       if (!seenSources.has(directSource)) {
         seenSources.add(directSource);
@@ -1976,7 +2108,7 @@ function extractImageSources(payload: unknown): string[] {
     if (type === "image" || type === "input_image" || type === "output_image" || type === "image_url") {
       for (const key of ["url", "data_url", "image_url", "data"]) {
         const candidate = asRecord(record[key])?.url ?? record[key];
-        const source = safeImageSource(candidate);
+        const source = messageImageSource(candidate);
         if (source && !seenSources.has(source)) {
           seenSources.add(source);
           sources.push(source);

@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SessionView } from "./App";
+import { invalidateThreadEvents, SessionView } from "./App";
 import { I18nProvider } from "./i18n";
 import type { StreamEvent, Thread } from "./types";
 
@@ -322,4 +322,129 @@ test("keeps thread and view changes isolated from events already shown", async (
   rerender(session(second));
   expect(await screen.findByText("Second conversation")).toBeInTheDocument();
   expect(screen.queryByText("First conversation")).not.toBeInTheDocument();
+});
+
+function serveEvents(value: Thread, eventRequests: string[], current: () => StreamEvent[]) {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.includes(`/threads/${value.id}/events`)) return response([]);
+    eventRequests.push(url);
+    const after = Number(new URL(url, "http://localhost").searchParams.get("after") ?? 0);
+    return response(current().filter(item => item.sequence > after));
+  }));
+}
+
+test("reloads the window after an edit rewound a stream while another session was shown", async () => {
+  const value = thread("rewrite-while-away");
+  const eventRequests: string[] = [];
+  let events = [event(value.id, 1, "Original opening"), event(value.id, 10, "Pre-edit tail")];
+  serveEvents(value, eventRequests, () => events);
+
+  const { unmount } = render(session(value));
+  await screen.findByText("Pre-edit tail");
+  unmount();
+
+  // The edit reinserts history below the cached tail; a later batch only reports newer events.
+  events = [event(value.id, 1, "Original opening"), event(value.id, 4, "Edited message"), event(value.id, 12, "Answer to the edit")];
+  invalidateThreadEvents(value.id, 4);
+  invalidateThreadEvents(value.id, 12);
+  render(session(value, 2, { streamRevision: 2, invalidationSequence: 12 }));
+
+  await screen.findByText("Answer to the edit");
+  expect(screen.getByText("Edited message")).toBeInTheDocument();
+  expect(screen.queryByText("Pre-edit tail")).not.toBeInTheDocument();
+  expect(eventRequests).toEqual([
+    `/api/threads/${value.id}/events?view=conversation`,
+    `/api/threads/${value.id}/events?view=conversation`
+  ]);
+});
+
+test("keeps an earlier rewind when a newer batch interrupts the reload", async () => {
+  const value = thread("rewrite-interrupted");
+  const eventRequests: string[] = [];
+  let events = [event(value.id, 1, "Original opening"), event(value.id, 10, "Pre-edit tail")];
+  let holdNextRequest = false;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (!url.includes(`/threads/${value.id}/events`)) return Promise.resolve(response([]));
+    eventRequests.push(url);
+    if (holdNextRequest) {
+      holdNextRequest = false;
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+    }
+    const after = Number(new URL(url, "http://localhost").searchParams.get("after") ?? 0);
+    return Promise.resolve(response(events.filter(item => item.sequence > after)));
+  }));
+
+  const { rerender } = render(session(value));
+  await screen.findByText("Pre-edit tail");
+
+  events = [event(value.id, 1, "Original opening"), event(value.id, 4, "Edited message"), event(value.id, 12, "Answer to the edit")];
+  holdNextRequest = true;
+  invalidateThreadEvents(value.id, 4);
+  rerender(session(value, 1, { streamRevision: 1, invalidationSequence: 4 }));
+  await waitFor(() => expect(eventRequests).toHaveLength(2));
+  invalidateThreadEvents(value.id, 12);
+  rerender(session(value, 2, { streamRevision: 2, invalidationSequence: 12 }));
+
+  await screen.findByText("Answer to the edit");
+  expect(screen.queryByText("Pre-edit tail")).not.toBeInTheDocument();
+  expect(eventRequests).toEqual([
+    `/api/threads/${value.id}/events?view=conversation`,
+    `/api/threads/${value.id}/events?view=conversation`,
+    `/api/threads/${value.id}/events?view=conversation`
+  ]);
+});
+
+test("loads only newer events once a rewind has been consumed", async () => {
+  const value = thread("rewrite-consumed");
+  const eventRequests: string[] = [];
+  let events = [event(value.id, 1, "Original opening"), event(value.id, 10, "Pre-edit tail")];
+  serveEvents(value, eventRequests, () => events);
+
+  const { rerender } = render(session(value));
+  await screen.findByText("Pre-edit tail");
+  events = [event(value.id, 1, "Original opening"), event(value.id, 4, "Edited message")];
+  invalidateThreadEvents(value.id, 4);
+  rerender(session(value, 1, { streamRevision: 1, invalidationSequence: 4 }));
+  await screen.findByText("Edited message");
+
+  events = [...events, event(value.id, 5, "Streaming answer")];
+  invalidateThreadEvents(value.id, 5);
+  rerender(session(value, 2, { streamRevision: 2, invalidationSequence: 5 }));
+
+  await screen.findByText("Streaming answer");
+  expect(eventRequests).toEqual([
+    `/api/threads/${value.id}/events?view=conversation`,
+    `/api/threads/${value.id}/events?view=conversation`,
+    `/api/threads/${value.id}/events?view=conversation&after=4&limit=1000`
+  ]);
+});
+
+test("keeps recently used sessions cached and evicts the least recently used", async () => {
+  const eventRequests: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.includes("/events")) return response([]);
+    eventRequests.push(url);
+    const threadID = url.split("/")[3];
+    return response([event(threadID, 1, `Message in ${threadID}`)]);
+  }));
+  const threads = Array.from({ length: 10 }, (_, index) => thread(`lru-${index}`));
+  const visit = async (value: Thread) => {
+    const view = render(session(value));
+    await screen.findByText(`Message in ${value.id}`);
+    view.unmount();
+  };
+
+  for (const value of threads.slice(0, 8)) await visit(value);
+  await visit(threads[0]);
+  for (const value of threads.slice(8)) await visit(value);
+  eventRequests.length = 0;
+  await visit(threads[0]);
+  await visit(threads[1]);
+  await visit(threads[9]);
+
+  // lru-0 was revisited, so lru-1 and lru-2 were evicted by lru-8 and lru-9.
+  expect(eventRequests).toEqual([`/api/threads/${threads[1].id}/events?view=conversation`]);
 });

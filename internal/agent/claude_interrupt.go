@@ -4,34 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
+var claudeTurnOwner = turnOwner{
+	name:        "Claude",
+	kinds:       []string{"claude.turn.start"},
+	lostMessage: protocol.ClaudeOwnershipLostMessage,
+	verifyError: func(error) error { return errors.New("could not verify Claude task completion") },
+}
+
 func (c *Client) interruptClaudeAndWait(ctx context.Context, operationID string) error {
-	c.seenMu.Lock()
-	execution := c.seen[operationID]
-	if execution != nil && execution.kind == "claude.turn.start" {
-		cancel, done := execution.cancel, execution.done
-		c.seenMu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		select {
-		case <-done:
-			return nil
-		case <-ctx.Done():
-			return fmt.Errorf("Claude process has not confirmed termination: %w", ctx.Err())
-		}
-	}
-	c.seenMu.Unlock()
-	if _, found, err := c.loadOperationResult(operationID); err != nil {
-		return errors.New("could not verify Claude task completion")
-	} else if found {
-		return nil
-	}
-	return errors.New(protocol.ClaudeOwnershipLostMessage)
+	return c.interruptTurnAndWait(ctx, operationID, claudeTurnOwner)
 }
 
 func (c *Client) reconcileClaudeOperations(raw json.RawMessage) {
@@ -42,7 +27,7 @@ func (c *Client) reconcileClaudeOperations(raw json.RawMessage) {
 	for _, id := range check.ClaudeOperationIDs {
 		c.seenMu.Lock()
 		execution := c.seen[id]
-		if execution != nil {
+		if execution != nil && !execution.awaitingStart() {
 			select {
 			case <-execution.done:
 				result := execution.result
@@ -52,6 +37,13 @@ func (c *Client) reconcileClaudeOperations(raw json.RawMessage) {
 				c.seenMu.Unlock()
 				_ = c.queue("claude_ownership_active", protocol.GeminiOwnership{OperationID: id}, true)
 			}
+			continue
+		}
+		if execution != nil {
+			// Only an interruption that beat this turn's start is known; it says
+			// nothing about a CLI that an earlier Agent process started.
+			c.seenMu.Unlock()
+			_ = c.queue("claude_ownership_lost", protocol.GeminiOwnership{OperationID: id}, true)
 			continue
 		}
 		result, found, err := c.loadOperationResult(id)

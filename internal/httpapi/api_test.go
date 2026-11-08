@@ -33,9 +33,9 @@ func TestSetupLoginAndAuthenticatedSession(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(testWriter{t}, nil))
 	gateway := agentgateway.New(database, hub, vault, log)
 	frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
-	handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true)
+	handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true, WithSetupToken(testSetupToken))
 
-	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"username": "admin", "auth_mode": store.AuthModeTOTP}, nil)
+	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"setup_token": testSetupToken, "username": "admin", "auth_mode": store.AuthModeTOTP}, nil)
 	if setup.Code != http.StatusCreated {
 		t.Fatalf("setup returned %d: %s", setup.Code, setup.Body.String())
 	}
@@ -104,10 +104,10 @@ func TestSetupAndLoginAuthenticationModes(t *testing.T) {
 			log := slog.New(slog.NewTextHandler(testWriter{t}, nil))
 			gateway := agentgateway.New(database, hub, vault, log)
 			frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
-			handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true)
+			handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true, WithSetupToken(testSetupToken))
 
 			setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{
-				"username": "admin", "auth_mode": test.mode, "password": test.password,
+				"setup_token": testSetupToken, "username": "admin", "auth_mode": test.mode, "password": test.password,
 			}, nil)
 			if setup.Code != http.StatusCreated {
 				t.Fatalf("setup returned %d: %s", setup.Code, setup.Body.String())
@@ -175,8 +175,8 @@ func TestSetupRejectsInvalidAuthenticationConfiguration(t *testing.T) {
 		name string
 		body map[string]string
 	}{
-		{name: "unsupported mode", body: map[string]string{"username": "admin", "auth_mode": "magic"}},
-		{name: "short password", body: map[string]string{"username": "admin", "auth_mode": store.AuthModePassword, "password": "too-short"}},
+		{name: "unsupported mode", body: map[string]string{"setup_token": testSetupToken, "username": "admin", "auth_mode": "magic"}},
+		{name: "short password", body: map[string]string{"setup_token": testSetupToken, "username": "admin", "auth_mode": store.AuthModePassword, "password": "too-short"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
@@ -189,7 +189,7 @@ func TestSetupRejectsInvalidAuthenticationConfiguration(t *testing.T) {
 			log := slog.New(slog.NewTextHandler(testWriter{t}, nil))
 			gateway := agentgateway.New(database, hub, vault, log)
 			frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
-			handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true)
+			handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true, WithSetupToken(testSetupToken))
 			response := requestJSON(t, handler, http.MethodPost, "/api/setup", test.body, nil)
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("setup returned %d: %s", response.Code, response.Body.String())
@@ -247,6 +247,8 @@ func TestFrontendVersionIsExposedAndInjected(t *testing.T) {
 		t.Fatalf("frontend version was not exposed by health endpoint: headers=%v body=%s", healthResponse.Header(), healthResponse.Body.String())
 	}
 }
+
+const testSetupToken = "test-setup-token"
 
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any, cookie *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()

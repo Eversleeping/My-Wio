@@ -218,11 +218,25 @@ func (s *Store) CommitBlankProject(ctx context.Context, operation Operation, com
 	if err := ValidateBlankProjectResult(command, result); err != nil {
 		return err
 	}
+	if operationResult.OperationID != operation.ID {
+		return errors.New("blank project result operation mismatch")
+	}
+	data, err := operationResultData(operationResult.Data)
+	if err != nil {
+		return err
+	}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	now := time.Now().UTC()
+	// Claim the operation first: a result for an operation that already
+	// finished (cancelled, reconciled or a duplicate) must not create the
+	// workspace or mark the project ready.
+	if err = s.completeActiveOperation(ctx, tx, operation.ID, operationResult.Status, operationResult.Message, data, now); err != nil {
+		return err
+	}
 	var count int
 	if err = tx.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM projects WHERE id=? AND status='provisioning'"), command.ProjectID); err != nil {
 		return err
@@ -230,18 +244,10 @@ func (s *Store) CommitBlankProject(ctx context.Context, operation Operation, com
 	if count != 1 {
 		return sql.ErrNoRows
 	}
-	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,status,kind,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,'managed','ready','primary',?,?,0,?,?)`), command.WorkspaceID, command.ProjectID, operation.ServerID, result.Path, command.Name, result.Branch, result.CommitSHA, time.Now().UTC(), time.Now().UTC()); err != nil {
+	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,status,kind,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,'managed','ready','primary',?,?,0,?,?)`), command.WorkspaceID, command.ProjectID, operation.ServerID, result.Path, command.Name, result.Branch, result.CommitSHA, now, now); err != nil {
 		return err
 	}
-	data, err := operationResultData(operationResult.Data)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
 	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE projects SET status='ready',provision_error='',updated_at=? WHERE id=?`), now, command.ProjectID); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=? AND project_id=?`), operationResult.Status, operationResult.Message, data, now, operationResult.OperationID, command.ProjectID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -279,12 +285,27 @@ func (s *Store) FailBlankProject(ctx context.Context, operation Operation, comma
 	if err != nil {
 		data = "{}"
 	}
+	if operation.Kind != gitProjectCreateKind || operation.ProjectID != command.ProjectID || operationResult.OperationID != operation.ID {
+		return errors.New("blank project operation does not match command")
+	}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
+	// A stale result for an operation that already finished must not change
+	// the project or its remote. The HTTP layer also fails the operation while
+	// it is still preparing the remote, before it was ever queued.
+	claimed, err := tx.ExecContext(ctx, s.Q(`UPDATE agent_operations SET status='failed',result=?,result_data=?,completed_at=? WHERE id=? AND status IN ('preparing','queued','delivered','running')`), operationResult.Message, data, now, operation.ID)
+	if err != nil {
+		return err
+	}
+	if count, err := claimed.RowsAffected(); err != nil {
+		return err
+	} else if count != 1 {
+		return ErrOperationNotActive
+	}
 	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE projects SET status=?,provision_error=?,updated_at=? WHERE id=?`), status, operationResult.Message, now, command.ProjectID); err != nil {
 		return err
 	}
@@ -293,9 +314,6 @@ func (s *Store) FailBlankProject(ctx context.Context, operation Operation, comma
 		remoteStatus = "ready"
 	}
 	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE project_remotes SET status=CASE WHEN fetch_url<>'' THEN ? ELSE 'failed' END,error=?,updated_at=? WHERE project_id=? AND name='origin'`), remoteStatus, operationResult.Message, now, command.ProjectID); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, s.Q(`UPDATE agent_operations SET status='failed',result=?,result_data=?,completed_at=? WHERE id=? AND project_id=?`), operationResult.Message, data, now, operationResult.OperationID, command.ProjectID); err != nil {
 		return err
 	}
 	return tx.Commit()

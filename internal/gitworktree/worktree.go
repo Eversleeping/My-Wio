@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -73,17 +74,63 @@ func Remove(ctx context.Context, source, target, branch string, roots []string) 
 	if err != nil {
 		return err
 	}
+	var removeErr error
 	output, err := gitModify(ctx, source, "worktree", "remove", "--force", "--", target)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove worktree: %s", cleanGitError(output, err))
-	}
-	if branch != "" {
-		output, err = gitModify(ctx, source, "branch", "-D", "--", branch)
-		if err != nil {
-			return fmt.Errorf("remove worktree branch: %s", cleanGitError(output, err))
+	if err != nil {
+		if worktreeGone(ctx, source, target) {
+			// A previous attempt (or somebody else) already removed the
+			// worktree. Drop Git's stale administrative entry, if any, so the
+			// branch is no longer considered checked out, then carry on.
+			if pruneOutput, pruneErr := gitModify(ctx, source, "worktree", "prune"); pruneErr != nil {
+				removeErr = fmt.Errorf("prune worktrees: %s", cleanGitError(pruneOutput, pruneErr))
+			}
+		} else {
+			removeErr = fmt.Errorf("remove worktree: %s", cleanGitError(output, err))
 		}
 	}
-	return nil
+	// The branch delete is always attempted so that a retried cleanup can
+	// finish the work an earlier, partially failed attempt started.
+	if branch != "" {
+		output, err = gitModify(ctx, source, "branch", "-D", "--", branch)
+		if err != nil && !branchMissing(ctx, source, branch) {
+			return errors.Join(removeErr, fmt.Errorf("remove worktree branch: %s", cleanGitError(output, err)))
+		}
+	}
+	return removeErr
+}
+
+// worktreeGone recognizes a worktree that no longer exists, either on disk or
+// in Git's administrative records. It does not rely on Git's messages, which
+// are translated on servers with a non-English locale.
+func worktreeGone(ctx context.Context, source, target string) bool {
+	if _, err := os.Lstat(target); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	output, err := git(ctx, source, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	targetInfo, targetErr := os.Stat(target)
+	for _, line := range strings.Split(string(output), "\n") {
+		path, ok := strings.CutPrefix(line, "worktree ")
+		if !ok {
+			continue
+		}
+		if filepath.Clean(path) == target {
+			return false
+		}
+		if info, err := os.Stat(path); err == nil && targetErr == nil && os.SameFile(info, targetInfo) {
+			return false
+		}
+	}
+	return true
+}
+
+// branchMissing reports whether the local branch no longer exists.
+func branchMissing(ctx context.Context, source, branch string) bool {
+	_, err := git(ctx, source, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }
 
 func containsPath(parent, child string) bool {

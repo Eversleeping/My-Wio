@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -259,5 +260,214 @@ func TestTickQueuesClaudeAndSkipsUnsafeStates(t *testing.T) {
 		if saved.LastRunStatus != expected {
 			t.Fatalf("%s: %+v", state, saved)
 		}
+	}
+}
+
+// schedulerFixture enrolls an online server with one workspace.
+func schedulerFixture(t *testing.T) (*store.Store, store.Server, store.Workspace, *Runner) {
+	t.Helper()
+	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	if _, err := database.CreateEnrollment(ctx, "scheduler-node", []string{"/srv"}, "scheduler-enrollment-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := database.ConsumeEnrollment(ctx, "scheduler-enrollment-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := database.EnrollServer(ctx, enrollment, "scheduler-node.local", "scheduler-agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.2.97", CodexReady: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduler", Name: "scheduler"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
+	}
+	gateway := agentgateway.New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return database, server, workspaces[0], &Runner{store: database, gateway: gateway, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+}
+
+func scheduledTask(t *testing.T, database *store.Store, input store.ScheduledTaskInput, nextRunAt time.Time) store.ScheduledTask {
+	t.Helper()
+	if input.Name == "" {
+		input.Name, input.Prompt, input.Enabled = "review", "Review the repository", true
+	}
+	if input.Schedule == "" {
+		input.Schedule, input.Timezone = "@hourly", "UTC"
+	}
+	task, err := database.CreateScheduledTask(context.Background(), input, nextRunAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+func TestTickTreatsStaleHeartbeatAsOffline(t *testing.T) {
+	database, server, workspace, runner := schedulerFixture(t)
+	ctx := context.Background()
+	thread, err := database.CreateThread(ctx, workspace.ID, "scheduled session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := scheduledTask(t, database, store.ScheduledTaskInput{ThreadID: thread.ID}, time.Now().UTC().Add(-time.Minute))
+	// The control plane crashed while the Agent was connected, so the status
+	// column still says online although the Agent stopped sending heartbeats.
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE servers SET status='online',last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-time.Hour), server.ID); err != nil {
+		t.Fatal(err)
+	}
+	runner.tick(ctx)
+	skipped, err := database.ScheduledTask(ctx, task.ID)
+	if err != nil || skipped.LastRunStatus != "skipped" || skipped.LastRunMessage != "server is offline" || skipped.LastOperationID != "" {
+		t.Fatalf("turn queued for an offline server: %#v %v", skipped, err)
+	}
+	if operations, err := database.PendingOperations(ctx, server.ID); err != nil || len(operations) != 0 {
+		t.Fatalf("operations queued for an offline server: %#v %v", operations, err)
+	}
+}
+
+func TestTickDisablesTasksWithInvalidSchedules(t *testing.T) {
+	database, _, workspace, runner := schedulerFixture(t)
+	ctx := context.Background()
+	thread, err := database.CreateThread(ctx, workspace.ID, "scheduled session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// More broken tasks than one tick loads, all due before the valid one.
+	start := time.Now().UTC().Add(-2 * time.Hour)
+	broken := make([]string, 0, 101)
+	for i := 0; i < 101; i++ {
+		input := store.ScheduledTaskInput{ThreadID: thread.ID, Schedule: "not a schedule", Timezone: "UTC"}
+		if i%2 == 1 {
+			input.Schedule, input.Timezone = "0 9 * * *", "Mars/Olympus"
+		}
+		broken = append(broken, scheduledTask(t, database, input, start.Add(time.Duration(i)*time.Second)).ID)
+	}
+	valid := scheduledTask(t, database, store.ScheduledTaskInput{ThreadID: thread.ID, ApprovalMode: "never"}, time.Now().UTC().Add(-time.Minute))
+
+	runner.tick(ctx)
+	runner.tick(ctx)
+
+	for _, id := range broken {
+		task, err := database.ScheduledTask(ctx, id)
+		if err != nil || task.Enabled || task.LastRunStatus != "failed" || !strings.HasPrefix(task.LastRunMessage, "task disabled: invalid schedule") {
+			t.Fatalf("broken task was not disabled: %#v %v", task, err)
+		}
+	}
+	queued, err := database.ScheduledTask(ctx, valid.ID)
+	if err != nil || queued.LastRunStatus != "queued" || !queued.NextRunAt.After(time.Now().UTC()) {
+		t.Fatalf("valid task was starved: %#v %v", queued, err)
+	}
+	if due, err := database.DueScheduledTasks(ctx, time.Now().UTC(), 100); err != nil || len(due) != 0 {
+		t.Fatalf("tasks still due: %d %v", len(due), err)
+	}
+}
+
+func TestTickAttributesResultsThatArriveBeforeTheRunIsRecorded(t *testing.T) {
+	for _, kind := range []string{"codex", "claude", "gemini"} {
+		t.Run(kind, func(t *testing.T) {
+			database, _, workspace, runner := schedulerFixture(t)
+			ctx := context.Background()
+			var threadID, userMessage string
+			switch kind {
+			case "codex":
+				thread, err := database.CreateThread(ctx, workspace.ID, "scheduled session")
+				if err != nil {
+					t.Fatal(err)
+				}
+				threadID, userMessage = thread.ID, "user.message"
+			case "claude":
+				thread, err := database.CreateClaudeThread(ctx, workspace.ID, "sonnet", "default", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				threadID, userMessage = thread.ID, "claude.user.message"
+			case "gemini":
+				thread, err := database.CreateGeminiThread(ctx, workspace.ID, "test-model", "default")
+				if err != nil {
+					t.Fatal(err)
+				}
+				threadID, userMessage = thread.ID, "gemini.user.message"
+			}
+			task := scheduledTask(t, database, store.ScheduledTaskInput{AgentKind: kind, ThreadID: threadID}, time.Now().UTC().Add(-time.Minute))
+			// Play the gateway at the earliest point the Agent could answer:
+			// once the prompt is recorded, the turn fails and the result is
+			// attributed to whichever task references the operation.
+			trigger := `CREATE TRIGGER agent_fails_fast AFTER INSERT ON events WHEN NEW.kind='` + userMessage + `' BEGIN
+				UPDATE agent_operations SET status='failed',result='Agent is updating' WHERE status='queued' AND kind IN ('codex.turn.start','claude.turn.start','gemini.turn.start');
+				UPDATE ` + kind + `_scheduled_tasks SET last_run_status='failed',last_run_message='Agent is updating' WHERE last_operation_id IN (SELECT id FROM agent_operations WHERE result='Agent is updating') AND last_run_status IN ('queued','running');
+			END`
+			if _, err := database.DB.ExecContext(ctx, trigger); err != nil {
+				t.Fatal(err)
+			}
+			runner.tick(ctx)
+			current, err := database.ScheduledTask(ctx, task.ID)
+			if err != nil || current.LastOperationID == "" || current.LastRunStatus != "failed" || current.LastRunMessage != "Agent is updating" {
+				t.Fatalf("fast failure was overwritten: %#v %v", current, err)
+			}
+		})
+	}
+}
+
+func TestTickSeparatesBusyWorkspacesFromQueueFailures(t *testing.T) {
+	for _, kind := range []string{"claude", "gemini"} {
+		t.Run(kind, func(t *testing.T) {
+			database, _, workspace, runner := schedulerFixture(t)
+			ctx := context.Background()
+			var threadID, agent string
+			if kind == "claude" {
+				thread, err := database.CreateClaudeThread(ctx, workspace.ID, "sonnet", "default", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				threadID, agent = thread.ID, "Claude"
+			} else {
+				thread, err := database.CreateGeminiThread(ctx, workspace.ID, "test-model", "default")
+				if err != nil {
+					t.Fatal(err)
+				}
+				threadID, agent = thread.ID, "Gemini"
+			}
+			task := scheduledTask(t, database, store.ScheduledTaskInput{AgentKind: kind, ThreadID: threadID}, time.Now().UTC().Add(-time.Minute))
+
+			// Another session's turn holds the workspace write lock.
+			other, err := database.CreateGeminiThread(ctx, workspace.ID, "test-model", "default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.QueueGeminiTurn(ctx, other, "occupy the workspace", "test-model", "default"); err != nil {
+				t.Fatal(err)
+			}
+			runner.tick(ctx)
+			skipped, err := database.ScheduledTask(ctx, task.ID)
+			if err != nil || skipped.LastRunStatus != "skipped" || skipped.LastRunMessage != "workspace has another active write operation" {
+				t.Fatalf("busy workspace: %#v %v", skipped, err)
+			}
+
+			other, _ = database.GeminiThread(ctx, other.ID)
+			if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: other.OperationID, Status: "succeeded"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.DB.ExecContext(ctx, `CREATE TRIGGER database_fails BEFORE INSERT ON agent_operations WHEN NEW.kind='`+kind+`.turn.start' BEGIN SELECT RAISE(ABORT,'simulated database failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE "+kind+"_scheduled_tasks SET next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
+				t.Fatal(err)
+			}
+			runner.tick(ctx)
+			failed, err := database.ScheduledTask(ctx, task.ID)
+			if err != nil || failed.LastRunStatus != "failed" || !strings.HasPrefix(failed.LastRunMessage, "could not queue "+agent+" turn: ") || !strings.Contains(failed.LastRunMessage, "simulated database failure") {
+				t.Fatalf("database failure reported as: %#v %v", failed, err)
+			}
+		})
 	}
 }

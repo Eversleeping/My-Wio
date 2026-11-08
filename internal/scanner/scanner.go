@@ -265,7 +265,7 @@ func inspect(ctx context.Context, repositoryPath string) protocol.Repository {
 	if !repositoryOwned(repositoryPath) {
 		return repository
 	}
-	repository.RemoteURL = gitOutput(ctx, repositoryPath, "remote", "get-url", "origin")
+	repository.RemoteURL = gitrepository.RedactRemoteURL(gitOutput(ctx, repositoryPath, "remote", "get-url", "origin"))
 	repository.Branch = gitOutput(ctx, repositoryPath, "branch", "--show-current")
 	repository.CommitSHA = gitOutput(ctx, repositoryPath, "rev-parse", "HEAD")
 	// Submodule worktrees are not inspected: that would run Git with each
@@ -297,18 +297,21 @@ func Import(ctx context.Context, cloneRoot string, command protocol.GitImportCom
 	if !filepath.IsAbs(destination) {
 		destination = filepath.Join(cloneRoot, destination)
 	}
-	if !within(cloneRoot, destination) {
+	if destination == cloneRoot || !within(cloneRoot, destination) {
 		return "", errors.New("destination must stay within the configured clone root")
 	}
-	if _, err := os.Stat(destination); err == nil {
+	if _, err := os.Lstat(destination); err == nil {
 		return "", fmt.Errorf("destination already exists: %s", destination)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	parent := filepath.Dir(destination)
-	if err := os.MkdirAll(parent, 0o750); err != nil {
+	parent, err := importParent(cloneRoot, filepath.Dir(destination))
+	if err != nil {
 		return "", err
 	}
+	// From here on only the resolved parent is used, so the clone cannot be
+	// redirected by symbolic links in the requested path.
+	final := filepath.Join(parent, filepath.Base(destination))
 	staging, err := os.MkdirTemp(parent, importStagingPrefix)
 	if err != nil {
 		return "", err
@@ -322,15 +325,73 @@ func Import(ctx context.Context, cloneRoot string, command protocol.GitImportCom
 	if err != nil {
 		return "", fmt.Errorf("git clone: %w: %s", err, truncate(string(output), 4096))
 	}
-	if _, err := os.Stat(destination); err == nil {
+	if _, err := os.Lstat(final); err == nil {
 		return "", fmt.Errorf("destination already exists: %s", destination)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	if err := os.Rename(staging, destination); err != nil {
+	if err := os.Rename(staging, final); err != nil {
 		return "", fmt.Errorf("publish cloned repository: %w", err)
 	}
 	return destination, nil
+}
+
+// importParent creates the parent directory of an import destination and
+// returns its resolved path. The lexical check in Import cannot see symbolic
+// links: a link inside the clone root could otherwise send the directories
+// and the clone anywhere the agent can write. Existing components are
+// resolved before anything is created and everything is checked again once
+// the directory exists.
+func importParent(cloneRoot, parent string) (string, error) {
+	escape := errors.New("destination resolves outside the configured clone root")
+	root, err := resolveExistingPrefix(cloneRoot)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := resolveExistingPrefix(parent)
+	if err != nil {
+		return "", err
+	}
+	if !within(root, resolved) {
+		return "", escape
+	}
+	// MkdirAll never follows a symbolic link it would have to create, so a
+	// dangling link in a missing component makes it fail instead.
+	if err := os.MkdirAll(parent, 0o750); err != nil {
+		return "", err
+	}
+	if root, err = filepath.EvalSymlinks(cloneRoot); err != nil {
+		return "", err
+	}
+	if resolved, err = filepath.EvalSymlinks(parent); err != nil {
+		return "", err
+	}
+	if !within(root, resolved) {
+		return "", escape
+	}
+	return resolved, nil
+}
+
+// resolveExistingPrefix resolves symbolic links in the longest existing
+// prefix of path and appends the components that do not exist yet.
+func resolveExistingPrefix(path string) (string, error) {
+	var missing []string
+	current := path
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, missing...)...), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		next := filepath.Dir(current)
+		if next == current {
+			return "", err
+		}
+		missing = append([]string{filepath.Base(current)}, missing...)
+		current = next
+	}
 }
 
 func within(root, child string) bool {

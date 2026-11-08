@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   totp_secret TEXT NOT NULL,
   recovery_hashes TEXT NOT NULL,
+  totp_last_counter BIGINT NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

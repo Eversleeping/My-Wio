@@ -3,38 +3,22 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
+var geminiTurnOwner = turnOwner{
+	name:        "Gemini",
+	kinds:       []string{"gemini.turn.start", "gemini.turn.rewrite"},
+	lostMessage: protocol.GeminiOwnershipLostMessage,
+	verifyError: func(err error) error { return fmt.Errorf("could not verify Gemini task completion: %w", err) },
+}
+
 // A control-message acknowledgement is not proof that the CLI stopped. Wait
 // for the original execution (including process cleanup) before confirming.
 func (c *Client) interruptGeminiAndWait(ctx context.Context, operationID string) error {
-	c.seenMu.Lock()
-	execution := c.seen[operationID]
-	if execution != nil && (execution.kind == "gemini.turn.start" || execution.kind == "gemini.turn.rewrite") {
-		cancel, done := execution.cancel, execution.done
-		c.seenMu.Unlock()
-		if cancel != nil {
-			// Also cancels turns whose adapter has not registered the process yet.
-			cancel()
-		}
-		select {
-		case <-done:
-			return nil
-		case <-ctx.Done():
-			return fmt.Errorf("Gemini process has not confirmed termination: %w", ctx.Err())
-		}
-	}
-	c.seenMu.Unlock()
-	if _, found, err := c.loadOperationResult(operationID); err != nil {
-		return fmt.Errorf("could not verify Gemini task completion: %w", err)
-	} else if found {
-		return nil
-	}
-	return errors.New(protocol.GeminiOwnershipLostMessage)
+	return c.interruptTurnAndWait(ctx, operationID, geminiTurnOwner)
 }
 
 // A probe never starts or interrupts a turn. Replaying a completed receipt
@@ -48,7 +32,7 @@ func (c *Client) reconcileGeminiOperations(raw json.RawMessage) {
 	for _, id := range check.OperationIDs {
 		c.seenMu.Lock()
 		execution := c.seen[id]
-		if execution != nil {
+		if execution != nil && !execution.awaitingStart() {
 			select {
 			case <-execution.done:
 				result := execution.result
@@ -58,6 +42,13 @@ func (c *Client) reconcileGeminiOperations(raw json.RawMessage) {
 				c.seenMu.Unlock()
 				_ = c.queue("gemini_ownership_active", protocol.GeminiOwnership{OperationID: id}, true)
 			}
+			continue
+		}
+		if execution != nil {
+			// Only an interruption that beat this turn's start is known; it says
+			// nothing about a CLI that an earlier Agent process started.
+			c.seenMu.Unlock()
+			_ = c.queue("gemini_ownership_lost", protocol.GeminiOwnership{OperationID: id}, true)
 			continue
 		}
 		result, found, err := c.loadOperationResult(id)

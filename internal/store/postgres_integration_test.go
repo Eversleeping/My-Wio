@@ -108,6 +108,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertPostgresInteractiveConnections(t, scans)
 	assertWorkspaceFileScanTimeoutAndRetry(t, scans)
 	assertOperationInterruptLifecycle(t, scans)
+	assertOperationInterruptsUnderLinguisticCollation(t, databaseURL)
 	assertCodexSnapshotTimeoutAndRetry(t, scans)
 	assertMessageForkCopiesOnlySelectedHistory(t, scans)
 	assertGeminiCredentialBindingsAndReplay(t, scans)

@@ -39,6 +39,8 @@ type liveTurn struct {
 	closed      bool
 	inputs      map[string]*liveInput
 	idle        *time.Timer
+	idleRound   uint64
+	idleExpired bool
 	background  int
 	lastResult  bool
 	queued      int
@@ -227,8 +229,38 @@ func (live *liveTurn) result(queued int) error {
 	if live.idle != nil {
 		live.idle.Stop()
 	}
-	live.idle = time.AfterFunc(45*time.Second, func() { live.cancel() })
+	live.idleRound++
+	round := live.idleRound
+	live.idle = time.AfterFunc(steerIdleTimeout, func() { live.expireIdle(round) })
 	return nil
+}
+
+// steerIdleTimeout is how long a CLI may stay open after a result while an
+// injected instruction remains unconfirmed.
+var steerIdleTimeout = 45 * time.Second
+
+// expireIdle stops a CLI that stayed idle after its last result. The turn
+// itself already finished; finishedByIdleTimeout lets run report that result
+// instead of a cancellation.
+func (live *liveTurn) expireIdle(round uint64) {
+	live.mu.Lock()
+	if live.idle == nil || live.idleRound != round || live.closed {
+		// Progress or a newer result replaced this timer after it fired.
+		live.mu.Unlock()
+		return
+	}
+	live.idleExpired = true
+	cancel := live.cancel
+	live.mu.Unlock()
+	cancel()
+}
+
+// finishedByIdleTimeout reports whether the idle timer stopped the CLI with
+// no progress after its last result, so that result is the turn's outcome.
+func (live *liveTurn) finishedByIdleTimeout() bool {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	return live.idleExpired && live.lastResult
 }
 
 func (live *liveTurn) finish() {

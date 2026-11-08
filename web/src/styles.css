@@ -893,6 +893,9 @@ input:focus, select:focus, textarea:focus {
 .auth-method-copy small { color: var(--muted); font-size: 11px; line-height: 1.4; text-wrap: pretty; }
 .auth-password-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; }
 .auth-password-fields .auth-help { grid-column: 1 / -1; margin-top: -5px; color: var(--muted); font-size: 11px; }
+.auth-setup-token .field { margin-bottom: 6px; }
+.auth-setup-token .auth-help { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.45; text-wrap: pretty; }
+.auth-setup-token input[aria-invalid="true"] { border-color: var(--red); }
 .password-input { position: relative; }
 .password-input input { padding-right: 43px; }
 .password-input .icon-button { position: absolute; top: 2px; right: 2px; width: 34px; height: 34px; }
@@ -1195,6 +1198,13 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .message-images img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .message-images.single button { max-height: 360px; aspect-ratio: auto; }
 .message-images.single img { max-height: 360px; object-fit: contain; }
+.remote-image-link { min-width: 0; max-width: min(100%, 420px); display: inline-flex; align-items: center; gap: 9px; margin: 6px 0; padding: 9px 11px; color: #38bdf8; background: #0d121c; border: 1px dashed #2b3750; border-radius: 6px; font-size: 11px; line-height: 1.35; text-decoration: none !important; }
+.remote-image-link span { min-width: 0; display: grid; gap: 2px; }
+.remote-image-link strong, .remote-image-link small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-image-link strong { color: var(--ink); font-weight: 600; }
+.remote-image-link small { color: var(--muted); }
+.remote-image-link svg { flex: 0 0 auto; }
+.message-images .remote-image-link { margin: 0; }
 .dialog.image-preview-dialog { width: fit-content; max-width: calc(100vw - 40px); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; overflow: hidden; background: #090c12; border-color: #232e42; }
 .image-preview-dialog > .dialog-heading { flex: 0 0 auto; color: #e6edf3; background: #090c12; border-bottom-color: #1e2638; }
 .image-preview-dialog > .dialog-heading h2 { font-size: 12px; font-weight: 500; }
@@ -2019,6 +2029,7 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 [data-theme="light"] .markdown-content a { color: #0369a1; }
 [data-theme="light"] .markdown-content a.unavailable-link { color: #64748b; }
 [data-theme="light"] .markdown-image { background: #f1f5f9; }
+[data-theme="light"] .remote-image-link { color: #0369a1; background: #f1f5f9; border-color: #cbd5e1; }
 [data-theme="light"] .tool-event,
 [data-theme="light"] .raw-event {
   background: #f8fafc;

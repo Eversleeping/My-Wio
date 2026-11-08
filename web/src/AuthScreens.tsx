@@ -1,7 +1,7 @@
-import { FormEvent, ReactNode, useId, useState } from "react";
+import { FormEvent, ReactNode, useId, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronRight, Copy, Eye, EyeOff, KeyRound, LoaderCircle, LockKeyhole, ShieldCheck } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { post } from "./api";
+import { APIError, post } from "./api";
 import { useI18n } from "./i18n";
 import { ThemeSwitch } from "./theme";
 import type { Session } from "./types";
@@ -32,6 +32,10 @@ function needsCode(mode: AuthMode) {
 
 export function SetupScreen({ onReady }: { onReady: (authMode: AuthMode) => void }) {
   const { t } = useI18n();
+  const [setupToken, setSetupToken] = useState("");
+  const [setupTokenRejected, setSetupTokenRejected] = useState(false);
+  const setupTokenHelpID = useId();
+  const setupTokenRef = useRef<HTMLInputElement>(null);
   const [username, setUsername] = useState("admin");
   const [authMode, setAuthMode] = useState<AuthMode>("totp");
   const [password, setPassword] = useState("");
@@ -50,12 +54,17 @@ export function SetupScreen({ onReady }: { onReady: (authMode: AuthMode) => void
     }
     setBusy(true);
     setError("");
+    setSetupTokenRejected(false);
     try {
-      const payload: Record<string, string> = { username, auth_mode: authMode };
+      const payload: Record<string, string> = { setup_token: setupToken.trim(), username, auth_mode: authMode };
       if (needsPassword(authMode)) payload.password = password;
       setResult(await post<SetupResult>("/setup", payload));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("error.request"));
+      // The control plane answers 403 for a missing or wrong one-time setup token.
+      const tokenRejected = err instanceof APIError && err.status === 403;
+      setSetupTokenRejected(tokenRejected);
+      setError(tokenRejected ? t("auth.setupTokenRejected", { message: err.message }) : err instanceof Error ? err.message : t("error.request"));
+      if (tokenRejected) setupTokenRef.current?.focus();
     } finally {
       setBusy(false);
     }
@@ -74,6 +83,10 @@ export function SetupScreen({ onReady }: { onReady: (authMode: AuthMode) => void
         <div className="auth-heading-copy">
           <div className="section-heading"><h1>{t("auth.createAdmin")}</h1><span className="status-tag neutral"><LockKeyhole size={14} />{t("auth.singleAdmin")}</span></div>
           <p>{t("auth.setupIntro")}</p>
+        </div>
+        <div className="auth-setup-token">
+          <Field label={t("auth.setupToken")}><input ref={setupTokenRef} value={setupToken} onChange={event => { setSetupToken(event.target.value); setSetupTokenRejected(false); }} autoComplete="off" autoCapitalize="none" spellCheck={false} aria-describedby={setupTokenHelpID} aria-invalid={setupTokenRejected || undefined} required /></Field>
+          <p className="auth-help" id={setupTokenHelpID}>{t("auth.setupTokenHelp")}</p>
         </div>
         <Field label={t("auth.username")}><input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></Field>
         <fieldset className="auth-method-fieldset">

@@ -127,6 +127,9 @@ func (a *API) copyWorkspace(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) crossServerCloneCommand(r *http.Request, workspace store.Workspace, destination string) (protocol.GitWorkspaceCloneCommand, string, error) {
 	snapshot, err := a.store.WorkspaceGitSnapshot(r.Context(), workspace.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return protocol.GitWorkspaceCloneCommand{}, "source Git status is unavailable; refresh Git status first", nil
+	}
 	if err != nil {
 		return protocol.GitWorkspaceCloneCommand{}, "", err
 	}

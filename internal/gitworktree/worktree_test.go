@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -48,6 +49,73 @@ func TestCreateAndRemove(t *testing.T) {
 	}
 }
 
+// TestRemoveIsRetryable covers cleanups that are retried after an earlier
+// attempt (or somebody else) already removed part of the worktree: the
+// branch must end up deleted and the retry must succeed.
+func TestRemoveIsRetryable(t *testing.T) {
+	scenarios := map[string]func(t *testing.T, source, target string){
+		"removed twice": func(t *testing.T, source, target string) {
+			if err := Remove(context.Background(), source, target, "feature/retry", []string{filepath.Dir(source)}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"directory deleted manually": func(t *testing.T, source, target string) {
+			if err := os.RemoveAll(target); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"worktree removed but branch left behind": func(t *testing.T, source, target string) {
+			runGit(t, source, "worktree", "remove", "--force", target)
+		},
+		"administrative entry pruned but directory left behind": func(t *testing.T, source, target string) {
+			runGit(t, source, "worktree", "remove", "--force", target)
+			if err := os.Mkdir(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, prepare := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			source := newRepository(t, root)
+			target := filepath.Join(root, "repo-retry")
+			result, err := Create(context.Background(), protocol.GitWorktreeCreateCommand{SourcePath: source, TargetPath: target, Branch: "feature/retry"}, []string{root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepare(t, source, result.Path)
+			if err := Remove(context.Background(), source, result.Path, result.Branch, []string{root}); err != nil {
+				t.Fatalf("retried cleanup failed: %v", err)
+			}
+			if err := exec.Command("git", "-C", source, "show-ref", "--verify", "--quiet", "refs/heads/feature/retry").Run(); err == nil {
+				t.Fatal("worktree branch still exists after cleanup")
+			}
+			if output, err := exec.Command("git", "-C", source, "worktree", "list", "--porcelain").Output(); err != nil || strings.Contains(string(output), "repo-retry") {
+				t.Fatalf("stale worktree entry remains: %s %v", output, err)
+			}
+			// A further retry is a no-op.
+			if err := Remove(context.Background(), source, result.Path, result.Branch, []string{root}); err != nil {
+				t.Fatalf("repeated cleanup failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestRemoveReportsBranchStillCheckedOut(t *testing.T) {
+	root := t.TempDir()
+	source := newRepository(t, root)
+	target := filepath.Join(root, "repo-missing")
+	current, err := exec.Command("git", "-C", source, "branch", "--show-current").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The source checkout's own branch cannot be deleted: that failure must
+	// be reported rather than mistaken for an already deleted branch.
+	if err := Remove(context.Background(), source, target, strings.TrimSpace(string(current)), []string{root}); err == nil {
+		t.Fatal("deleting the checked-out branch was reported as success")
+	}
+}
+
 func TestCreateRejectsUnsafeInput(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside")
@@ -73,6 +141,20 @@ func TestCreateRejectsSourceAndTargetAncestors(t *testing.T) {
 			t.Fatalf("expected ancestor relationship to fail: %s", target)
 		}
 	}
+}
+
+func newRepository(t *testing.T, root string) string {
+	t.Helper()
+	source := filepath.Join(root, "repo")
+	runGit(t, root, "init", source)
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "add", "README.md")
+	runGit(t, source, "commit", "-m", "initial")
+	return source
 }
 
 func runGit(t *testing.T, directory string, args ...string) {

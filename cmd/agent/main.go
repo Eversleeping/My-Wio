@@ -5,10 +5,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,7 +38,8 @@ func run(log *slog.Logger, args []string) error {
 	case "enroll":
 		flags := flag.NewFlagSet("enroll", flag.ContinueOnError)
 		controlURL := flags.String("url", "", "Wio control-plane URL")
-		token := flags.String("token", "", "one-time enrollment token")
+		token := flags.String("token", "", "one-time enrollment token (visible to other local users in the process list; prefer --token-file)")
+		tokenFile := flags.String("token-file", "", "read the one-time enrollment token from this file, or from standard input when set to -")
 		configPath := flags.String("config", defaultConfig(), "configuration file")
 		cloneRoot := flags.String("clone-root", "/var/lib/wio-agent/projects", "managed Git clone root")
 		stateDir := flags.String("state-dir", "/var/lib/wio-agent", "agent state directory")
@@ -46,12 +49,16 @@ func run(log *slog.Logger, args []string) error {
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *controlURL == "" || *token == "" {
-			return errors.New("--url and --token are required")
+		if *controlURL == "" || *token == "" && *tokenFile == "" {
+			return errors.New("--url and one of --token or --token-file are required")
+		}
+		secret, err := enrollmentToken(*token, *tokenFile, os.Stdin)
+		if err != nil {
+			return err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: *token, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure})
+		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure})
 		if err != nil {
 			return err
 		}
@@ -111,6 +118,47 @@ func defaultConfig() string {
 		return "/etc/wio-agent/config.json"
 	}
 	return "wio-agent.json"
+}
+
+// maximumEnrollmentTokenSize bounds what --token-file reads.
+const maximumEnrollmentTokenSize = 64 << 10
+
+// enrollmentToken returns the one-time enrollment token. --token puts the
+// token on the command line, where every local user can read it in the
+// process list, so installers pass it with --token-file instead: a file
+// path, or "-" for standard input.
+func enrollmentToken(flagToken, tokenFile string, stdin io.Reader) (string, error) {
+	if flagToken != "" && tokenFile != "" {
+		return "", errors.New("use only one of --token and --token-file")
+	}
+	if tokenFile == "" {
+		if flagToken == "" {
+			return "", errors.New("enrollment token is empty")
+		}
+		return flagToken, nil
+	}
+	source := stdin
+	name := "standard input"
+	if tokenFile != "-" {
+		file, err := os.Open(tokenFile)
+		if err != nil {
+			return "", fmt.Errorf("read enrollment token: %w", err)
+		}
+		defer file.Close()
+		source, name = file, tokenFile
+	}
+	data, err := io.ReadAll(io.LimitReader(source, maximumEnrollmentTokenSize+1))
+	if err != nil {
+		return "", fmt.Errorf("read enrollment token from %s: %w", name, err)
+	}
+	if len(data) > maximumEnrollmentTokenSize {
+		return "", fmt.Errorf("enrollment token in %s is too large", name)
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		return "", fmt.Errorf("enrollment token in %s is empty", name)
+	}
+	return token, nil
 }
 
 var _ = os.Interrupt

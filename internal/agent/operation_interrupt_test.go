@@ -157,3 +157,131 @@ func TestOperationInterruptReplayRestoresTargetReceiptAfterRestart(t *testing.T)
 		}
 	}
 }
+
+func shortPreStartInterruptWait(t *testing.T) {
+	t.Helper()
+	previous := preStartInterruptWait
+	preStartInterruptWait = 50 * time.Millisecond
+	t.Cleanup(func() { preStartInterruptWait = previous })
+}
+
+type turnInterruptCase struct {
+	name      string
+	startKind string
+	interrupt func(*Client, context.Context, string) error
+	probe     func(*Client, string)
+	lost      string
+	payload   any
+}
+
+func turnInterruptCases(t *testing.T) []turnInterruptCase {
+	return []turnInterruptCase{
+		{
+			name: "claude", startKind: "claude.turn.start", lost: protocol.ClaudeOwnershipLostMessage,
+			interrupt: (*Client).interruptClaudeAndWait,
+			probe: func(c *Client, id string) {
+				raw, _ := json.Marshal(protocol.GeminiKeepalive{ClaudeOperationIDs: []string{id}})
+				c.reconcileClaudeOperations(raw)
+			},
+			payload: protocol.ClaudeTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), Prompt: "must not run", PermissionMode: "default"},
+		},
+		{
+			name: "gemini", startKind: "gemini.turn.start", lost: protocol.GeminiOwnershipLostMessage,
+			interrupt: (*Client).interruptGeminiAndWait,
+			probe: func(c *Client, id string) {
+				raw, _ := json.Marshal(protocol.GeminiKeepalive{OperationIDs: []string{id}})
+				c.reconcileGeminiOperations(raw)
+			},
+			payload: protocol.GeminiTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), Prompt: "must not run", Model: "flash", ApprovalMode: "default"},
+		},
+	}
+}
+
+func waitForPreStartTombstone(t *testing.T, c *Client, id string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.seenMu.Lock()
+		execution := c.seen[id]
+		recorded := execution != nil && execution.awaitingStart()
+		c.seenMu.Unlock()
+		if recorded {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("interrupt did not record a tombstone for the unregistered start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func expectInterruptedResult(t *testing.T, outbound <-chan *protocol.AgentEnvelope, id string) {
+	t.Helper()
+	message := receiveAgentEnvelope(t, outbound)
+	var result protocol.OperationResult
+	if message.Kind != "operation_result" || json.Unmarshal(message.PayloadJSON, &result) != nil || result.OperationID != id || result.Status != "interrupted" || result.Message != preStartInterruptMessage {
+		t.Fatalf("late start was not answered with the interruption: kind=%s payload=%s", message.Kind, message.PayloadJSON)
+	}
+}
+
+// Every envelope runs on its own goroutine, so an interrupt delivered right
+// after its turn start can be handled first. Order it deterministically: the
+// start must replay the interruption instead of running a whole turn.
+func TestTurnInterruptBeforeStartCancelsTheLateStart(t *testing.T) {
+	for _, tc := range turnInterruptCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			c := interruptTestClient(t)
+			interrupted := make(chan error, 1)
+			go func() { interrupted <- tc.interrupt(c, context.Background(), "turn") }()
+			waitForPreStartTombstone(t, c, "turn")
+			payload, err := json.Marshal(tc.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "turn", Kind: tc.startKind, PayloadJSON: payload})
+			// No operation_started: the start finished before it could run.
+			expectInterruptedResult(t, c.outbound, "turn")
+			if err := <-interrupted; err != nil {
+				t.Fatalf("interrupt of a suppressed start: %v", err)
+			}
+			result, found, err := c.loadOperationResult("turn")
+			if err != nil || !found || result.Status != "interrupted" {
+				t.Fatalf("suppressed start left no receipt: %#v %v %v", result, found, err)
+			}
+			// Probes and repeated interrupts now see a finished turn.
+			tc.probe(c, "turn")
+			expectInterruptedResult(t, c.outbound, "turn")
+			if err := tc.interrupt(c, context.Background(), "turn"); err != nil {
+				t.Fatalf("repeated interrupt: %v", err)
+			}
+			if len(c.outbound) != 0 {
+				t.Fatalf("unexpected messages: %d", len(c.outbound))
+			}
+		})
+	}
+}
+
+// A start that never reaches this process went to an earlier Agent process,
+// whose CLI may still be running: that stays an ownership loss, while the
+// tombstone still keeps a delayed start from running.
+func TestTurnInterruptWithoutStartReportsOwnershipLost(t *testing.T) {
+	shortPreStartInterruptWait(t)
+	for _, tc := range turnInterruptCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			c := interruptTestClient(t)
+			for attempt := 0; attempt < 2; attempt++ {
+				if err := tc.interrupt(c, context.Background(), "orphan"); err == nil || err.Error() != tc.lost {
+					t.Fatalf("attempt %d: unknown turn reported stopped: %v", attempt, err)
+				}
+			}
+			tc.probe(c, "orphan")
+			message := receiveAgentEnvelope(t, c.outbound)
+			if message.Kind != tc.name+"_ownership_lost" {
+				t.Fatalf("probe claimed a result for a turn this process never saw: %s %s", message.Kind, message.PayloadJSON)
+			}
+			payload, _ := json.Marshal(tc.payload)
+			c.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "orphan", Kind: tc.startKind, PayloadJSON: payload})
+			expectInterruptedResult(t, c.outbound, "orphan")
+		})
+	}
+}

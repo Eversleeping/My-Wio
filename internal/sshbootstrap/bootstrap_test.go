@@ -353,6 +353,14 @@ func TestConnectClearsHandshakeDeadline(t *testing.T) {
 
 func startTestSSHServer(t *testing.T, configure ...func(*ssh.ServerConfig)) (string, int) {
 	t.Helper()
+	return startExecSSHServer(t, func(ssh.Channel, string) {}, configure...)
+}
+
+// startExecSSHServer serves one SSH connection. Every exec request is
+// accepted, passed to handle together with its command, and then reported as
+// successful.
+func startExecSSHServer(t *testing.T, handle func(channel ssh.Channel, command string), configure ...func(*ssh.ServerConfig)) (string, int) {
+	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +407,13 @@ func startTestSSHServer(t *testing.T, configure ...func(*ssh.ServerConfig)) (str
 						_ = request.Reply(false, nil)
 						continue
 					}
+					var payload struct{ Command string }
+					if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
+						_ = request.Reply(false, nil)
+						return
+					}
 					_ = request.Reply(true, nil)
+					handle(channel, payload.Command)
 					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
 					return
 				}
@@ -415,6 +429,58 @@ func startTestSSHServer(t *testing.T, configure ...func(*ssh.ServerConfig)) (str
 		t.Fatal(err)
 	}
 	return host, port
+}
+
+func TestEnrollmentTokenIsSentOnStandardInput(t *testing.T) {
+	type execution struct{ command, stdin string }
+	executions := make(chan execution, 2)
+	host, port := startExecSSHServer(t, func(channel ssh.Channel, command string) {
+		input, _ := io.ReadAll(channel)
+		executions <- execution{command: command, stdin: string(input)}
+	})
+	client, _, err := connect(context.Background(), Target{Host: host, Port: port, User: "root", AuthMethod: "password", Password: "test-password"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	received := func() execution {
+		t.Helper()
+		select {
+		case result := <-executions:
+			return result
+		case <-time.After(10 * time.Second):
+			t.Fatal("SSH command was not executed")
+			return execution{}
+		}
+	}
+
+	token := "wio-enrollment-token-secret"
+	enrollment := enrollCommand("https://wio.example.com", "/var/lib/wio-agent/.local/bin/codex")
+	if enrollment != "/usr/local/bin/wio-agent enroll --url 'https://wio.example.com' --token-file - --codex '/var/lib/wio-agent/.local/bin/codex'" {
+		t.Fatalf("unexpected enrollment command: %q", enrollment)
+	}
+	command := elevated(false, enrollment)
+	if _, err := runWithInput(client, command, []byte(token+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	enroll := received()
+	if enroll.command != command || !strings.Contains(enroll.command, "--token-file - --codex") {
+		t.Fatalf("unexpected remote enrollment command: %q", enroll.command)
+	}
+	if strings.Contains(enroll.command, token) || strings.Contains(enroll.command, "--token ") {
+		t.Fatalf("enrollment token is on the remote command line: %q", enroll.command)
+	}
+	if enroll.stdin != token+"\n" {
+		t.Fatalf("enrollment token was not sent on standard input: %q", enroll.stdin)
+	}
+
+	// Commands without input still get an immediately closed standard input.
+	if _, err := run(client, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if plain := received(); plain.command != "true" || plain.stdin != "" {
+		t.Fatalf("unexpected command without input: %#v", plain)
+	}
 }
 
 func TestProgressReaderReportsUploadCompletion(t *testing.T) {

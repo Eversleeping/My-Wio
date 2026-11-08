@@ -20,6 +20,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/deployer"
 	"github.com/wio-platform/wio/internal/deploymenttemplate"
 	"github.com/wio-platform/wio/internal/gitprovider"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -445,18 +446,14 @@ func validateBlankProjectRemote(input createProjectInput) error {
 		if strings.ContainsAny(input.Remote.URL, "\x00\r\n\t ") {
 			return errors.New("remote URL contains invalid characters")
 		}
-		if strings.Contains(input.Remote.URL, "@") && strings.HasPrefix(strings.ToLower(input.Remote.URL), "https://") {
-			return errors.New("HTTPS remote URL must not contain credentials")
+		if err := gitRemoteCredentialError(input.Remote.URL); err != nil {
+			return err
 		}
 		if validSCPRemote(input.Remote.URL) {
 			return nil
 		}
 		parsed, err := url.Parse(input.Remote.URL)
-		hasPassword := false
-		if parsed != nil && parsed.User != nil {
-			_, hasPassword = parsed.User.Password()
-		}
-		if err != nil || parsed.Host == "" || hasPassword || (parsed.Scheme != "https" && parsed.Scheme != "ssh") {
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "ssh") {
 			return errors.New("remote URL must be an HTTPS or SSH URL")
 		}
 		return nil
@@ -820,13 +817,31 @@ func (a *API) queueWorkspaceGitWrite(w http.ResponseWriter, r *http.Request, com
 		return
 	}
 	command.WorkspaceID, command.Path = workspace.ID, workspace.Path
+	// Check the write lock first: marking the snapshot as refreshing for a
+	// request that is about to be rejected would corrupt its visible status.
+	active, err := a.store.HasActiveWorkspaceWriteOperation(r.Context(), workspace.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check workspace write operations")
+		return
+	}
+	if active {
+		writeError(w, http.StatusConflict, store.ErrWorkspaceWriteActive.Error())
+		return
+	}
+	previous, err := a.store.WorkspaceGitSnapshot(r.Context(), workspace.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workspace Git status")
+		return
+	}
 	if err := a.store.BeginWorkspaceGitRefresh(r.Context(), workspace.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start workspace Git operation")
 		return
 	}
 	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.workspace.write", command, "git-write:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if errors.Is(err, store.ErrWorkspaceWriteActive) {
-		_ = a.store.FailWorkspaceGitRefresh(r.Context(), workspace.ID, err.Error())
+		// A concurrent write won the race after the check above. Nothing ran
+		// for this request, so put the snapshot back instead of failing it.
+		_ = a.store.RestoreWorkspaceGitRefresh(r.Context(), previous)
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -889,6 +904,10 @@ func (a *API) addGitRemote(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	if err := gitRemoteCredentialError(in.URL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "remote.add", Remote: strings.TrimSpace(in.Name), URL: strings.TrimSpace(in.URL)})
 }
 func (a *API) setGitRemote(w http.ResponseWriter, r *http.Request) {
@@ -896,6 +915,10 @@ func (a *API) setGitRemote(w http.ResponseWriter, r *http.Request) {
 		URL string `json:"url"`
 	}
 	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := gitRemoteCredentialError(in.URL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	a.queueWorkspaceGitWrite(w, r, protocol.GitWorkspaceWriteCommand{Action: "remote.set-url", Remote: chi.URLParam(r, "remote"), URL: strings.TrimSpace(in.URL)})
@@ -1116,6 +1139,10 @@ func (a *API) importProject(w http.ResponseWriter, r *http.Request) {
 	input.Destination = strings.TrimSpace(input.Destination)
 	if input.ServerID == "" || input.RemoteURL == "" {
 		writeError(w, http.StatusBadRequest, "server_id and remote_url are required")
+		return
+	}
+	if err := gitRemoteCredentialError(input.RemoteURL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !validGitRemote(input.RemoteURL) {
@@ -1973,8 +2000,12 @@ func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Codex session")
 		return
 	}
 	if thread.ArchivedAt != nil || thread.Status != "running" || thread.CodexThreadID == "" {
@@ -2061,8 +2092,12 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 		return
 	}
 	thread, err := a.store.Thread(r.Context(), threadID)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Codex session")
 		return
 	}
 	if thread.ArchivedAt != nil {
@@ -2144,8 +2179,12 @@ func validTurnImages(images []protocol.TurnImage) bool {
 
 func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load Codex session")
 		return
 	}
 	if thread.ArchivedAt != nil {
@@ -2436,6 +2475,9 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 		}
 	case "remote":
 		input.WorkspaceID = ""
+		if err := gitRemoteCredentialError(input.Repository); err != nil {
+			return store.DeploymentTarget{}, err
+		}
 		if input.Repository == "" || !validGitRemote(input.Repository) {
 			return store.DeploymentTarget{}, errors.New("repository must use HTTPS or SSH")
 		}
@@ -2452,6 +2494,11 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 		input.ProjectID = project.ID
 	default:
 		return store.DeploymentTarget{}, errors.New("source_type must be workspace or remote")
+	}
+	// The Agent validates the ref again before fetching; rejecting it here
+	// keeps refs Git would parse as options out of stored targets.
+	if err := deployer.ValidateGitRef(input.GitRef); err != nil {
+		return store.DeploymentTarget{}, fmt.Errorf("git_ref: %w", err)
 	}
 	checks, err := json.Marshal(input.HealthChecks)
 	if err != nil {
@@ -2637,8 +2684,12 @@ func (a *API) deleteDeployment(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 	target, err := a.store.DeploymentTarget(r.Context(), chi.URLParam(r, "targetID"))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "deployment target not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load deployment target")
 		return
 	}
 	server, err := a.store.Server(r.Context(), target.ServerID)
@@ -2656,8 +2707,16 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.CommitRef = strings.TrimSpace(input.CommitRef)
 	if input.CommitRef == "" {
 		input.CommitRef = target.GitRef
+	}
+	// Mirror the Agent: a workspace deployment without a ref deploys HEAD.
+	if input.CommitRef != "" || target.SourceType != "workspace" {
+		if err := deployer.ValidateGitRef(input.CommitRef); err != nil {
+			writeError(w, http.StatusBadRequest, "commit_ref: "+err.Error())
+			return
+		}
 	}
 	deployment, err := a.store.CreateDeployment(r.Context(), target.ID, input.CommitRef)
 	if errors.Is(err, store.ErrDeploymentActive) || errors.Is(err, store.ErrDeploymentContainerActive) {
@@ -2720,8 +2779,12 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 	target, err := a.store.DeploymentTarget(r.Context(), chi.URLParam(r, "targetID"))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "deployment target not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load deployment target")
 		return
 	}
 	server, err := a.store.Server(r.Context(), target.ServerID)
@@ -3010,7 +3073,39 @@ func makeAuditEntries(records []store.AuditRecord) []auditEntry {
 	return entries
 }
 
+// errGitRemoteCredentials explains why a remote URL with embedded secrets is
+// refused: remotes are stored and shown in plaintext, unlike vault entries.
+var errGitRemoteCredentials = errors.New("Git remote URL must not contain credentials; remove the user:token@ part and save the token as a Git credential profile in the credentials vault (Settings > Credentials)")
+
+// gitRemoteCredentialError rejects a password in any URL and any userinfo in an
+// HTTP(S) URL, where a bare username is usually a token. SSH users such as
+// ssh://git@host carry no secret and scp-style remotes have no password syntax.
+// The authority is inspected by hand so URLs that url.Parse refuses (and that
+// lenient callers may still accept) cannot smuggle credentials through.
+func gitRemoteCredentialError(remote string) error {
+	scheme, rest, ok := strings.Cut(strings.TrimSpace(remote), "://")
+	if !ok {
+		return nil
+	}
+	authority := rest
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return nil
+	}
+	scheme = strings.ToLower(scheme)
+	if strings.Contains(authority[:at], ":") || scheme == "http" || scheme == "https" {
+		return errGitRemoteCredentials
+	}
+	return nil
+}
+
 func validGitRemote(remote string) bool {
+	if gitRemoteCredentialError(remote) != nil {
+		return false
+	}
 	if strings.HasPrefix(remote, "git@") || strings.HasPrefix(remote, "ssh://") {
 		return true
 	}

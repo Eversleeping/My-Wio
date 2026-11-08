@@ -260,7 +260,10 @@ func (s *Store) CompleteProjectDeletion(ctx context.Context, operation Operation
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.Q(`UPDATE agent_operations SET status=?,result=?,result_data=?,completed_at=? WHERE id=? AND kind=?`), result.Status, result.Message, data, time.Now().UTC(), operation.ID, ProjectDeleteOperationKind); err != nil {
+	// Claim the operation first so a stale result (the deletion was
+	// cancelled, reconciled or already completed) cannot delete the
+	// workspace row or advance the deletion queue.
+	if err := s.completeActiveOperation(ctx, tx, operation.ID, result.Status, result.Message, data, time.Now().UTC()); err != nil {
 		return err
 	}
 	if result.Status == "succeeded" {

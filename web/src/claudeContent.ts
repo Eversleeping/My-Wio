@@ -1,3 +1,4 @@
+import { safeImageSource } from "./codexContent";
 import type { Question, QuestionValue } from "./components/UserInputPrompt";
 import type { StreamEvent } from "./types";
 
@@ -69,7 +70,7 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
       if (previous?.role === "assistant") { previous.text += text; previous.endEventID = event.event_id; }
       else items.push({ id: event.event_id, occurredAt, endEventID: event.event_id, role: "assistant", text });
     } else if (event.kind === "claude.user.message" || event.kind === "claude.steer.applied") {
-      items.push({ id: event.event_id, occurredAt, role: "user", text, images: Array.isArray(p.images) ? p.images.flatMap(image => typeof image?.data_url === "string" ? [image.data_url] : []) : [] });
+      items.push({ id: event.event_id, occurredAt, role: "user", text, images: Array.isArray(p.images) ? p.images.flatMap(image => { const source = safeImageSource(image?.data_url); return source ? [source] : []; }) : [] });
     } else if (event.kind === "claude.notice") items.push({ id: event.event_id, occurredAt, role: "notice", text });
     else if (event.kind === "claude.result") {
       if (Array.isArray(p.permission_denials) && p.permission_denials.length) items.push({ id: `${event.event_id}-denied`, occurredAt, role: "notice", text: denied });

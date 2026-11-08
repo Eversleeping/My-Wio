@@ -121,7 +121,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 
 ### 首次使用路径
 
-1. **创建管理员**：打开页面后选择登录方式。固定密码至少 12 个字符；选择动态验证码（TOTP）时，立刻离线保存恢复码。组合方式需要同时提供密码和 TOTP/恢复码。
+1. **创建管理员**：打开页面后填写一次性设置令牌（在控制面启动日志中查找 `FIRST-RUN SETUP TOKEN` 警告的 `setup_token` 字段，本地运行时就在 `go run` 终端中；也可通过 `WIO_SETUP_TOKEN` 预先指定），并选择登录方式。固定密码至少 12 个字符；选择动态验证码（TOTP）时，立刻离线保存恢复码。组合方式需要同时提供密码和 TOTP/恢复码。
 2. **准备凭据预设**：如果要使用 Codex 会话或注册服务器，先进入“设置”创建 Codex 凭据预设（服务地址、模型和 API Key）；Git HTTPS 凭据预设为可选项，但提交代码前应配置提交者姓名和邮箱。
 3. **注册第一台 Linux 服务器**：进入“服务器”并选择“注册服务器”。目标主机需运行 Linux、systemd 和 SSH；登录用户应为 `root` 或可免交互执行 `sudo` 的用户。先核对页面展示的 SSH 主机指纹，再确认安装。目标主机只需能够主动访问控制面，不需要开放 Wio 的入站端口。
 4. **确认可用状态**：等待服务器显示“在线”，检查心跳和所需能力。系统会先尝试补装缺失依赖；仍有警告时，可通过 SSH 修复重试。
@@ -149,6 +149,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 | `WIO_PUBLIC_URL` | 空 | Agent 注册 URL 和对外基址；生产环境应使用 `https://`，它也决定会话 Cookie 是否启用 `Secure` |
 | `WIO_DEV_INSECURE` | `false` | 仅本地开发时允许在 HTTPS 基址下关闭 `Secure` Cookie |
 | `WIO_TRUSTED_PROXIES` | 空（Docker Compose 中默认为回环与私有网段） | 逗号分隔的反向代理 IP/CIDR。仅当直接连接方属于该列表时才读取 `X-Forwarded-For`，并从右向左跳过可信代理取得真实客户端地址，用于登录限流与审计日志；为空时始终使用 TCP 对端地址。不要把公网可直连控制面的地址段加入列表 |
+| `WIO_SETUP_TOKEN` | 空（未设置时启动自动生成） | 创建首个管理员所需的一次性令牌（`POST /api/setup` 的 `setup_token` 字段，初始化页面会要求填写）。未设置且尚无管理员时，控制面每次启动都会生成新的随机令牌，并在日志中以 `FIRST-RUN SETUP TOKEN` 警告输出；管理员创建后令牌立即失效 |
 | `WIO_AGENT_ASSET_DIR` | `/usr/local/share/wio` | 网页 SSH 注册所使用的 Agent、systemd unit 和依赖助手资产目录 |
 | `WIO_CONTROL_AGENT_ENABLED` | Linux 上为 `true` | 是否启动内置控制机 Agent；设为 `false` 后记录仍保留但显示离线 |
 

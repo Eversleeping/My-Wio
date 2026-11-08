@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -338,5 +339,116 @@ func TestSessionsReconfigureAllIdleProcessesAndClose(t *testing.T) {
 	}
 	if _, _, err := p.acquire("after-close"); err == nil {
 		t.Fatal("closed pool accepted a new session")
+	}
+}
+
+func shortInterruptWindow(t *testing.T) {
+	t.Helper()
+	previous := interruptStartWindow
+	interruptStartWindow = 200 * time.Millisecond
+	t.Cleanup(func() { interruptStartWindow = previous })
+}
+
+// Controls for a conversation without a session must not start an
+// app-server, and must fail with the errors the control plane already treats
+// as "nothing left to stop" (noActiveCodexTurn) or "stale request".
+func TestSessionsControlsNeverCreateSessions(t *testing.T) {
+	shortInterruptWindow(t)
+	p, _ := sessionTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	err := p.Interrupt(ctx, protocol.InterruptTurnCommand{ThreadID: "unknown", CodexThread: "codex", TurnID: "turn"})
+	if err == nil || !strings.Contains(err.Error(), "no active turn") {
+		t.Fatalf("interrupt of an unknown session: %v", err)
+	}
+	if time.Since(started) >= interruptStartWindow {
+		t.Fatal("an interrupt for an accepted turn waited for a session that cannot appear")
+	}
+	if err := p.Interrupt(ctx, protocol.InterruptTurnCommand{ThreadID: "unknown", BestEffort: true}); err != nil {
+		t.Fatalf("best-effort interrupt must be a no-op: %v", err)
+	}
+	if err := p.Interrupt(ctx, protocol.InterruptTurnCommand{ThreadID: "unknown", CodexThread: "codex"}); err == nil || !strings.Contains(err.Error(), "no active turn") {
+		t.Fatalf("interrupt without a turn: %v", err)
+	}
+	if err := p.SteerTurn(ctx, protocol.SteerTurnCommand{ThreadID: "unknown", CodexThread: "codex", ExpectedTurnID: "turn", Prompt: "late"}); !errors.Is(err, errTurnNotActive) {
+		t.Fatalf("steer of an unknown session: %v", err)
+	}
+	if err := p.Decide(protocol.ApprovalDecisionCommand{ThreadID: "unknown", RequestID: "42", Decision: "approved"}); !errors.Is(err, errApprovalNotPending) {
+		t.Fatalf("decision for an unknown session: %v", err)
+	}
+	p.mu.Lock()
+	sessions := len(p.sessions)
+	p.mu.Unlock()
+	if sessions != 0 {
+		t.Fatalf("controls created %d sessions", sessions)
+	}
+}
+
+func TestSessionsInterruptOfReclaimedSessionDoesNotRestartAppServer(t *testing.T) {
+	shortInterruptWindow(t)
+	p, events := sessionTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.StartTurn(ctx, protocol.StartTurnCommand{ThreadID: "reclaimed", Prompt: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	waitSessionEvent(t, events, "reclaimed", "approval.requested")
+	if err := p.Interrupt(ctx, protocol.InterruptTurnCommand{ThreadID: "reclaimed"}); err != nil {
+		t.Fatal(err)
+	}
+	waitSessionEvent(t, events, "reclaimed", "codex.turn.completed")
+	p.mu.Lock()
+	p.sessions["reclaimed"].lastUsed = time.Now().Add(-2 * sessionIdleTimeout)
+	p.mu.Unlock()
+	p.reapIdle(time.Now())
+	for _, command := range []protocol.InterruptTurnCommand{
+		{ThreadID: "reclaimed", CodexThread: "helper-thread", TurnID: "helper-turn"},
+		{ThreadID: "reclaimed", CodexThread: "helper-thread"},
+	} {
+		if err := p.Interrupt(ctx, command); err == nil || !strings.Contains(err.Error(), "no active turn") {
+			t.Fatalf("stale interrupt %+v: %v", command, err)
+		}
+	}
+	p.mu.Lock()
+	recreated := p.sessions["reclaimed"] != nil
+	p.mu.Unlock()
+	if recreated {
+		t.Fatal("a stale interrupt recreated the reclaimed session")
+	}
+}
+
+func TestSessionsInterruptWaitsForConcurrentStart(t *testing.T) {
+	p, events := sessionTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	interrupted := make(chan error, 1)
+	// The interrupt is dispatched before the start creates its session.
+	go func() { interrupted <- p.Interrupt(ctx, protocol.InterruptTurnCommand{ThreadID: "racing"}) }()
+	time.Sleep(100 * time.Millisecond)
+	if err := p.StartTurn(ctx, protocol.StartTurnCommand{ThreadID: "racing", Prompt: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-interrupted; err != nil {
+		t.Fatalf("interrupt racing a turn start: %v", err)
+	}
+	waitSessionEvent(t, events, "racing", "codex.turn.completed")
+}
+
+func TestAdapterInterruptWithoutAppServerReportsNoActiveTurn(t *testing.T) {
+	a := New("does-not-exist", slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.StreamEvent) error { return nil })
+	command := protocol.InterruptTurnCommand{ThreadID: "wio", CodexThread: "codex", TurnID: "turn"}
+	if err := a.Interrupt(context.Background(), command); !errors.Is(err, errNoActiveTurn) {
+		t.Fatalf("interrupt without an app-server: %v", err)
+	}
+	command.BestEffort = true
+	if err := a.Interrupt(context.Background(), command); err != nil {
+		t.Fatalf("best-effort interrupt without an app-server: %v", err)
+	}
+	a.mu.Lock()
+	started := a.process != nil
+	a.mu.Unlock()
+	if started {
+		t.Fatal("interrupt started an app-server")
 	}
 }

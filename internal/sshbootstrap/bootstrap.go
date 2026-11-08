@@ -328,8 +328,9 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	}
 
 	request.report("enrolling_agent", 0, 0)
-	enroll := "/usr/local/bin/wio-agent enroll --url " + shellQuote(request.ControlURL) + " --token " + shellQuote(request.EnrollmentToken) + " --codex " + shellQuote(codexPath)
-	output, err := run(client, elevated(root, enroll))
+	// The token travels on the SSH session's standard input: a command-line
+	// argument would be visible to every local user of the target in ps.
+	output, err := runWithInput(client, elevated(root, enrollCommand(request.ControlURL, codexPath)), []byte(request.EnrollmentToken+"\n"))
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: agent enrollment was rejected", ErrInstallation)
 	}
@@ -1049,6 +1050,12 @@ func runTrimmed(client *ssh.Client, command string) (string, error) {
 }
 
 func run(client *ssh.Client, command string) (string, error) {
+	return runWithInput(client, command, nil)
+}
+
+// runWithInput runs command with input as its standard input. Secrets are
+// passed this way so that they never appear on a remote command line.
+func runWithInput(client *ssh.Client, command string, input []byte) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", err
@@ -1057,6 +1064,9 @@ func run(client *ssh.Client, command string) (string, error) {
 	output := &limitedBuffer{remaining: 64 << 10}
 	session.Stdout = output
 	session.Stderr = output
+	if input != nil {
+		session.Stdin = bytes.NewReader(input)
+	}
 	err = session.Run(command)
 	return output.String(), err
 }
@@ -1088,6 +1098,14 @@ func (b *limitedBuffer) String() string {
 }
 
 var enrolledServerPattern = regexp.MustCompile(`Enrolled server ([0-9a-fA-F-]+);`)
+
+// enrollCommand enrolls the Agent with the token read from standard input.
+// --token-file is available on the target because Install uploads the Agent
+// binary shipped with this control plane (built from the same source tree)
+// to /usr/local/bin/wio-agent before it enrolls.
+func enrollCommand(controlURL, codexPath string) string {
+	return "/usr/local/bin/wio-agent enroll --url " + shellQuote(controlURL) + " --token-file - --codex " + shellQuote(codexPath)
+}
 
 func enrollmentServerID(output string) string {
 	match := enrolledServerPattern.FindStringSubmatch(output)

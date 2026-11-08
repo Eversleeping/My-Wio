@@ -69,6 +69,13 @@ func init() {
 		fmt.Println("not json")
 		os.Exit(0)
 	}
+	if mode == "noisy-long" {
+		// Console noise and one event above the former 2 MiB line limit.
+		fmt.Println("Loaded cached credentials.")
+		fmt.Println(`["not", "an", "event"]`)
+		raw, _ := json.Marshal(map[string]any{"type": "tool_result", "tool_id": "tool-1", "status": "success", "output": strings.Repeat("x", 3<<20)})
+		fmt.Println(string(raw))
+	}
 	fmt.Println(`{"type":"message","role":"user","content":"duplicate"}`)
 	fmt.Println(`{"type":"message","role":"assistant","content":"hello","delta":true}`)
 	fmt.Println(`{"type":"tool_use","tool_id":"tool-1","tool_name":"read_file","parameters":{"path":"README.md"}}`)
@@ -242,5 +249,43 @@ func TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation(t *testing
 	}
 	if os.Getenv("GEMINI_API_KEY") != "inherited-secret" {
 		t.Fatal("global environment changed")
+	}
+}
+
+func TestRunSkipsConsoleNoiseAndAcceptsLongEvents(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "noisy-long")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record.json"))
+	binary, _ := os.Executable()
+	longest := 0
+	var kinds []string
+	a := New(binary, func(event protocol.StreamEvent) error {
+		kinds = append(kinds, event.Kind)
+		longest = max(longest, len(event.Payload))
+		return nil
+	})
+	if err := a.Run(context.Background(), "noisy", protocol.GeminiTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), Model: "flash", ApprovalMode: "default", Prompt: "test"}); err != nil {
+		t.Fatalf("console noise or a long event failed the turn: %v", err)
+	}
+	if longest < 3<<20 || kinds[len(kinds)-1] != "gemini.result" {
+		t.Fatalf("long event lost: longest=%d kinds=%v", longest, kinds)
+	}
+}
+
+func TestLineReaderFramesLines(t *testing.T) {
+	long := strings.Repeat("y", 200<<10) // spans several reads of the 64 KiB buffer
+	reader := newLineReader(strings.NewReader("first\r\n" + long + "\n\nlast"))
+	for _, want := range []string{"first", long, "", "last"} {
+		line, err := reader.next()
+		if err != nil || string(line) != want {
+			t.Fatalf("got %d bytes, %v; want %d bytes", len(line), err, len(want))
+		}
+	}
+	if _, err := reader.next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	limited := newLineReader(strings.NewReader(strings.Repeat("z", 1000) + "\n"))
+	limited.limit = 999
+	if _, err := limited.next(); !errors.Is(err, errOutputLineTooLong) {
+		t.Fatalf("oversized line accepted: %v", err)
 	}
 }

@@ -41,6 +41,12 @@ func runSteeringTestChild(mode string) {
 	if mode == "steer-no-receipt" {
 		return
 	}
+	if mode == "steer-idle-after-result" {
+		// Stay open without confirming the instruction, as a CLI does when a
+		// hook drops it; only the adapter's idle timer ends the process.
+		_, _ = io.ReadAll(r)
+		return
+	}
 	fmt.Printf("{\"type\":\"user\",\"isReplay\":true,\"uuid\":%q,\"message\":{\"content\":\"correction\"}}\n", input.UUID)
 	fmt.Printf("{\"type\":\"stream_event\",\"user_message_uuids\":[%q,%q],\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Adjusted\"}}}\n", first.UUID, input.UUID)
 	fmt.Printf("{\"type\":\"result\",\"subtype\":\"success\",\"queued_turn_count\":0,\"user_message_uuids\":[%q,%q]}\n", first.UUID, input.UUID)
@@ -229,5 +235,105 @@ func TestClaudeLiveSteeringExitWithoutReceiptIsUnconfirmed(t *testing.T) {
 	joined := strings.Join(kinds, ",")
 	if strings.Count(joined, "claude.steer.unconfirmed") != 1 || strings.Contains(joined, "claude.steer.applied") {
 		t.Fatal("incorrect delivery claim", joined)
+	}
+}
+
+// A successful turn whose injected instruction is never confirmed is stopped
+// by the idle timer. That must not turn the finished turn into a cancellation.
+func TestClaudeLiveSteeringIdleTimeoutKeepsSuccessfulResult(t *testing.T) {
+	previous := steerIdleTimeout
+	steerIdleTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { steerIdleTimeout = previous })
+	t.Setenv("WIO_CLAUDE_TEST_CHILD", "steer-idle-after-result")
+	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
+	binary, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var sessions Sessions
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	var mu sync.Mutex
+	var kinds []string
+	go func() {
+		done <- sessions.Run(ctx, binary, "operation", protocol.ClaudeTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), Prompt: "initial", PermissionMode: "default", Steer: true}, func(e protocol.StreamEvent) error {
+			mu.Lock()
+			kinds = append(kinds, e.Kind)
+			mu.Unlock()
+			if e.Kind == "claude.steer.ready" {
+				close(ready)
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("input never became ready")
+	}
+	err := sessions.Steer(ctx, protocol.ClaudeSteerCommand{ThreadID: "thread", OperationID: "operation", RequestID: uuid.NewString(), Prompt: "correction"})
+	if err == nil || err.Error() != protocol.ClaudeSteerUnconfirmedMessage {
+		t.Fatal("dropped instruction was not reported as uncertain", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("finished turn reported %v after the idle timeout", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("idle CLI was never stopped")
+	}
+	mu.Lock()
+	joined := strings.Join(kinds, ",")
+	mu.Unlock()
+	if strings.Count(joined, "claude.steer.unconfirmed") != 1 || strings.Contains(joined, "claude.steer.applied") {
+		t.Fatal("incorrect delivery claim", joined)
+	}
+}
+
+// A user interrupt during the idle period is still a cancellation.
+func TestClaudeLiveSteeringInterruptDuringIdleIsCancellation(t *testing.T) {
+	t.Setenv("WIO_CLAUDE_TEST_CHILD", "steer-idle-after-result")
+	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
+	binary, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	turnCtx, interrupt := context.WithCancel(ctx)
+	defer interrupt()
+	var sessions Sessions
+	ready := make(chan struct{})
+	result := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- sessions.Run(turnCtx, binary, "operation", protocol.ClaudeTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), Prompt: "initial", PermissionMode: "default", Steer: true}, func(e protocol.StreamEvent) error {
+			switch e.Kind {
+			case "claude.steer.ready":
+				close(ready)
+			case "claude.result":
+				close(result)
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("input never became ready")
+	}
+	go func() {
+		_ = sessions.Steer(ctx, protocol.ClaudeSteerCommand{ThreadID: "thread", OperationID: "operation", RequestID: uuid.NewString(), Prompt: "correction"})
+	}()
+	select {
+	case <-result:
+	case <-ctx.Done():
+		t.Fatal("result never arrived")
+	}
+	interrupt()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("interrupted turn reported success")
+		}
+	case <-ctx.Done():
+		t.Fatal("interrupted CLI was never stopped")
 	}
 }

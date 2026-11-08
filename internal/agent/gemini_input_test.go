@@ -162,9 +162,11 @@ func TestGeminiLongTurnCanBeInterruptedWhileWaitingForInput(t *testing.T) {
 }
 
 func TestGeminiInterruptRequiresOwnedExecutionOrCompletedReceipt(t *testing.T) {
+	shortPreStartInterruptWait(t)
 	client := NewClient(Config{StateDir: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err := client.interruptGeminiAndWait(context.Background(), "orphan"); err == nil {
-		t.Fatal("unknown execution was reported stopped after an Agent restart")
+	defer client.codex.Close()
+	if err := client.interruptGeminiAndWait(context.Background(), "orphan"); err == nil || err.Error() != protocol.GeminiOwnershipLostMessage {
+		t.Fatal("unknown execution was reported stopped after an Agent restart", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

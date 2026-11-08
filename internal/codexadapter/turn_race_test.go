@@ -89,6 +89,7 @@ func TestFastTurnCompletedBeforeStartResponseIsAppliedStaysCompleted(t *testing.
 			if state.Active || state.Starting || state.TurnID != "fast-turn" || adapter.hasActiveTurn() {
 				t.Fatalf("completed turn was resurrected: %#v", state)
 			}
+			flushEvents(t, adapter)
 			terminalKind := "codex." + map[string]string{"turn/completed": "turn.completed", "turn/failed": "turn.failed", "turn/cancelled": "turn.cancelled"}[terminal]
 			if got := events.kinds(); !equalKinds(got, "codex.turn.started", "turn.accepted", terminalKind) {
 				t.Fatalf("terminal event must follow turn.accepted, got %v", got)
@@ -118,6 +119,7 @@ func TestTerminalWithoutTurnIDBeforeStartResponseEndsStartingTurn(t *testing.T) 
 	if adapter.turns["wio-thread"].Active {
 		t.Fatalf("turn stayed active: %#v", adapter.turns["wio-thread"])
 	}
+	flushEvents(t, adapter)
 	if got := events.kinds(); !equalKinds(got, "turn.accepted", "codex.turn.completed") {
 		t.Fatalf("unexpected event order %v", got)
 	}
@@ -140,6 +142,7 @@ func TestDuplicateTerminalForPreviousTurnDoesNotEndStartingTurn(t *testing.T) {
 	if state := adapter.turns["wio-thread"]; !state.Active || state.TurnID != "new-turn" {
 		t.Fatalf("new turn should be active: %#v", state)
 	}
+	flushEvents(t, adapter)
 	if got := events.kinds(); !equalKinds(got, "codex.turn.completed", "turn.accepted") {
 		t.Fatalf("unexpected events %v", got)
 	}
@@ -158,6 +161,7 @@ func TestFailedTurnStartPublishesDeferredTerminalEvent(t *testing.T) {
 	if state := adapter.turns["wio-thread"]; state.Active || state.Starting || len(state.deferred) != 0 {
 		t.Fatalf("failed start left pending state: %#v", state)
 	}
+	flushEvents(t, adapter)
 	if got := events.kinds(); !equalKinds(got, "codex.turn.failed") {
 		t.Fatalf("deferred event lost: %v", got)
 	}
@@ -177,6 +181,7 @@ func TestResetDuringStartingTurnDoesNotResurrectIt(t *testing.T) {
 	if adapter.hasActiveTurn() {
 		t.Fatal("reset turn resurrected")
 	}
+	flushEvents(t, adapter)
 	// The completed turn is published, and not additionally reported failed.
 	if got := events.kinds(); !equalKinds(got, "codex.turn.completed") {
 		t.Fatalf("unexpected events %v", got)

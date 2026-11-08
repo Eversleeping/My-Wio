@@ -146,6 +146,93 @@ func TestImportPublishesRepositoryAtFinalDestination(t *testing.T) {
 	}
 }
 
+func TestImportRejectsSymlinksEscapingCloneRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	source := newSourceRepository(t, root)
+	cloneRoot := filepath.Join(root, "projects")
+	outside := filepath.Join(root, "outside")
+	for _, directory := range []string{cloneRoot, outside} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(cloneRoot, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "missing"), filepath.Join(cloneRoot, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{
+		filepath.Join(cloneRoot, "escape", "service"),
+		filepath.Join(cloneRoot, "escape", "nested", "service"),
+		filepath.Join(cloneRoot, "dangling", "service"),
+		"escape/relative",
+		cloneRoot,
+	} {
+		if _, err := Import(context.Background(), cloneRoot, protocol.GitImportCommand{Name: "service", RemoteURL: source, Destination: destination}); err == nil {
+			t.Fatalf("import through %s was accepted", destination)
+		}
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("import wrote outside the clone root: %v", entries)
+	}
+}
+
+func TestImportAllowsSymlinksThatStayInsideCloneRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	source := newSourceRepository(t, root)
+	realRoot := filepath.Join(root, "data", "projects")
+	if err := os.MkdirAll(filepath.Join(realRoot, "group"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Both the clone root and a directory inside it are symbolic links.
+	cloneRoot := filepath.Join(root, "projects")
+	if err := os.Symlink(realRoot, cloneRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(realRoot, "group"), filepath.Join(realRoot, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(cloneRoot, "alias", "nested", "service")
+	imported, err := Import(context.Background(), cloneRoot, protocol.GitImportCommand{Name: "service", RemoteURL: source, Destination: destination})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported != destination {
+		t.Fatalf("import returned %q, want %q", imported, destination)
+	}
+	if _, err := os.Stat(filepath.Join(realRoot, "group", "nested", "service", ".git")); err != nil {
+		t.Fatalf("repository was not published inside the clone root: %v", err)
+	}
+	assertNoImportStagingDirectories(t, filepath.Join(realRoot, "group", "nested"))
+}
+
+func TestDiscoverRedactsRemoteCredentials(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repository := newSourceRepository(t, root)
+	runGit(t, repository, "remote", "add", "origin", "https://deploy:synthetic-secret@example.com/team/service.git")
+	inventory, err := Discover(context.Background(), []string{root}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Repositories) != 1 || inventory.Repositories[0].RemoteURL != "https://example.com/team/service.git" {
+		t.Fatalf("unexpected inventory: %#v", inventory.Repositories)
+	}
+}
+
 // TestDiscoverDoesNotRunRepositoryPrograms is the regression test for
 // repository configuration (core.fsmonitor, filter drivers) executing
 // programs as the agent user during inventory scans.
@@ -398,6 +485,23 @@ func runGit(t *testing.T, directory string, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
+}
+
+func newSourceRepository(t *testing.T, root string) string {
+	t.Helper()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Wio Test")
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "add", "README.md")
+	runGit(t, source, "commit", "-m", "initial")
+	return source
 }
 
 func assertNoImportStagingDirectories(t *testing.T, root string) {

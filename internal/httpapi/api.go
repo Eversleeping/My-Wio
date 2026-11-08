@@ -37,6 +37,20 @@ import (
 
 const sessionCookie = "wio_session"
 
+// contentSecurityPolicy fits the Vite SPA: scripts, the service worker and the
+// image-compression worker are same-origin bundles, and React style props plus
+// third-party highlighters may write inline styles. Remote images are never
+// loaded inline, so img-src stays limited to the app itself and pasted images.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+const (
+	websocketWriteTimeout         = 10 * time.Second
+	websocketPongWait             = 70 * time.Second
+	websocketPingInterval         = 30 * time.Second
+	websocketSessionCheckInterval = time.Minute
+	websocketSessionCheckTimeout  = 5 * time.Second
+)
+
 type API struct {
 	store          *store.Store
 	hub            *realtime.Hub
@@ -55,8 +69,11 @@ type API struct {
 	secureCookie   bool
 	trustedProxies TrustedProxies
 	setupMu        sync.Mutex
+	setupToken     string
 	bootstrapMu    sync.Mutex
 	login          *loginLimiter
+	// wsSessionCheck is how often open WebSockets re-validate their session.
+	wsSessionCheck time.Duration
 }
 
 type sessionContextKey struct{}
@@ -84,6 +101,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 	for _, option := range options {
 		option(api)
 	}
+	api.initSetupToken()
 	router := chi.NewRouter()
 	router.Use(api.resolveClientIP, api.recoverer, api.securityHeaders)
 	router.Route("/api", func(r chi.Router) {
@@ -300,6 +318,7 @@ func (a *API) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -358,11 +377,16 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Username string `json:"username"`
-		AuthMode string `json:"auth_mode"`
-		Password string `json:"password"`
+		SetupToken string `json:"setup_token"`
+		Username   string `json:"username"`
+		AuthMode   string `json:"auth_mode"`
+		Password   string `json:"password"`
 	}
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !a.setupTokenMatches(input.SetupToken) {
+		writeError(w, http.StatusForbidden, "setup requires a valid setup token; find it in the control-plane logs or set WIO_SETUP_TOKEN")
 		return
 	}
 	input.Username = strings.TrimSpace(input.Username)
@@ -426,6 +450,7 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not create administrator")
 			return
 		}
+		a.setupToken = ""
 		_ = a.store.Audit(r.Context(), user.ID, "setup.complete", "user", user.ID, map[string]string{"username": input.Username, "auth_mode": authMode}, clientIP(r))
 		writeJSON(w, http.StatusCreated, map[string]any{"username": input.Username, "auth_mode": authMode, "totp_uri": totpURI, "totp_secret": totpSecret, "recovery_codes": recoveryCodes})
 		return
@@ -435,6 +460,7 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create administrator")
 		return
 	}
+	a.setupToken = ""
 	_ = a.store.Audit(r.Context(), user.ID, "setup.complete", "user", user.ID, map[string]string{"username": input.Username, "auth_mode": authMode}, clientIP(r))
 	writeJSON(w, http.StatusCreated, map[string]any{"username": input.Username, "auth_mode": authMode})
 }
@@ -527,21 +553,22 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not read TOTP secret")
 			return
 		}
-		valid = totp.Validate(code, secret)
-		if !valid && passwordValid {
-			var hashes []string
-			_ = json.Unmarshal([]byte(user.RecoveryHashes), &hashes)
-			needle := security.HashRecovery(code)
-			for index, hash := range hashes {
-				if hash == needle {
-					hashes = append(hashes[:index], hashes[index+1:]...)
-					updated, _ := json.Marshal(hashes)
-					_, err = a.store.DB.ExecContext(r.Context(), a.store.Q("UPDATE users SET recovery_hashes=? WHERE id=?"), string(updated), user.ID)
-					valid = err == nil
-					usedRecovery = true
-					break
-				}
+		counter, matched := security.MatchTOTP(code, secret, time.Now())
+		// A code is spent only by an otherwise valid attempt, so a wrong
+		// password cannot burn the time step or a recovery code.
+		if matched && passwordValid {
+			valid, err = a.store.AdvanceTOTPCounter(r.Context(), user.ID, counter)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "could not verify TOTP code")
+				return
 			}
+		} else if !matched && passwordValid {
+			valid, err = a.store.ConsumeRecoveryCode(r.Context(), user.ID, security.HashRecovery(code))
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "could not verify recovery code")
+				return
+			}
+			usedRecovery = valid
 		}
 	}
 	releaseHash()
@@ -643,6 +670,12 @@ func (a *API) enrollAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) websocket(w http.ResponseWriter, r *http.Request) {
+	session := currentSession(r)
+	cookie, err := r.Cookie(sessionCookie)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
@@ -656,13 +689,20 @@ func (a *API) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer connection.Close()
+	// r.Context() stops tracking the client once the connection is hijacked, so
+	// the reader goroutine is the only way to observe a disconnect.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	connection.SetReadLimit(1024)
-	connection.SetReadDeadline(time.Now().Add(70 * time.Second))
+	connection.SetReadDeadline(time.Now().Add(websocketPongWait))
 	connection.SetPongHandler(func(string) error {
-		connection.SetReadDeadline(time.Now().Add(70 * time.Second))
+		connection.SetReadDeadline(time.Now().Add(websocketPongWait))
 		return nil
 	})
 	go func() {
+		defer cancel()
+		// Closing also unblocks a write stuck on an unresponsive peer.
+		defer connection.Close()
 		for {
 			if _, _, err := connection.ReadMessage(); err != nil {
 				return
@@ -671,22 +711,55 @@ func (a *API) websocket(w http.ResponseWriter, r *http.Request) {
 	}()
 	id, events := a.hub.Subscribe()
 	defer a.hub.Unsubscribe(id)
-	ping := time.NewTicker(30 * time.Second)
+	ping := time.NewTicker(websocketPingInterval)
 	defer ping.Stop()
+	checkInterval := a.wsSessionCheck
+	if checkInterval <= 0 {
+		checkInterval = websocketSessionCheckInterval
+	}
+	sessionCheck := time.NewTicker(checkInterval)
+	defer sessionCheck.Stop()
+	expiry := time.NewTimer(time.Until(session.ExpiresAt))
+	defer expiry.Stop()
 	for {
 		select {
 		case event, ok := <-events:
-			if !ok || connection.WriteJSON(event) != nil {
+			if !ok {
+				return
+			}
+			_ = connection.SetWriteDeadline(time.Now().Add(websocketWriteTimeout))
+			if connection.WriteJSON(event) != nil {
 				return
 			}
 		case <-ping.C:
 			if connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)) != nil {
 				return
 			}
-		case <-r.Context().Done():
+		case <-sessionCheck.C:
+			if !a.websocketSessionActive(ctx, cookie.Value) {
+				closeWebsocketForSession(connection)
+				return
+			}
+		case <-expiry.C:
+			closeWebsocketForSession(connection)
+			return
+		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// websocketSessionActive only reports false when the session is definitely gone
+// (logged out or expired); a database hiccup must not disconnect every client.
+func (a *API) websocketSessionActive(ctx context.Context, token string) bool {
+	ctx, cancel := context.WithTimeout(ctx, websocketSessionCheckTimeout)
+	defer cancel()
+	_, err := a.store.SessionByToken(ctx, token)
+	return !errors.Is(err, sql.ErrNoRows)
+}
+
+func closeWebsocketForSession(connection *websocket.Conn) {
+	_ = connection.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "session ended"), time.Now().Add(time.Second))
 }
 
 func (a *API) serveFrontend(w http.ResponseWriter, r *http.Request) {

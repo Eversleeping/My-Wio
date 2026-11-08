@@ -411,6 +411,7 @@ test("an unconfigured installation can reach sign-in without a backend", async (
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Create administrator" })).toBeVisible();
+  await page.getByLabel("Setup token", { exact: true }).fill("e2e-setup-token");
   await page.getByRole("radio", { name: "Username + fixed password Use one password for every sign-in." }).check();
   await page.getByLabel("Password", { exact: true }).fill("safe-test-password");
   await page.getByLabel("Confirm password", { exact: true }).fill("safe-test-password");
@@ -420,6 +421,7 @@ test("an unconfigured installation can reach sign-in without a backend", async (
   );
   await page.getByRole("button", { name: "Create administrator" }).click();
   expect(JSON.parse((await setupRequest).postData() ?? "{}")).toMatchObject({
+    setup_token: "e2e-setup-token",
     username: "admin",
     auth_mode: "password"
   });

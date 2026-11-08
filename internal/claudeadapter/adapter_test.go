@@ -22,6 +22,9 @@ func init() {
 	if mode == "" {
 		return
 	}
+	if path := os.Getenv("WIO_CLAUDE_TEST_KEY_RECORD"); path != "" {
+		recordAPIKeyDelivery(path)
+	}
 	if strings.HasPrefix(mode, "skills") {
 		runSkillsTestChild(mode)
 		os.Exit(0)

@@ -95,6 +95,37 @@ func assertOperationInterruptLifecycle(t *testing.T, database *Store) {
 	if !found {
 		t.Fatal("operation list missing interrupt capability or progress")
 	}
+	// A third attempt chains after the second. A lookup that misses the
+	// second attempt (a text range under a linguistic collation) reuses its
+	// idempotency key and fails.
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: retry, Status: "failed", Message: "termination not confirmed again"}); err != nil {
+		t.Fatal(err)
+	}
+	list, err = database.ListOperations(ctx, "", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range list {
+		if row.ID == operation.ID && (row.InterruptStatus != "failed" || row.InterruptError != "termination not confirmed again") {
+			t.Fatalf("operation list shows a stale interruption: %#v", row)
+		}
+	}
+	third, err := database.RequestOperationInterrupt(ctx, operation.ID)
+	if err != nil || third == first || third == retry {
+		t.Fatalf("third interruption: %q %v", third, err)
+	}
+	if again, err := database.RequestOperationInterrupt(ctx, operation.ID); err != nil || again != third {
+		t.Fatalf("active third interruption was not reused: %q %v", again, err)
+	}
+	list, err = database.ListOperations(ctx, "", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range list {
+		if row.ID == operation.ID && (row.InterruptStatus != "queued" || row.InterruptError != "") {
+			t.Fatalf("operation list missed the newest interruption: %#v", row)
+		}
+	}
 
 	for _, kind := range []string{"git.workspace.inspect", "workspace.files", "workspace.changes", "workspace.file.preview", "workspace.diff.preview", "inventory.scan"} {
 		t.Run(kind, func(t *testing.T) {
@@ -174,5 +205,43 @@ func assertOperationInterruptLifecycle(t *testing.T, database *Store) {
 	}
 	if changed, err := database.CompleteInterruptedOperation(ctx, completed, protocol.OperationResult{OperationID: completed.ID, Status: "cancelled"}); err != nil || changed {
 		t.Fatalf("finished task overwritten: %v %v", changed, err)
+	}
+}
+
+func TestListOperationsMatchesInterruptionsByExactTarget(t *testing.T) {
+	ctx := context.Background()
+	database := testStore(t)
+	server := createOperationTestServer(t, database, "exact-interrupt", "exact-interrupt")
+	now := time.Now().UTC()
+	insert := func(id, kind, key, status string, at time.Time) {
+		t.Helper()
+		if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO agent_operations(id,server_id,kind,payload,status,idempotency_key,created_at) VALUES(?,?,?,'{}',?,?,?)"), id, server.ID, kind, status, key, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Target IDs that share a prefix or contain the key separator.
+	insert("op1", "inventory.scan", "scan-op1", "running", now)
+	insert("op10", "inventory.scan", "scan-op10", "running", now)
+	insert("op1:x", "inventory.scan", "scan-op1:x", "running", now)
+	insert("plain", "inventory.scan", "scan-plain", "running", now)
+	insert("interrupt-op10", "operation.interrupt", "operation-interrupt:op10:", "failed", now.Add(time.Second))
+	insert("interrupt-op1x", "operation.interrupt", "operation-interrupt:op1:x:", "running", now.Add(time.Second))
+	insert("interrupt-op1-a", "operation.interrupt", "operation-interrupt:op1:", "failed", now.Add(time.Second))
+	insert("interrupt-op1-b", "operation.interrupt", "operation-interrupt:op1:interrupt-op1-a", "queued", now.Add(2*time.Second))
+	list, err := database.ListOperations(ctx, "", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"op1": "queued", "op10": "failed", "op1:x": "running", "plain": ""}
+	for _, row := range list {
+		if status, ok := want[row.ID]; ok {
+			if row.InterruptStatus != status {
+				t.Fatalf("%s interruption = %q, want %q", row.ID, row.InterruptStatus, status)
+			}
+			delete(want, row.ID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("operations missing from the list: %v", want)
 	}
 }

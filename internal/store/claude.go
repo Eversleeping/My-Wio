@@ -115,14 +115,24 @@ func (s *Store) CreateClaudeThread(ctx context.Context, workspaceID, model, mode
 
 // QueueClaudeTurn atomically claims the thread and the shared workspace write lock.
 func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt, model, mode, effort string, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
-	return s.queueClaudeInput(ctx, thread, "", prompt, model, mode, effort, images...)
+	return s.queueClaudeInput(ctx, thread, "", prompt, model, mode, effort, nil, images...)
+}
+
+// QueueScheduledClaudeTurn queues a scheduled task's turn and records the run
+// as queued on the task in the same transaction. It returns the operation ID.
+func (s *Store) QueueScheduledClaudeTurn(ctx context.Context, taskID string, thread ClaudeThread, prompt, model, mode, effort string, at time.Time) (string, error) {
+	run := &scheduledRun{table: "claude_scheduled_tasks", taskID: taskID, at: at}
+	if _, err := s.queueClaudeInput(ctx, thread, "", prompt, model, mode, effort, run); err != nil {
+		return "", err
+	}
+	return run.operationID, nil
 }
 
 func (s *Store) QueueClaudeRewrite(ctx context.Context, thread ClaudeThread, eventID, prompt, model, mode, effort string, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
-	return s.queueClaudeInput(ctx, thread, eventID, prompt, model, mode, effort, images...)
+	return s.queueClaudeInput(ctx, thread, eventID, prompt, model, mode, effort, nil, images...)
 }
 
-func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editID, prompt, model, mode, effort string, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
+func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editID, prompt, model, mode, effort string, run *scheduledRun, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return protocol.StreamEvent{}, err
@@ -190,6 +200,12 @@ func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editI
 	}
 	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?,?,?,?,'claude.turn.start',?,1,?,?)`), opID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, string(payload), "claude:"+opID, now)
 	if err != nil {
+		if isWorkspaceWriteConflict(err) {
+			return protocol.StreamEvent{}, ErrWorkspaceWriteActive
+		}
+		return protocol.StreamEvent{}, err
+	}
+	if err := s.recordScheduledRun(ctx, tx, run, opID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	if editID != "" {

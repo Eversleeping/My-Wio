@@ -24,6 +24,7 @@ func TestUserInputRoundTripAndResolution(t *testing.T) {
 	a.threads["native"] = "wio"
 	params := json.RawMessage(`{"threadId":"native","turnId":"turn","questions":[{"id":"choice","question":"Choose","options":[{"label":"A"},{"label":"B"}]},{"id":"text","question":"Describe","isOther":true}]}`)
 	a.handleServerRequest(rpcMessage{ID: json.RawMessage(`7`), Method: protocol.UserInputRequestMethod, Params: params})
+	flushEvents(t, a)
 	if len(events) != 1 || events[0].StreamID != "wio" || writer.Len() != 0 {
 		t.Fatalf("request not retained: %+v %s", events, writer.String())
 	}

@@ -279,3 +279,30 @@ test("builds a weekly scheduled task from time and weekday selectors", async () 
   expect(requests[0].body.model).toBe("deep");
   expect(requests[0].body.reasoning_effort).toBe("ultra");
 });
+
+test("stops native snapshot polling when the session view closes", async () => {
+  const user = userEvent.setup();
+  const value = thread("native-polling");
+  const snapshotSignals: AbortSignal[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes(`/threads/${value.id}/events`)) return jsonResponse([]);
+    if (url.includes(`/threads/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, reason: "", error: "", data: {}, updated_at: null });
+    if (url.includes("/codex/skills")) {
+      if (init?.method === "POST") return jsonResponse({ operation_id: "skills-refresh" }, 202);
+      snapshotSignals.push(init?.signal as AbortSignal);
+      return jsonResponse({ status: snapshotSignals.length === 1 ? "idle" : "loading", supported: true, reason: "", error: "", data: [], updated_at: null });
+    }
+    return jsonResponse([]);
+  }));
+
+  const view = renderSession(value);
+  await user.type(await screen.findByPlaceholderText("Message Codex"), "/");
+  await waitFor(() => expect(snapshotSignals.length).toBeGreaterThanOrEqual(2));
+  view.unmount();
+  const requestCount = snapshotSignals.length;
+
+  expect(snapshotSignals.at(-1)?.aborted).toBe(true);
+  await new Promise(resolve => setTimeout(resolve, 1_200));
+  expect(snapshotSignals).toHaveLength(requestCount);
+});

@@ -161,7 +161,21 @@ func (s *Store) QueueGeminiInput(ctx context.Context, thread GeminiThread, event
 	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, eventID, images, nil, thinking)
 }
 
+// QueueScheduledGeminiTurn queues a scheduled task's turn and records the run
+// as queued on the task in the same transaction. It returns the operation ID.
+func (s *Store) QueueScheduledGeminiTurn(ctx context.Context, taskID string, thread GeminiThread, prompt, model, mode, thinking string, at time.Time) (string, error) {
+	run := &scheduledRun{table: "gemini_scheduled_tasks", taskID: taskID, at: at}
+	if _, err := s.queueGeminiRun(ctx, run, thread, prompt, model, mode, "", nil, nil, thinking); err != nil {
+		return "", err
+	}
+	return run.operationID, nil
+}
+
 func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, goal *protocol.GeminiGoalCommand, thinking ...string) (protocol.StreamEvent, error) {
+	return s.queueGeminiRun(ctx, nil, thread, prompt, model, mode, editEventID, images, goal, thinking...)
+}
+
+func (s *Store) queueGeminiRun(ctx context.Context, run *scheduledRun, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, goal *protocol.GeminiGoalCommand, thinking ...string) (protocol.StreamEvent, error) {
 	level := thread.ThinkingLevel
 	if len(thinking) > 0 {
 		level = thinking[0]
@@ -247,6 +261,12 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at)
  VALUES(?,?,?,?,?,?,1,?,?)`), opID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, kind, string(payload), "gemini:"+opID, now)
 	if err != nil {
+		if isWorkspaceWriteConflict(err) {
+			return protocol.StreamEvent{}, ErrWorkspaceWriteActive
+		}
+		return protocol.StreamEvent{}, err
+	}
+	if err := s.recordScheduledRun(ctx, tx, run, opID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	if editEventID != "" {

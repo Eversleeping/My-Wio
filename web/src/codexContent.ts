@@ -40,14 +40,38 @@ export function isExternalLink(href: string | undefined) {
   return Boolean(scheme && scheme !== "file");
 }
 
+const inlineImageData = /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=\s]+$/i;
+
+function imageURL(source: string) {
+  try {
+    return new URL(source);
+  } catch {
+    return null;
+  }
+}
+
+function isWebURL(url: URL) {
+  return url.protocol === "https:" || url.protocol === "http:";
+}
+
+/**
+ * Returns an image source that may load without user action: embedded raster
+ * data, local blobs, or this origin. Remote URLs are excluded because loading
+ * them from model output would leak data to the remote host.
+ */
 export function safeImageSource(value: unknown): string {
   if (typeof value !== "string") return "";
   const source = value.trim();
-  if (/^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(source)) return source;
-  try {
-    const url = new URL(source);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
-  } catch {
-    return "";
-  }
+  if (inlineImageData.test(source)) return source;
+  const url = imageURL(source);
+  if (!url) return "";
+  if (url.protocol === "blob:") return url.href;
+  return isWebURL(url) && url.origin === location.origin ? url.href : "";
+}
+
+/** Returns a remote image URL that may only be opened on request, never loaded inline. */
+export function remoteImageURL(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const url = imageURL(value.trim());
+  return url && isWebURL(url) && url.origin !== location.origin ? url.href : "";
 }

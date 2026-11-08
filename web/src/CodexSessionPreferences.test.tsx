@@ -154,7 +154,8 @@ test("restores the saved position after invalidated events finish loading", asyn
   expect(await screen.findByText("Second session message")).toBeInTheDocument();
 
   rerender(sessionView(first, 1));
-  expect(await screen.findByText("New message")).toBeInTheDocument();
+  // Markdown renders lazily, so the matched fallback may be replaced right away.
+  await screen.findByText("New message");
   stream = container.querySelector<HTMLElement>(".event-stream")!;
   await waitFor(() => expect(stream).toHaveProperty("scrollTop", 360));
 });

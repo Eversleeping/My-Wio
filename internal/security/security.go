@@ -14,7 +14,10 @@ import (
 	"io"
 	"math"
 	"strings"
+	"time"
 
+	"github.com/pquerna/otp"
+	"github.com/pquerna/otp/hotp"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -77,6 +80,27 @@ func GenerateRecoveryCodes(count int) ([]string, []string, error) {
 		hashes = append(hashes, HashRecovery(code))
 	}
 	return codes, hashes, nil
+}
+
+const (
+	totpPeriodSeconds = 30
+	totpSkewSteps     = 1
+)
+
+// MatchTOTP returns the time-step counter a six-digit TOTP code belongs to,
+// allowing one step of clock skew either way. Callers must persist the counter
+// and reject values that are not newer, because a code otherwise stays valid
+// for its whole window. If a random collision matches several steps the newest
+// wins, so a replay cannot be accepted under an older step.
+func MatchTOTP(code, secret string, at time.Time) (int64, bool) {
+	current := at.Unix() / totpPeriodSeconds
+	options := hotp.ValidateOpts{Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1}
+	for counter := current + totpSkewSteps; counter >= current-totpSkewSteps; counter-- {
+		if valid, err := hotp.ValidateCustom(code, uint64(counter), secret, options); err == nil && valid {
+			return counter, true
+		}
+	}
+	return 0, false
 }
 
 type Vault struct{ key []byte }
@@ -149,7 +173,43 @@ func (v *Vault) Decrypt(encoded string, out any) error {
 	return json.Unmarshal(plain, out)
 }
 
-var secretKeys = []string{"token", "secret", "password", "authorization", "private_key", "api_key"}
+// secretKeys are matched as substrings of normalized JSON keys, so snake_case,
+// camelCase and header spellings (api_key, apiKey, x-api-key) all hit one entry.
+// "secret" also covers secretKey and clientSecret; "credential" covers the plural.
+var secretKeys = []string{"token", "secret", "password", "passwd", "authorization", "credential", "cookie", "apikey", "privatekey", "accesskey"}
+
+// usageCounterSuffixes name token-usage counters. Their keys also contain
+// "token", but the UI and usage accounting read them; only nonnegative
+// integers are kept, so a string under such a key is still redacted.
+var usageCounterSuffixes = []string{"tokens", "tokencount", "tokensused", "tokenbudget"}
+
+func normalizeSecretKey(key string) string {
+	return strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(key))
+}
+
+func isUsageCounter(normalized string, value any) bool {
+	count, ok := value.(float64)
+	if !ok || count < 0 || math.Trunc(count) != count {
+		return false
+	}
+	for _, suffix := range usageCounterSuffixes {
+		if strings.HasSuffix(normalized, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isUsageContainer matches objects that group usage counters. They are walked
+// rather than replaced, so anything secret-looking inside them is still hidden.
+func isUsageContainer(normalized string, value any) bool {
+	switch value.(type) {
+	case map[string]any, []any:
+		return strings.HasSuffix(normalized, "tokenusage") || normalized == "tokencount"
+	default:
+		return false
+	}
+}
 
 func RedactJSON(raw []byte) []byte {
 	var value any
@@ -168,18 +228,17 @@ func redactValue(v any) {
 	switch x := v.(type) {
 	case map[string]any:
 		for key, val := range x {
-			lower := strings.ToLower(key)
-			// CLI usage counts share "token" with credentials. Only preserve
-			// known, nonnegative integer counters; strings and other token keys
-			// still follow normal secret redaction.
-			if lower == "input_tokens" || lower == "output_tokens" || lower == "total_tokens" || lower == "cached_tokens" || lower == "cache_creation_input_tokens" || lower == "cache_read_input_tokens" {
-				if count, ok := val.(float64); ok && count >= 0 && math.Trunc(count) == count {
-					continue
-				}
+			normalized := normalizeSecretKey(key)
+			if isUsageCounter(normalized, val) {
+				continue
+			}
+			if isUsageContainer(normalized, val) {
+				redactValue(val)
+				continue
 			}
 			hidden := false
 			for _, needle := range secretKeys {
-				if strings.Contains(lower, needle) {
+				if strings.Contains(normalized, needle) {
 					hidden = true
 					break
 				}

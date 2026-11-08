@@ -88,6 +88,34 @@ func (p *Sessions) withSession(threadID string, action func(*Adapter) error) err
 	return action(a)
 }
 
+// withExistingSession runs action on the conversation's session only if one
+// exists. Controls addressed to a running turn must never create a session:
+// a new app-server has no turn to interrupt or steer and no approval to
+// answer, and a session that was reclaimed took its turn with it.
+func (p *Sessions) withExistingSession(threadID string, action func(*Adapter) error) (bool, error) {
+	p.lifecycle.RLock()
+	defer p.lifecycle.RUnlock()
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return false, errors.New("Codex sessions are closed")
+	}
+	s := p.sessions[threadID]
+	if s == nil {
+		p.mu.Unlock()
+		return false, nil
+	}
+	s.users++
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		s.users--
+		s.lastUsed = time.Now()
+		p.mu.Unlock()
+	}()
+	return true, action(s.adapter)
+}
+
 func (p *Sessions) Warm(ctx context.Context) error {
 	return p.withSession("", func(a *Adapter) error { return a.Warm(ctx) })
 }
@@ -106,25 +134,58 @@ func (p *Sessions) RewriteTurn(ctx context.Context, command protocol.RewriteTurn
 	return p.withSession(command.Start.ThreadID, func(a *Adapter) error { return a.RewriteTurn(ctx, command) })
 }
 
+// Interrupt targets only an existing session; without one there is no turn,
+// which the control plane treats as already interrupted. A turn start
+// delivered together with the interrupt may not have created its session yet,
+// so an interrupt that does not name an accepted turn waits for it as briefly
+// as the adapter waits for the turn itself.
 func (p *Sessions) Interrupt(ctx context.Context, command protocol.InterruptTurnCommand) error {
 	if strings.TrimSpace(command.ThreadID) == "" {
 		return errors.New("Wio thread ID is required")
 	}
-	return p.withSession(command.ThreadID, func(a *Adapter) error { return a.Interrupt(ctx, command) })
+	deadline := time.Now().Add(interruptStartWindow)
+	wait := time.NewTicker(50 * time.Millisecond)
+	defer wait.Stop()
+	for {
+		found, err := p.withExistingSession(command.ThreadID, func(a *Adapter) error { return a.Interrupt(ctx, command) })
+		if found || err != nil {
+			return err
+		}
+		// An accepted turn had a session; if it is gone, so is the turn.
+		if command.TurnID != "" || !time.Now().Before(deadline) {
+			return noActiveTurn(command)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait.C:
+		}
+	}
 }
 
 func (p *Sessions) SteerTurn(ctx context.Context, command protocol.SteerTurnCommand) error {
 	if strings.TrimSpace(command.ThreadID) == "" {
 		return errors.New("Wio thread ID is required")
 	}
-	return p.withSession(command.ThreadID, func(a *Adapter) error { return a.SteerTurn(ctx, command) })
+	if err := validateSteer(command); err != nil {
+		return err
+	}
+	found, err := p.withExistingSession(command.ThreadID, func(a *Adapter) error { return a.SteerTurn(ctx, command) })
+	if !found && err == nil {
+		return errTurnNotActive
+	}
+	return err
 }
 
 func (p *Sessions) Decide(command protocol.ApprovalDecisionCommand) error {
 	if strings.TrimSpace(command.ThreadID) == "" {
 		return errors.New("Wio thread ID is required")
 	}
-	return p.withSession(command.ThreadID, func(a *Adapter) error { return a.Decide(command) })
+	found, err := p.withExistingSession(command.ThreadID, func(a *Adapter) error { return a.Decide(command) })
+	if !found && err == nil {
+		return errApprovalNotPending
+	}
+	return err
 }
 
 func (p *Sessions) ForkThread(ctx context.Context, command protocol.ForkThreadCommand) (result protocol.ForkThreadResult, err error) {
@@ -163,6 +224,14 @@ func (a *Adapter) hasActiveTurn() bool {
 		}
 	}
 	return false
+}
+
+// hasPendingEvents reports undelivered events, such as the terminal event of
+// a turn that ended while the Agent outbound queue was backed up.
+func (a *Adapter) hasPendingEvents() bool {
+	a.events.mu.Lock()
+	defer a.events.mu.Unlock()
+	return a.events.running || len(a.events.pending) > 0
 }
 
 func (p *Sessions) ReconfigureEnvironment(environment []string, update func() error) error {
@@ -227,7 +296,9 @@ func (p *Sessions) reapIdle(now time.Time) {
 	p.mu.Lock()
 	var idle []*Adapter
 	for id, s := range p.sessions {
-		if s.users == 0 && !s.lastUsed.IsZero() && now.Sub(s.lastUsed) >= sessionIdleTimeout && !s.adapter.hasActiveTurn() {
+		// Closing an adapter bounds its delivery retries, so keep a session
+		// whose events are still waiting for the Agent outbound queue.
+		if s.users == 0 && !s.lastUsed.IsZero() && now.Sub(s.lastUsed) >= sessionIdleTimeout && !s.adapter.hasActiveTurn() && !s.adapter.hasPendingEvents() {
 			delete(p.sessions, id)
 			idle = append(idle, s.adapter)
 		}

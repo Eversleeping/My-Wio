@@ -246,8 +246,8 @@ func newLoginTestHandler(t *testing.T, trusted string) (http.Handler, *store.Sto
 	log := slog.New(slog.NewTextHandler(testWriter{t}, nil))
 	gateway := agentgateway.New(database, hub, vault, log)
 	frontend, _ := fs.Sub(fstest.MapFS{"index.html": {Data: []byte("ok")}}, ".")
-	handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true, WithTrustedProxies(mustTrustedProxies(t, trusted)))
-	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"username": "admin", "auth_mode": store.AuthModePassword, "password": "correct-horse-battery"}, nil)
+	handler := New(database, hub, gateway, vault, log, frontend, "http://localhost", true, WithTrustedProxies(mustTrustedProxies(t, trusted)), WithSetupToken(testSetupToken))
+	setup := requestJSON(t, handler, http.MethodPost, "/api/setup", map[string]string{"setup_token": testSetupToken, "username": "admin", "auth_mode": store.AuthModePassword, "password": "correct-horse-battery"}, nil)
 	if setup.Code != http.StatusCreated {
 		t.Fatalf("setup returned %d: %s", setup.Code, setup.Body.String())
 	}

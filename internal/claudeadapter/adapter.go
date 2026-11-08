@@ -79,7 +79,11 @@ func run(parent context.Context, executable, operationID string, command protoco
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, args...)
-	configureEnvironment(cmd, environment)
+	releaseEnvironment, err := configureEnvironment(cmd, environment)
+	if err != nil {
+		return err
+	}
+	defer releaseEnvironment()
 	cmd.Dir = command.Workspace
 	if live == nil {
 		cmd.Stdin = strings.NewReader(input)
@@ -93,6 +97,8 @@ func run(parent context.Context, executable, operationID string, command protoco
 	configureProcess(cmd)
 	// Stderr can contain credentials; do not persist it in operation errors.
 	stdout, err := childprocess.StartStream(cmd)
+	// The CLI holds its own copy of any credential descriptor now.
+	releaseEnvironment()
 	if err != nil {
 		return fmt.Errorf("start Claude Code CLI (install claude for the Agent account): %w", err)
 	}
@@ -371,7 +377,14 @@ func run(parent context.Context, executable, operationID string, command protoco
 		return streamErr
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		// The idle timer stops a CLI that stayed open after its final result
+		// only because an injected instruction was never confirmed. The turn
+		// already finished, so report that result rather than a cancellation;
+		// finish() still emits steer.unconfirmed for the instruction.
+		if parent.Err() != nil || live == nil || !live.finishedByIdleTimeout() {
+			return ctx.Err()
+		}
+		waitErr = nil
 	}
 	if waitErr != nil {
 		return fmt.Errorf("Claude Code failed; check authentication, model access and tool results: %w", waitErr)
@@ -385,23 +398,56 @@ func run(parent context.Context, executable, operationID string, command protoco
 	return nil
 }
 
-func configureEnvironment(cmd *exec.Cmd, environment []string) {
-	if len(environment) != 0 {
-		// Remove inherited values before adding managed credentials and Git
-		// settings so only the selected server profile reaches this process.
-		overridden := make(map[string]bool, len(environment))
-		for _, entry := range environment {
-			key, _, _ := strings.Cut(entry, "=")
-			overridden[strings.ToUpper(key)] = true
-		}
-		for _, entry := range os.Environ() {
-			key, _, _ := strings.Cut(entry, "=")
-			if !overridden[strings.ToUpper(key)] {
-				cmd.Env = append(cmd.Env, entry)
-			}
-		}
-		cmd.Env = append(cmd.Env, environment...)
+// apiKeyDescriptorVariable names the inherited descriptor the CLI reads the
+// API key from. The CLI also scrubs it from the environment of the tools and
+// processes it starts.
+const apiKeyDescriptorVariable = "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"
+
+// configureEnvironment applies the selected server profile to cmd. The
+// returned function releases the parent's copy of any descriptor passed to
+// the CLI; call it once the process has started or failed to start.
+func configureEnvironment(cmd *exec.Cmd, environment []string) (func(), error) {
+	if len(environment) == 0 {
+		return func() {}, nil
 	}
+	// Remove inherited values before adding managed credentials and Git
+	// settings so only the selected server profile reaches this process.
+	overridden := map[string]bool{strings.ToUpper(apiKeyDescriptorVariable): true}
+	managed := make([]string, 0, len(environment)+1)
+	apiKey := ""
+	for _, entry := range environment {
+		key, value, _ := strings.Cut(entry, "=")
+		overridden[strings.ToUpper(key)] = true
+		if strings.EqualFold(key, "ANTHROPIC_API_KEY") && value != "" {
+			apiKey = value
+			continue
+		}
+		managed = append(managed, entry)
+	}
+	release := func() {}
+	if apiKey != "" {
+		// An environment variable would be visible to every Bash command
+		// and process the model starts, so pass the key through a pipe the
+		// CLI reads at startup where the platform supports it.
+		descriptor, closeDescriptor, err := apiKeyDescriptor(cmd, apiKey)
+		if err != nil {
+			return nil, fmt.Errorf("pass Claude API key: %w", err)
+		}
+		if descriptor != "" {
+			managed = append(managed, apiKeyDescriptorVariable+"="+descriptor)
+			release = closeDescriptor
+		} else {
+			managed = append(managed, "ANTHROPIC_API_KEY="+apiKey)
+		}
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !overridden[strings.ToUpper(key)] {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, managed...)
+	return release, nil
 }
 
 func claudeUserInput(prompt string, images []protocol.TurnImage, id, priority string) ([]byte, error) {

@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 )
 
 const releaseImagesFile = ".wio-release-images.json"
@@ -26,7 +28,7 @@ type releaseImages struct {
 	Services map[string]pinnedService `json:"services"`
 }
 
-func (d *Deployer) saveReleaseImages(ctx context.Context, release, directory string, environment []string, project, composeFile string) error {
+func (d *Deployer) saveReleaseImages(ctx context.Context, release, directory string, environment []string, project, composeFile string) (err error) {
 	ids, err := d.compose(ctx, directory, environment, project, composeFile, "ps", "--all", "--quiet")
 	if err != nil {
 		return fmt.Errorf("list release containers: %w", err)
@@ -35,7 +37,7 @@ func (d *Deployer) saveReleaseImages(ctx context.Context, release, directory str
 	if len(containers) == 0 {
 		return errors.New("release has no containers to snapshot")
 	}
-	args := append([]string{"inspect", "--format", `{{index .Config.Labels "com.docker.compose.service"}} {{.Image}}`}, containers...)
+	args := append([]string{"inspect", "--format", `{{index .Config.Labels "com.docker.compose.service"}} {{.Image}}`, "--"}, containers...)
 	output, err := run(ctx, nil, d.Docker, args...)
 	if err != nil {
 		return fmt.Errorf("inspect release images: %w", err)
@@ -46,11 +48,24 @@ func (d *Deployer) saveReleaseImages(ctx context.Context, release, directory str
 	}
 	// Keep historical images tagged so routine dangling-image pruning cannot
 	// silently remove the artifacts needed for rollback.
+	var tagged []string
+	defer func() {
+		if err == nil {
+			return
+		}
+		// Without a recorded snapshot nothing would ever remove these tags.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancel()
+		for _, tag := range tagged {
+			_ = d.removeImageTag(cleanup, tag)
+		}
+	}()
 	for service, pinned := range snapshot.Services {
 		tag := releaseImageTag(release, service)
 		if _, err := run(ctx, nil, d.Docker, "image", "tag", pinned.Image, tag); err != nil {
 			return fmt.Errorf("retain release image: %w", err)
 		}
+		tagged = append(tagged, tag)
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
@@ -70,6 +85,61 @@ func (d *Deployer) saveReleaseImages(ctx context.Context, release, directory str
 		return closeErr
 	}
 	return os.Rename(file.Name(), filepath.Join(release, releaseImagesFile))
+}
+
+// removeReleaseImageTags removes the tags that keep a release's images
+// available for rollback and returns the ones that could not be removed.
+// Tags that no longer exist are ignored. Images are never force-removed, so
+// an image that is still in use only loses the tag once nothing else needs it.
+func (d *Deployer) removeReleaseImageTags(ctx context.Context, release string) []string {
+	tags, err := releaseImageTags(release)
+	if err != nil {
+		return []string{fmt.Sprintf("release %s: %v", filepath.Base(release), err)}
+	}
+	var failures []string
+	for _, tag := range tags {
+		if err := d.removeImageTag(ctx, tag); err != nil {
+			failures = append(failures, err.Error())
+		}
+	}
+	return failures
+}
+
+// releaseImageTags lists the retained image tags recorded by a release's
+// snapshot. Releases without a snapshot have none.
+func releaseImageTags(release string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(release, releaseImagesFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var snapshot releaseImages
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("read release image snapshot: %w", err)
+	}
+	tags := make([]string, 0, len(snapshot.Services))
+	for service := range snapshot.Services {
+		if servicePattern.MatchString(service) {
+			tags = append(tags, releaseImageTag(release, service))
+		}
+	}
+	sort.Strings(tags)
+	return tags, nil
+}
+
+func (d *Deployer) removeImageTag(ctx context.Context, tag string) error {
+	output, err := run(ctx, nil, d.Docker, "image", "rm", tag)
+	if err == nil || imageNotFound(output) {
+		return nil
+	}
+	return fmt.Errorf("remove image tag %s: %w: %s", tag, err, output)
+}
+
+func imageNotFound(output string) bool {
+	message := strings.ToLower(output)
+	return strings.Contains(message, "no such image") || strings.Contains(message, "image not known")
 }
 
 func releaseImageTag(release, service string) string {

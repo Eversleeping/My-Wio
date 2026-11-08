@@ -33,6 +33,9 @@ services:
       # loopback and private ranges are the proxy hops. Caddy >= 2.5 replaces
       # X-Forwarded-For from untrusted clients, so the header cannot be forged.
       WIO_TRUSTED_PROXIES: ${WIO_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
+      # One-time token for creating the first administrator. When empty, the
+      # control plane generates one and logs it (docker compose logs controlplane).
+      WIO_SETUP_TOKEN: ${WIO_SETUP_TOKEN:-}
       WIO_CONTROL_AGENT_ENABLED: ${WIO_CONTROL_AGENT_ENABLED:-true}
       WIO_CONTROL_AGENT_SCAN_ROOTS: /srv,/opt,/home,/var/lib/wio-agent/projects
       WIO_CONTROL_AGENT_CLONE_ROOT: /var/lib/wio-agent/projects

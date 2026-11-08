@@ -2,11 +2,12 @@
 package geminiadapter
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -215,19 +216,28 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	if err != nil {
 		return fmt.Errorf("start Gemini CLI (install @google/gemini-cli for the Agent account): %w", err)
 	}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	lines := newLineReader(stdout)
+	skipped := skippedOutput{mode: "stream-json"}
+	defer skipped.report()
 	gotResult, success := false, false
 	var streamErr error
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(strings.TrimSpace(string(line))) == 0 {
+	for {
+		line, err := lines.next()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				streamErr = err
+			}
+			break
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(line, &payload); err != nil {
-			streamErr = errors.New("Gemini CLI returned invalid stream-json output")
-			break
+			// Only JSON objects are stream events; anything else is console
+			// output that does not affect the turn.
+			skipped.add(line)
+			continue
 		}
 		kind, _ := payload["type"].(string)
 		switch kind {
@@ -262,9 +272,6 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 			gotResult = true
 			success = payload["status"] == "success"
 		}
-	}
-	if streamErr == nil {
-		streamErr = scanner.Err()
 	}
 	if streamErr != nil {
 		cancel()

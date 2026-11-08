@@ -146,8 +146,7 @@ func (s *Store) QueueWorkspaceLifecycle(ctx context.Context, workspace Workspace
 	operationID := NewID()
 	now := time.Now().UTC()
 	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?,?,?,?,'git.workspace.lifecycle',?,1,?,?)`), operationID, workspace.ServerID, workspace.ProjectID, workspace.ID, string(payload), "workspace-lifecycle:"+workspace.ID+":"+operationID, now); err != nil {
-		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "operations_workspace_active_write_unique") || strings.Contains(lower, "unique constraint failed: agent_operations.workspace_id") {
+		if isWorkspaceWriteConflict(err) {
 			return "", ErrWorkspaceWriteActive
 		}
 		return "", err
@@ -195,8 +194,7 @@ func (s *Store) QueueCrossServerWorkspaceClone(ctx context.Context, source Works
 	operationID := NewID()
 	now := time.Now().UTC()
 	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?,?,?,?,'git.workspace.clone',?,1,?,?)`), operationID, targetServerID, source.ProjectID, source.ID, string(payload), "workspace-clone:"+source.ID+":"+command.WorkspaceID, now); err != nil {
-		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "operations_workspace_active_write_unique") || strings.Contains(lower, "unique constraint failed: agent_operations.workspace_id") {
+		if isWorkspaceWriteConflict(err) {
 			return "", ErrWorkspaceWriteActive
 		}
 		return "", err
@@ -210,6 +208,8 @@ func (s *Store) QueueCrossServerWorkspaceClone(ctx context.Context, source Works
 	return operationID, nil
 }
 
+// CompleteCrossServerWorkspaceClone returns ErrOperationNotActive without
+// recording the clone when the operation already finished.
 func (s *Store) CompleteCrossServerWorkspaceClone(ctx context.Context, operation Operation, command protocol.GitWorkspaceCloneCommand, result protocol.GitWorkspaceCloneResult, operationResult protocol.OperationResult) error {
 	if operation.Kind != "git.workspace.clone" || operation.ProjectID != command.ProjectID || operation.WorkspaceID == "" || operation.ServerID == "" {
 		return errors.New("workspace clone operation does not match command")
@@ -226,6 +226,10 @@ func (s *Store) CompleteCrossServerWorkspaceClone(ctx context.Context, operation
 		return err
 	}
 	defer tx.Rollback()
+	now := time.Now().UTC()
+	if err = s.completeActiveOperation(ctx, tx, operation.ID, "succeeded", operationResult.Message, data, now); err != nil {
+		return err
+	}
 	var sourceCount int
 	if err = tx.GetContext(ctx, &sourceCount, s.Q("SELECT COUNT(*) FROM workspaces WHERE id=? AND project_id=?"), operation.WorkspaceID, command.ProjectID); err != nil {
 		return err
@@ -233,19 +237,17 @@ func (s *Store) CompleteCrossServerWorkspaceClone(ctx context.Context, operation
 	if sourceCount != 1 {
 		return sql.ErrNoRows
 	}
-	now := time.Now().UTC()
 	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,status,kind,parent_workspace_id,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at) VALUES(?,?,?,?,?,'managed','ready','primary',NULL,?,?,0,?,?)`), command.WorkspaceID, command.ProjectID, operation.ServerID, result.Path, command.Name, result.Branch, result.CommitSHA, now, now); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status='ready',git_error='' WHERE id=?"), operation.WorkspaceID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='succeeded',result=?,result_data=?,completed_at=? WHERE id=?"), operationResult.Message, data, now, operation.ID); err != nil {
-		return err
-	}
 	return tx.Commit()
 }
 
+// FailCrossServerWorkspaceClone returns ErrOperationNotActive without touching
+// the source workspace when the operation already finished.
 func (s *Store) FailCrossServerWorkspaceClone(ctx context.Context, operation Operation, result protocol.OperationResult, workspaceStatus string) error {
 	if workspaceStatus != "partial" {
 		workspaceStatus = "ready"
@@ -260,15 +262,17 @@ func (s *Store) FailCrossServerWorkspaceClone(ctx context.Context, operation Ope
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=?,git_error=? WHERE id=?"), workspaceStatus, result.Message, operation.WorkspaceID); err != nil {
+	if err = s.completeActiveOperation(ctx, tx, operation.ID, "failed", result.Message, data, now); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='failed',result=?,result_data=?,completed_at=? WHERE id=?"), result.Message, data, now, operation.ID); err != nil {
+	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=?,git_error=? WHERE id=?"), workspaceStatus, result.Message, operation.WorkspaceID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
+// CompleteWorkspaceLifecycle returns ErrOperationNotActive without changing
+// the workspace rows when the operation already finished.
 func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operation, command protocol.GitWorkspaceLifecycleCommand, result protocol.GitWorkspaceLifecycleResult, operationResult protocol.OperationResult) error {
 	if operation.Kind != "git.workspace.lifecycle" || operation.ProjectID != command.ProjectID || operation.WorkspaceID != command.WorkspaceID || operation.ServerID == "" {
 		return errors.New("workspace lifecycle operation does not match command")
@@ -289,6 +293,9 @@ func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operat
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
+	if err = s.completeActiveOperation(ctx, tx, operation.ID, "succeeded", operationResult.Message, data, now); err != nil {
+		return err
+	}
 	switch command.Action {
 	case "move":
 		result, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET path=?,status='ready',git_error='',last_scanned_at=? WHERE id=? AND server_id=?"), result.TargetPath, now, command.WorkspaceID, operation.ServerID)
@@ -318,12 +325,11 @@ func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operat
 	default:
 		return errors.New("unsupported workspace lifecycle action")
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='succeeded',result=?,result_data=?,completed_at=? WHERE id=?"), operationResult.Message, data, now, operationResult.OperationID); err != nil {
-		return err
-	}
 	return tx.Commit()
 }
 
+// FailWorkspaceLifecycle returns ErrOperationNotActive without touching the
+// workspace when the operation already finished.
 func (s *Store) FailWorkspaceLifecycle(ctx context.Context, operation Operation, command protocol.GitWorkspaceLifecycleCommand, result protocol.OperationResult, workspaceStatus string) error {
 	if workspaceStatus != "partial" {
 		workspaceStatus = "ready"
@@ -338,13 +344,20 @@ func (s *Store) FailWorkspaceLifecycle(ctx context.Context, operation Operation,
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
+	if err = s.completeActiveOperation(ctx, tx, operation.ID, "failed", result.Message, data, now); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=?,git_error=? WHERE id=?"), workspaceStatus, result.Message, command.WorkspaceID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='failed',result=?,result_data=?,completed_at=? WHERE id=?"), result.Message, data, now, operation.ID); err != nil {
-		return err
-	}
 	return tx.Commit()
+}
+
+// isWorkspaceWriteConflict reports a violation of the one-active-write-per-
+// workspace index on agent_operations (SQLite or PostgreSQL wording).
+func isWorkspaceWriteConflict(err error) bool {
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "operations_workspace_active_write_unique") || strings.Contains(lower, "unique constraint failed: agent_operations.workspace_id")
 }
 
 func cleanLifecyclePath(value string) string {

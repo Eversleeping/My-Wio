@@ -59,6 +59,7 @@ func TestCompletedItemReplayIdentityIsScoped(t *testing.T) {
 	} {
 		a.handleNotification(rpcMessage{Method: "item/completed", Params: json.RawMessage(params)})
 	}
+	flushEvents(t, a)
 	if len(events) != 4 || events[0].EventID == "" || events[0].EventID != events[1].EventID {
 		t.Fatalf("replayed notification must retain its identity: %+v", events)
 	}
@@ -358,6 +359,7 @@ func TestRewriteTurnForksBeforeRollingBackAndStartingReplacement(t *testing.T) {
 	if err := adapter.rewriteTurn(context.Background(), command, request); err != nil {
 		t.Fatal(err)
 	}
+	flushEvents(t, adapter)
 	if len(methods) != 3 || methods[0] != "thread/fork" || methods[1] != "thread/rollback" || methods[2] != "turn/start" {
 		t.Fatalf("unexpected rewrite request order: %#v", methods)
 	}
@@ -522,6 +524,7 @@ func TestPrepareCodexThreadRebindsWhenStoredThreadIsMissing(t *testing.T) {
 	if err := adapter.startTurn(context.Background(), command, request); err != nil {
 		t.Fatal(err)
 	}
+	flushEvents(t, adapter)
 	if len(methods) != 3 || methods[0] != "thread/resume" || methods[1] != "thread/start" || methods[2] != "turn/start" {
 		t.Fatalf("unexpected fallback methods=%#v", methods)
 	}
@@ -538,6 +541,7 @@ func TestUnknownThreadNotificationIsNeverGuessedFromSingleActiveTurn(t *testing.
 		emit:    func(event protocol.StreamEvent) error { emitted = append(emitted, event); return nil },
 	}
 	adapter.handleNotification(rpcMessage{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"codex-b","turn":{"id":"turn-b","status":"completed"}}`)})
+	flushEvents(t, adapter)
 	if len(emitted) != 0 || !adapter.turns["wio-a"].Active {
 		t.Fatalf("unknown notification affected active thread: emitted=%#v state=%#v", emitted, adapter.turns["wio-a"])
 	}
@@ -551,6 +555,7 @@ func TestStaleCompletionDoesNotFinishNewerTurn(t *testing.T) {
 		emit:    func(event protocol.StreamEvent) error { emitted = append(emitted, event); return nil },
 	}
 	adapter.handleNotification(rpcMessage{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"codex-thread","turn":{"id":"old-turn","status":"completed"}}`)})
+	flushEvents(t, adapter)
 	if !adapter.turns["wio-thread"].Active || len(emitted) != 0 {
 		t.Fatalf("stale completion affected the newer turn: state=%#v events=%#v", adapter.turns["wio-thread"], emitted)
 	}
@@ -562,6 +567,7 @@ func TestResetEmitsFailureForEveryActiveTurn(t *testing.T) {
 	adapter.turns["wio-a"] = turnState{CodexThread: "codex-a", TurnID: "turn-a", Active: true}
 	adapter.turns["wio-b"] = turnState{CodexThread: "codex-b", TurnID: "turn-b", Active: true}
 	adapter.reset(errors.New("app-server disconnected"))
+	flushEvents(t, adapter)
 	if len(emitted) != 2 {
 		t.Fatalf("expected one failure per active turn, got %#v", emitted)
 	}

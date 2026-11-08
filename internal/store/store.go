@@ -86,6 +86,10 @@ func Open(databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateUserTOTPCounter(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateImportedProjectRemotes(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -934,8 +938,18 @@ func (s *Store) ConsumeEnrollment(ctx context.Context, token string) (Enrollment
 	if err != nil {
 		return Enrollment{}, err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE enrollment_tokens SET consumed_at=? WHERE id=? AND consumed_at IS NULL"), time.Now().UTC(), e.ID); err != nil {
+	result, err := tx.ExecContext(ctx, s.Q("UPDATE enrollment_tokens SET consumed_at=? WHERE id=? AND consumed_at IS NULL"), time.Now().UTC(), e.ID)
+	if err != nil {
 		return Enrollment{}, err
+	}
+	// Concurrent consumers can all pass the SELECT above; only the one whose
+	// UPDATE changed the row owns the token.
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Enrollment{}, err
+	}
+	if rows != 1 {
+		return Enrollment{}, sql.ErrNoRows
 	}
 	if err = tx.Commit(); err != nil {
 		return Enrollment{}, err
@@ -1188,6 +1202,10 @@ type Project struct {
 	ImportOperationID string     `db:"-" json:"import_operation_id"`
 }
 
+// likePatternEscaper makes user input match literally in a LIKE ... ESCAPE '\'
+// pattern; SQLite and PostgreSQL both honour that escape clause.
+var likePatternEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	return s.ListProjectsFiltered(ctx, "", "", "")
 }
@@ -1196,8 +1214,8 @@ func (s *Store) ListProjectsFiltered(ctx context.Context, name, serverID, status
 	filters := make([]string, 0, 3)
 	args := make([]any, 0, 3)
 	if name = strings.TrimSpace(name); name != "" {
-		filters = append(filters, "p.name LIKE ?")
-		args = append(args, "%"+name+"%")
+		filters = append(filters, `LOWER(p.name) LIKE LOWER(?) ESCAPE '\'`)
+		args = append(args, "%"+likePatternEscaper.Replace(name)+"%")
 	}
 	if serverID = strings.TrimSpace(serverID); serverID != "" {
 		filters = append(filters, `(EXISTS (SELECT 1 FROM workspaces sw WHERE sw.project_id=p.id AND sw.server_id=?)
@@ -1854,8 +1872,6 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 	limit = operationListLimit(limit)
 	const updatedAt = "COALESCE(o.completed_at,o.started_at,o.delivered_at,o.created_at)"
 	query := `SELECT o.id,o.server_id,COALESCE(s.name,'') server_name,COALESCE(s.agent_version,'') agent_version,
-		COALESCE((SELECT i.status FROM agent_operations i WHERE i.kind='operation.interrupt' AND i.idempotency_key>='operation-interrupt:' || o.id || ':' AND i.idempotency_key<'operation-interrupt:' || o.id || ';' ORDER BY i.created_at DESC,i.id DESC LIMIT 1),'') interrupt_status,
-		COALESCE((SELECT i.result FROM agent_operations i WHERE i.kind='operation.interrupt' AND i.idempotency_key>='operation-interrupt:' || o.id || ':' AND i.idempotency_key<'operation-interrupt:' || o.id || ';' ORDER BY i.created_at DESC,i.id DESC LIMIT 1),'') interrupt_error,
 		COALESCE(o.project_id,'') project_id,COALESCE(p.name,'') project_name,
 		COALESCE(o.workspace_id,'') workspace_id,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,
 		COALESCE(o.thread_id,'') thread_id,COALESCE(t.title,'') thread_title,
@@ -1871,6 +1887,11 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 		ORDER BY CASE WHEN o.status IN ('queued','waiting','delivered','running') THEN 0 ELSE 1 END,` + updatedAt + ` DESC,o.id DESC LIMIT ?`
 	var out []OperationSummary
 	if err := s.DB.SelectContext(ctx, &out, s.Q(query), status, canceledStatus, status, limit); err != nil {
+		return nil, err
+	}
+	// Interruption progress is matched by exact key prefix in Go; see
+	// operationInterruptKeyPrefix.
+	if err := s.attachOperationInterrupts(ctx, out); err != nil {
 		return nil, err
 	}
 	for i := range out {

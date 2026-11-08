@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,6 +45,11 @@ func fakeACPCLI() {
 			return
 		}
 		var result any = map[string]any{}
+		if os.Getenv("WIO_GEMINI_TEST_NOISE") == "1" {
+			// Libraries and extensions occasionally print to stdout.
+			fmt.Println("Loaded cached credentials.")
+			fmt.Println()
+		}
 		switch msg.Method {
 		case "initialize":
 			result = map[string]any{"protocolVersion": 1}
@@ -95,6 +101,11 @@ func fakeACPCLI() {
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": text}})
 				result = map[string]any{"stopReason": "end_turn"}
 				break
+			}
+			if size := os.Getenv("WIO_GEMINI_TEST_LARGE_CHUNK"); size != "" {
+				var length int
+				_, _ = fmt.Sscan(size, &length)
+				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": strings.Repeat("x", length)}})
 			}
 			if sample := os.Getenv("WIO_GEMINI_TEST_USAGE_RESULT"); sample != "" {
 				_ = json.Unmarshal([]byte(sample), &result)
@@ -325,10 +336,15 @@ func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 			if session != "" {
 				t.Setenv("WIO_GEMINI_TEST_RESUME", "1")
 			}
+			// Questions are emitted by the bridge and answers by their own
+			// goroutine, so emit runs concurrently with the turn.
+			var eventsMu sync.Mutex
 			var events []protocol.StreamEvent
 			var a *Adapter
 			a = New(executable, func(e protocol.StreamEvent) error {
+				eventsMu.Lock()
 				events = append(events, e)
+				eventsMu.Unlock()
 				if e.Kind == "gemini.question" {
 					go func() {
 						_ = a.Answer(protocol.GeminiAnswerCommand{ThreadID: "thread", OperationID: "op", RequestID: e.EventID, Answers: map[string]protocol.UserInputAnswer{"q": {Answers: []string{"Yes"}}}})
@@ -343,6 +359,8 @@ func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			eventsMu.Lock()
+			defer eventsMu.Unlock()
 			raw, _ := os.ReadFile(record)
 			var prompt struct {
 				Prompt []struct {
@@ -374,9 +392,43 @@ func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 			if !shellOutput {
 				t.Fatalf("ACP shell output was lost: %s", transcript)
 			}
-			if len(a.questions) != 0 {
-				t.Fatal(fmt.Sprintf("pending questions leaked: %d", len(a.questions)))
+			a.mu.Lock()
+			pending := len(a.questions)
+			a.mu.Unlock()
+			if pending != 0 {
+				t.Fatal(fmt.Sprintf("pending questions leaked: %d", pending))
 			}
 		})
+	}
+}
+
+// One oversized frame or a stray console line must not end an ACP session.
+func TestACPToleratesNoiseAndLargeFrames(t *testing.T) {
+	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
+	t.Setenv("WIO_GEMINI_TEST_NOISE", "1")
+	const size = 9 << 20 // above the previous 8 MiB ACP frame limit
+	t.Setenv("WIO_GEMINI_TEST_LARGE_CHUNK", fmt.Sprint(size))
+	executable, _ := os.Executable()
+	var mu sync.Mutex
+	longest := 0
+	a := New(executable, func(e protocol.StreamEvent) error {
+		if e.Kind == "gemini.message" {
+			mu.Lock()
+			longest = max(longest, len(e.Payload))
+			mu.Unlock()
+		}
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := a.Run(ctx, "op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), Prompt: "test", Model: "flash", ApprovalMode: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if longest < size {
+		t.Fatalf("large ACP frame was not delivered: %d bytes", longest)
 	}
 }

@@ -33,6 +33,13 @@ func (h *Hub) Unsubscribe(id int) {
 	h.mu.Unlock()
 }
 
+// Subscribers returns the number of active subscriptions.
+func (h *Hub) Subscribers() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
+}
+
 func (h *Hub) Publish(event protocol.StreamEvent) {
 	h.mu.RLock()
 	stalled := make([]int, 0)

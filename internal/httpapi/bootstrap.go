@@ -84,6 +84,7 @@ var (
 	errEnrollmentToken   = errors.New("could not create enrollment token")
 	errEnrollmentStore   = errors.New("could not create enrollment")
 	errCredentialProfile = errors.New("credential profile is invalid")
+	errRepairServerGone  = errors.New("server not found")
 )
 
 func (input sshConnectionInput) target() sshbootstrap.Target {
@@ -221,6 +222,14 @@ func (a *API) streamBootstrapServerSSHForServer(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
+	// Once streaming starts the status line is committed, so report an unknown
+	// repair target as a plain 404 before writing any progress.
+	if serverID != "" {
+		if _, err := a.store.Server(r.Context(), serverID); errors.Is(err, sql.ErrNoRows) {
+			a.writeBootstrapError(w, errRepairServerGone)
+			return
+		}
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming is unavailable")
@@ -325,6 +334,9 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 		enrollmentID, err = a.store.CreateRepairEnrollment(r.Context(), serverID, token, expires)
 	}
 	if err != nil {
+		if serverID != "" && errors.Is(err, sql.ErrNoRows) {
+			return sshbootstrap.InstallResult{}, errRepairServerGone
+		}
 		return sshbootstrap.InstallResult{}, fmt.Errorf("%w: %v", errEnrollmentStore, err)
 	}
 
@@ -430,6 +442,8 @@ func bootstrapErrorInfo(err error) (int, string, string) {
 		return http.StatusBadRequest, "credential_profile_invalid", "the selected credential profile is unavailable or invalid"
 	case errors.Is(err, errEnrollmentToken):
 		return http.StatusInternalServerError, "enrollment_token_failed", "could not create enrollment token"
+	case errors.Is(err, errRepairServerGone):
+		return http.StatusNotFound, "server_not_found", "server not found"
 	case errors.Is(err, errEnrollmentStore):
 		return http.StatusInternalServerError, "enrollment_store_failed", "could not create enrollment"
 	case errors.Is(err, sshbootstrap.ErrInvalidTarget):
