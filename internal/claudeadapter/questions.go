@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type liveQuestion struct {
@@ -34,6 +35,13 @@ func (live *liveTurn) questionRequest(raw []byte) error {
 	}
 	if json.Unmarshal(raw, &frame) != nil || frame.RequestID == "" || len(frame.RequestID) > 256 {
 		return errors.New("invalid Claude control request")
+	}
+	if frame.Request.Subtype == "can_use_tool" && live.collaborationPrefix != "" {
+		for _, tool := range sessiontools.Definitions() {
+			if frame.Request.Tool == live.collaborationPrefix+tool.Name {
+				return live.controlResponse(frame.RequestID, map[string]any{"behavior": "allow", "updatedInput": frame.Request.Input})
+			}
+		}
 	}
 	if frame.Request.Subtype != "can_use_tool" || frame.Request.Tool != "AskUserQuestion" {
 		return live.controlResponse(frame.RequestID, map[string]any{"behavior": "deny", "message": "This tool requires approval that is not available in Wio. Use the configured permission mode or another allowed tool."})

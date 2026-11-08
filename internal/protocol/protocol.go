@@ -189,6 +189,8 @@ type ProjectRemoteResult struct {
 }
 
 type GitWorktreeCreateCommand struct {
+	LastTurnID        string             `json:"last_turn_id,omitempty"`
+	CutoffSequence    int64              `json:"cutoff_sequence,omitempty"`
 	ClaudeFork        *ClaudeForkCommand `json:"claude_fork,omitempty"`
 	GeminiFork        *GeminiForkCommand `json:"gemini_fork,omitempty"`
 	SourceWorkspaceID string             `json:"source_workspace_id"`
@@ -205,6 +207,7 @@ type GitWorktreeCreateCommand struct {
 }
 
 type GitWorktreeCreateResult struct {
+	LastTurnID       string `json:"last_turn_id,omitempty"`
 	ClaudeSnapshotID string `json:"claude_snapshot_id,omitempty"`
 	GeminiSessionID  string `json:"gemini_session_id,omitempty"`
 	Path             string `json:"path"`
@@ -412,6 +415,7 @@ type StreamEvent struct {
 }
 
 type StartTurnCommand struct {
+	OperationID     string      `json:"-"`
 	ThreadID        string      `json:"thread_id"`
 	CodexThread     string      `json:"codex_thread_id,omitempty"`
 	WorkspaceID     string      `json:"workspace_id"`

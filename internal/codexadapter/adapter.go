@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,10 +26,12 @@ import (
 type EmitFunc func(protocol.StreamEvent) error
 
 type Adapter struct {
-	command     string
-	environment []string
-	log         *slog.Logger
-	emit        EmitFunc
+	mcpStart        func(context.Context) (map[string]any, func(), error)
+	toolOperationID string
+	command         string
+	environment     []string
+	log             *slog.Logger
+	emit            EmitFunc
 
 	startMu sync.Mutex
 	writeMu sync.Mutex
@@ -1152,7 +1155,18 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	processContext, cancel := context.WithCancel(context.Background())
 	// Enable interactive questions for ordinary turns, including existing Agent
 	// installations whose on-disk Codex configuration predates this feature.
-	process := exec.CommandContext(processContext, a.command, "app-server", "--listen", "stdio://", "-c", "features.default_mode_request_user_input=true")
+	args := []string{"app-server", "--listen", "stdio://", "-c", "features.default_mode_request_user_input=true"}
+	if a.mcpStart != nil {
+		bridge, closeBridge, err := a.mcpStart(processContext)
+		if err == nil {
+			name := bridge["name"].(string)
+			args = append(args, "-c", "mcp_servers."+name+".url="+strconv.Quote(bridge["url"].(string)), "-c", "mcp_servers."+name+".http_headers.Authorization="+strconv.Quote(bridge["headers"].(map[string]string)["Authorization"]))
+			go func() { <-processContext.Done(); closeBridge() }()
+		} else {
+			a.log.Warn("collaboration bridge unavailable")
+		}
+	}
+	process := exec.CommandContext(processContext, a.command, args...)
 	process.Env = append(os.Environ(), a.environment...)
 	configureProcess(process)
 	stdout, err := process.StdoutPipe()
@@ -1192,6 +1206,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	go a.stderrLoop(stderr)
 	go func() {
 		err := process.Wait()
+		cancel()
 		a.log.Warn("Codex app-server exited", "error", err)
 		a.resetProcess(process, fmt.Errorf("Codex app-server exited: %w", err))
 	}()

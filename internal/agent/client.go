@@ -41,11 +41,14 @@ import (
 	"github.com/wio-platform/wio/internal/gitworktree"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/scanner"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 const initialReconnectBackoff = time.Second
 
 type Client struct {
+	toolMu             sync.Mutex
+	toolReplies        map[string]chan sessiontools.Reply
 	config             Config
 	log                *slog.Logger
 	outbound           chan *protocol.AgentEnvelope
@@ -102,6 +105,7 @@ func NewClient(config Config, log *slog.Logger) *Client {
 	if err := client.loadGeminiCredentials(); err != nil {
 		log.Warn("Gemini API configuration could not be loaded")
 	}
+	client.codex.SetCollaborationTransport(client.callSessionTool)
 	return client
 }
 
@@ -221,6 +225,10 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			cancel()
 			return connected, err
 		default:
+		}
+		if command.Kind == "session_tool_response" {
+			c.receiveSessionToolReply(command.PayloadJSON)
+			continue
 		}
 		if command.Kind == protocol.ControlKindKeepalive && command.OperationID == "" {
 			go c.reconcileGeminiOperations(command.PayloadJSON)
@@ -639,7 +647,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 			if err == nil && command.TargetThreadID != "" {
-				forkCommand := protocol.ForkThreadCommand{SourceThreadID: command.SourceThreadID, TargetThreadID: command.TargetThreadID, CodexThread: command.CodexThread, WorkspaceID: command.TargetWorkspaceID, Workspace: result.Path, Title: command.Title}
+				forkCommand := protocol.ForkThreadCommand{SourceThreadID: command.SourceThreadID, TargetThreadID: command.TargetThreadID, CodexThread: command.CodexThread, WorkspaceID: command.TargetWorkspaceID, Workspace: result.Path, Title: command.Title, LastTurnID: command.LastTurnID, CutoffSequence: command.CutoffSequence}
 				var fork protocol.ForkThreadResult
 				fork, err = c.codex.ForkThread(ctx, forkCommand)
 				if err != nil {
@@ -651,6 +659,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 					}
 				} else {
 					result.CodexThread = fork.CodexThread
+					result.LastTurnID = fork.LastTurnID
 				}
 			}
 			if err == nil {
@@ -981,6 +990,13 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		if err != nil {
 			return err
 		}
+		bridge, closeBridge, bridgeErr := c.sessionBridge(ctx, sessiontools.Ref{Engine: "gemini", ID: command.ThreadID}, envelope.OperationID)
+		if bridgeErr == nil {
+			command.CollaborationMCP = bridge
+			defer closeBridge()
+		} else {
+			c.log.Warn("collaboration bridge unavailable", "engine", "gemini")
+		}
 		return c.gemini.RunInTrustedWorkspaceWithEnvironment(ctx, envelope.OperationID, command, environment)
 	case "claude.turn.start":
 		if c.agentUpdatePending() {
@@ -1025,6 +1041,13 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		cliVersion := c.currentClaudeVersion(ctx, effectiveClaudePath(c.config.StateDir))
 		command.Questions = command.Questions && buildinfo.SupportsClaudeQuestions(buildinfo.Version, cliVersion)
 		command.Steer = command.Steer && buildinfo.SupportsClaudeSteering(buildinfo.Version, cliVersion)
+		bridge, closeBridge, bridgeErr := c.sessionBridge(ctx, sessiontools.Ref{Engine: "claude", ID: command.ThreadID}, envelope.OperationID)
+		if bridgeErr == nil {
+			command.CollaborationMCP = bridge
+			defer closeBridge()
+		} else {
+			c.log.Warn("collaboration bridge unavailable", "engine", "claude")
+		}
 		return c.claudeTurns.Run(ctx, effectiveClaudePath(c.config.StateDir), envelope.OperationID, command, func(event protocol.StreamEvent) error {
 			if event.EventID == "" {
 				event.EventID = uuid.NewString()
@@ -1063,6 +1086,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
+		command.OperationID = envelope.OperationID
 		return c.codex.StartTurn(ctx, command)
 	case "codex.turn.rewrite":
 		if c.agentUpdatePending() {
@@ -1072,6 +1096,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
+		command.Start.OperationID = envelope.OperationID
 		return c.codex.RewriteTurn(ctx, command)
 	case "codex.turn.steer":
 		var command protocol.SteerTurnCommand

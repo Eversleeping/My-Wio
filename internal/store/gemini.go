@@ -10,6 +10,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type GeminiThread struct {
@@ -126,18 +127,7 @@ func (s *Store) CreateGeminiThread(ctx context.Context, workspaceID, model, mode
 		return GeminiThread{}, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,model,approval_mode,thinking_level,created_at,updated_at,model_credential_revision)
- SELECT ?,w.id,?,?,?,?,?,`+geminiCredentialRevision+` FROM workspaces w JOIN servers s ON s.id=w.server_id LEFT JOIN server_gemini_credential_profiles gcp ON gcp.server_id=s.id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), id, model, mode, level, time.Now().UTC(), time.Now().UTC(), workspaceID)
-	if err != nil {
-		return GeminiThread{}, err
-	}
-	if n, err := result.RowsAffected(); err != nil || n != 1 {
-		if err != nil {
-			return GeminiThread{}, err
-		}
-		return GeminiThread{}, sql.ErrNoRows
-	}
-	if err := s.showProjectForNewThread(ctx, tx, workspaceID); err != nil {
+	if err := s.createCollaborationSessionTx(ctx, tx, sessiontools.Ref{Engine: "gemini", ID: id}, workspaceID, "Gemini", model, mode, level); err != nil {
 		return GeminiThread{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -176,15 +166,24 @@ func (s *Store) queueGeminiTurn(ctx context.Context, thread GeminiThread, prompt
 }
 
 func (s *Store) queueGeminiRun(ctx context.Context, run *scheduledRun, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, goal *protocol.GeminiGoalCommand, thinking ...string) (protocol.StreamEvent, error) {
-	level := thread.ThinkingLevel
-	if len(thinking) > 0 {
-		level = thinking[0]
-	}
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	defer tx.Rollback()
+	event, err := s.queueGeminiTurnTx(ctx, tx, thread, prompt, model, mode, editEventID, images, goal, run, thinking...)
+	if err != nil {
+		return event, err
+	}
+	return event, tx.Commit()
+}
+
+func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, goal *protocol.GeminiGoalCommand, run *scheduledRun, thinking ...string) (protocol.StreamEvent, error) {
+	level := thread.ThinkingLevel
+	if len(thinking) > 0 {
+		level = thinking[0]
+	}
+	var err error
 
 	// Serialize configuration changes with newly queued turns on this server.
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), thread.ServerID); err != nil {
@@ -270,7 +269,7 @@ func (s *Store) queueGeminiRun(ctx context.Context, run *scheduledRun, thread Ge
 		return protocol.StreamEvent{}, err
 	}
 	if editEventID != "" {
-		return protocol.StreamEvent{}, tx.Commit()
+		return protocol.StreamEvent{}, nil
 	}
 	message, _ := json.Marshal(map[string]any{"text": prompt, "operation_id": opID, "model": model, "thinking_level": level, "images": images})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "gemini.user.message", OccurredAt: now, Payload: message}
@@ -282,7 +281,7 @@ func (s *Store) queueGeminiRun(ctx context.Context, run *scheduledRun, thread Ge
 	if err != nil {
 		return event, err
 	}
-	return event, tx.Commit()
+	return event, nil
 }
 
 func truncateGeminiTitle(prompt string) string {
@@ -302,50 +301,59 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread, go
 		return err
 	}
 	defer tx.Rollback()
+	_, err = s.interruptGeminiTurnTx(ctx, tx, thread, goalAction...)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) interruptGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread GeminiThread, goalAction ...string) (string, error) {
+	var err error
 	// Serialize ownership checks, cancellation, and human confirmation on
 	// the operation row before changing the associated thread.
 	locked, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND status IN ('queued','delivered','running')"), thread.OperationID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	lockedCount, err := locked.RowsAffected()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if lockedCount != 1 {
-		return ErrThreadActive
+		return "", ErrThreadActive
 	}
 	// Cancel an undispatched task locally. An in-flight task must acknowledge its
 	// cancellation before releasing the workspace or accepting another prompt.
 	result, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',completed_at=? WHERE id=? AND status='queued'"), time.Now().UTC(), thread.OperationID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	count, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return "", err
 	}
 	var previousStatus string
 	if err := tx.GetContext(ctx, &previousStatus, s.Q("SELECT status FROM gemini_threads WHERE id=? AND operation_id=?"), thread.ID, thread.OperationID); err != nil {
-		return err
+		return "", err
 	}
 	status := "interrupting"
 	if count == 1 {
 		if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
-			return err
+			return "", err
 		}
 		status = "interrupted"
 	}
 	result, err = tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET status=?,updated_at=? WHERE id=? AND operation_id=? AND (status IN ('queued','running') OR (status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('delivered','running'))))"), status, time.Now().UTC(), thread.ID, thread.OperationID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if changed != 1 {
-		return ErrThreadActive
+		return "", ErrThreadActive
 	}
 	goalStatus, goalID := "paused", ""
 	if len(goalAction) > 0 {
@@ -355,16 +363,16 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread, go
 		goalID = goalAction[1]
 	}
 	if goalStatus != "paused" && goalStatus != "cancelled" {
-		return errors.New("invalid Gemini goal action")
+		return "", errors.New("invalid Gemini goal action")
 	}
 	goalResult, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_goals SET status=?,updated_at=? WHERE thread_id=? AND operation_id=? AND status='active' AND (?='' OR id=?)"), goalStatus, time.Now().UTC(), thread.ID, thread.OperationID, goalID, goalID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if goalID != "" {
 		goalCount, err := goalResult.RowsAffected()
 		if err != nil || goalCount != 1 {
-			return ErrGeminiGoalChanged
+			return "", ErrGeminiGoalChanged
 		}
 	}
 	if count == 0 {
@@ -373,10 +381,11 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread, go
 		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at)
  VALUES(?,?,?,?,'gemini.turn.interrupt',?,?,?)`), id, thread.ServerID, thread.ProjectID, thread.WorkspaceID, string(payload), "gemini-interrupt:"+id, time.Now().UTC())
 		if err != nil {
-			return err
+			return "", err
 		}
+		return id, nil
 	}
-	return tx.Commit()
+	return thread.OperationID, nil
 }
 
 // ConfirmGeminiStopped is an explicit human acknowledgement for a legacy

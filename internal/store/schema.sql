@@ -641,3 +641,66 @@ CREATE TABLE IF NOT EXISTS claude_scheduled_tasks (
 
 CREATE INDEX IF NOT EXISTS claude_scheduled_tasks_due_idx ON claude_scheduled_tasks(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS claude_scheduled_tasks_thread_idx ON claude_scheduled_tasks(thread_id);
+
+-- Engine-neutral identities deliberately have no FK to one engine's table.
+-- Provenance survives deletion of a target session.
+CREATE TABLE IF NOT EXISTS session_tool_grants (
+ source_key TEXT PRIMARY KEY,
+ grant_json TEXT NOT NULL,
+ parent_key TEXT NOT NULL DEFAULT '',
+ parent_version INTEGER NOT NULL DEFAULT 0,
+ version INTEGER NOT NULL DEFAULT 1,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS session_tool_requests (
+ id TEXT PRIMARY KEY,
+ source_key TEXT NOT NULL,
+ request_key TEXT NOT NULL,
+ tool TEXT NOT NULL,
+ arguments TEXT NOT NULL,
+ execution_json TEXT NOT NULL DEFAULT '{}',
+ grant_version INTEGER NOT NULL,
+ status TEXT NOT NULL,
+ phase TEXT NOT NULL DEFAULT '',
+ target_engine TEXT NOT NULL DEFAULT '',
+ target_id TEXT NOT NULL DEFAULT '',
+ workspace_id TEXT NOT NULL DEFAULT '',
+ operation_id TEXT NOT NULL DEFAULT '',
+ result TEXT NOT NULL DEFAULT '{}',
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(source_key,request_key)
+);
+CREATE INDEX IF NOT EXISTS session_tool_requests_pending_idx ON session_tool_requests(status,created_at);
+CREATE INDEX IF NOT EXISTS events_collaboration_time_idx ON events(occurred_at,stream_id) WHERE kind IN ('session.collaboration.request','session.collaboration.updated','session.collaboration.child');
+CREATE TABLE IF NOT EXISTS session_tool_waits (
+ source_key TEXT NOT NULL,
+ target_key TEXT NOT NULL,
+ expires_at TIMESTAMP NOT NULL,
+ PRIMARY KEY(source_key,target_key)
+);
+CREATE TABLE IF NOT EXISTS session_tool_wait_lock (id INTEGER PRIMARY KEY);
+INSERT INTO session_tool_wait_lock(id) VALUES(1) ON CONFLICT(id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS session_links (
+ target_key TEXT PRIMARY KEY,
+ source_key TEXT NOT NULL,
+ root_key TEXT NOT NULL,
+ depth INTEGER NOT NULL,
+ request_id TEXT NOT NULL UNIQUE REFERENCES session_tool_requests(id),
+ relation TEXT NOT NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS session_links_source_idx ON session_links(source_key);
+CREATE INDEX IF NOT EXISTS session_links_root_idx ON session_links(root_key);
+CREATE TABLE IF NOT EXISTS session_subscriptions (
+ target_key TEXT NOT NULL,
+ source_key TEXT NOT NULL,
+ auto_continue INTEGER NOT NULL DEFAULT 0,
+ grant_version INTEGER NOT NULL,
+ last_event_id TEXT NOT NULL DEFAULT '',
+ last_continuation_id TEXT NOT NULL DEFAULT '',
+ continuation_count INTEGER NOT NULL DEFAULT 0,
+ unread_event_id TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(target_key,source_key)
+);
+CREATE INDEX IF NOT EXISTS session_subscriptions_source_idx ON session_subscriptions(source_key);

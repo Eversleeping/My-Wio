@@ -36,6 +36,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 - 实时展示 Codex 消息、命令输出、文件变更、任务状态、中断和审批请求；支持图片输入、消息改写、任务分叉、独立 worktree、目标、MCP、Skills、限额状态和模型/推理强度选择
 - 在 Codex 下方提供独立 Gemini 页面，通过官方 Gemini CLI 支持模型选择、流式会话、工具结果、历史续聊、中断及归档；接入步骤见 [Gemini 使用说明](docs/GEMINI.md)
 - 提供独立 Claude 页面，通过目标服务器的官方 Claude Code CLI 支持模型与权限选择、流式会话、工具结果、历史续聊、中断及归档；安装和认证步骤见 [Claude 使用说明](docs/CLAUDE.md)
+- 内置三模型会话协作工具，支持授权创建/分叉、独立 worktree 委派、进度与结果查询、未读通知和可选自动续聊；无需手动配置 MCP，详见 [会话协作说明](docs/SESSION_COLLABORATION.md)
 - 支持在设置中检查并选择稳定的 Codex CLI 版本，并向在线 Agent 下发 Codex CLI 更新
 - 使用 Docker Compose 发布目录、健康检查、稳定的 Compose 项目名、部署日志、容器启停/重启/删除和上一版本回滚
 - 支持 Vault Secret Set、Codex/Git 凭据预设、外部访问链接、告警确认和审计日志

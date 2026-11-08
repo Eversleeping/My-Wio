@@ -19,10 +19,12 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/sessionservice"
 	"github.com/wio-platform/wio/internal/store"
 )
 
 type Gateway struct {
+	sessions       *sessionservice.Service
 	store          *store.Store
 	hub            *realtime.Hub
 	vault          *security.Vault
@@ -37,7 +39,7 @@ type Gateway struct {
 }
 
 func New(s *store.Store, hub *realtime.Hub, vault *security.Vault, log *slog.Logger) *Gateway {
-	return &Gateway{store: s, hub: hub, vault: vault, log: log, keepaliveEvery: 20 * time.Second, pollEvery: 2 * time.Second, reconcileAfter: time.Minute, wakes: make(map[string]chan struct{}), metricBreaches: make(map[string]map[string]int)}
+	return &Gateway{sessions: &sessionservice.Service{Store: s}, store: s, hub: hub, vault: vault, log: log, keepaliveEvery: 20 * time.Second, pollEvery: 2 * time.Second, reconcileAfter: time.Minute, wakes: make(map[string]chan struct{}), metricBreaches: make(map[string]map[string]int)}
 }
 
 func (g *Gateway) Wake(serverID string) {
@@ -79,7 +81,8 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 	}()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- g.receive(stream, serverID) }()
+	replies := make(chan *protocol.ControlEnvelope, 32)
+	go func() { errCh <- g.receiveWithTools(stream, serverID, replies) }()
 	if err := g.sendKeepalive(stream, serverID, time.Now()); err != nil {
 		return err
 	}
@@ -104,6 +107,10 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 		case <-ticker.C:
 		case now := <-keepalive.C:
 			if err := g.sendKeepalive(stream, serverID, now); err != nil {
+				return err
+			}
+		case reply := <-replies:
+			if err := stream.Send(reply); err != nil {
 				return err
 			}
 		case <-wake:
@@ -134,6 +141,11 @@ func (g *Gateway) sendKeepalive(stream protocol.AgentServiceConnectServer, serve
 }
 
 func (g *Gateway) receive(stream protocol.AgentServiceConnectServer, serverID string) error {
+	return g.receiveWithTools(stream, serverID, make(chan *protocol.ControlEnvelope, 32))
+}
+
+func (g *Gateway) receiveWithTools(stream protocol.AgentServiceConnectServer, serverID string, replies chan<- *protocol.ControlEnvelope) error {
+	limit := make(chan struct{}, 8)
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -141,6 +153,10 @@ func (g *Gateway) receive(stream protocol.AgentServiceConnectServer, serverID st
 		}
 		if msg.ServerID != "" && msg.ServerID != serverID {
 			return status.Error(codes.PermissionDenied, "server id mismatch")
+		}
+		if msg.Kind == "session_tool_request" {
+			g.receiveSessionTool(stream, serverID, msg, replies, limit)
+			continue
 		}
 		if err := g.handle(stream.Context(), serverID, msg); err != nil {
 			g.log.Warn("agent message rejected", "server_id", serverID, "kind", msg.Kind, "error", err)

@@ -44,19 +44,20 @@ type GeminiSkillsResult struct {
 // GeminiTurnCommand runs a headless Gemini CLI turn in an existing workspace.
 // Authentication stays on the Agent host; credentials never enter this payload.
 type GeminiTurnCommand struct {
-	Goal            *GeminiGoalCommand   `json:"goal,omitempty"`
-	Steering        bool                 `json:"steering,omitempty"`
-	SteeringContext []string             `json:"steering_context,omitempty"`
-	Interactive     bool                 `json:"interactive,omitempty"`
-	Images          []TurnImage          `json:"images,omitempty"`
-	ThinkingLevel   string               `json:"thinking_level,omitempty"`
-	ThreadID        string               `json:"thread_id"`
-	Workspace       string               `json:"workspace"`
-	SessionID       string               `json:"session_id"`
-	Prompt          string               `json:"prompt"`
-	Model           string               `json:"model"`
-	ApprovalMode    string               `json:"approval_mode"`
-	Rewrite         *GeminiRewriteTarget `json:"rewrite,omitempty"`
+	CollaborationMCP map[string]any       `json:"-"`
+	Goal             *GeminiGoalCommand   `json:"goal,omitempty"`
+	Steering         bool                 `json:"steering,omitempty"`
+	SteeringContext  []string             `json:"steering_context,omitempty"`
+	Interactive      bool                 `json:"interactive,omitempty"`
+	Images           []TurnImage          `json:"images,omitempty"`
+	ThinkingLevel    string               `json:"thinking_level,omitempty"`
+	ThreadID         string               `json:"thread_id"`
+	Workspace        string               `json:"workspace"`
+	SessionID        string               `json:"session_id"`
+	Prompt           string               `json:"prompt"`
+	Model            string               `json:"model"`
+	ApprovalMode     string               `json:"approval_mode"`
+	Rewrite          *GeminiRewriteTarget `json:"rewrite,omitempty"`
 }
 
 // GeminiGoalCommand is tied to one operation; the control plane keeps the

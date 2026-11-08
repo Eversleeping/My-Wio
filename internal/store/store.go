@@ -2271,6 +2271,10 @@ func (s *Store) RecentEvents(ctx context.Context, streamID string, limit int) ([
 }
 
 func (s *Store) eventRows(ctx context.Context, query string, args ...any) ([]protocol.StreamEvent, error) {
+	return s.eventRowsQuery(ctx, s.DB, query, args...)
+}
+
+func (s *Store) eventRowsQuery(ctx context.Context, db sqlx.QueryerContext, query string, args ...any) ([]protocol.StreamEvent, error) {
 	var rows []struct {
 		EventID    string    `db:"event_id"`
 		StreamID   string    `db:"stream_id"`
@@ -2279,7 +2283,7 @@ func (s *Store) eventRows(ctx context.Context, query string, args ...any) ([]pro
 		Sequence   int64     `db:"sequence"`
 		OccurredAt time.Time `db:"occurred_at"`
 	}
-	if err := s.DB.SelectContext(ctx, &rows, query, args...); err != nil {
+	if err := sqlx.SelectContext(ctx, db, &rows, query, args...); err != nil {
 		return nil, err
 	}
 	out := make([]protocol.StreamEvent, 0, len(rows))

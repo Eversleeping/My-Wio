@@ -27,24 +27,25 @@ type liveInput struct {
 }
 
 type liveTurn struct {
-	questions   map[string]*liveQuestion
-	steering    bool
-	mu          sync.Mutex
-	writeMu     sync.Mutex
-	threadID    string
-	operationID string
-	stdin       io.WriteCloser
-	cancel      context.CancelFunc
-	ready       bool
-	closed      bool
-	inputs      map[string]*liveInput
-	idle        *time.Timer
-	idleRound   uint64
-	idleExpired bool
-	background  int
-	lastResult  bool
-	queued      int
-	emit        func(string, map[string]any) error
+	collaborationPrefix string
+	questions           map[string]*liveQuestion
+	steering            bool
+	mu                  sync.Mutex
+	writeMu             sync.Mutex
+	threadID            string
+	operationID         string
+	stdin               io.WriteCloser
+	cancel              context.CancelFunc
+	ready               bool
+	closed              bool
+	inputs              map[string]*liveInput
+	idle                *time.Timer
+	idleRound           uint64
+	idleExpired         bool
+	background          int
+	lastResult          bool
+	queued              int
+	emit                func(string, map[string]any) error
 }
 
 func (s *Sessions) Run(ctx context.Context, executable, operationID string, command protocol.ClaudeTurnCommand, emit func(protocol.StreamEvent) error, environment ...string) error {

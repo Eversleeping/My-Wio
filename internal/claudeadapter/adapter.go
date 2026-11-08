@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 // Run keeps prompts off the process command line and requires a complete result.
@@ -75,6 +76,19 @@ func run(parent context.Context, executable, operationID string, command protoco
 			return errors.New("Claude questions require a live input stream")
 		}
 		args = append(args, "--permission-prompt-tool", "stdio")
+	}
+	if command.CollaborationMCP != nil {
+		name := command.CollaborationMCP["name"].(string)
+		configuration, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{name: map[string]any{"type": "http", "url": command.CollaborationMCP["url"], "headers": command.CollaborationMCP["headers"]}}})
+		args = append(args, "--mcp-config", string(configuration))
+		allowed := []string{}
+		for _, tool := range sessiontools.Definitions() {
+			allowed = append(allowed, "mcp__"+name+"__"+tool.Name)
+		}
+		args = append(args, "--allowedTools", strings.Join(allowed, ","))
+		if live != nil {
+			live.collaborationPrefix = "mcp__" + name + "__"
+		}
 	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()

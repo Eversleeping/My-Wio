@@ -1,3 +1,4 @@
+import { SessionCollaboration } from "../components/SessionCollaboration";
 import { SessionUsage, formatUsageNumber } from "../components/SessionUsage";
 import { GeminiTool, GeminiToolGroup } from "../components/GeminiTool";
 import { MessageImages } from "../components/MessageImages";
@@ -140,6 +141,7 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
     </aside>
     <div className="gemini-main">{active ? <>
       <SessionPreviewTabs previews={previews} />
+      {active && <SessionCollaboration key={"collaboration:"+active.id} engine="gemini" id={active.id} workspaceID={active.workspace_id} projectID={active.project_id} revision={realtime} />}
       <SessionPreviewPanels previews={previews} workspaceID={active.workspace_id} workspaceRoot={active.path} writable realtime={realtime + tick} notify={notify} onOpenFile={openFile}>
         <GeminiSession key={active.id} thread={active} realtime={dependency} notify={notify} onChanged={refresh} onNewSession={() => openNewSession(active.workspace_id)} onOpenFile={openFile} onFork={eventID => void management.fork(active, eventID)} onSchedule={() => management.schedule(active)} />
       </SessionPreviewPanels>

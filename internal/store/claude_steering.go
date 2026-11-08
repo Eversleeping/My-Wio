@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -20,6 +21,15 @@ func (s *Store) QueueClaudeSteer(ctx context.Context, command protocol.ClaudeSte
 		return protocol.StreamEvent{}, "", err
 	}
 	defer tx.Rollback()
+	event, op, err := s.queueClaudeSteerTx(ctx, tx, command)
+	if err != nil {
+		return event, op, err
+	}
+	return event, op, tx.Commit()
+}
+
+func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command protocol.ClaudeSteerCommand) (protocol.StreamEvent, string, error) {
+	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE claude_threads SET status=status WHERE id=?"), command.ThreadID); err != nil {
 		return protocol.StreamEvent{}, "", err
 	}
@@ -31,7 +41,7 @@ func (s *Store) QueueClaudeSteer(ctx context.Context, command protocol.ClaudeSte
 		if json.Unmarshal([]byte(existing.Payload), &previous) != nil || previous.OperationID != command.OperationID || previous.Prompt != command.Prompt || !slices.Equal(previous.Images, command.Images) {
 			return protocol.StreamEvent{}, "", errors.New("steering request already has different content")
 		}
-		return protocol.StreamEvent{}, existing.ID, tx.Commit()
+		return protocol.StreamEvent{}, existing.ID, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return protocol.StreamEvent{}, "", err
@@ -89,7 +99,7 @@ func (s *Store) QueueClaudeSteer(ctx context.Context, command protocol.ClaudeSte
 	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, now, string(payload)); err != nil {
 		return event, "", err
 	}
-	return event, id, tx.Commit()
+	return event, id, nil
 }
 
 func (s *Store) ClaudeSteerCommand(ctx context.Context, threadID, requestID string) (protocol.ClaudeSteerCommand, error) {

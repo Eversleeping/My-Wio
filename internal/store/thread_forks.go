@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -27,12 +28,16 @@ type forkEventPayload struct {
 // ThreadForkBoundary resolves a message against the complete persisted stream,
 // including history that the browser has not loaded. Forks stop at turn boundaries.
 func (s *Store) ThreadForkBoundary(ctx context.Context, threadID, eventID string) (string, int64, error) {
+	return s.threadForkBoundary(ctx, s.DB, threadID, eventID)
+}
+
+func (s *Store) threadForkBoundary(ctx context.Context, db sqlx.QueryerContext, threadID, eventID string) (string, int64, error) {
 	var target struct {
 		Kind     string `db:"kind"`
 		Payload  string `db:"payload"`
 		Sequence int64  `db:"sequence"`
 	}
-	if err := s.DB.GetContext(ctx, &target, s.Q("SELECT kind,payload,sequence FROM events WHERE stream_id=? AND event_id=?"), threadID, eventID); err != nil {
+	if err := sqlx.GetContext(ctx, db, &target, s.Q("SELECT kind,payload,sequence FROM events WHERE stream_id=? AND event_id=?"), threadID, eventID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", 0, ErrInvalidForkTarget
 		}
@@ -42,7 +47,7 @@ func (s *Store) ThreadForkBoundary(ctx context.Context, threadID, eventID string
 	if json.Unmarshal([]byte(target.Payload), &selected) != nil || target.Kind != "codex.item.completed" || selected.Item.Type != "agentMessage" || selected.Item.Phase == "commentary" || selected.TurnID == "" || selected.Item.ID == "" {
 		return "", 0, ErrInvalidForkTarget
 	}
-	events, err := s.eventRows(ctx, s.Q("SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND sequence>? AND kind IN ('codex.item.completed','codex.turn.completed') ORDER BY sequence"), threadID, target.Sequence)
+	events, err := s.eventRowsQuery(ctx, db, s.Q("SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND sequence>? AND kind IN ('codex.item.completed','codex.turn.completed') ORDER BY sequence"), threadID, target.Sequence)
 	if err != nil {
 		return "", 0, err
 	}

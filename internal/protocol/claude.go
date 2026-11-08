@@ -31,21 +31,22 @@ func ValidClaudeSkillName(name string) bool {
 
 // ClaudeTurnCommand contains no credentials. The CLI authenticates as the Agent account.
 type ClaudeTurnCommand struct {
-	Questions      bool                 `json:"questions,omitempty"`
-	Rewrite        *ClaudeRewriteTarget `json:"rewrite,omitempty"`
-	ResumeAt       string               `json:"-"`
-	Steer          bool                 `json:"steer,omitempty"`
-	Images         []TurnImage          `json:"images,omitempty"`
-	ForkSnapshotID string               `json:"fork_snapshot_id,omitempty"`
-	ForkSessionID  string               `json:"fork_session_id,omitempty"`
-	ResumePath     string               `json:"-"`
-	ThreadID       string               `json:"thread_id"`
-	Workspace      string               `json:"workspace"`
-	SessionID      string               `json:"session_id"`
-	Prompt         string               `json:"prompt"`
-	Model          string               `json:"model"`
-	PermissionMode string               `json:"permission_mode"`
-	Effort         string               `json:"effort,omitempty"`
+	CollaborationMCP map[string]any       `json:"-"`
+	Questions        bool                 `json:"questions,omitempty"`
+	Rewrite          *ClaudeRewriteTarget `json:"rewrite,omitempty"`
+	ResumeAt         string               `json:"-"`
+	Steer            bool                 `json:"steer,omitempty"`
+	Images           []TurnImage          `json:"images,omitempty"`
+	ForkSnapshotID   string               `json:"fork_snapshot_id,omitempty"`
+	ForkSessionID    string               `json:"fork_session_id,omitempty"`
+	ResumePath       string               `json:"-"`
+	ThreadID         string               `json:"thread_id"`
+	Workspace        string               `json:"workspace"`
+	SessionID        string               `json:"session_id"`
+	Prompt           string               `json:"prompt"`
+	Model            string               `json:"model"`
+	PermissionMode   string               `json:"permission_mode"`
+	Effort           string               `json:"effort,omitempty"`
 }
 
 type ClaudeAnswerCommand struct {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type acpMessage struct {
@@ -328,6 +329,16 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 							if goal != nil && strings.HasPrefix(p.ToolCall.ID, "mcp_"+bridge["name"].(string)+"_wio_goal_report") && strings.HasPrefix(p.ToolCall.Title, "wio_goal_report(") {
 								bridgeCall = true
 							}
+							if command.CollaborationMCP != nil {
+								for _, tool := range sessiontools.Definitions() {
+									serverName := command.CollaborationMCP["name"].(string)
+									prefix := "mcp_" + serverName + "_" + tool.Name
+									if (p.ToolCall.ID == prefix || strings.HasPrefix(p.ToolCall.ID, prefix+"__")) && (strings.HasPrefix(p.ToolCall.Title, tool.Name+"(") || p.ToolCall.Title == tool.Name+" ("+serverName+" MCP Server)") {
+										bridgeCall = true
+										break
+									}
+								}
+							}
 							if bridgeCall || (command.ApprovalMode == "yolo" && !planApproval) {
 								for _, o := range p.Options {
 									if o.Kind == "allow_once" {
@@ -392,7 +403,15 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		sessionID = fork.SessionID
 		resuming = sessionID != ""
 	}
-	params := map[string]any{"cwd": command.Workspace, "mcpServers": []any{bridge}}
+	servers := []any{bridge}
+	if command.CollaborationMCP != nil {
+		headers := []any{}
+		for key, value := range command.CollaborationMCP["headers"].(map[string]string) {
+			headers = append(headers, map[string]string{"name": key, "value": value})
+		}
+		servers = append(servers, map[string]any{"name": command.CollaborationMCP["name"], "type": "http", "url": command.CollaborationMCP["url"], "headers": headers})
+	}
+	params := map[string]any{"cwd": command.Workspace, "mcpServers": servers}
 	var sessionResult json.RawMessage
 	if sessionID == "" {
 		raw, err := call("session/new", params)

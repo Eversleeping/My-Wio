@@ -23,6 +23,15 @@ func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, reques
 		return protocol.StreamEvent{}, "", err
 	}
 	defer tx.Rollback()
+	event, op, err := s.queueGeminiSteerTx(ctx, tx, threadID, expected, requestID, prompt, images...)
+	if err != nil {
+		return event, op, err
+	}
+	return event, op, tx.Commit()
+}
+
+func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, expected, requestID, prompt string, images ...protocol.TurnImage) (protocol.StreamEvent, string, error) {
+	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET status=status WHERE id=?"), threadID); err != nil {
 		return protocol.StreamEvent{}, "", err
 	}
@@ -38,7 +47,7 @@ func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, reques
 		if json.Unmarshal([]byte(existing.Payload), &command) != nil || command.Prompt != prompt || command.OperationID != expected || !slices.Equal(command.Images, images) {
 			return protocol.StreamEvent{}, "", errors.New("steering request already has different content")
 		}
-		return protocol.StreamEvent{}, existing.ID, tx.Commit()
+		return protocol.StreamEvent{}, existing.ID, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return protocol.StreamEvent{}, "", err
@@ -99,7 +108,7 @@ func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, reques
 	if err != nil {
 		return event, "", err
 	}
-	return event, id, tx.Commit()
+	return event, id, nil
 }
 
 func (s *Store) geminiSteeringContext(ctx context.Context, tx *sqlx.Tx, thread string, cutoff int64) ([]string, error) {

@@ -2,12 +2,13 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type ClaudeThread struct {
@@ -84,27 +85,13 @@ func (s *Store) ClaudeThread(ctx context.Context, id string) (ClaudeThread, erro
 }
 
 func (s *Store) CreateClaudeThread(ctx context.Context, workspaceID, model, mode, effort string) (ClaudeThread, error) {
-	id, now := NewID(), time.Now().UTC()
+	id := NewID()
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return ClaudeThread{}, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, s.Q(`INSERT INTO claude_threads(id,workspace_id,model,permission_mode,created_at,updated_at)
- SELECT ?,w.id,?,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), id, model, mode, now, now, workspaceID)
-	if err != nil {
-		return ClaudeThread{}, err
-	}
-	if n, err := result.RowsAffected(); err != nil || n != 1 {
-		if err != nil {
-			return ClaudeThread{}, err
-		}
-		return ClaudeThread{}, sql.ErrNoRows
-	}
-	if err := s.showProjectForNewThread(ctx, tx, workspaceID); err != nil {
-		return ClaudeThread{}, err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO claude_thread_options(thread_id,effort) VALUES(?,?)"), id, effort); err != nil {
+	if err := s.createCollaborationSessionTx(ctx, tx, sessiontools.Ref{Engine: "claude", ID: id}, workspaceID, "Claude", model, mode, effort); err != nil {
 		return ClaudeThread{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -138,6 +125,15 @@ func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editI
 		return protocol.StreamEvent{}, err
 	}
 	defer tx.Rollback()
+	event, err := s.queueClaudeInputTx(ctx, tx, thread, editID, prompt, model, mode, effort, run, images...)
+	if err != nil {
+		return event, err
+	}
+	return event, tx.Commit()
+}
+
+func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread ClaudeThread, editID, prompt, model, mode, effort string, run *scheduledRun, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
+	var err error
 	// Serialize a new turn with credential changes and CLI installation.
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), thread.ServerID); err != nil {
 		return protocol.StreamEvent{}, err
@@ -209,7 +205,7 @@ func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editI
 		return protocol.StreamEvent{}, err
 	}
 	if editID != "" {
-		return protocol.StreamEvent{}, tx.Commit()
+		return protocol.StreamEvent{}, nil
 	}
 	raw, _ := json.Marshal(map[string]any{"text": prompt, "images": images, "operation_id": opID})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "claude.user.message", OccurredAt: now, Payload: raw}
@@ -219,7 +215,7 @@ func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editI
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, now, string(raw)); err != nil {
 		return event, err
 	}
-	return event, tx.Commit()
+	return event, nil
 }
 
 func (s *Store) InterruptClaudeTurn(ctx context.Context, thread ClaudeThread) error {
@@ -228,43 +224,53 @@ func (s *Store) InterruptClaudeTurn(ctx context.Context, thread ClaudeThread) er
 		return err
 	}
 	defer tx.Rollback()
-	locked, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND kind='claude.turn.start' AND status IN ('queued','delivered','running')"), thread.OperationID)
+	_, err = s.interruptClaudeTurnTx(ctx, tx, thread)
 	if err != nil {
 		return err
 	}
+	return tx.Commit()
+}
+
+func (s *Store) interruptClaudeTurnTx(ctx context.Context, tx *sqlx.Tx, thread ClaudeThread) (string, error) {
+	var err error
+	locked, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND kind='claude.turn.start' AND status IN ('queued','delivered','running')"), thread.OperationID)
+	if err != nil {
+		return "", err
+	}
 	if n, err := locked.RowsAffected(); err != nil || n != 1 {
-		return ErrThreadActive
+		return "", ErrThreadActive
 	}
 	result, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',completed_at=? WHERE id=? AND status='queued'"), time.Now().UTC(), thread.OperationID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	count, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return "", err
 	}
 	status := "interrupting"
 	if count == 1 {
 		status = "interrupted"
 		if _, err := tx.ExecContext(ctx, s.Q("UPDATE claude_scheduled_tasks SET last_run_status='cancelled',last_run_message='Cancelled before dispatch',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
-			return err
+			return "", err
 		}
 	}
 	result, err = tx.ExecContext(ctx, s.Q("UPDATE claude_threads SET status=?,updated_at=? WHERE id=? AND operation_id=? AND (status IN ('queued','running') OR (status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('delivered','running'))))"), status, time.Now().UTC(), thread.ID, thread.OperationID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if n, err := result.RowsAffected(); err != nil || n != 1 {
-		return ErrThreadActive
+		return "", ErrThreadActive
 	}
 	if count == 0 {
 		payload, _ := json.Marshal(protocol.ClaudeInterruptCommand{ThreadID: thread.ID, OperationID: thread.OperationID, RecoveryPending: thread.RecoveryPending})
 		id := NewID()
 		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,'claude.turn.interrupt',?,?,?)`), id, thread.ServerID, thread.ProjectID, thread.WorkspaceID, string(payload), "claude-interrupt:"+id, time.Now().UTC()); err != nil {
-			return err
+			return "", err
 		}
+		return id, nil
 	}
-	return tx.Commit()
+	return thread.OperationID, nil
 }
 
 func (s *Store) ConfirmClaudeStopped(ctx context.Context, threadID, operationID string) error {

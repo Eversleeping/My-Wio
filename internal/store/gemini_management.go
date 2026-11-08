@@ -42,6 +42,15 @@ func (s *Store) QueueGeminiFork(ctx context.Context, thread GeminiThread, eventI
 		return "", "", err
 	}
 	defer tx.Rollback()
+	op, target, err := s.queueGeminiForkTx(ctx, tx, thread, eventID, worktree)
+	if err != nil {
+		return op, target, err
+	}
+	return op, target, tx.Commit()
+}
+
+func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread GeminiThread, eventID string, worktree *protocol.GitWorktreeCreateCommand) (string, string, error) {
+	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), thread.ServerID); err != nil {
 		return "", "", err
 	}
@@ -52,7 +61,7 @@ func (s *Store) QueueGeminiFork(ctx context.Context, thread GeminiThread, eventI
 	if updating != 0 {
 		return "", "", ErrGeminiCredentialsBusy
 	}
-	opID, targetID := NewID(), NewID()
+	opID, targetID := NewID(), collaborationTargetID(ctx)
 	r, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET operation_id=?,status='queued' WHERE id=? AND session_id<>'' AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, thread.ID)
 	if err != nil {
 		return "", "", err
@@ -161,7 +170,7 @@ func (s *Store) QueueGeminiFork(ctx context.Context, thread GeminiThread, eventI
 	if err != nil {
 		return "", "", err
 	}
-	return opID, targetID, tx.Commit()
+	return opID, targetID, nil
 }
 
 func (s *Store) commitGeminiFork(ctx context.Context, tx *sqlx.Tx, c protocol.GeminiForkCommand, nativeID string) error {

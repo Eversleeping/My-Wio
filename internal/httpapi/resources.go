@@ -2125,20 +2125,15 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 		writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
 		return
 	}
-	if err := a.store.ClaimThreadForTurn(r.Context(), thread.ID); errors.Is(err, store.ErrThreadActive) {
+	operationID, event, err := a.store.QueueCodexTurn(r.Context(), thread, command)
+	if errors.Is(err, store.ErrThreadActive) {
 		writeError(w, http.StatusConflict, "active Codex session must finish before starting another turn")
 		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not reserve Codex session")
-		return
 	}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.turn.start", command, "codex-turn:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
-		_ = a.store.SetThreadStatus(r.Context(), thread.ID, thread.Status)
 		writeError(w, http.StatusInternalServerError, "could not queue Codex turn")
 		return
 	}
-	event, _ := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images)})})
 	a.hub.Publish(event)
 	a.gateway.Wake(thread.ServerID)
 	session := currentSession(r)

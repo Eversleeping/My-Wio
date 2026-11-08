@@ -12,6 +12,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 var ErrThreadActive = errors.New("Codex session is active")
@@ -107,11 +108,7 @@ func (s *Store) CreateThread(ctx context.Context, workspaceID, title string) (Th
 		return Thread{}, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO codex_threads(id,workspace_id,title) VALUES(?,?,?)"), id, workspaceID, title)
-	if err != nil {
-		return Thread{}, err
-	}
-	if err := s.showProjectForNewThread(ctx, tx, workspaceID); err != nil {
+	if err := s.createCollaborationSessionTx(ctx, tx, sessiontools.Ref{Engine: "codex", ID: id}, workspaceID, title, "", "on-request", ""); err != nil {
 		return Thread{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -342,9 +339,21 @@ func (s *Store) CommitGitWorktree(ctx context.Context, command protocol.GitWorkt
 	if sourceCount != 1 {
 		return sql.ErrNoRows
 	}
+	if command.LastTurnID != "" {
+		if err := ValidateThreadForkResult(protocol.ForkThreadCommand{CodexThread: command.CodexThread, LastTurnID: command.LastTurnID}, protocol.ForkThreadResult{CodexThread: result.CodexThread, LastTurnID: result.LastTurnID}); err != nil {
+			return err
+		}
+		var native string
+		if err := tx.GetContext(ctx, &native, s.Q("SELECT codex_thread_id FROM codex_threads WHERE id=?"), command.SourceThreadID); err != nil {
+			return err
+		}
+		if native != command.CodexThread || command.CutoffSequence <= 0 {
+			return errors.New("source conversation changed while forking")
+		}
+	}
 	now := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO codex_threads(id,workspace_id,codex_thread_id,title,status,last_sequence,created_at,updated_at)
-		SELECT ?,?,?,?,'idle',last_sequence,?,? FROM codex_threads WHERE id=?`), command.TargetThreadID, command.TargetWorkspaceID, result.CodexThread, command.Title, now, now, command.SourceThreadID); err != nil {
+		SELECT ?,?,?,?,'idle',CASE WHEN ?>0 THEN ? ELSE last_sequence END,?,? FROM codex_threads WHERE id=?`), command.TargetThreadID, command.TargetWorkspaceID, result.CodexThread, command.Title, command.CutoffSequence, command.CutoffSequence, now, now, command.SourceThreadID); err != nil {
 		return err
 	}
 	var events []struct {
@@ -353,7 +362,7 @@ func (s *Store) CommitGitWorktree(ctx context.Context, command protocol.GitWorkt
 		OccurredAt time.Time `db:"occurred_at"`
 		Payload    string    `db:"payload"`
 	}
-	if err := tx.SelectContext(ctx, &events, s.Q("SELECT sequence,kind,occurred_at,payload FROM events WHERE stream_id=? ORDER BY sequence"), command.SourceThreadID); err != nil {
+	if err := tx.SelectContext(ctx, &events, s.Q("SELECT sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND (?=0 OR sequence<=?) ORDER BY sequence"), command.SourceThreadID, command.CutoffSequence, command.CutoffSequence); err != nil {
 		return err
 	}
 	for _, event := range events {

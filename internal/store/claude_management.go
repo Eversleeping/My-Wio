@@ -33,6 +33,15 @@ func (s *Store) QueueClaudeFork(ctx context.Context, t ClaudeThread, w *protocol
 		return "", "", err
 	}
 	defer tx.Rollback()
+	op, target, err := s.queueClaudeForkTx(ctx, tx, t, w, eventID...)
+	if err != nil {
+		return op, target, err
+	}
+	return op, target, tx.Commit()
+}
+
+func (s *Store) queueClaudeForkTx(ctx context.Context, tx *sqlx.Tx, t ClaudeThread, w *protocol.GitWorktreeCreateCommand, eventID ...string) (string, string, error) {
+	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), t.ServerID); err != nil {
 		return "", "", err
 	}
@@ -46,7 +55,7 @@ func (s *Store) QueueClaudeFork(ctx context.Context, t ClaudeThread, w *protocol
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), t.WorkspaceID); err != nil {
 		return "", "", err
 	}
-	opID, target := NewID(), NewID()
+	opID, target := NewID(), collaborationTargetID(ctx)
 	r, err := tx.ExecContext(ctx, s.Q(`UPDATE claude_threads SET status='queued',operation_id=? WHERE id=? AND session_id=? AND session_id<>'' AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, t.ID, t.SessionID)
 	if err != nil {
 		return "", "", err
@@ -85,7 +94,7 @@ func (s *Store) QueueClaudeFork(ctx context.Context, t ClaudeThread, w *protocol
 	if err != nil {
 		return "", "", err
 	}
-	return opID, target, tx.Commit()
+	return opID, target, nil
 }
 func (s *Store) commitClaudeFork(ctx context.Context, tx *sqlx.Tx, c protocol.ClaudeForkCommand, snapshot string) error {
 	if snapshot != c.TargetThreadID || snapshot == "" {

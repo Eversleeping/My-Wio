@@ -1,3 +1,4 @@
+import { SessionCollaboration } from "../components/SessionCollaboration";
 import { ClaudeQuestion } from "../components/ClaudeQuestion";
 import { type CSSProperties, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, MoreHorizontal, Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound } from "lucide-react";
@@ -151,6 +152,7 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
     </aside>
     <div className="gemini-main">{thread ? <>
       <SessionPreviewTabs previews={previews} />
+      {thread && <SessionCollaboration key={"collaboration:"+thread.id} engine="claude" id={thread.id} workspaceID={thread.workspace_id} projectID={thread.project_id} revision={realtime} />}
       <SessionPreviewPanels previews={previews} workspaceID={thread.workspace_id} workspaceRoot={thread.path} writable realtime={realtime + tick} notify={notify} onOpenFile={openFile}>
         <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} onSchedule={() => management.schedule(thread)} onFork={eventID => management.fork(thread, eventID)} notify={notify} onNew={() => newSession(thread.workspace_id)} />
       </SessionPreviewPanels>

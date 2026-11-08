@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wio-platform/wio/internal/mcpbridge"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 const sessionIdleTimeout = 5 * time.Minute
@@ -17,17 +19,18 @@ const sessionIdleTimeout = 5 * time.Minute
 // Sessions isolates each Wio conversation in its own app-server process. The
 // shared adapter is used only for server/workspace capability queries.
 type Sessions struct {
-	lifecycle sync.RWMutex
-	mu        sync.Mutex
-	command   string
-	env       []string
-	log       *slog.Logger
-	emit      EmitFunc
-	shared    *Adapter
-	sessions  map[string]*session
-	closed    bool
-	stop      chan struct{}
-	done      chan struct{}
+	collaboration sessiontools.Transport
+	lifecycle     sync.RWMutex
+	mu            sync.Mutex
+	command       string
+	env           []string
+	log           *slog.Logger
+	emit          EmitFunc
+	shared        *Adapter
+	sessions      map[string]*session
+	closed        bool
+	stop          chan struct{}
+	done          chan struct{}
 }
 
 type session struct {
@@ -44,6 +47,13 @@ func NewSessions(command string, environment []string, log *slog.Logger, emit Em
 	}
 	go p.reapLoop()
 	return p
+}
+
+// SetCollaborationTransport is configured before any managed session starts.
+func (p *Sessions) SetCollaborationTransport(transport sessiontools.Transport) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.collaboration = transport
 }
 
 // acquire returns a session lease without holding the pool mutex during any
@@ -66,6 +76,17 @@ func (p *Sessions) acquire(threadID string) (*Adapter, func(), error) {
 			p.mu.Unlock()
 			return p.emit(event)
 		})
+		if p.collaboration != nil {
+			transport := p.collaboration
+			s.adapter.mcpStart = func(ctx context.Context) (map[string]any, func(), error) {
+				return mcpbridge.Start(ctx, func(ctx context.Context, name string, args json.RawMessage) (sessiontools.Reply, error) {
+					s.adapter.mu.Lock()
+					operation := s.adapter.toolOperationID
+					s.adapter.mu.Unlock()
+					return transport(ctx, sessiontools.Ref{Engine: "codex", ID: threadID}, operation, name, args)
+				})
+			}
+		}
 		p.sessions[threadID] = s
 	}
 	s.users++
@@ -124,14 +145,24 @@ func (p *Sessions) StartTurn(ctx context.Context, command protocol.StartTurnComm
 	if strings.TrimSpace(command.ThreadID) == "" {
 		return errors.New("Wio thread ID is required")
 	}
-	return p.withSession(command.ThreadID, func(a *Adapter) error { return a.StartTurn(ctx, command) })
+	return p.withSession(command.ThreadID, func(a *Adapter) error {
+		a.mu.Lock()
+		a.toolOperationID = command.OperationID
+		a.mu.Unlock()
+		return a.StartTurn(ctx, command)
+	})
 }
 
 func (p *Sessions) RewriteTurn(ctx context.Context, command protocol.RewriteTurnCommand) error {
 	if strings.TrimSpace(command.Start.ThreadID) == "" {
 		return errors.New("Wio thread ID is required")
 	}
-	return p.withSession(command.Start.ThreadID, func(a *Adapter) error { return a.RewriteTurn(ctx, command) })
+	return p.withSession(command.Start.ThreadID, func(a *Adapter) error {
+		a.mu.Lock()
+		a.toolOperationID = command.Start.OperationID
+		a.mu.Unlock()
+		return a.RewriteTurn(ctx, command)
+	})
 }
 
 // Interrupt targets only an existing session; without one there is no turn,
