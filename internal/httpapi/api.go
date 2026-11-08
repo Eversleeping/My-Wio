@@ -10,11 +10,11 @@ import (
 	"io/fs"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,20 +53,15 @@ type API struct {
 	gitProviders   gitprovider.Creator
 	publicURL      string
 	secureCookie   bool
+	trustedProxies TrustedProxies
 	setupMu        sync.Mutex
-	loginMu        sync.Mutex
 	bootstrapMu    sync.Mutex
-	login          map[string]*loginAttempt
-}
-
-type loginAttempt struct {
-	Failures int
-	Blocked  time.Time
+	login          *loginLimiter
 }
 
 type sessionContextKey struct{}
 
-func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool) http.Handler {
+func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool, options ...Option) http.Handler {
 	assetDir := os.Getenv("WIO_AGENT_ASSET_DIR")
 	api := &API{
 		store:          s,
@@ -84,10 +79,13 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 		gitProviders:   gitprovider.Client{},
 		publicURL:      strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		secureCookie:   strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
-		login:          make(map[string]*loginAttempt),
+		login:          newLoginLimiter(),
+	}
+	for _, option := range options {
+		option(api)
 	}
 	router := chi.NewRouter()
-	router.Use(api.recoverer, api.securityHeaders)
+	router.Use(api.resolveClientIP, api.recoverer, api.securityHeaders)
 	router.Route("/api", func(r chi.Router) {
 		r.Get("/health", api.health)
 		r.Get("/setup/status", api.setupStatus)
@@ -441,13 +439,32 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"username": input.Username, "auth_mode": authMode})
 }
 
+// dummyPasswordHash is verified when the requested account does not exist so
+// unknown usernames cost the same Argon2id work as known ones. It is a
+// well-formed encoding that no password can match in practice.
+const dummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
 func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if wait := a.loginBlocked(ip); wait > 0 {
-		w.Header().Set("Retry-After", "60")
+	// Reserve the attempt before any expensive work so parallel requests
+	// cannot all pass the check before the first failure is recorded.
+	if wait, ok := a.login.reserve(ip); !ok {
+		retryAfter := int((wait + time.Second - 1) / time.Second)
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 		writeError(w, http.StatusTooManyRequests, "too many failed sign-in attempts")
 		return
 	}
+	settled := false
+	settle := func(outcome func(string)) {
+		if !settled {
+			settled = true
+			outcome(ip)
+		}
+	}
+	defer settle(a.login.release)
 	var input struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -457,8 +474,33 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := a.store.UserByName(r.Context(), strings.TrimSpace(input.Username))
-	if err != nil {
-		a.loginFailed(ip)
+	userFound := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "could not read user")
+		return
+	}
+	if userFound {
+		if !sleepContext(r.Context(), a.login.accountDelay(user.ID)) {
+			return
+		}
+	}
+	if !a.login.acquireHash(r.Context()) {
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, "sign-in is busy, retry shortly")
+		return
+	}
+	hashHeld := true
+	releaseHash := func() {
+		if hashHeld {
+			hashHeld = false
+			a.login.releaseHash()
+		}
+	}
+	defer releaseHash()
+	if !userFound {
+		_ = security.VerifyPassword(dummyPasswordHash, input.Password)
+		releaseHash()
+		settle(a.login.fail)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -469,7 +511,9 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 	needsPassword := authMode == store.AuthModePassword || authMode == store.AuthModePasswordTOTP
 	needsCode := authMode == store.AuthModeTOTP || authMode == store.AuthModePasswordTOTP
 	if !needsPassword && !needsCode {
-		a.loginFailed(ip)
+		releaseHash()
+		settle(a.login.fail)
+		a.login.accountFailed(user.ID)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -500,12 +544,15 @@ func (a *API) loginHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	releaseHash()
 	if !passwordValid || !valid {
-		a.loginFailed(ip)
+		settle(a.login.fail)
+		a.login.accountFailed(user.ID)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	a.loginSucceeded(ip)
+	settle(a.login.succeed)
+	a.login.accountSucceeded(user.ID)
 	token, err := security.RandomToken(32)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create session")
@@ -682,37 +729,6 @@ func (a *API) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-func (a *API) loginBlocked(ip string) time.Duration {
-	a.loginMu.Lock()
-	defer a.loginMu.Unlock()
-	attempt := a.login[ip]
-	if attempt == nil || time.Now().After(attempt.Blocked) {
-		return 0
-	}
-	return time.Until(attempt.Blocked)
-}
-
-func (a *API) loginFailed(ip string) {
-	a.loginMu.Lock()
-	defer a.loginMu.Unlock()
-	attempt := a.login[ip]
-	if attempt == nil {
-		attempt = &loginAttempt{}
-		a.login[ip] = attempt
-	}
-	attempt.Failures++
-	if attempt.Failures >= 5 {
-		attempt.Blocked = time.Now().Add(5 * time.Minute)
-		attempt.Failures = 0
-	}
-}
-
-func (a *API) loginSucceeded(ip string) {
-	a.loginMu.Lock()
-	delete(a.login, ip)
-	a.loginMu.Unlock()
-}
-
 func currentSession(r *http.Request) store.Session {
 	return r.Context().Value(sessionContextKey{}).(store.Session)
 }
@@ -740,14 +756,6 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
-}
-
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	return r.RemoteAddr
 }
 
 func databaseConflict(err error) bool {

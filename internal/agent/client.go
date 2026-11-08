@@ -25,9 +25,11 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	gnet "github.com/shirou/gopsutil/v4/net"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/childprocess"
@@ -66,6 +68,11 @@ type Client struct {
 	claudeVersionPath  string
 	claudeVersion      string
 	claudeVersionUntil time.Time
+	// sentMu guards the one-slot retry buffer and the waiters for tracked
+	// messages; both are touched only by queueTracked and sendLoop.
+	sentMu      sync.Mutex
+	retry       *protocol.AgentEnvelope
+	sentWaiters map[string]chan struct{}
 }
 
 type operationExecution struct {
@@ -155,7 +162,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	} else {
 		transport = insecure.NewCredentials()
 	}
-	connection, err := grpc.NewClient(parsed.Host, grpc.WithTransportCredentials(transport), grpc.WithDefaultCallOptions(grpc.ForceCodec(protocol.Codec()), grpc.MaxCallRecvMsgSize(8<<20), grpc.MaxCallSendMsgSize(8<<20)))
+	connection, err := grpc.NewClient(parsed.Host, grpc.WithTransportCredentials(transport), grpc.WithDefaultCallOptions(grpc.ForceCodec(protocol.Codec()), grpc.MaxCallRecvMsgSize(maxAgentMessageBytes), grpc.MaxCallSendMsgSize(maxAgentMessageBytes)))
 	if err != nil {
 		return false, err
 	}
@@ -180,7 +187,17 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	_ = c.enqueueMetrics(ctx)
 	_ = c.enqueueInventory(ctx)
 	sendErrors := make(chan error, 1)
-	go c.sendLoop(streamContext, stream, sendErrors)
+	sendDone := make(chan struct{})
+	go func() {
+		defer close(sendDone)
+		c.sendLoop(streamContext, stream, sendErrors)
+	}()
+	// The next connection's sendLoop must not start before this one has parked
+	// its failed message in the retry slot, or that message would be reordered.
+	defer func() {
+		cancel()
+		<-sendDone
+	}()
 	go c.periodic(streamContext)
 	connected := false
 	for {
@@ -208,6 +225,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		if command.Kind == protocol.ControlKindKeepalive && command.OperationID == "" {
 			go c.reconcileGeminiOperations(command.PayloadJSON)
 			go c.reconcileClaudeOperations(command.PayloadJSON)
+			go c.reconcileOperations(command.PayloadJSON)
 			continue
 		}
 		go c.handleOperation(ctx, command)
@@ -216,22 +234,30 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 
 func (c *Client) sendLoop(ctx context.Context, stream protocol.AgentServiceConnectClient, errors chan<- error) {
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case envelope := <-c.outbound:
-			if err := stream.Send(envelope); err != nil {
-				select {
-				case c.outbound <- envelope:
-				default:
-				}
-				select {
-				case errors <- err:
-				default:
-				}
+		envelope := c.takeRetry()
+		if envelope == nil {
+			select {
+			case <-ctx.Done():
 				return
+			case envelope = <-c.outbound:
 			}
 		}
+		if err := stream.Send(envelope); err != nil {
+			if status.Code(err) == codes.ResourceExhausted {
+				// The message itself is too large for the stream. Retrying the same
+				// bytes would kill every future connection, so shrink or drop it.
+				envelope = c.replaceOversized(envelope)
+			}
+			if envelope != nil {
+				c.setRetry(envelope)
+			}
+			select {
+			case errors <- err:
+			default:
+			}
+			return
+		}
+		c.markSent(envelope)
 	}
 }
 
@@ -287,6 +313,13 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		c.seenMu.Unlock()
 		select {
 		case <-done:
+		default:
+			// The control plane re-sends a delivered operation only when its start
+			// notice never arrived; repeat it so the re-sends stop.
+			_ = c.queue("operation_started", protocol.OperationStarted{OperationID: envelope.OperationID}, true)
+		}
+		select {
+		case <-done:
 			c.seenMu.Lock()
 			result := execution.result
 			c.seenMu.Unlock()
@@ -308,6 +341,9 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	defer cancel()
 	execution.cancel = cancel
 	c.seen[envelope.OperationID] = execution
+	// Checked under seenMu, like stageAgentUpdate's scan of active executions,
+	// so an operation cannot slip in between staging and exec and be wiped.
+	blockedByUpdate := c.updatePending && envelope.Kind != "agent.update" && !protocol.SafeDuringAgentRestart(envelope.Kind)
 	c.seenMu.Unlock()
 	if err := c.queue("operation_started", protocol.OperationStarted{OperationID: envelope.OperationID}, true); err != nil {
 		c.log.Warn("could not queue operation start", "operation_id", envelope.OperationID, "error", err)
@@ -316,7 +352,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	var resultData json.RawMessage
 	refreshInventory := false
 	var err error
-	if (envelope.Kind == "claude.thread.fork" || envelope.Kind == "gemini.thread.fork" || envelope.Kind == "git.worktree.create") && c.agentUpdatePending() {
+	if blockedByUpdate {
 		err = errors.New("Agent update is in progress; retry the task after it reconnects")
 	} else if envelope.Kind == "operation.interrupt" {
 		var command protocol.OperationInterruptCommand
@@ -656,7 +692,10 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		message = err.Error()
 		c.log.Warn("operation failed", "operation_id", envelope.OperationID, "kind", envelope.Kind, "error", err)
 	}
-	result := protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192), Data: resultData}
+	result := limitOperationResult(protocol.OperationResult{OperationID: envelope.OperationID, Status: status, Message: truncate(message, 8192), Data: resultData})
+	if result.Status != status {
+		c.log.Warn("operation result exceeds the Agent message limit", "operation_id", envelope.OperationID, "kind", envelope.Kind, "bytes", len(resultData))
+	}
 	resultSaved := c.config.StateDir == ""
 	if err := c.saveOperationResult(result); err != nil {
 		c.log.Warn("could not persist operation result", "operation_id", envelope.OperationID, "error", err)
@@ -670,14 +709,25 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	close(execution.done)
 	c.pruneCompletedOperations(execution.completedAt)
 	c.seenMu.Unlock()
-	if queueErr := c.queue("operation_result", result, true); queueErr != nil {
+	var resultSent <-chan struct{}
+	var queueErr error
+	if restartPath != "" {
+		resultSent, queueErr = c.queueTracked("operation_result", result)
+	} else {
+		queueErr = c.queue("operation_result", result, true)
+	}
+	if queueErr != nil {
 		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
 	}
 	if refreshInventory {
 		go c.refreshInventory()
 	}
 	if err == nil && restartPath != "" {
-		time.Sleep(750 * time.Millisecond)
+		// The receipt is already persisted, so a result lost here is replayed by
+		// the next process' reconcile; waiting is still the common fast path.
+		if !waitForSent(resultSent, agentUpdateFlushTimeout) {
+			c.log.Warn("Agent update result was not sent before restart; it will be replayed after reconnect", "operation_id", envelope.OperationID)
+		}
 		if restartErr := activateStagedUpdate(c.config.StateDir, restartPath); restartErr != nil {
 			c.releaseAgentUpdate()
 			c.log.Error("could not restart into Agent update", "operation_id", envelope.OperationID, "error", restartErr)
@@ -1279,20 +1329,7 @@ func (c *Client) queue(kind string, payload any, important bool) error {
 	if err != nil {
 		return err
 	}
-	envelope := &protocol.AgentEnvelope{MessageID: uuid.NewString(), ServerID: c.config.ServerID, Kind: kind, OccurredAtUnixMS: time.Now().UnixMilli(), PayloadJSON: raw}
-	if important {
-		select {
-		case c.outbound <- envelope:
-			return nil
-		case <-time.After(5 * time.Second):
-			return errors.New("agent outbound queue is full")
-		}
-	}
-	select {
-	case c.outbound <- envelope:
-	default:
-	}
-	return nil
+	return c.enqueue(c.newEnvelope(kind, raw), important)
 }
 
 func commandVersion(ctx context.Context, command string) string {

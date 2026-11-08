@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/wio-platform/wio/internal/childprocess"
 )
 
 const (
@@ -156,14 +154,14 @@ func Create(ctx context.Context, options CreateOptions, managedRoots []string) (
 		return CreateResult{}, fmt.Errorf("verify repository path: %w", err)
 	}
 	target = resolvedTarget
-	if output, commandErr := runGit(ctx, target, "init", "-b", branch); commandErr != nil {
+	if output, commandErr := runGitModify(ctx, target, "init", "-b", branch); commandErr != nil {
 		return CreateResult{}, fmt.Errorf("initialize repository: %s", cleanGitError(output, commandErr))
 	}
-	if output, commandErr := runGit(ctx, target, "config", "--local", "wio.projectId", projectID); commandErr != nil {
+	if output, commandErr := runGitModify(ctx, target, "config", "--local", "wio.projectId", projectID); commandErr != nil {
 		return CreateResult{}, fmt.Errorf("mark repository project: %s", cleanGitError(output, commandErr))
 	}
 	if remoteURL != "" {
-		if output, commandErr := runGit(ctx, target, "remote", "add", "--", "origin", remoteURL); commandErr != nil {
+		if output, commandErr := runGitModify(ctx, target, "remote", "add", "--", "origin", remoteURL); commandErr != nil {
 			return CreateResult{}, fmt.Errorf("add origin remote: %s", cleanGitError(output, commandErr))
 		}
 	}
@@ -212,7 +210,7 @@ func recoverCreatedRepository(ctx context.Context, options CreateOptions, branch
 	}
 	if remoteURL != "" {
 		if existingRemote == "" {
-			if output, commandErr := runGit(ctx, repositoryPath, "remote", "add", "--", "origin", remoteURL); commandErr != nil {
+			if output, commandErr := runGitModify(ctx, repositoryPath, "remote", "add", "--", "origin", remoteURL); commandErr != nil {
 				return CreateResult{}, fmt.Errorf("resume origin remote: %s", cleanGitError(output, commandErr))
 			}
 		} else if existingRemote != remoteURL {
@@ -251,7 +249,7 @@ func commitREADME(ctx context.Context, repositoryPath string, options CreateOpti
 	if err := os.WriteFile(filepath.Join(repositoryPath, "README.md"), []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write README: %w", err)
 	}
-	if output, commandErr := runGit(ctx, repositoryPath, "add", "--", "README.md"); commandErr != nil {
+	if output, commandErr := runGitModify(ctx, repositoryPath, "--literal-pathspecs", "add", "--", "README.md"); commandErr != nil {
 		return fmt.Errorf("stage README: %s", cleanGitError(output, commandErr))
 	}
 	message := strings.TrimSpace(options.CommitMessage)
@@ -265,7 +263,7 @@ func commitREADME(ctx context.Context, repositoryPath string, options CreateOpti
 	if email := strings.TrimSpace(options.AuthorEmail); email != "" {
 		args = append([]string{"-c", "user.email=" + email}, args...)
 	}
-	if output, commandErr := runGit(ctx, repositoryPath, args...); commandErr != nil {
+	if output, commandErr := runGitModify(ctx, repositoryPath, args...); commandErr != nil {
 		return fmt.Errorf("commit README: %s", cleanGitError(output, commandErr))
 	}
 	return nil
@@ -820,21 +818,6 @@ func splitLines(output []byte) []string {
 		}
 	}
 	return result
-}
-
-func runGit(ctx context.Context, directory string, args ...string) ([]byte, error) {
-	commandArgs := gitCommandArguments(directory, args...)
-	command := childprocess.CommandContext(ctx, "git", commandArgs...)
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
-	return childprocess.CombinedOutput(command)
-}
-
-func gitCommandArguments(directory string, args ...string) []string {
-	if directory == "" {
-		return append([]string(nil), args...)
-	}
-	commandArgs := []string{"-c", "safe.directory=" + directory, "-C", directory}
-	return append(commandArgs, args...)
 }
 
 func verifyEmptyRemote(ctx context.Context, remoteURL string) error {

@@ -142,3 +142,122 @@ func writeGitChangeFile(t *testing.T, root, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+// Paths are always literal: a file named like a glob or pathspec magic must
+// never select other files (discarding an untracked "*" used to delete every
+// untracked file).
+func TestChangeOperationsTreatPathsLiterally(t *testing.T) {
+	requireGit(t)
+	special := []string{"*", "?", "[ab]", ":(glob)x"}
+	victims := []string{"a", "b", "x", "z"}
+	ctx := context.Background()
+
+	t.Run("discard untracked", func(t *testing.T) {
+		root := t.TempDir()
+		repository := literalPathRepository(t, root, nil)
+		for _, name := range append(append([]string(nil), special...), victims...) {
+			writeGitChangeFile(t, repository, name, "untracked\n")
+		}
+		remaining := append(append([]string(nil), special...), victims...)
+		for _, name := range special {
+			if err := DiscardUnstaged(ctx, repository, []string{name}, false, []string{root}); err != nil {
+				t.Fatalf("discard %q: %v", name, err)
+			}
+			remaining = remaining[1:]
+			if _, err := os.Lstat(filepath.Join(repository, name)); !os.IsNotExist(err) {
+				t.Fatalf("%q was not removed: %v", name, err)
+			}
+			for _, other := range remaining {
+				if _, err := os.Lstat(filepath.Join(repository, other)); err != nil {
+					t.Fatalf("discarding %q also removed %q: %v", name, other, err)
+				}
+			}
+		}
+	})
+
+	t.Run("stage unstage and restore tracked", func(t *testing.T) {
+		root := t.TempDir()
+		all := append(append([]string(nil), special...), victims...)
+		repository := literalPathRepository(t, root, all)
+		for _, name := range all {
+			writeGitChangeFile(t, repository, name, "changed\n")
+		}
+		for _, name := range special {
+			if err := Stage(ctx, repository, []string{name}, false, []string{root}); err != nil {
+				t.Fatalf("stage %q: %v", name, err)
+			}
+			changes := changesByPath(t, repository, root)
+			for _, other := range all {
+				if staged := changes[other].Staged; staged != (other == name) {
+					t.Fatalf("after staging %q, %q staged=%v", name, other, staged)
+				}
+			}
+			if err := Unstage(ctx, repository, []string{name}, false, []string{root}); err != nil {
+				t.Fatalf("unstage %q: %v", name, err)
+			}
+			for path, change := range changesByPath(t, repository, root) {
+				if change.Staged {
+					t.Fatalf("after unstaging %q, %q is still staged", name, path)
+				}
+			}
+		}
+		restored := map[string]bool{}
+		for _, name := range special {
+			if err := DiscardUnstaged(ctx, repository, []string{name}, false, []string{root}); err != nil {
+				t.Fatalf("discard %q: %v", name, err)
+			}
+			restored[name] = true
+			for _, other := range all {
+				content, err := os.ReadFile(filepath.Join(repository, other))
+				want := "changed\n"
+				if restored[other] {
+					want = "base\n"
+				}
+				if err != nil || string(content) != want {
+					t.Fatalf("after discarding %q, %q = %q (%v), want %q", name, other, content, err, want)
+				}
+			}
+		}
+	})
+
+	t.Run("unstage before initial commit", func(t *testing.T) {
+		root := t.TempDir()
+		repository := filepath.Join(root, "repo")
+		if err := os.Mkdir(repository, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runWriteGit(t, repository, "init", "-q", "-b", "main")
+		for _, name := range append(append([]string(nil), special...), victims...) {
+			writeGitChangeFile(t, repository, name, "new\n")
+		}
+		if err := Stage(ctx, repository, nil, true, []string{root}); err != nil {
+			t.Fatal(err)
+		}
+		if err := Unstage(ctx, repository, []string{"*"}, false, []string{root}); err != nil {
+			t.Fatal(err)
+		}
+		for path, change := range changesByPath(t, repository, root) {
+			if change.Staged == (path == "*") {
+				t.Fatalf("unstaging \"*\" before the first commit affected %q: %#v", path, change)
+			}
+		}
+	})
+}
+
+func literalPathRepository(t *testing.T, root string, tracked []string) string {
+	t.Helper()
+	repository := filepath.Join(root, "repo")
+	if err := os.Mkdir(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runWriteGit(t, repository, "init", "-q", "-b", "main")
+	runWriteGit(t, repository, "config", "user.name", "Wio Test")
+	runWriteGit(t, repository, "config", "user.email", "wio@example.com")
+	writeGitChangeFile(t, repository, "base.txt", "base\n")
+	for _, name := range tracked {
+		writeGitChangeFile(t, repository, name, "base\n")
+	}
+	runWriteGit(t, repository, "add", ".")
+	runWriteGit(t, repository, "commit", "-q", "-m", "base")
+	return repository
+}

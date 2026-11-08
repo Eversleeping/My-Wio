@@ -43,7 +43,7 @@ func CloneWorkspace(ctx context.Context, options CloneWorkspaceOptions, managedR
 	if err != nil {
 		return CloneWorkspaceResult{}, fmt.Errorf("invalid clone path: %w", err)
 	}
-	output, err := runGit(ctx, "", "clone", "--branch", options.Branch, "--single-branch", "--", options.RemoteURL, target)
+	output, err := runGitModify(ctx, "", "clone", "--branch", options.Branch, "--single-branch", "--", options.RemoteURL, target)
 	if err != nil {
 		return CloneWorkspaceResult{}, fmt.Errorf("clone workspace: %s", cleanGitError(output, err))
 	}
@@ -64,7 +64,7 @@ func CloneWorkspace(ctx context.Context, options CloneWorkspaceOptions, managedR
 	if status.Dirty || status.Detached || status.Unborn || status.Branch != options.Branch || status.Head != options.ExpectedHead {
 		return CloneWorkspaceResult{}, errors.New("cloned workspace does not match the expected branch and commit")
 	}
-	if output, commandErr := runGit(ctx, repository, "config", "--local", "wio.projectId", options.ProjectID); commandErr != nil {
+	if output, commandErr := runGitModify(ctx, repository, "config", "--local", "wio.projectId", options.ProjectID); commandErr != nil {
 		return CloneWorkspaceResult{}, fmt.Errorf("mark cloned workspace project: %s", cleanGitError(output, commandErr))
 	}
 	complete = true
@@ -90,7 +90,7 @@ func MoveWorkspace(ctx context.Context, sourcePath, targetPath string, managedRo
 			return "", fmt.Errorf("resolve worktree common directory: %s", cleanGitError(commonOutput, commonErr))
 		}
 		owner := filepath.Dir(strings.TrimSpace(string(commonOutput)))
-		output, moveErr := runGit(ctx, owner, "worktree", "move", source, target)
+		output, moveErr := runGitModify(ctx, owner, "worktree", "move", source, target)
 		if moveErr != nil {
 			return "", fmt.Errorf("move linked worktree: %s", cleanGitError(output, moveErr))
 		}
@@ -175,7 +175,7 @@ func DeleteWorkspace(ctx context.Context, workspacePath string, force bool, mana
 			return fmt.Errorf("resolve worktree common directory: %s", cleanGitError(commonOutput, commonErr))
 		}
 		owner := filepath.Dir(strings.TrimSpace(string(commonOutput)))
-		output, removeErr := runGit(ctx, owner, args...)
+		output, removeErr := runGitModify(ctx, owner, args...)
 		if removeErr != nil {
 			return fmt.Errorf("remove linked worktree: %s", cleanGitError(output, removeErr))
 		}

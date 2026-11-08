@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -35,17 +36,12 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 		c.seenMu.Unlock()
 		return "", errors.New("an Agent update is already in progress")
 	}
-	for _, execution := range c.seen {
-		if execution.kind != "gemini.turn.start" && execution.kind != "gemini.turn.rewrite" && execution.kind != "gemini.thread.fork" && execution.kind != "claude.turn.start" && execution.kind != "git.worktree.create" && execution.kind != "gemini.skills.manage" {
-			continue
-		}
-		select {
-		case <-execution.done:
-		default:
-			c.seenMu.Unlock()
-			return "", errors.New("finish or interrupt active Gemini or Claude tasks before updating the Agent")
-		}
+	if err := c.agentUpdateBlocker(); err != nil {
+		c.seenMu.Unlock()
+		return "", err
 	}
+	// handleOperation refuses non-restart-safe work once this is set, so the
+	// scan above stays valid until exec.
 	c.updatePending = true
 	c.seenMu.Unlock()
 	defer func() {
@@ -99,6 +95,50 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 		return "", err
 	}
 	return targetPath, nil
+}
+
+// Called under seenMu. syscall.Exec wipes every goroutine without sending its
+// result, so any active execution that is not restart-safe blocks the update.
+// The running agent.update itself is exempt; updatePending serializes those.
+func (c *Client) agentUpdateBlocker() error {
+	for _, execution := range c.seen {
+		if execution.kind == "agent.update" || protocol.SafeDuringAgentRestart(execution.kind) {
+			continue
+		}
+		select {
+		case <-execution.done:
+			continue
+		default:
+		}
+		switch execution.kind {
+		case "gemini.turn.start", "gemini.turn.rewrite", "gemini.thread.fork", "claude.turn.start", "claude.thread.fork", "git.worktree.create", "gemini.skills.manage":
+			return errors.New("finish or interrupt active Gemini or Claude tasks before updating the Agent")
+		}
+		return fmt.Errorf("finish active operations before updating the Agent (%s is still running)", execution.kind)
+	}
+	return nil
+}
+
+const (
+	agentUpdateFlushTimeout = 10 * time.Second
+	// Stream.Send returns once gRPC has queued the frame; give its writer a
+	// moment to put the bytes on the wire before the process image is replaced.
+	agentUpdateFlushGrace = 250 * time.Millisecond
+)
+
+func waitForSent(sent <-chan struct{}, timeout time.Duration) bool {
+	if sent == nil {
+		return false
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-sent:
+		time.Sleep(agentUpdateFlushGrace)
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func (c *Client) agentUpdatePending() bool {

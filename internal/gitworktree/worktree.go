@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/gitrepository"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -52,7 +52,7 @@ func Create(ctx context.Context, command protocol.GitWorktreeCreateCommand, root
 	if base == "" {
 		base = "HEAD"
 	}
-	output, err := git(ctx, source, "worktree", "add", "-b", branch, "--", target, base)
+	output, err := gitModify(ctx, source, "worktree", "add", "-b", branch, "--", target, base)
 	if err != nil {
 		return protocol.GitWorktreeCreateResult{}, fmt.Errorf("create worktree: %s", cleanGitError(output, err))
 	}
@@ -73,12 +73,12 @@ func Remove(ctx context.Context, source, target, branch string, roots []string) 
 	if err != nil {
 		return err
 	}
-	output, err := git(ctx, source, "worktree", "remove", "--force", "--", target)
+	output, err := gitModify(ctx, source, "worktree", "remove", "--force", "--", target)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove worktree: %s", cleanGitError(output, err))
 	}
 	if branch != "" {
-		output, err = git(ctx, source, "branch", "-D", "--", branch)
+		output, err = gitModify(ctx, source, "branch", "-D", "--", branch)
 		if err != nil {
 			return fmt.Errorf("remove worktree branch: %s", cleanGitError(output, err))
 		}
@@ -126,9 +126,16 @@ func allowedPath(path string, roots []string, mustExist bool) (string, error) {
 	return "", errors.New("path is outside configured roots")
 }
 
+// git runs a read-only Git command with repository-configured programs
+// disabled.
 func git(ctx context.Context, directory string, args ...string) ([]byte, error) {
-	commandArgs := append([]string{"-C", directory}, args...)
-	return childprocess.CombinedOutput(childprocess.CommandContext(ctx, "git", commandArgs...))
+	return gitrepository.RunInspect(ctx, directory, args...)
+}
+
+// gitModify runs a Git command that changes the repository. The repository's
+// hooks and filters only apply when the agent user owns it.
+func gitModify(ctx context.Context, directory string, args ...string) ([]byte, error) {
+	return gitrepository.RunModify(ctx, directory, args...)
 }
 
 func cleanGitError(output []byte, err error) string {

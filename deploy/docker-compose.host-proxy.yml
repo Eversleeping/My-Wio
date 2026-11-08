@@ -1,5 +1,8 @@
 services:
   controlplane:
+    # Keep the port on loopback: WIO_TRUSTED_PROXIES (inherited from
+    # docker-compose.yml) trusts the Docker gateway address that the host Caddy
+    # connections arrive from, so the port must not be reachable by others.
     ports:
       - "127.0.0.1:${WIO_HOST_PORT:-18080}:8080"
     volumes:

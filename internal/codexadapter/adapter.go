@@ -47,6 +47,18 @@ type turnState struct {
 	CodexThread string
 	TurnID      string
 	Active      bool
+	// Starting is set while turn/start is in flight and its response has not
+	// been applied yet. Terminal notifications for the new turn can be read
+	// before the requesting goroutine retakes the lock; they are recorded here
+	// and their events are deferred so that turn.accepted is always published
+	// before the turn's terminal event and the completed turn is never
+	// resurrected as Active.
+	Starting bool
+	// FinishedTurnID is the most recent turn known to be over. Duplicate
+	// terminal notifications for it must not end a newer turn.
+	FinishedTurnID        string
+	finishedWhileStarting bool
+	deferred              []protocol.StreamEvent
 }
 
 type approvalRequest struct {
@@ -680,16 +692,19 @@ func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartT
 		return errors.New("Codex session already has an active turn")
 	}
 	a.threads[codexThread] = command.ThreadID
-	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, Active: true}
+	previous := a.turns[command.ThreadID]
+	finished := previous.FinishedTurnID
+	if previous.TurnID != "" {
+		// The previous turn is not active, so it is over even if its terminal
+		// notification has not been seen (yet).
+		finished = previous.TurnID
+	}
+	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, Active: true, Starting: true, FinishedTurnID: finished}
 	a.mu.Unlock()
 	params := turnStartParams(command, codexThread)
 	result, err := request(ctx, "turn/start", params)
 	if err != nil {
-		a.mu.Lock()
-		state := a.turns[command.ThreadID]
-		state.Active = false
-		a.turns[command.ThreadID] = state
-		a.mu.Unlock()
+		a.abortStartingTurn(command.ThreadID)
 		return err
 	}
 	var response struct {
@@ -698,23 +713,35 @@ func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartT
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(result, &response); err != nil {
-		a.mu.Lock()
-		state := a.turns[command.ThreadID]
-		state.Active = false
-		a.turns[command.ThreadID] = state
-		a.mu.Unlock()
+		a.abortStartingTurn(command.ThreadID)
 		return err
 	}
 	if response.Turn.ID == "" {
-		a.mu.Lock()
-		state := a.turns[command.ThreadID]
-		state.Active = false
-		a.turns[command.ThreadID] = state
-		a.mu.Unlock()
+		a.abortStartingTurn(command.ThreadID)
 		return errors.New("turn/start returned no turn id")
 	}
 	a.mu.Lock()
-	a.turns[command.ThreadID] = turnState{CodexThread: codexThread, TurnID: response.Turn.ID, Active: true}
+	state, exists := a.turns[command.ThreadID]
+	if !exists || !state.Starting {
+		// The app-server was reset after answering; the reset already
+		// reported the turn as failed, so do not mark it running again.
+		a.mu.Unlock()
+		return errors.New("Codex app-server restarted before the turn was accepted")
+	}
+	deferred := state.deferred
+	// Only a terminal notification for this turn (or one without a turn id,
+	// which can only belong to the turn being started) ends it.
+	completed := state.finishedWhileStarting && (state.FinishedTurnID == "" || state.FinishedTurnID == response.Turn.ID)
+	state.CodexThread = codexThread
+	state.TurnID = response.Turn.ID
+	state.Active = !completed
+	if completed {
+		state.FinishedTurnID = response.Turn.ID
+	}
+	state.Starting = false
+	state.finishedWhileStarting = false
+	state.deferred = nil
+	a.turns[command.ThreadID] = state
 	if command.CodexThread != "" && command.CodexThread != codexThread {
 		delete(a.threads, command.CodexThread)
 	}
@@ -723,7 +750,33 @@ func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartT
 	for key, value := range acceptedMetadata {
 		accepted[key] = value
 	}
-	return a.emitEvent(command.ThreadID, "turn.accepted", accepted)
+	// turn.accepted marks the thread running on the control plane, so any
+	// terminal event that raced ahead of the response is published after it.
+	err = a.emitEvent(command.ThreadID, "turn.accepted", accepted)
+	for _, event := range deferred {
+		_ = a.emit(event)
+	}
+	return err
+}
+
+// abortStartingTurn clears the pending state created by startPreparedTurn
+// when turn/start fails, publishing any terminal events that were deferred.
+func (a *Adapter) abortStartingTurn(threadID string) {
+	a.mu.Lock()
+	state, exists := a.turns[threadID]
+	var deferred []protocol.StreamEvent
+	if exists && state.Starting {
+		deferred = state.deferred
+		state.Active = false
+		state.Starting = false
+		state.finishedWhileStarting = false
+		state.deferred = nil
+		a.turns[threadID] = state
+	}
+	a.mu.Unlock()
+	for _, event := range deferred {
+		_ = a.emit(event)
+	}
 }
 
 func (a *Adapter) prepareCodexThread(ctx context.Context, command protocol.StartTurnCommand, request requestFunc) (string, error) {
@@ -1261,13 +1314,31 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 		state.Active = true
 		a.turns[wioThread] = state
 	}
+	deferred := false
 	if wioThread != "" && terminalTurnNotification(message.Method) {
 		state := a.turns[wioThread]
-		if turnID != "" && state.TurnID != "" && state.TurnID != turnID {
+		switch {
+		case turnID != "" && state.TurnID != "" && state.TurnID != turnID:
 			ignore = true
-		} else {
-			state.Active = false
+		case state.Starting && turnID != "" && turnID == state.FinishedTurnID:
+			// A duplicate for the previous turn must not end the turn that
+			// is being started; publish it without touching the state.
+		case state.Starting:
+			// turn/start has not been applied yet: remember that the turn
+			// ended and publish the event after turn.accepted.
+			state.finishedWhileStarting = true
+			state.FinishedTurnID = turnID
+			state.deferred = append(state.deferred, notificationEvent(message, wioThread, codexThread, turnID))
 			a.turns[wioThread] = state
+			deferred = true
+		default:
+			state.Active = false
+			if turnID != "" {
+				state.FinishedTurnID = turnID
+			}
+			a.turns[wioThread] = state
+		}
+		if !ignore {
 			for id, request := range a.approve {
 				if request.ThreadID == wioThread {
 					delete(a.approve, id)
@@ -1276,12 +1347,16 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 		}
 	}
 	a.mu.Unlock()
-	if wioThread == "" || ignore {
+	if wioThread == "" || ignore || deferred {
 		return
 	}
 	if !persistNotification(message.Method) {
 		return
 	}
+	_ = a.emit(notificationEvent(message, wioThread, codexThread, turnID))
+}
+
+func notificationEvent(message rpcMessage, wioThread, codexThread, turnID string) protocol.StreamEvent {
 	kind := "codex." + strings.ReplaceAll(message.Method, "/", ".")
 	eventID := ""
 	if message.Method == "item/completed" && turnID != "" {
@@ -1297,7 +1372,7 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 			eventID = uuid.NewSHA1(uuid.NameSpaceOID, identity).String()
 		}
 	}
-	_ = a.emit(protocol.StreamEvent{EventID: eventID, StreamID: wioThread, Kind: kind, OccurredAt: time.Now().UTC(), Payload: append(json.RawMessage(nil), message.Params...)})
+	return protocol.StreamEvent{EventID: eventID, StreamID: wioThread, Kind: kind, OccurredAt: time.Now().UTC(), Payload: append(json.RawMessage(nil), message.Params...)}
 }
 
 func persistNotification(method string) bool {
@@ -1323,7 +1398,7 @@ func (a *Adapter) emitEvent(streamID, kind string, payload any) error {
 
 func (a *Adapter) reset(reason error) {
 	a.mu.Lock()
-	failed := a.activeTurnsLocked()
+	failed, deferred := a.activeTurnsLocked()
 	a.process = nil
 	a.stdin = nil
 	a.cancel = nil
@@ -1335,6 +1410,9 @@ func (a *Adapter) reset(reason error) {
 	a.threads = make(map[string]string)
 	a.turns = make(map[string]turnState)
 	a.mu.Unlock()
+	for _, event := range deferred {
+		_ = a.emit(event)
+	}
 	a.emitDisconnectedTurns(failed, reason)
 	if reason != nil {
 		a.log.Debug("Codex adapter reset", "reason", reason)
@@ -1347,7 +1425,7 @@ func (a *Adapter) resetProcess(process *exec.Cmd, reason error) {
 		a.mu.Unlock()
 		return
 	}
-	failed := a.activeTurnsLocked()
+	failed, deferred := a.activeTurnsLocked()
 	a.process = nil
 	a.stdin = nil
 	a.cancel = nil
@@ -1359,20 +1437,27 @@ func (a *Adapter) resetProcess(process *exec.Cmd, reason error) {
 	a.threads = make(map[string]string)
 	a.turns = make(map[string]turnState)
 	a.mu.Unlock()
+	for _, event := range deferred {
+		_ = a.emit(event)
+	}
 	a.emitDisconnectedTurns(failed, reason)
 	if reason != nil {
 		a.log.Debug("Codex adapter reset", "reason", reason)
 	}
 }
 
-func (a *Adapter) activeTurnsLocked() map[string]turnState {
+// activeTurnsLocked returns turns that must be reported as failed on reset and
+// the terminal events deferred by starting turns, which still need publishing.
+func (a *Adapter) activeTurnsLocked() (map[string]turnState, []protocol.StreamEvent) {
 	active := make(map[string]turnState)
+	var deferred []protocol.StreamEvent
 	for threadID, state := range a.turns {
-		if state.Active {
+		deferred = append(deferred, state.deferred...)
+		if state.Active && !state.finishedWhileStarting {
 			active[threadID] = state
 		}
 	}
-	return active
+	return active, deferred
 }
 
 func (a *Adapter) emitDisconnectedTurns(turns map[string]turnState, reason error) {

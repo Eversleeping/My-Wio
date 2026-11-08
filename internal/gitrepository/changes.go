@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/wio-platform/wio/internal/childprocess"
 )
 
 const MaxWorkspaceDiffBytes int64 = 1024 * 1024
@@ -125,7 +126,7 @@ func ReadWorkspaceDiff(ctx context.Context, repositoryPath, relativePath, oldPat
 	if _, headErr := runGit(ctx, repositoryPath, "rev-parse", "--verify", "HEAD"); headErr != nil && selected.Status == "added" {
 		return newFileDiff(repositoryPath, relativePath, limit)
 	}
-	args := []string{"--literal-pathspecs", "diff", "--no-ext-diff", "--no-color", "--find-renames", "--unified=3", "HEAD", "--"}
+	args := []string{"--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--unified=3", "HEAD", "--"}
 	if oldPath != "" {
 		args = append(args, filepath.FromSlash(oldPath))
 	}
@@ -224,39 +225,60 @@ func newFileDiff(repositoryPath, relativePath string, limit int64) (WorkspaceDif
 	return WorkspaceDiff{Path: relativePath, Content: content, Additions: len(lines), Truncated: truncated}, nil
 }
 
+// runGitOutputLimited runs a read-only Git command like runGit but keeps at
+// most limit bytes of standard output. When the output is larger the command
+// is stopped and the truncated output is returned.
 func runGitOutputLimited(ctx context.Context, directory string, limit int64, args ...string) ([]byte, bool, error) {
-	commandArgs := append([]string{"-C", directory}, args...)
-	command := exec.CommandContext(ctx, "git", commandArgs...)
-	stdout, err := command.StdoutPipe()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	command, err := gitCommand(ctx, directory, gitInspect, args...)
 	if err != nil {
 		return nil, false, err
 	}
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
+	stderr := &limitedBuffer{limit: 64 * 1024}
+	command.Stderr = stderr
+	stream, err := childprocess.StartStream(command)
+	if err != nil {
 		return nil, false, err
 	}
-	output, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	output, readErr := io.ReadAll(io.LimitReader(stream, limit+1))
 	truncated := int64(len(output)) > limit
-	if truncated {
-		output = output[:limit]
-		_ = command.Process.Kill()
+	if truncated || readErr != nil {
+		cancel()
 	}
-	waitErr := command.Wait()
+	waitErr := stream.Wait()
 	if readErr != nil {
 		return nil, false, readErr
 	}
 	if truncated {
-		return output, true, nil
+		return output[:limit], true, nil
 	}
 	if waitErr != nil {
-		message := strings.TrimSpace(stderr.String())
+		message := strings.TrimSpace(stderr.buffer.String())
 		if message == "" {
 			message = waitErr.Error()
 		}
 		return nil, false, errors.New(message)
 	}
 	return output, false, nil
+}
+
+// limitedBuffer keeps the first limit bytes written to it and discards the
+// rest, so a noisy command cannot grow memory without bound.
+type limitedBuffer struct {
+	buffer bytes.Buffer
+	limit  int
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if remaining := b.limit - b.buffer.Len(); remaining > 0 {
+		if len(p) > remaining {
+			b.buffer.Write(p[:remaining])
+		} else {
+			b.buffer.Write(p)
+		}
+	}
+	return len(p), nil
 }
 
 func workspaceDiffStats(content string) (additions, deletions int) {

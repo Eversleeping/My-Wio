@@ -3,9 +3,12 @@ package protocol
 const GeminiOwnershipLostMessage = "Agent no longer owns this Gemini task; it may have restarted. Verify the old CLI process before recovering the session"
 
 // GeminiKeepalive requests a status check without replaying a turn.
+// ReconcileOperationIDs lists other operations whose result is overdue; old
+// Agents ignore the field, so the control plane never treats silence as loss.
 type GeminiKeepalive struct {
-	OperationIDs       []string `json:"gemini_operation_ids,omitempty"`
-	ClaudeOperationIDs []string `json:"claude_operation_ids,omitempty"`
+	OperationIDs          []string `json:"gemini_operation_ids,omitempty"`
+	ClaudeOperationIDs    []string `json:"claude_operation_ids,omitempty"`
+	ReconcileOperationIDs []string `json:"reconcile_operation_ids,omitempty"`
 }
 
 type GeminiOwnership struct {

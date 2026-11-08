@@ -30,7 +30,7 @@ func CreateBranch(ctx context.Context, repositoryPath, name, startPoint string, 
 		}
 		args = append(args, startPoint)
 	}
-	output, err := runGit(ctx, repositoryPath, args...)
+	output, err := runGitModify(ctx, repositoryPath, args...)
 	if err != nil {
 		return fmt.Errorf("create branch: %s", cleanGitError(output, err))
 	}
@@ -48,7 +48,7 @@ func RenameBranch(ctx context.Context, repositoryPath, name, newName string, man
 	if err := validateBranch(ctx, newName); err != nil {
 		return err
 	}
-	output, err := runGit(ctx, repositoryPath, "branch", "-m", name, newName)
+	output, err := runGitModify(ctx, repositoryPath, "branch", "-m", name, newName)
 	if err != nil {
 		return fmt.Errorf("rename branch: %s", cleanGitError(output, err))
 	}
@@ -67,7 +67,7 @@ func DeleteBranch(ctx context.Context, repositoryPath, name string, force bool, 
 	if force {
 		flag = "-D"
 	}
-	output, err := runGit(ctx, repositoryPath, "branch", flag, name)
+	output, err := runGitModify(ctx, repositoryPath, "branch", flag, name)
 	if err != nil {
 		return fmt.Errorf("delete branch: %s", cleanGitError(output, err))
 	}
@@ -87,7 +87,7 @@ func Checkout(ctx context.Context, repositoryPath, ref string, detach bool, mana
 		args = append(args, "--detach")
 	}
 	args = append(args, ref)
-	output, err := runGit(ctx, repositoryPath, args...)
+	output, err := runGitModify(ctx, repositoryPath, args...)
 	if err != nil {
 		return fmt.Errorf("switch branch: %s", cleanGitError(output, err))
 	}
@@ -105,7 +105,7 @@ func AddRemote(ctx context.Context, repositoryPath, name, remoteURL string, mana
 	if err := validateRemoteURL(strings.TrimSpace(remoteURL)); err != nil {
 		return err
 	}
-	output, err := runGit(ctx, repositoryPath, "remote", "add", name, remoteURL)
+	output, err := runGitModify(ctx, repositoryPath, "remote", "add", name, remoteURL)
 	if err != nil {
 		return fmt.Errorf("add remote: %s", cleanGitError(output, err))
 	}
@@ -123,7 +123,7 @@ func SetRemoteURL(ctx context.Context, repositoryPath, name, remoteURL string, m
 	if err := validateRemoteURL(strings.TrimSpace(remoteURL)); err != nil {
 		return err
 	}
-	output, err := runGit(ctx, repositoryPath, "remote", "set-url", name, remoteURL)
+	output, err := runGitModify(ctx, repositoryPath, "remote", "set-url", name, remoteURL)
 	if err != nil {
 		return fmt.Errorf("update remote: %s", cleanGitError(output, err))
 	}
@@ -138,7 +138,7 @@ func RemoveRemote(ctx context.Context, repositoryPath, name string, managedRoots
 	if err := validateRemoteName(name); err != nil {
 		return err
 	}
-	output, err := runGit(ctx, repositoryPath, "remote", "remove", name)
+	output, err := runGitModify(ctx, repositoryPath, "remote", "remove", name)
 	if err != nil {
 		return fmt.Errorf("remove remote: %s", cleanGitError(output, err))
 	}
@@ -157,7 +157,7 @@ func Fetch(ctx context.Context, repositoryPath, remote string, managedRoots []st
 		}
 		args = append(args, remote)
 	}
-	output, err := runGit(ctx, repositoryPath, args...)
+	output, err := runGitModify(ctx, repositoryPath, args...)
 	if err != nil {
 		return fmt.Errorf("fetch: %s", cleanGitError(output, err))
 	}
@@ -182,7 +182,7 @@ func Pull(ctx context.Context, repositoryPath, remote, branch string, managedRoo
 		}
 		args = append(args, branch)
 	}
-	output, err := runGit(ctx, repositoryPath, args...)
+	output, err := runGitModify(ctx, repositoryPath, args...)
 	if err != nil {
 		return fmt.Errorf("pull: %s", cleanGitError(output, err))
 	}
@@ -205,7 +205,7 @@ func Push(ctx context.Context, repositoryPath, remote, ref string, setUpstream b
 		args = append(args, "--set-upstream")
 	}
 	args = append(args, remote, ref)
-	output, err := runGit(ctx, repositoryPath, args...)
+	output, err := runGitModify(ctx, repositoryPath, args...)
 	if err != nil {
 		return fmt.Errorf("push: %s", cleanGitError(output, err))
 	}
@@ -228,9 +228,9 @@ func Stage(ctx context.Context, repositoryPath string, paths []string, all bool,
 	if len(paths) == 0 {
 		return nil
 	}
-	args := []string{"add", "--all", "--"}
+	args := []string{"--literal-pathspecs", "add", "--all", "--"}
 	args = append(args, paths...)
-	output, err := runGit(ctx, repositoryPath, args...)
+	output, err := runGitModify(ctx, repositoryPath, args...)
 	if err != nil {
 		return fmt.Errorf("stage changes: %s", cleanGitError(output, err))
 	}
@@ -254,17 +254,17 @@ func Unstage(ctx context.Context, repositoryPath string, paths []string, all boo
 		return nil
 	}
 	if _, headErr := runGit(ctx, repositoryPath, "rev-parse", "--verify", "HEAD"); headErr != nil {
-		args := []string{"rm", "--cached", "-r", "--ignore-unmatch", "--"}
+		args := []string{"--literal-pathspecs", "rm", "--cached", "-r", "--ignore-unmatch", "--"}
 		args = append(args, paths...)
-		output, rmErr := runGit(ctx, repositoryPath, args...)
+		output, rmErr := runGitModify(ctx, repositoryPath, args...)
 		if rmErr != nil {
 			return fmt.Errorf("unstage changes: %s", cleanGitError(output, rmErr))
 		}
 		return nil
 	}
-	args := []string{"restore", "--staged", "--"}
+	args := []string{"--literal-pathspecs", "restore", "--staged", "--"}
 	args = append(args, paths...)
-	output, err := runGit(ctx, repositoryPath, args...)
+	output, err := runGitModify(ctx, repositoryPath, args...)
 	if err != nil {
 		return fmt.Errorf("unstage changes: %s", cleanGitError(output, err))
 	}
@@ -296,9 +296,9 @@ func DiscardUnstaged(ctx context.Context, repositoryPath string, paths []string,
 	for _, path := range paths {
 		var output []byte
 		if byPath[path].Status == "untracked" {
-			output, err = runGit(ctx, repositoryPath, "clean", "-f", "--", path)
+			output, err = runGitModify(ctx, repositoryPath, "--literal-pathspecs", "clean", "-f", "--", path)
 		} else {
-			output, err = runGit(ctx, repositoryPath, "restore", "--worktree", "--", path)
+			output, err = runGitModify(ctx, repositoryPath, "--literal-pathspecs", "restore", "--worktree", "--", path)
 		}
 		if err != nil {
 			return fmt.Errorf("discard changes: %s", cleanGitError(output, err))
@@ -358,7 +358,7 @@ func CommitChanges(ctx context.Context, repositoryPath, message string, managedR
 	if strings.ContainsRune(message, '\x00') {
 		return errors.New("commit message contains a NUL character")
 	}
-	output, err := runGit(ctx, repositoryPath, "commit", "--no-gpg-sign", "-m", message)
+	output, err := runGitModify(ctx, repositoryPath, "commit", "--no-gpg-sign", "-m", message)
 	if err != nil {
 		return fmt.Errorf("commit changes: %s", cleanGitError(output, err))
 	}

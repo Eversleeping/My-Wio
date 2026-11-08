@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -132,5 +134,56 @@ func TestActivateCurrentUpdateRollsBackAnUnconfirmedAttempt(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(updatesRoot, "current.json")); !os.IsNotExist(err) {
 		t.Fatalf("rollback left the update manifest active: %v", err)
+	}
+}
+
+func TestStageAgentUpdateRejectsActiveNonIdempotentOperations(t *testing.T) {
+	for _, kind := range []string{"deploy.start", "deploy.rollback", "git.workspace.write", "git.workspace.lifecycle", "git.workspace.clone", "git.project.create", "workspace.file.write", "cli.install", "codex.update", "credentials.configure"} {
+		t.Run(kind, func(t *testing.T) {
+			client := &Client{seen: map[string]*operationExecution{"running": {kind: kind, done: make(chan struct{})}}}
+			if _, err := client.stageAgentUpdate(context.Background(), protocol.AgentUpdateCommand{}); err == nil || !strings.Contains(err.Error(), "finish active operations") || !strings.Contains(err.Error(), kind) {
+				t.Fatalf("active %s did not prevent update: %v", kind, err)
+			}
+			if client.agentUpdatePending() {
+				t.Fatal("rejected update reserved the Agent")
+			}
+		})
+	}
+}
+
+func TestStageAgentUpdateAllowsRestartSafeOperations(t *testing.T) {
+	seen := map[string]*operationExecution{"self": {kind: "agent.update", done: make(chan struct{})}}
+	for _, kind := range []string{"workspace.files", "workspace.changes", "git.workspace.inspect", "inventory.scan", "operation.interrupt"} {
+		seen[kind] = &operationExecution{kind: kind, done: make(chan struct{})}
+	}
+	client := &Client{seen: seen}
+	// Validation of the empty command fails only after the blocker scan passed.
+	if _, err := client.stageAgentUpdate(context.Background(), protocol.AgentUpdateCommand{}); err == nil || !strings.Contains(err.Error(), "version is required") {
+		t.Fatalf("restart-safe operations blocked the update: %v", err)
+	}
+}
+
+func TestPendingUpdateRefusesNewNonIdempotentOperations(t *testing.T) {
+	client := &Client{
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		outbound: make(chan *protocol.AgentEnvelope, 8),
+		seen:     make(map[string]*operationExecution),
+	}
+	client.updatePending = true
+	for _, kind := range []string{"deploy.start", "git.workspace.write", "workspace.file.write"} {
+		client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: kind, Kind: kind, PayloadJSON: json.RawMessage(`{}`)})
+		receiveOperationStarted(t, client.outbound, kind)
+		var result protocol.OperationResult
+		envelope := receiveAgentEnvelope(t, client.outbound)
+		if json.Unmarshal(envelope.PayloadJSON, &result) != nil || result.Status != "failed" || !strings.Contains(result.Message, "update is in progress") {
+			t.Fatalf("%s ran during a pending update: %#v", kind, result)
+		}
+	}
+	client.handleOperation(context.Background(), &protocol.ControlEnvelope{OperationID: "scan", Kind: "workspace.files", PayloadJSON: json.RawMessage(`{"path":"/nonexistent"}`)})
+	receiveOperationStarted(t, client.outbound, "scan")
+	var result protocol.OperationResult
+	envelope := receiveAgentEnvelope(t, client.outbound)
+	if json.Unmarshal(envelope.PayloadJSON, &result) != nil || strings.Contains(result.Message, "update is in progress") {
+		t.Fatalf("restart-safe read was refused during a pending update: %#v", result)
 	}
 }

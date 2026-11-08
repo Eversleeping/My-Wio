@@ -132,6 +132,14 @@ sudo env WIO_PUBLIC_DOMAIN="$WIO_PUBLIC_DOMAIN" WIO_HOST_PORT="$WIO_HOST_PORT" \
 sudo systemctl reload caddy
 ```
 
+## 客户端地址与登录限流
+
+登录限流和审计日志按真实客户端 IP 统计：同一地址（IPv6 按 /64 聚合）15 分钟内失败 5 次后会被拒绝 5 分钟；同一账户的连续失败只会逐步增加等待时间（最多数秒），不会锁死管理员。控制面只在直接连接方属于 `WIO_TRUSTED_PROXIES` 时才读取 `X-Forwarded-For`，并从右向左跳过可信代理。
+
+- 两种 Compose 方案默认将 `WIO_TRUSTED_PROXIES` 设为回环与私有网段（`127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`）。方案 A 中控制面只在 Compose 网络内可达；方案 B 中宿主机 Caddy 的连接经回环端口进入容器，表现为 Docker 网关地址。因此不要把控制面端口发布到非回环地址。
+- Caddy 2.5 及以上版本在未配置 `trusted_proxies` 时会用对端地址覆盖客户端自带的 `X-Forwarded-For`，客户端无法伪造。宿主机 Caddy 必须满足该版本要求；只有当 Caddy 前面还有 CDN/负载均衡时，才在 Caddy 的全局 `servers { trusted_proxies static <CDN 网段> }` 中列出这些网段。
+- 如果控制面所在网络中存在不受信任、可直连 8080 端口的容器或主机，请在 `.env` 中把 `WIO_TRUSTED_PROXIES` 收窄为 Caddy 的实际地址。若不经代理直接暴露控制面，请将其设为空字符串。
+
 ## 验收与首次登录
 
 先检查容器和本机健康检查。方案 A 使用公开 HTTPS 地址；方案 B 还应检查回环端口。

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -518,47 +520,48 @@ func (s *Store) ListSecretSets(ctx context.Context) ([]SecretSet, error) {
 }
 
 func (s *Store) UpsertSecretSet(ctx context.Context, id, name, ciphertext string) (string, error) {
-	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	var resultID string
+	err := s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+		setID := id
+		var current struct {
+			ID         string `db:"id"`
+			KeyVersion int    `db:"key_version"`
+		}
+		lookup := "SELECT id,key_version FROM secret_sets WHERE name=?"
+		args := []any{name}
+		if strings.TrimSpace(id) != "" {
+			lookup = "SELECT id,key_version FROM secret_sets WHERE id=? OR name=? ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1"
+			args = []any{id, name, id}
+		}
+		err := tx.GetContext(ctx, &current, s.Q(lookup), args...)
+		now := time.Now().UTC()
+		version := 1
+		if errors.Is(err, sql.ErrNoRows) {
+			if setID == "" {
+				setID = NewID()
+			}
+			if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO secret_sets(id,name,ciphertext,key_version,created_at,updated_at) VALUES(?,?,?,?,?,?)"), setID, name, ciphertext, version, now, now); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else {
+			setID = current.ID
+			version = current.KeyVersion + 1
+			if _, err = tx.ExecContext(ctx, s.Q("UPDATE secret_sets SET name=?,ciphertext=?,key_version=?,updated_at=? WHERE id=?"), name, ciphertext, version, now, setID); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO secret_set_versions(secret_set_id,key_version,ciphertext,updated_at) VALUES(?,?,?,?)"), setID, version, ciphertext, now); err != nil {
+			return err
+		}
+		resultID = setID
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	defer tx.Rollback()
-	var current struct {
-		ID         string `db:"id"`
-		KeyVersion int    `db:"key_version"`
-	}
-	lookup := "SELECT id,key_version FROM secret_sets WHERE name=?"
-	args := []any{name}
-	if strings.TrimSpace(id) != "" {
-		lookup = "SELECT id,key_version FROM secret_sets WHERE id=? OR name=? ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1"
-		args = []any{id, name, id}
-	}
-	err = tx.GetContext(ctx, &current, s.Q(lookup), args...)
-	now := time.Now().UTC()
-	version := 1
-	if errors.Is(err, sql.ErrNoRows) {
-		if id == "" {
-			id = NewID()
-		}
-		if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO secret_sets(id,name,ciphertext,key_version,created_at,updated_at) VALUES(?,?,?,?,?,?)"), id, name, ciphertext, version, now, now); err != nil {
-			return "", err
-		}
-	} else if err != nil {
-		return "", err
-	} else {
-		id = current.ID
-		version = current.KeyVersion + 1
-		if _, err = tx.ExecContext(ctx, s.Q("UPDATE secret_sets SET name=?,ciphertext=?,key_version=?,updated_at=? WHERE id=?"), name, ciphertext, version, now, id); err != nil {
-			return "", err
-		}
-	}
-	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO secret_set_versions(secret_set_id,key_version,ciphertext,updated_at) VALUES(?,?,?,?)"), id, version, ciphertext, now); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return id, nil
+	return resultID, nil
 }
 
 func (s *Store) SecretCiphertext(ctx context.Context, id string) (string, error) {
@@ -655,84 +658,79 @@ func (s *Store) CreateDeploymentTarget(ctx context.Context, target DeploymentTar
 }
 
 func (s *Store) UpdateDeploymentTarget(ctx context.Context, target DeploymentTarget) (DeploymentTarget, error) {
-	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return DeploymentTarget{}, err
-	}
-	defer tx.Rollback()
-	var active int
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), target.ID); err != nil {
-		return DeploymentTarget{}, err
-	}
-	if active > 0 {
-		return DeploymentTarget{}, ErrDeploymentActive
-	}
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), target.ID); err != nil {
-		return DeploymentTarget{}, err
-	}
-	if active > 0 {
-		return DeploymentTarget{}, ErrDeploymentContainerActive
-	}
-	var secret any = target.SecretSetID
-	if target.SecretSetID == "" {
-		secret = nil
-	}
-	var workspace any = target.WorkspaceID
-	if target.WorkspaceID == "" {
-		workspace = nil
-	}
-	result, err := tx.ExecContext(ctx, s.Q(`UPDATE deployment_targets SET project_id=?,server_id=?,source_type=?,workspace_id=?,secret_set_id=?,environment=?,repository=?,git_ref=?,compose_file=?,working_dir=?,build_mode=?,health_checks=?,release_root=?,public_url=? WHERE id=?`), target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.PublicURL, target.ID)
-	if err != nil {
-		return DeploymentTarget{}, err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return DeploymentTarget{}, err
-	}
-	if rows == 0 {
-		return DeploymentTarget{}, sql.ErrNoRows
-	}
 	var updated DeploymentTarget
-	if err := tx.GetContext(ctx, &updated, s.Q(deploymentTargetSelect+" WHERE t.id=?"), target.ID); err != nil {
-		return DeploymentTarget{}, err
-	}
-	if err := tx.Commit(); err != nil {
+	err := s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+		var active int
+		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), target.ID); err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrDeploymentActive
+		}
+		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), target.ID); err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrDeploymentContainerActive
+		}
+		var secret any = target.SecretSetID
+		if target.SecretSetID == "" {
+			secret = nil
+		}
+		var workspace any = target.WorkspaceID
+		if target.WorkspaceID == "" {
+			workspace = nil
+		}
+		result, err := tx.ExecContext(ctx, s.Q(`UPDATE deployment_targets SET project_id=?,server_id=?,source_type=?,workspace_id=?,secret_set_id=?,environment=?,repository=?,git_ref=?,compose_file=?,working_dir=?,build_mode=?,health_checks=?,release_root=?,public_url=? WHERE id=?`), target.ProjectID, target.ServerID, target.SourceType, workspace, secret, target.Environment, target.Repository, target.GitRef, target.ComposeFile, target.WorkingDir, target.BuildMode, target.HealthChecks, target.ReleaseRoot, target.PublicURL, target.ID)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return sql.ErrNoRows
+		}
+		if err := tx.GetContext(ctx, &updated, s.Q(deploymentTargetSelect+" WHERE t.id=?"), target.ID); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return DeploymentTarget{}, err
 	}
 	return updated, nil
 }
 
 func (s *Store) DeleteDeploymentTarget(ctx context.Context, id string) error {
-	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var active int
-	if err := tx.GetContext(ctx, &active, s.Q(`SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')`), id); err != nil {
-		return err
-	}
-	if active > 0 {
-		return ErrDeploymentActive
-	}
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), id); err != nil {
-		return err
-	}
-	if active > 0 {
-		return ErrDeploymentContainerActive
-	}
-	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM deployment_targets WHERE id=?"), id)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-	return tx.Commit()
+	return s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+		var active int
+		if err := tx.GetContext(ctx, &active, s.Q(`SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')`), id); err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrDeploymentActive
+		}
+		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), id); err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrDeploymentContainerActive
+		}
+		result, err := tx.ExecContext(ctx, s.Q("DELETE FROM deployment_targets WHERE id=?"), id)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	})
 }
 
 type Deployment struct {
@@ -833,118 +831,113 @@ func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {
 }
 
 func (s *Store) CreateDeployment(ctx context.Context, targetID, commitRef string) (Deployment, error) {
-	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return Deployment{}, err
-	}
-	defer tx.Rollback()
-	var active int
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), targetID); err != nil {
-		return Deployment{}, err
-	}
-	if active > 0 {
-		return Deployment{}, ErrDeploymentActive
-	}
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), targetID); err != nil {
-		return Deployment{}, err
-	}
-	if active > 0 {
-		return Deployment{}, ErrDeploymentContainerActive
-	}
-	id := NewID()
-	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO deployments(id,target_id,commit_ref) VALUES(?,?,?)"), id, targetID, commitRef)
-	if err != nil {
-		return Deployment{}, err
-	}
-	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_config_snapshots(
-		deployment_id,target_id,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
-		repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
-		health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,created_at)
-		SELECT d.id,d.target_id,t.project_id,p.name,t.source_type,t.environment,t.server_id,s.name,COALESCE(t.workspace_id,''),COALESCE(w.path,''),COALESCE(w.display_name,''),
-			t.repository,?,d.resolved_commit,t.compose_file,t.working_dir,t.build_mode,t.release_root,t.public_url,t.detected_public_url,
-			t.health_checks,COALESCE(t.secret_set_id,''),COALESCE(ss.name,''),COALESCE(ss.key_version,0),ss.updated_at,?
-		FROM deployments d
-		JOIN deployment_targets t ON t.id=d.target_id
-		JOIN projects p ON p.id=t.project_id
-		JOIN servers s ON s.id=t.server_id
-		LEFT JOIN workspaces w ON w.id=t.workspace_id
-		LEFT JOIN secret_sets ss ON ss.id=t.secret_set_id
-		WHERE d.id=?`), commitRef, now, id); err != nil {
-		return Deployment{}, err
-	}
-	action := "deploy"
-	message := "deployment queued"
-	if commitRef == "rollback" {
-		action = "rollback"
-		message = "rollback queued"
-	}
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
-		VALUES(?,NULL,?,'pending',?,'',?)
-		ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action=excluded.action,status='pending',message=excluded.message,content='',updated_at=excluded.updated_at`), targetID, action, message, now); err != nil {
-		return Deployment{}, err
-	}
 	var deployment Deployment
-	err = tx.GetContext(ctx, &deployment, s.Q(deploymentHistorySelect+` WHERE d.id=?`), id)
+	err := s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+		var active int
+		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), targetID); err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrDeploymentActive
+		}
+		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), targetID); err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrDeploymentContainerActive
+		}
+		id := NewID()
+		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO deployments(id,target_id,commit_ref) VALUES(?,?,?)"), id, targetID, commitRef); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_config_snapshots(
+			deployment_id,target_id,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
+			repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
+			health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,created_at)
+			SELECT d.id,d.target_id,t.project_id,p.name,t.source_type,t.environment,t.server_id,s.name,COALESCE(t.workspace_id,''),COALESCE(w.path,''),COALESCE(w.display_name,''),
+				t.repository,?,d.resolved_commit,t.compose_file,t.working_dir,t.build_mode,t.release_root,t.public_url,t.detected_public_url,
+				t.health_checks,COALESCE(t.secret_set_id,''),COALESCE(ss.name,''),COALESCE(ss.key_version,0),ss.updated_at,?
+			FROM deployments d
+			JOIN deployment_targets t ON t.id=d.target_id
+			JOIN projects p ON p.id=t.project_id
+			JOIN servers s ON s.id=t.server_id
+			LEFT JOIN workspaces w ON w.id=t.workspace_id
+			LEFT JOIN secret_sets ss ON ss.id=t.secret_set_id
+			WHERE d.id=?`), commitRef, now, id); err != nil {
+			return err
+		}
+		action := "deploy"
+		message := "deployment queued"
+		if commitRef == "rollback" {
+			action = "rollback"
+			message = "rollback queued"
+		}
+		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
+			VALUES(?,NULL,?,'pending',?,'',?)
+			ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action=excluded.action,status='pending',message=excluded.message,content='',updated_at=excluded.updated_at`), targetID, action, message, now); err != nil {
+			return err
+		}
+		if err := tx.GetContext(ctx, &deployment, s.Q(deploymentHistorySelect+` WHERE d.id=?`), id); err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		return Deployment{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return Deployment{}, err
 	}
 	return deployment, nil
 }
 
 func (s *Store) CreateRollbackDeployment(ctx context.Context, targetID, sourceDeploymentID string) (Deployment, error) {
-	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return Deployment{}, err
-	}
-	defer tx.Rollback()
-	var active int
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), targetID); err != nil {
-		return Deployment{}, err
-	}
-	if active > 0 {
-		return Deployment{}, ErrDeploymentActive
-	}
-	if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), targetID); err != nil {
-		return Deployment{}, err
-	}
-	if active > 0 {
-		return Deployment{}, ErrDeploymentContainerActive
-	}
-	var sourceStatus string
-	if err := tx.GetContext(ctx, &sourceStatus, s.Q(`SELECT d.status FROM deployments d JOIN deployment_config_snapshots ds ON ds.deployment_id=d.id WHERE d.id=? AND d.target_id=?`), sourceDeploymentID, targetID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Deployment{}, ErrDeploymentSnapshotUnavailable
+	var id string
+	err := s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+		var active int
+		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), targetID); err != nil {
+			return err
 		}
-		return Deployment{}, err
-	}
-	if sourceStatus != "succeeded" && sourceStatus != "rolled_back" {
-		return Deployment{}, ErrDeploymentSnapshotUnavailable
-	}
-	id := NewID()
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO deployments(id,target_id,commit_ref) VALUES(?,?,?)"), id, targetID, "rollback"); err != nil {
-		return Deployment{}, err
-	}
-	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
-		VALUES(?,NULL,'rollback','pending','rollback queued','',?)
-		ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action='rollback',status='pending',message='rollback queued',content='',updated_at=excluded.updated_at`), targetID, now); err != nil {
-		return Deployment{}, err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_config_snapshots(
-		deployment_id,target_id,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
-		repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
-		health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,rollback_of_deployment_id,created_at)
-		SELECT ?,?,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
+		if active > 0 {
+			return ErrDeploymentActive
+		}
+		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), targetID); err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrDeploymentContainerActive
+		}
+		var sourceStatus string
+		if err := tx.GetContext(ctx, &sourceStatus, s.Q(`SELECT d.status FROM deployments d JOIN deployment_config_snapshots ds ON ds.deployment_id=d.id WHERE d.id=? AND d.target_id=?`), sourceDeploymentID, targetID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrDeploymentSnapshotUnavailable
+			}
+			return err
+		}
+		if sourceStatus != "succeeded" && sourceStatus != "rolled_back" {
+			return ErrDeploymentSnapshotUnavailable
+		}
+		id = NewID()
+		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO deployments(id,target_id,commit_ref) VALUES(?,?,?)"), id, targetID, "rollback"); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
+			VALUES(?,NULL,'rollback','pending','rollback queued','',?)
+			ON CONFLICT(target_id) DO UPDATE SET operation_id=NULL,action='rollback',status='pending',message='rollback queued',content='',updated_at=excluded.updated_at`), targetID, now); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_config_snapshots(
+			deployment_id,target_id,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
 			repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
-			health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,?,?
-		FROM deployment_config_snapshots WHERE deployment_id=?`), id, targetID, sourceDeploymentID, now, sourceDeploymentID); err != nil {
-		return Deployment{}, err
-	}
-	if err := tx.Commit(); err != nil {
+			health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,rollback_of_deployment_id,created_at)
+			SELECT ?,?,project_id,project_name,source_type,environment,server_id,server_name,workspace_id,workspace_path,workspace_name,
+				repository,git_ref,resolved_commit,compose_file,working_dir,build_mode,release_root,configured_public_url,detected_public_url,
+				health_checks,secret_set_id,secret_set_name,secret_set_key_version,secret_set_updated_at,?,?
+			FROM deployment_config_snapshots WHERE deployment_id=?`), id, targetID, sourceDeploymentID, now, sourceDeploymentID); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return Deployment{}, err
 	}
 	return s.Deployment(ctx, id)
@@ -1156,62 +1149,59 @@ func (s *Store) QueueDeploymentContainerOperation(ctx context.Context, targetID,
 	if strings.TrimSpace(idempotency) == "" {
 		return "", errors.New("container operation idempotency key is required")
 	}
-	tx, err := s.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	var operationID string
+	err := s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+		var existing string
+		err := tx.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency)
+		if err == nil {
+			operationID = existing
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var targetResource struct {
+			ServerID    string `db:"server_id"`
+			ProjectID   string `db:"project_id"`
+			WorkspaceID string `db:"workspace_id"`
+		}
+		if err := tx.GetContext(ctx, &targetResource, s.Q("SELECT server_id,project_id,COALESCE(workspace_id,'') workspace_id FROM deployment_targets WHERE id=?"), targetID); err != nil {
+			return err
+		}
+		if targetResource.ServerID != serverID {
+			return errors.New("deployment target does not belong to the requested server")
+		}
+		var activeDeployments int
+		if err := tx.GetContext(ctx, &activeDeployments, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), targetID); err != nil {
+			return err
+		}
+		if activeDeployments > 0 {
+			return ErrDeploymentActive
+		}
+		var activeContainer int
+		if err := tx.GetContext(ctx, &activeContainer, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), targetID); err != nil {
+			return err
+		}
+		if activeContainer > 0 {
+			return ErrDeploymentContainerActive
+		}
+		operationID = NewID()
+		now := time.Now().UTC()
+		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,NULLIF(?,''),?,?,?,?)"), operationID, serverID, targetResource.ProjectID, targetResource.WorkspaceID, "deploy.container", ciphertext, idempotency, now); err != nil {
+			if lookupErr := tx.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); lookupErr == nil {
+				operationID = existing
+				return nil
+			}
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
+			VALUES(?,?,?,'pending',?,'',?)
+			ON CONFLICT(target_id) DO UPDATE SET operation_id=excluded.operation_id,action=excluded.action,status='pending',message=excluded.message,content='',updated_at=excluded.updated_at`), targetID, operationID, action, "container "+action+" queued", now); err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	var existing string
-	err = tx.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency)
-	if err == nil {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return "", commitErr
-		}
-		return existing, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	var targetResource struct {
-		ServerID    string `db:"server_id"`
-		ProjectID   string `db:"project_id"`
-		WorkspaceID string `db:"workspace_id"`
-	}
-	if err := tx.GetContext(ctx, &targetResource, s.Q("SELECT server_id,project_id,COALESCE(workspace_id,'') workspace_id FROM deployment_targets WHERE id=?"), targetID); err != nil {
-		return "", err
-	}
-	if targetResource.ServerID != serverID {
-		return "", errors.New("deployment target does not belong to the requested server")
-	}
-	var activeDeployments int
-	if err := tx.GetContext(ctx, &activeDeployments, s.Q("SELECT COUNT(*) FROM deployments WHERE target_id=? AND status IN ('queued','preparing','running')"), targetID); err != nil {
-		return "", err
-	}
-	if activeDeployments > 0 {
-		return "", ErrDeploymentActive
-	}
-	var activeContainer int
-	if err := tx.GetContext(ctx, &activeContainer, s.Q("SELECT COUNT(*) FROM deployment_container_state WHERE target_id=? AND status='pending'"), targetID); err != nil {
-		return "", err
-	}
-	if activeContainer > 0 {
-		return "", ErrDeploymentContainerActive
-	}
-	operationID := NewID()
-	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,NULLIF(?,''),?,?,?,?)"), operationID, serverID, targetResource.ProjectID, targetResource.WorkspaceID, "deploy.container", ciphertext, idempotency, now); err != nil {
-		if lookupErr := tx.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); lookupErr == nil {
-			_ = tx.Commit()
-			return existing, nil
-		}
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO deployment_container_state(target_id,operation_id,action,status,message,content,updated_at)
-		VALUES(?,?,?,'pending',?,'',?)
-		ON CONFLICT(target_id) DO UPDATE SET operation_id=excluded.operation_id,action=excluded.action,status='pending',message=excluded.message,content='',updated_at=excluded.updated_at`), targetID, operationID, action, "container "+action+" queued", now); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return operationID, nil

@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -144,11 +146,139 @@ func TestImportPublishesRepositoryAtFinalDestination(t *testing.T) {
 	}
 }
 
-func TestGitOutputTrustsOnlyTheInspectedRepository(t *testing.T) {
-	repository := filepath.Join(string(filepath.Separator), "srv", "wio")
-	args := gitCommandArguments(repository, "status", "--porcelain")
-	if len(args) != 6 || args[0] != "-c" || args[1] != "safe.directory="+repository || args[2] != "-C" || args[3] != repository || args[4] != "status" || args[5] != "--porcelain" {
-		t.Fatalf("unexpected safe-directory Git arguments: %#v", args)
+// TestDiscoverDoesNotRunRepositoryPrograms is the regression test for
+// repository configuration (core.fsmonitor, filter drivers) executing
+// programs as the agent user during inventory scans.
+func TestDiscoverDoesNotRunRepositoryPrograms(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repository, markers := maliciousRepository(t, root)
+
+	// Precondition: plain Git runs the configured programs.
+	touchLater(t, repository)
+	if output, err := exec.Command("git", "-C", repository, "status", "--porcelain").CombinedOutput(); err != nil {
+		t.Fatalf("plain git status: %v: %s", err, output)
+	}
+	for _, name := range []string{"fsmonitor", "filter"} {
+		if _, err := os.Stat(filepath.Join(markers, name)); err != nil {
+			t.Fatalf("test repository does not trigger %s: %v", name, err)
+		}
+	}
+	if err := os.RemoveAll(markers); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(markers, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	touchLater(t, repository)
+	inventory, err := Discover(context.Background(), []string{root}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Repositories) != 1 {
+		t.Fatalf("unexpected inventory: %#v", inventory.Repositories)
+	}
+	item := inventory.Repositories[0]
+	if item.RemoteURL != "https://example.com/team/service.git" || item.Branch != "main" || item.CommitSHA == "" || item.Dirty {
+		t.Fatalf("unexpected repository metadata: %#v", item)
+	}
+	assertNoMarkers(t, markers)
+}
+
+func TestDiscoverReportsForeignRepositoriesWithoutRunningGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repository, markers := maliciousRepository(t, root)
+	previous := repositoryOwned
+	var checked []string
+	repositoryOwned = func(path string) bool {
+		checked = append(checked, path)
+		return false
+	}
+	t.Cleanup(func() { repositoryOwned = previous })
+
+	touchLater(t, repository)
+	inventory, err := Discover(context.Background(), []string{root}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Repositories) != 1 || len(checked) != 1 {
+		t.Fatalf("unexpected inventory: %#v (checked %#v)", inventory.Repositories, checked)
+	}
+	item := inventory.Repositories[0]
+	if item.Name != "service" || item.Path != checked[0] || item.Discovered == "" {
+		t.Fatalf("foreign repository was not reported: %#v", item)
+	}
+	if item.RemoteURL != "" || item.Branch != "" || item.CommitSHA != "" || item.Dirty {
+		t.Fatalf("Git ran in a foreign repository: %#v", item)
+	}
+	assertNoMarkers(t, markers)
+}
+
+func maliciousRepository(t *testing.T, root string) (string, string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("marker programs are shell scripts")
+	}
+	repository := filepath.Join(root, "service")
+	markers := filepath.Join(t.TempDir(), "markers")
+	scripts := t.TempDir()
+	for _, directory := range []string{repository, markers} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := func(name, body string) string {
+		path := filepath.Join(scripts, name)
+		content := "#!/bin/sh\ntouch '" + filepath.Join(markers, name) + "'\n" + body + "\n"
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	runGit(t, repository, "init", "-q", "-b", "main")
+	runGit(t, repository, "config", "user.email", "test@example.com")
+	runGit(t, repository, "config", "user.name", "Wio Test")
+	runGit(t, repository, "remote", "add", "origin", "https://example.com/team/service.git")
+	if err := os.WriteFile(filepath.Join(repository, ".gitattributes"), []byte("*.txt filter=evil\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "same.txt"), []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", ".")
+	runGit(t, repository, "commit", "-q", "-m", "initial")
+	runGit(t, repository, "config", "core.fsmonitor", script("fsmonitor", "exit 1"))
+	runGit(t, repository, "config", "filter.evil.clean", script("filter", "cat"))
+	runGit(t, repository, "config", "filter.evil.required", "true")
+	return repository, markers
+}
+
+var touchClock = time.Now().Add(-48 * time.Hour)
+
+// touchLater changes same.txt's mtime but not its content, so Git compares
+// its content (through the clean filter) again.
+func touchLater(t *testing.T, repository string) {
+	t.Helper()
+	touchClock = touchClock.Add(time.Minute)
+	if err := os.Chtimes(filepath.Join(repository, "same.txt"), touchClock, touchClock); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNoMarkers(t *testing.T, markers string) {
+	t.Helper()
+	entries, err := os.ReadDir(markers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		t.Errorf("repository-configured program ran during discovery: %s", entry.Name())
 	}
 }
 

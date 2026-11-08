@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/gitrepository"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -247,31 +248,40 @@ func resolveWorkspaceRoot(root string, allowedRoots []string) (string, error) {
 	return ResolveWorkspaceRoot(root, allowedRoots)
 }
 
+// repositoryOwned decides whether discovery may run Git in a repository.
+// Tests replace it to simulate repositories owned by another user.
+var repositoryOwned = gitrepository.RepositoryOwnedByCurrentUser
+
+// inspect reads repository metadata. Repositories owned by another user are
+// reported as present without running Git in them: their configuration is
+// controlled by that user, and Git refuses them anyway unless an administrator
+// explicitly trusts them.
 func inspect(ctx context.Context, repositoryPath string) protocol.Repository {
-	return protocol.Repository{
+	repository := protocol.Repository{
 		Path:       repositoryPath,
 		Name:       filepath.Base(repositoryPath),
-		RemoteURL:  gitOutput(ctx, repositoryPath, "remote", "get-url", "origin"),
-		Branch:     gitOutput(ctx, repositoryPath, "branch", "--show-current"),
-		CommitSHA:  gitOutput(ctx, repositoryPath, "rev-parse", "HEAD"),
-		Dirty:      gitOutput(ctx, repositoryPath, "status", "--porcelain") != "",
 		Discovered: time.Now().UTC().Format(time.RFC3339),
 	}
+	if !repositoryOwned(repositoryPath) {
+		return repository
+	}
+	repository.RemoteURL = gitOutput(ctx, repositoryPath, "remote", "get-url", "origin")
+	repository.Branch = gitOutput(ctx, repositoryPath, "branch", "--show-current")
+	repository.CommitSHA = gitOutput(ctx, repositoryPath, "rev-parse", "HEAD")
+	// Submodule worktrees are not inspected: that would run Git with each
+	// submodule's own configuration.
+	repository.Dirty = gitOutput(ctx, repositoryPath, "status", "--porcelain", "--ignore-submodules=dirty") != ""
+	return repository
 }
 
+// gitOutput runs a read-only Git command with repository-configured programs
+// (fsmonitor, hooks, filter drivers, ...) disabled.
 func gitOutput(ctx context.Context, repositoryPath string, args ...string) string {
-	commandArgs := gitCommandArguments(repositoryPath, args...)
-	command := childprocess.CommandContext(ctx, "git", commandArgs...)
-	output, err := childprocess.Output(command)
+	output, err := gitrepository.InspectOutput(ctx, repositoryPath, args...)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
-}
-
-func gitCommandArguments(repositoryPath string, args ...string) []string {
-	commandArgs := []string{"-c", "safe.directory=" + repositoryPath, "-C", repositoryPath}
-	return append(commandArgs, args...)
 }
 
 func Import(ctx context.Context, cloneRoot string, command protocol.GitImportCommand) (string, error) {

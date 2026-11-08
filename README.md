@@ -148,6 +148,7 @@ Codex 集成遵循当前的 [Codex app-server 协议](https://learn.chatgpt.com/
 | `WIO_MASTER_KEY` | 无 | Base64 编码的 32 字节 Vault 主密钥；使用 PostgreSQL 或保存真实密钥时必须显式设置 |
 | `WIO_PUBLIC_URL` | 空 | Agent 注册 URL 和对外基址；生产环境应使用 `https://`，它也决定会话 Cookie 是否启用 `Secure` |
 | `WIO_DEV_INSECURE` | `false` | 仅本地开发时允许在 HTTPS 基址下关闭 `Secure` Cookie |
+| `WIO_TRUSTED_PROXIES` | 空（Docker Compose 中默认为回环与私有网段） | 逗号分隔的反向代理 IP/CIDR。仅当直接连接方属于该列表时才读取 `X-Forwarded-For`，并从右向左跳过可信代理取得真实客户端地址，用于登录限流与审计日志；为空时始终使用 TCP 对端地址。不要把公网可直连控制面的地址段加入列表 |
 | `WIO_AGENT_ASSET_DIR` | `/usr/local/share/wio` | 网页 SSH 注册所使用的 Agent、systemd unit 和依赖助手资产目录 |
 | `WIO_CONTROL_AGENT_ENABLED` | Linux 上为 `true` | 是否启动内置控制机 Agent；设为 `false` 后记录仍保留但显示离线 |
 

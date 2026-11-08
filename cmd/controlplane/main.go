@@ -93,7 +93,16 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	httpHandler := httpapi.New(database, hub, gateway, vault, log, frontend, os.Getenv("WIO_PUBLIC_URL"), devInsecure)
+	trustedProxies, err := httpapi.ParseTrustedProxies(os.Getenv("WIO_TRUSTED_PROXIES"))
+	if err != nil {
+		return fmt.Errorf("WIO_TRUSTED_PROXIES: %w", err)
+	}
+	if trustedProxies.Empty() {
+		log.Info("WIO_TRUSTED_PROXIES is empty; client addresses come from the TCP peer and X-Forwarded-For is ignored")
+	} else {
+		log.Info("trusting X-Forwarded-For from reverse proxies", "trusted_proxies", trustedProxies.String())
+	}
+	httpHandler := httpapi.New(database, hub, gateway, vault, log, frontend, os.Getenv("WIO_PUBLIC_URL"), devInsecure, httpapi.WithTrustedProxies(trustedProxies))
 	handler := h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 			grpcServer.ServeHTTP(w, r)
