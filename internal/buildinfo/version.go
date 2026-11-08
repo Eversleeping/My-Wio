@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.3.04"
+var Version = "0.3.05"
 
 func SupportsScopedCredentials(version string) bool { return atLeast(version, "0.3.02") }
 
