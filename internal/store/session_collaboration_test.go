@@ -955,3 +955,56 @@ func TestCollaborationSessionCountIsUnlimitedAndIgnoresDeleted(t *testing.T) {
 		t.Fatalf("deleted child still counted: %+v", reply)
 	}
 }
+
+func TestCollaborationModelOverride(t *testing.T) {
+	for _, c := range []struct {
+		engine, model, effort string
+		p                     sessiontools.Params
+		wantModel, wantEffort string
+		fails                 bool
+	}{
+		{"claude", "sonnet", "", sessiontools.Params{}, "sonnet", "", false},
+		{"claude", "sonnet", "low", sessiontools.Params{Model: "opus[1m]", Effort: "max"}, "opus[1m]", "max", false},
+		{"claude", "sonnet", "low", sessiontools.Params{Model: "opus"}, "opus", "", false},
+		{"claude", "sonnet", "low", sessiontools.Params{Effort: "high"}, "sonnet", "high", false},
+		{"claude", "sonnet", "", sessiontools.Params{Effort: "ultra"}, "", "", true},
+		{"codex", "", "", sessiontools.Params{Model: "gpt-5.5", Effort: "xhigh"}, "gpt-5.5", "xhigh", false},
+		{"codex", "", "", sessiontools.Params{Model: "gpt[1m]"}, "", "", true},
+		{"codex", "", "", sessiontools.Params{Model: "bad model"}, "", "", true},
+		{"gemini", "auto", "", sessiontools.Params{Effort: "high"}, "", "", true},
+		{"gemini", "auto", "", sessiontools.Params{Model: "gemini-3-pro-preview", Effort: "low"}, "gemini-3-pro-preview", "low", false},
+		{"gemini", "auto", "", sessiontools.Params{Model: "gemini-3-pro-preview", Effort: "medium"}, "", "", true},
+		// An inherited effort that does not fit the default model is dropped, not rejected.
+		{"gemini", "auto", "high", sessiontools.Params{}, "auto", "", false},
+	} {
+		model, effort, err := collaborationModelOverride(c.engine, c.model, c.effort, c.p)
+		if c.fails != (err != nil) || !c.fails && (model != c.wantModel || effort != c.wantEffort) {
+			t.Fatalf("%+v: %q %q %v", c, model, effort, err)
+		}
+	}
+}
+
+func TestCollaborationCreateWithModelAndEffort(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+	reply := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "claude-opus", Engine: "claude", Model: "opus", Effort: "high"})
+	if reply.Error != nil || reply.Session == nil {
+		t.Fatalf("create: %+v", reply)
+	}
+	thread, err := f.db.ClaudeThread(ctx, reply.Session.ID)
+	if err != nil || thread.Model != "opus" || thread.Effort != "high" {
+		t.Fatalf("claude child: %+v %v", thread, err)
+	}
+	codex := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "codex-model", Engine: "codex", Model: "gpt-5.5", Effort: "low"})
+	if codex.Error != nil || codex.Session == nil {
+		t.Fatalf("codex create: %+v", codex)
+	}
+	got := f.call(t, "wio_get_session", sessiontools.Params{Session: *codex.Session})
+	raw, _ := json.Marshal(got.Data)
+	if !strings.Contains(string(raw), `"model":"gpt-5.5"`) || !strings.Contains(string(raw), `"effort":"low"`) {
+		t.Fatalf("codex child: %s", raw)
+	}
+	if bad := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "gemini-auto-effort", Engine: "gemini", Effort: "high"}); bad.Error == nil || bad.Error.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("gemini auto effort: %+v", bad)
+	}
+}

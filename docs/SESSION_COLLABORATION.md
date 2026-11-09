@@ -9,7 +9,7 @@ Wio 为自己管理的 Codex、Claude、Gemini 进程自动注入会话协作工
 3. 按需授权其他工作区、独立 worktree、跨模型执行权限、自动续聊和进一步委派。跨模型权限由用户选择，执行时还会检查它是否超过来源会话的权限。
 4. 正常发送任务，例如：“新建 Claude 会话检查测试，使用独立 worktree，不提交；完成后让我查看结果。”
 
-默认使用当前项目、服务器和工作区，沿用来源模型类型及执行设置。仅创建空会话不会调用模型。跨模型会按照目标服务器现有模型默认规则选择模型。
+默认使用当前项目、服务器和工作区，沿用来源模型类型及执行设置。仅创建空会话不会调用模型。跨模型会按照目标服务器现有模型默认规则选择模型。`wio_create_session` 与 `wio_fork_session` 可选传入 `model`（模型 ID 或别名）和 `effort`（思考等级）覆盖默认值：Codex 为 `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`/`ultra`，Claude 为 `low`/`medium`/`high`/`xhigh`/`max`（模型可带 `[1m]`），Gemini 为 `minimal`/`low`/`medium`/`high` 且需明确指定支持思考等级的 Gemini 3 模型（`auto` 与 2.x 不支持）。只改模型时不沿用原思考等级；显式传入的不合法取值返回 `INVALID_ARGUMENT`。之后的续聊沿用子会话保存的设置。
 
 共享工作区共享文件修改。独立 worktree 隔离 Git 工作目录，仍遵循 Agent 现有的文件与系统访问权限。
 

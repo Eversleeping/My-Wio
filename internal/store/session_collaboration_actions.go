@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/geminiapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
@@ -184,6 +187,46 @@ func (s *Store) collaborationSend(ctx context.Context, tx *sqlx.Tx, t Collaborat
 	err := tx.GetContext(ctx, &op, s.Q("SELECT operation_id FROM "+t.Engine+"_threads WHERE id=?"), t.ID)
 	return op, err
 }
+
+// collaborationModelOverride applies the caller's optional model and effort.
+// An explicit model clears the inherited effort unless effort is also given,
+// because effort levels are not portable between models.
+func collaborationModelOverride(engine, model, effort string, p sessiontools.Params) (string, string, error) {
+	if p.Model != "" {
+		if !collaborationModelPattern.MatchString(strings.TrimSuffix(p.Model, "[1m]")) || len(p.Model) > 128 || engine != "claude" && strings.HasSuffix(p.Model, "[1m]") {
+			return "", "", sessiontools.Fail("INVALID_ARGUMENT", "invalid model")
+		}
+		if p.Model != model {
+			model, effort = p.Model, ""
+		}
+	}
+	if p.Effort != "" {
+		effort = p.Effort
+	}
+	valid := true
+	switch engine {
+	case "codex":
+		switch effort {
+		case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		default:
+			valid = false
+		}
+	case "claude":
+		valid = protocol.ValidClaudeEffort(effort)
+	case "gemini":
+		valid = geminiapi.ValidThinkingLevel(model, effort)
+	}
+	if !valid {
+		if p.Effort == "" {
+			// Only an explicit request can fail; a default that no longer fits is dropped.
+			return model, "", nil
+		}
+		return "", "", sessiontools.Fail("INVALID_ARGUMENT", "effort "+strconv.Quote(p.Effort)+" is not supported by "+engine+" model "+strconv.Quote(model))
+	}
+	return model, effort, nil
+}
+
+var collaborationModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 func collaborationPermissionRank(engine, mode string) int {
 	if mode == "plan" {
@@ -386,9 +429,13 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 			return reply, sessiontools.Fail("CAPABILITY_UNSUPPORTED", "native forks require the same engine and source workspace; choose handoff otherwise")
 		}
 		if native {
-			execution, _ = json.Marshal(map[string]string{"model": origin.Model, "mode": origin.Mode, "effort": origin.Effort})
-			r.Execution = string(execution)
+			model, mode, effort = origin.Model, origin.Mode, origin.Effort
 		}
+		if model, effort, err = collaborationModelOverride(engine, model, effort, p); err != nil {
+			return reply, err
+		}
+		execution, _ = json.Marshal(map[string]string{"model": model, "mode": mode, "effort": effort})
+		r.Execution = string(execution)
 		if r.Tool == "wio_fork_session" && p.ForkMode == "handoff" {
 			if strings.TrimSpace(p.Handoff) == "" {
 				return reply, sessiontools.Fail("INVALID_ARGUMENT", "handoff requires explicit context")
