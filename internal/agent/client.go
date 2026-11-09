@@ -1033,6 +1033,8 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		if err != nil {
 			return err
 		}
+		environment, stopStreamProxy := c.claudeStreamProxy(environment)
+		defer stopStreamProxy()
 		gitEnvironment, err := c.geminiGitEnvironment(ctx)
 		if err != nil {
 			return err

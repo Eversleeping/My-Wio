@@ -9,7 +9,7 @@
 3. SSH 注册和修复会安装并验证 Claude Code 的最新正式版。官方控制端镜像也已内置 Claude CLI。已有服务器可通过上述版本管理入口安装，需要 Node.js/npm；缺少依赖时先运行 SSH 修复。
 4. **设置 → 新增凭据 → Claude API** 填写名称、API 基础地址、模型和密钥。官方地址为 `https://api.anthropic.com`，兼容 Anthropic Messages API 的代理填写其基础地址。Wio 通过 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 向 CLI 提供配置，密钥在控制端加密保存，在 Agent 的受保护配置文件中保存，不写入项目仓库。
 5. 在 **服务器 → 更改凭据 → Claude API** 选择预设并应用，等待成功后才会更新绑定。编辑预设后须重新应用；新会话默认模型取自最后一次成功应用的配置快照，可在会话中另行调整。Claude 配置独立于 Codex、Gemini 和 Git。
-6. 未应用托管预设时，CLI 可继续使用 Agent 运行账号已有的 Claude Code 登录或服务环境认证。请确保 `HOME`、`PATH`、文件权限和认证均属于同一运行账号。托管预设生效后，CLI 使用该预设的 API 密钥和地址。Wio 禁止 CLI 自动更新，版本由管理入口控制；此处“已就绪”表示可找到 CLI，不代表密钥已通过模型调用验证。
+6. 未应用托管预设时，CLI 可继续使用 Agent 运行账号已有的 Claude Code 登录或服务环境认证。请确保 `HOME`、`PATH`、文件权限和认证均属于同一运行账号。托管预设生效后，CLI 使用该预设的 API 密钥和地址。使用非 Anthropic 官方地址时，Agent 会为每轮会话在本机回环地址启动一个转发代理：请求原样转发，流式响应在收到 `message_stop` 后立即结束。部分中转服务在 `message_stop` 后仍用心跳保持连接约 30 秒，而 CLI 会等连接结束才执行下一步，导致每次工具调用和每轮结束都多等约 30 秒。代理不保存也不添加凭据，并会把回环地址加入 `NO_PROXY`；如需关闭，可在 Agent 环境中设置 `WIO_CLAUDE_STREAM_PROXY=off`。Wio 禁止 CLI 自动更新，版本由管理入口控制；此处“已就绪”表示可找到 CLI，不代表密钥已通过模型调用验证。
 
 ## 使用方式和权限
 

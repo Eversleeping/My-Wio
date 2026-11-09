@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wio-platform/wio/internal/claudeadapter"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -62,4 +63,38 @@ func (c *Client) claudeEnvironment() ([]string, error) {
 	return append(environment, "ANTHROPIC_API_KEY="+command.APIKey,
 		"ANTHROPIC_BASE_URL="+command.Endpoint, "ANTHROPIC_AUTH_TOKEN=",
 		"CLAUDE_CODE_USE_BEDROCK=", "CLAUDE_CODE_USE_VERTEX=", "CLAUDE_CODE_USE_FOUNDRY="), nil
+}
+
+// claudeStreamProxy routes a configured custom endpoint through a per-turn
+// loopback proxy that ends each streamed response at message_stop. Relays that
+// hold the stream open afterwards otherwise delay every Claude step by about
+// 30 seconds. If the proxy cannot start, the CLI talks to the endpoint directly.
+// Set WIO_CLAUDE_STREAM_PROXY=off on the Agent to disable it.
+func (c *Client) claudeStreamProxy(environment []string) ([]string, func()) {
+	if os.Getenv("WIO_CLAUDE_STREAM_PROXY") == "off" {
+		return environment, func() {}
+	}
+	for i, entry := range environment {
+		endpoint, ok := strings.CutPrefix(entry, "ANTHROPIC_BASE_URL=")
+		if !ok || endpoint == "" {
+			continue
+		}
+		// Anthropic's own API closes streams promptly; keep it first-party.
+		if parsed, err := url.Parse(endpoint); err != nil || parsed.Hostname() == "anthropic.com" || strings.HasSuffix(parsed.Hostname(), ".anthropic.com") {
+			return environment, func() {}
+		}
+		base, stop, err := claudeadapter.StartStreamProxy(endpoint)
+		if err != nil {
+			c.log.Warn("Claude stream proxy unavailable; using the endpoint directly", "error", err)
+			return environment, func() {}
+		}
+		routed := append([]string(nil), environment...)
+		routed[i] = "ANTHROPIC_BASE_URL=" + base
+		// Keep an inherited HTTP(S)_PROXY from capturing loopback traffic.
+		for _, key := range []string{"NO_PROXY", "no_proxy"} {
+			routed = append(routed, key+"="+strings.TrimPrefix(os.Getenv(key)+",127.0.0.1,localhost", ","))
+		}
+		return routed, stop
+	}
+	return environment, func() {}
 }
