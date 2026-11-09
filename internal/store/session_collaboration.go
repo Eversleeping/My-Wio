@@ -332,7 +332,7 @@ func (s *Store) authorizeCollaboration(ctx context.Context, tx *sqlx.Tx, source 
 	if err == nil && count != 1 {
 		err = sessiontools.Fail("OUT_OF_SCOPE", "only your child sessions or explicitly granted sessions may be managed")
 	}
-	if err == nil && !collaborationWorkspaceAllowed(source, grant, t.WorkspaceID) {
+	if err == nil && !collaborationWorkspaceAllowed(source, grant, t.WorkspaceID, t.ProjectID) {
 		var arguments string
 		if e := tx.GetContext(ctx, &arguments, s.Q("SELECT arguments FROM session_tool_requests WHERE source_key=? AND target_engine=? AND target_id=? AND tool IN ('wio_create_session','wio_fork_session') LIMIT 1"), source.Ref().Key(), target.Engine, target.ID); e != nil {
 			return t, e
@@ -343,7 +343,11 @@ func (s *Store) authorizeCollaboration(ctx context.Context, tx *sqlx.Tx, source 
 		if base == "" {
 			base = source.WorkspaceID
 		}
-		if !grant.Worktree || p.DirectoryMode != "worktree" || !collaborationWorkspaceAllowed(source, grant, base) {
+		allowed, e := s.collaborationWorkspaceGranted(ctx, tx, source, grant, base)
+		if e != nil {
+			return t, e
+		}
+		if !grant.Worktree || p.DirectoryMode != "worktree" || !allowed {
 			err = sessiontools.Fail("OUT_OF_SCOPE", "target workspace is no longer granted")
 		}
 	}
@@ -431,7 +435,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 		return collaborationError(p.RequestID, err)
 	}
 	if call.Name == "wio_get_context" {
-		return sessiontools.Reply{Status: "succeeded", Data: map[string]any{"session": source, "grant": grant, "engines": []string{"codex", "claude", "gemini"}, "limits": map[string]int{"active_children": 2, "total_sessions": 10, "delegation_depth": 2, "wait_ms": 30000}, "shared_directory": true}}
+		return sessiontools.Reply{Status: "succeeded", Data: map[string]any{"session": source, "grant": grant, "engines": []string{"codex", "claude", "gemini"}, "limits": map[string]any{"active_children": 2, "total_sessions": nil, "delegation_depth": 2, "wait_ms": 30000}, "shared_directory": true}}
 	}
 	if !grant.Enabled {
 		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration in this session's settings first"))
@@ -565,7 +569,7 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 		}
 		items := []Workspace{}
 		for _, w := range workspaces {
-			if collaborationWorkspaceAllowed(source, grant, w.ID) {
+			if collaborationWorkspaceAllowed(source, grant, w.ID, w.ProjectID) {
 				items = append(items, w)
 			}
 		}
@@ -755,8 +759,14 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 	return reply, sessiontools.Fail("CAPABILITY_UNSUPPORTED", "unsupported tool")
 }
 
-func collaborationWorkspaceAllowed(source CollaborationSession, g sessiontools.Grant, id string) bool {
+// collaborationWorkspaceAllowed reports whether workspace id, which belongs to
+// projectID, is in the grant's scope. Allowing other agents' sessions in the
+// project grants every workspace of that project, including worktrees.
+func collaborationWorkspaceAllowed(source CollaborationSession, g sessiontools.Grant, id, projectID string) bool {
 	if id == source.WorkspaceID {
+		return true
+	}
+	if g.AllProjectSessions && projectID != "" && projectID == source.ProjectID {
 		return true
 	}
 	for _, allowed := range g.WorkspaceIDs {
@@ -765,6 +775,23 @@ func collaborationWorkspaceAllowed(source CollaborationSession, g sessiontools.G
 		}
 	}
 	return false
+}
+
+// collaborationWorkspaceGranted resolves the workspace's project before
+// checking the grant, so callers holding only an ID cannot widen the scope.
+func (s *Store) collaborationWorkspaceGranted(ctx context.Context, tx *sqlx.Tx, source CollaborationSession, g sessiontools.Grant, id string) (bool, error) {
+	if collaborationWorkspaceAllowed(source, g, id, "") {
+		return true, nil
+	}
+	if !g.AllProjectSessions {
+		return false, nil
+	}
+	var project string
+	err := tx.GetContext(ctx, &project, s.Q("SELECT project_id FROM workspaces WHERE id=?"), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && collaborationWorkspaceAllowed(source, g, id, project), err
 }
 
 func (s *Store) collaborationMessages(ctx context.Context, tx *sqlx.Tx, id string, after int64, limit int) ([]protocol.StreamEvent, error) {

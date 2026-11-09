@@ -239,13 +239,6 @@ func (s *Store) collaborationLimits(ctx context.Context, tx *sqlx.Tx, source Col
 	if depth >= 2 {
 		return depth, sessiontools.Fail("DELEGATION_LIMIT", "maximum delegation depth reached")
 	}
-	var count int
-	if err := tx.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM session_links WHERE root_key=?"), root); err != nil {
-		return depth, err
-	}
-	if count >= 10 {
-		return depth, sessiontools.Fail("DELEGATION_LIMIT", "root task has created ten sessions")
-	}
 	var keys []string
 	if err := tx.SelectContext(ctx, &keys, s.Q("SELECT target_key FROM session_links WHERE source_key=?"), source.Ref().Key()); err != nil {
 		return depth, err
@@ -256,8 +249,15 @@ func (s *Store) collaborationLimits(ctx context.Context, tx *sqlx.Tx, source Col
 		if err == nil && t.Busy() {
 			active++
 		} else if err == nil || errors.Is(err, sql.ErrNoRows) {
+			// A missing session only occupies a slot while its request is still
+			// preparing it; a deleted session never counts, even if a stale
+			// request row still names it.
+			query := "SELECT COUNT(*) FROM session_tool_requests WHERE target_engine=? AND target_id=? AND status IN ('accepted','preparing','queued')"
+			if err != nil {
+				query = "SELECT COUNT(*) FROM session_tool_requests WHERE target_engine=? AND target_id=? AND phase<>'' AND status IN ('accepted','preparing')"
+			}
 			var n int
-			if err = tx.GetContext(ctx, &n, s.Q("SELECT COUNT(*) FROM session_tool_requests WHERE target_engine=? AND target_id=? AND status IN ('accepted','preparing','queued')"), refFromKey(key).Engine, refFromKey(key).ID); err != nil {
+			if err = tx.GetContext(ctx, &n, s.Q(query), refFromKey(key).Engine, refFromKey(key).ID); err != nil {
 				return depth, err
 			}
 			active += n
@@ -353,7 +353,9 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 		if workspace == "" {
 			workspace = source.WorkspaceID
 		}
-		if !collaborationWorkspaceAllowed(source, grant, workspace) {
+		if allowed, e := s.collaborationWorkspaceGranted(ctx, tx, source, grant, workspace); e != nil {
+			return reply, e
+		} else if !allowed {
 			return reply, sessiontools.Fail("OUT_OF_SCOPE", "workspace is not granted")
 		}
 		var w Workspace

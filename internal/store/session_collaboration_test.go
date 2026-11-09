@@ -842,3 +842,116 @@ func TestCollaborationWorktreeChildDefersForOtherWriters(t *testing.T) {
 		t.Fatalf("another session's write should still defer worktree creation: %+v", created)
 	}
 }
+
+func TestCollaborationWorkspaceAllowedByProjectGrant(t *testing.T) {
+	source := CollaborationSession{WorkspaceID: "own", ProjectID: "project"}
+	grant := sessiontools.Grant{WorkspaceIDs: []string{"picked"}}
+	for _, c := range []struct {
+		all         bool
+		id, project string
+		allowed     bool
+	}{
+		{false, "own", "project", true},
+		{false, "picked", "project", true},
+		{false, "worktree", "project", false},
+		{true, "worktree", "project", true},
+		{true, "foreign", "other", false},
+		{true, "unknown", "", false},
+	} {
+		grant.AllProjectSessions = c.all
+		if got := collaborationWorkspaceAllowed(source, grant, c.id, c.project); got != c.allowed {
+			t.Fatalf("%+v: got %v", c, got)
+		}
+	}
+}
+
+func TestCollaborationProjectGrantCoversProjectWorkspaces(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+	var project string
+	if err := f.db.DB.GetContext(ctx, &project, f.db.Q("SELECT project_id FROM workspaces WHERE id=?"), f.workspace); err != nil {
+		t.Fatal(err)
+	}
+	worktree, foreignProject, foreign := NewID(), NewID(), NewID()
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO workspaces(id,project_id,server_id,path,kind) VALUES(?,?,?,?,'worktree')", []any{worktree, project, f.server, "/srv/worktree-" + worktree}},
+		{"INSERT INTO projects(id,name,default_branch) VALUES(?,?,'main')", []any{foreignProject, "Foreign"}},
+		{"INSERT INTO workspaces(id,project_id,server_id,path) VALUES(?,?,?,?)", []any{foreign, foreignProject, f.server, "/srv/foreign-" + foreign}},
+	} {
+		if _, err := f.db.DB.ExecContext(ctx, f.db.Q(query.sql), query.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed := func() []string {
+		reply := f.call(t, "wio_list_workspaces", sessiontools.Params{})
+		ids := []string{}
+		for _, w := range reply.Data.([]Workspace) {
+			ids = append(ids, w.ID)
+		}
+		return ids
+	}
+	if ids := listed(); len(ids) != 1 || ids[0] != f.workspace {
+		t.Fatalf("default scope: %v", ids)
+	}
+	if reply := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "worktree-denied", Engine: "codex", WorkspaceID: worktree}); reply.Error == nil || reply.Error.Code != "OUT_OF_SCOPE" {
+		t.Fatalf("worktree outside scope: %+v", reply)
+	}
+	grant, _ := f.db.CollaborationGrant(ctx, f.source)
+	grant.AllProjectSessions = true
+	if err := f.db.SetCollaborationGrant(ctx, f.source, grant); err != nil {
+		t.Fatal(err)
+	}
+	if ids := listed(); len(ids) != 2 || strings.Contains(strings.Join(ids, ","), foreign) {
+		t.Fatalf("project-wide scope: %v", ids)
+	}
+	if reply := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "worktree-allowed", Engine: "codex", WorkspaceID: worktree}); reply.Error != nil {
+		t.Fatalf("project worktree: %+v", reply)
+	}
+	if reply := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "foreign-denied", Engine: "codex", WorkspaceID: foreign}); reply.Error == nil || reply.Error.Code != "OUT_OF_SCOPE" {
+		t.Fatalf("other project: %+v", reply)
+	}
+}
+
+func TestCollaborationSessionCountIsUnlimitedAndIgnoresDeleted(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+	children := []sessiontools.Ref{}
+	for i := 0; i < 12; i++ {
+		reply := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "many-" + NewID(), Engine: "codex"})
+		if reply.Error != nil || reply.Session == nil {
+			t.Fatalf("child %d: %+v", i, reply)
+		}
+		children = append(children, *reply.Session)
+	}
+	context := f.call(t, "wio_get_context", sessiontools.Params{})
+	raw, _ := json.Marshal(context.Data)
+	if !strings.Contains(string(raw), `"total_sessions":null`) {
+		t.Fatalf("limits: %s", raw)
+	}
+	// Two running children fill the active slots.
+	for _, child := range children[:2] {
+		if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='running' WHERE id=?"), child.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reply := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "over-active", Engine: "codex"}); reply.Error == nil || reply.Error.Code != "DELEGATION_LIMIT" {
+		t.Fatalf("active limit: %+v", reply)
+	}
+	// Deleting one frees its slot even if its request row still looks queued.
+	deleted := children[0]
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='completed' WHERE id=?"), deleted.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.DeleteThread(ctx, deleted.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE session_tool_requests SET status='queued', phase='' WHERE target_engine='codex' AND target_id=?"), deleted.ID); err != nil {
+		t.Fatal(err)
+	}
+	if reply := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "after-delete", Engine: "codex"}); reply.Error != nil {
+		t.Fatalf("deleted child still counted: %+v", reply)
+	}
+}

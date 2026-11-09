@@ -87,31 +87,7 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const modelForWorkspace = (id: string) => { const workspace = workspaces.data?.find(item => item.id === id); return servers.data?.find(item => item.id === workspace?.server_id)?.claude_profile_model || "sonnet"; };
   const newSession = (id = thread?.workspace_id ?? "") => { const previous = threads.data?.find(item => item.workspace_id === id); setWorkspaceID(id); setModel(modelForWorkspace(id)); setEffort(previous?.effort ?? ""); setMode(previous?.permission_mode ?? "default"); setError(""); setCreateOpen(true); };
 
-  const groups = useMemo(() => {
-    const result = new Map<string, { name: string; path: string; context: ClaudeThread; threads: ClaudeThread[] }>();
-    const byID = new Map((workspaces.data ?? []).map(item => [item.id, item]));
-    for (const item of threads.data ?? []) {
-      if (item.project_hidden_at) continue;
-      const workspace = byID.get(item.workspace_id);
-      const path = workspace?.path || item.path;
-      const identity = [workspace?.display_name?.trim(), workspace?.branch?.trim(), path.split(/[\\/]/).filter(Boolean).at(-1)].find(value => value && value !== item.project_name);
-      const group = result.get(item.workspace_id) ?? { name: identity ? `${item.project_name} · ${identity}` : item.project_name, path, context: item, threads: [] };
-      group.threads.push(item); result.set(item.workspace_id, group);
-    }
-    if (!archived) for (const workspace of workspaces.data ?? []) {
-      if (result.has(workspace.id) || workspace.status !== "ready" || workspace.kind !== "worktree") continue;
-      const source = threads.data?.find(item => item.project_id === workspace.project_id && item.server_id === workspace.server_id && !item.project_hidden_at);
-      if (!source) continue;
-      const identity = workspace.display_name?.trim() || workspace.branch?.trim() || workspace.path.split(/[\\/]/).filter(Boolean).at(-1);
-      result.set(workspace.id, { name: identity ? `${source.project_name} · ${identity}` : source.project_name, path: workspace.path, context: {...source, workspace_id:workspace.id, path:workspace.path}, threads: [] });
-    }
-    const query = search.trim().toLocaleLowerCase();
-    return [...result.entries()].sort(([,a],[,b]) => Number(!a.context.project_pinned_at) - Number(!b.context.project_pinned_at) || (b.context.project_pinned_at ?? "").localeCompare(a.context.project_pinned_at ?? "")).flatMap(([id, group]) => {
-      if (!query || `${group.name} ${group.path}`.toLocaleLowerCase().includes(query)) return [[id, group] as const];
-      const matching = group.threads.filter(item => `${item.title} ${item.server_name} ${item.id} ${item.session_id}`.toLocaleLowerCase().includes(query));
-      return matching.length ? [[id, { ...group, threads: matching }] as const] : [];
-    });
-  }, [search, threads.data, workspaces.data, archived]);
+  const groups = useMemo(() => groupClaudeThreads(threads.data ?? [], workspaces.data ?? [], search), [search, threads.data, workspaces.data]);
   const management = useClaudeManagement({ workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify });
   const threadActions = (item: ClaudeThread): ContextMenuAction[] => { const actions=management.threadActions(item); return [
     ...actions.filter(action => action.id === "pin"),
@@ -337,4 +313,25 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     <Dialog open={helpOpen} title={t("claude.commandsHelp")} onClose={()=>setHelpOpen(false)}><p>{t("claude.commandsDescription")}</p><p><a href="https://code.claude.com/docs/en/headless" target="_blank" rel="noreferrer">Claude Code</a></p></Dialog>
     <ConfirmDialog open={confirming} danger title={t("claude.confirmStopped")} impact={t("claude.confirmStoppedImpact")} confirmLabel={t("claude.confirmStopped")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setConfirming(false)} onConfirm={confirmStopped} />
   </section>;
+}
+
+// Groups only workspaces that still contain sessions; an empty workspace would
+// show as a "(0)" project entry in the sidebar.
+export function groupClaudeThreads(threads: ClaudeThread[], workspaces: Workspace[], search: string) {
+  const result = new Map<string, { name: string; path: string; context: ClaudeThread; threads: ClaudeThread[] }>();
+  const byID = new Map(workspaces.map(item => [item.id, item]));
+  for (const item of threads) {
+    if (item.project_hidden_at) continue;
+    const workspace = byID.get(item.workspace_id);
+    const path = workspace?.path || item.path;
+    const identity = [workspace?.display_name?.trim(), workspace?.branch?.trim(), path.split(/[\\/]/).filter(Boolean).at(-1)].find(value => value && value !== item.project_name);
+    const group = result.get(item.workspace_id) ?? { name: identity ? `${item.project_name} · ${identity}` : item.project_name, path, context: item, threads: [] };
+    group.threads.push(item); result.set(item.workspace_id, group);
+  }
+  const query = search.trim().toLocaleLowerCase();
+  return [...result.entries()].sort(([,a],[,b]) => Number(!a.context.project_pinned_at) - Number(!b.context.project_pinned_at) || (b.context.project_pinned_at ?? "").localeCompare(a.context.project_pinned_at ?? "")).flatMap(([id, group]) => {
+    if (!query || `${group.name} ${group.path}`.toLocaleLowerCase().includes(query)) return [[id, group] as const];
+    const matching = group.threads.filter(item => `${item.title} ${item.server_name} ${item.id} ${item.session_id}`.toLocaleLowerCase().includes(query));
+    return matching.length ? [[id, { ...group, threads: matching }] as const] : [];
+  });
 }

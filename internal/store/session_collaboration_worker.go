@@ -192,7 +192,7 @@ func (s *Store) advanceCollaborationPhase(ctx context.Context, tx *sqlx.Tx, sour
 			if err := tx.GetContext(ctx, &w, s.Q("SELECT * FROM workspaces WHERE id=? AND status='ready'"), r.WorkspaceID); err != nil {
 				return err
 			}
-			if !grant.Worktree || !collaborationWorkspaceAllowed(source, grant, w.ID) {
+			if !grant.Worktree || !collaborationWorkspaceAllowed(source, grant, w.ID, w.ProjectID) {
 				return sessiontools.Fail("OUT_OF_SCOPE", "worktree creation is no longer granted")
 			}
 			command, err := s.collaborationWorktree(ctx, tx, w, p, r.TargetEngine)

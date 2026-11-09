@@ -27,3 +27,30 @@ test("saves explicit collaboration scope and displays child provenance", async (
   await user.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(saved).toEqual([expect.objectContaining({ enabled: true, all_project_sessions: true, session_refs: [], worktree: true, auto_continue: false, target_modes: { claude: "default" } })]));
 });
+
+test("hides deleted and archived children and deletes a child after confirmation", async () => {
+  localStorage.setItem("wio_language", "en");
+  const deleted: string[] = [];
+  const session = (id: string, title: string, extra: object = {}) => ({ engine: "gemini", id, title, status: "completed", workspace_id: "workspace", url: `/?view=gemini&thread=${id}`, operation_id: "", recovery_pending: false, ...extra });
+  const state = { supported: true, grant: { enabled: true, workspace_ids: [], session_refs: [], worktree: false, auto_continue: false, delegate: false, target_modes: {} }, requests: [], links: [
+    { source_key: "codex:source", target_key: "gemini:done", relation: "created", missing: false, session: session("done", "Finished child") },
+    { source_key: "codex:source", target_key: "gemini:busy", relation: "created", missing: false, session: session("busy", "Running child", { status: "running" }) },
+    { source_key: "codex:source", target_key: "gemini:old", relation: "created", missing: false, session: session("old", "Archived child", { archived_at: "2026-11-01T00:00:00Z" }) },
+    { source_key: "codex:source", target_key: "gemini:gone", relation: "created", missing: true, session: session("gone", "") }
+  ] };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, options: RequestInit = {}) => {
+    if (options.method === "DELETE") { deleted.push(String(input)); return new Response("{}"); }
+    return new Response(JSON.stringify(String(input).includes("/collaboration") ? state : []));
+  }));
+  const user = userEvent.setup();
+  render(<I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={0} /></I18nProvider>);
+  await user.click(await screen.findByRole("button", { name: /Session collaboration/ }));
+  expect(screen.getByRole("link", { name: /Finished child/ })).toBeInTheDocument();
+  expect(screen.queryByText(/Archived child/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/provenance retained/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Delete child session Running child" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "Delete child session Finished child" }));
+  expect(deleted).toEqual([]);
+  await user.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(deleted).toEqual([expect.stringContaining("/gemini/threads/done")]));
+});
