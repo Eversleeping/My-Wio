@@ -28,7 +28,7 @@ func (a *API) steerClaudeTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	event, id, err := a.store.QueueClaudeSteer(r.Context(), input)
 	if err != nil {
-		writeError(w, 409, err.Error())
+		writeStoreError(w, err, "could not queue request")
 		return
 	}
 	if event.EventID != "" {

@@ -48,7 +48,7 @@ func (s *Store) GeminiGoal(ctx context.Context, threadID string) (*GeminiGoal, e
 // the thread and workspace. A restarted control plane must not replay it.
 func (s *Store) QueueGeminiGoal(ctx context.Context, thread GeminiThread, prompt, model, mode, thinking string, images []protocol.TurnImage, goal *protocol.GeminiGoalCommand) (protocol.StreamEvent, error) {
 	if goal == nil || !ValidGeminiGoalLimits(goal.MaxContinuations, goal.MaxSeconds) {
-		return protocol.StreamEvent{}, errors.New("invalid Gemini goal limits")
+		return protocol.StreamEvent{}, invalidInput(errors.New("invalid Gemini goal limits"))
 	}
 	return s.queueGeminiTurn(ctx, thread, prompt, model, mode, "", images, goal, thinking)
 }
@@ -56,7 +56,7 @@ func (s *Store) QueueGeminiGoal(ctx context.Context, thread GeminiThread, prompt
 func (s *Store) claimGeminiGoal(ctx context.Context, tx *sqlx.Tx, threadID, opID string, goal *protocol.GeminiGoalCommand, images *[]protocol.TurnImage, now time.Time) error {
 	if goal.ID == "" {
 		if strings.TrimSpace(goal.Objective) == "" || len(goal.Objective) > 256*1024 {
-			return errors.New("invalid Gemini goal objective")
+			return invalidInput(errors.New("invalid Gemini goal objective"))
 		}
 		if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_goals SET status='cancelled',updated_at=? WHERE thread_id=? AND status IN ('paused','blocked')"), now, threadID); err != nil {
 			return err
@@ -72,7 +72,10 @@ func (s *Store) claimGeminiGoal(ctx context.Context, tx *sqlx.Tx, threadID, opID
 	}
 	var existing GeminiGoal
 	if err := tx.GetContext(ctx, &existing, s.Q("SELECT * FROM gemini_goals WHERE id=? AND thread_id=?"), goal.ID, threadID); err != nil {
-		return ErrGeminiGoalChanged
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrGeminiGoalChanged
+		}
+		return err
 	}
 	if existing.Status != "paused" && existing.Status != "blocked" {
 		return ErrGeminiGoalChanged

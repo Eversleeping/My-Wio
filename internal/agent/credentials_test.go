@@ -178,3 +178,74 @@ func TestConfigureCredentialsWritesMultipleGitCredentials(t *testing.T) {
 		t.Fatalf("first Git profile should define the default commit identity: %q %v", config, err)
 	}
 }
+
+func TestReplaceCredentialFileAtomicallyPreservesMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.key")
+	if err := os.WriteFile(path, []byte("original-key"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	if err := replaceCredentialFile(path, []byte("replacement-key")); err != nil {
+		t.Fatal(err)
+	}
+	old, err := io.ReadAll(original)
+	if err != nil || string(old) != "original-key" {
+		t.Fatalf("old inode was modified: %q %v", old, err)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil || string(current) != "replacement-key" {
+		t.Fatalf("replacement missing: %q %v", current, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("permissions changed: %v %v", info, err)
+	}
+}
+
+func TestReplaceCredentialFileDoesNotTruncateWhenDirectoryIsReadOnly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex.key")
+	if err := os.WriteFile(path, []byte("original-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	if err := replaceCredentialFile(path, []byte("replacement-key")); err == nil {
+		t.Fatal("write unexpectedly succeeded without an atomic replacement")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "original-key" {
+		t.Fatalf("failed replacement damaged original: %q %v", data, err)
+	}
+}
+
+func TestLegacyCodexKeyUpdatesUseStateDirAcrossRestart(t *testing.T) {
+	config := Config{StateDir: t.TempDir(), CodexAPIKeyFile: "/etc/wio-agent/codex.key"}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client := NewClient(config, log)
+	defer client.codex.Close()
+	command := protocol.ConfigureCredentialsCommand{Scope: "codex", CodexAPIURL: "https://api.example.com/v1", CodexAPIKey: "updated-state-secret", CodexModel: "gpt-5.6-sol"}
+	if err := client.configureCredentials(command); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(config.StateDir, "codex.key"))
+	if err != nil || string(data) != command.CodexAPIKey+"\n" {
+		t.Fatalf("managed key missing: %q %v", data, err)
+	}
+	env := codexEnvironment(config, log)
+	if len(env) != 1 || env[0] != "WIO_CODEX_API_KEY="+command.CodexAPIKey {
+		t.Fatalf("restart did not read updated key: %v", env)
+	}
+}

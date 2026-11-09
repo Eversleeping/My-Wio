@@ -48,7 +48,15 @@ func run(log *slog.Logger) error {
 		databaseURL = "wio.db?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 	}
 	devInsecure := envBool("WIO_DEV_INSECURE")
-	database, err := store.Open(databaseURL)
+	poolLimit, err := postgresPoolLimitFromEnv()
+	if err != nil {
+		return err
+	}
+	retentionPolicy, err := retentionPolicyFromEnv()
+	if err != nil {
+		return err
+	}
+	database, err := store.OpenWithOptions(databaseURL, store.OpenOptions{PostgresMaxOpenConns: poolLimit})
 	if err != nil {
 		return err
 	}
@@ -128,6 +136,7 @@ func run(log *slog.Logger) error {
 	defer stopAgent()
 	go gateway.RunSessionCollaboration(agentContext)
 	go runWorkspaceFileScanMaintenance(agentContext, database, log)
+	go runDataRetention(agentContext, database, retentionPolicy, log)
 	go func() {
 		log.Info("Wio control plane listening", "address", listenerAddress, "version", buildinfo.Version)
 		errCh <- server.Serve(listener)

@@ -29,7 +29,7 @@ func (s *Store) QueueClaudeAnswer(ctx context.Context, threadID, requestID strin
 	}
 	var detail string
 	if err = tx.GetContext(ctx, &detail, s.Q("SELECT payload FROM events WHERE stream_id=? AND event_id=? AND kind='claude.question'"), threadID, requestID); err != nil {
-		return "", errors.New("Claude question not found")
+		return "", err
 	}
 	var question struct {
 		OperationID string `json:"operation_id"`
@@ -38,7 +38,7 @@ func (s *Store) QueueClaudeAnswer(ctx context.Context, threadID, requestID strin
 		return "", errors.New("invalid Claude question")
 	}
 	if err = protocol.ValidateUserInputAnswers(json.RawMessage(detail), answers); err != nil {
-		return "", err
+		return "", invalidInput(err)
 	}
 	key := "claude-answer:" + requestID
 	var existing struct {
@@ -50,7 +50,7 @@ func (s *Store) QueueClaudeAnswer(ctx context.Context, threadID, requestID strin
 		var command protocol.ClaudeAnswerCommand
 		_ = json.Unmarshal([]byte(existing.Payload), &command)
 		if !reflect.DeepEqual(command.Answers, answers) {
-			return "", errors.New("Claude question already has a different answer")
+			return "", stateConflict("Claude question already has a different answer")
 		}
 		return existing.ID, tx.Commit()
 	}
@@ -58,17 +58,17 @@ func (s *Store) QueueClaudeAnswer(ctx context.Context, threadID, requestID strin
 		return "", err
 	}
 	if thread.OperationID != question.OperationID || thread.Status != "running" || thread.ArchivedAt != nil || thread.ServerStatus != "online" {
-		return "", errors.New("Claude question has expired or Agent is offline")
+		return "", stateConflict("Claude question has expired or Agent is offline")
 	}
 	if !buildinfo.SupportsClaudeQuestions(thread.AgentVersion, thread.ClaudeVersion) {
-		return "", errors.New("Claude questions require an Agent update")
+		return "", stateConflict("Claude questions require an Agent update")
 	}
 	var cancelled int
 	if err := tx.GetContext(ctx, &cancelled, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND event_id=? AND kind='claude.question.cancelled'"), threadID, requestID+":question.cancelled"); err != nil {
 		return "", err
 	}
 	if cancelled != 0 {
-		return "", errors.New("Claude question has been cancelled")
+		return "", stateConflict("Claude question has been cancelled")
 	}
 	command := protocol.ClaudeAnswerCommand{ThreadID: threadID, OperationID: question.OperationID, RequestID: requestID, Answers: answers}
 	raw, _ := json.Marshal(command)

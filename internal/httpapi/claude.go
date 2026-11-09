@@ -42,12 +42,12 @@ func (a *API) createClaudeThread(w http.ResponseWriter, r *http.Request) {
 	if input.Model == "" {
 		workspace, err := a.store.Workspace(r.Context(), input.WorkspaceID)
 		if err != nil {
-			writeError(w, 400, "workspace not found or unavailable")
+			writeSessionCreateError(w, err, "workspace not found or unavailable")
 			return
 		}
 		server, err := a.store.Server(r.Context(), workspace.ServerID)
 		if err != nil {
-			writeError(w, 400, "server not found or unavailable")
+			writeStoreError(w, err, "server not found or unavailable")
 			return
 		}
 		input.Model = server.ClaudeProfileModel
@@ -64,7 +64,7 @@ func (a *API) createClaudeThread(w http.ResponseWriter, r *http.Request) {
 	}
 	thread, err := a.store.CreateClaudeThread(r.Context(), input.WorkspaceID, input.Model, input.PermissionMode, input.Effort)
 	if err != nil {
-		writeError(w, 400, "workspace not found or unavailable")
+		writeSessionCreateError(w, err, "workspace not found or unavailable")
 		return
 	}
 	a.auditClaude(r, "claude.thread.create", thread.ID)
@@ -186,7 +186,11 @@ func (a *API) startClaudeTurn(w http.ResponseWriter, r *http.Request) {
 		event, err = a.store.QueueClaudeTurn(r.Context(), thread, input.Prompt, input.Model, input.PermissionMode, effort, input.Images...)
 	}
 	if err != nil {
-		writeError(w, 409, "could not queue Claude turn; check session and active workspace operations")
+		if errors.Is(err, store.ErrInvalidEditTarget) {
+			writeError(w, http.StatusConflict, err.Error())
+		} else {
+			writeStoreError(w, err, "could not queue Claude turn; check session and active workspace operations")
+		}
 		return
 	}
 	if event.EventID != "" {
@@ -208,7 +212,7 @@ func (a *API) interruptClaudeTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.InterruptClaudeTurn(r.Context(), thread); err != nil {
-		writeError(w, 409, "Claude turn is no longer running")
+		writeStoreError(w, err, "Claude turn is no longer running")
 		return
 	}
 	a.gateway.Wake(thread.ServerID)
@@ -234,7 +238,7 @@ func (a *API) confirmClaudeStopped(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.ConfirmClaudeStopped(r.Context(), thread.ID, input.OperationID); err != nil {
-		writeError(w, 409, "Claude task changed or no longer needs confirmation")
+		writeStoreError(w, err, "Claude task changed or no longer needs confirmation")
 		return
 	}
 	a.auditClaude(r, "claude.turn.confirm_stopped", thread.ID)
@@ -268,7 +272,7 @@ func (a *API) updateClaudeThread(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.Title != nil || input.Archived != nil {
 		if err := a.store.UpdateClaudeThread(r.Context(), thread.ID, title, archived); err != nil {
-			writeError(w, 409, "finish or interrupt the Claude turn first")
+			writeStoreError(w, err, "finish or interrupt the Claude turn first")
 			return
 		}
 	}
@@ -289,7 +293,7 @@ func (a *API) deleteClaudeThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.DeleteClaudeThread(r.Context(), thread.ID); err != nil {
-		writeError(w, 409, "finish or interrupt the Claude turn before deleting it")
+		writeStoreError(w, err, "finish or interrupt the Claude turn before deleting it")
 		return
 	}
 	a.auditClaude(r, "claude.thread.delete", thread.ID)

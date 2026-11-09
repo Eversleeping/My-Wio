@@ -225,10 +225,10 @@ func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 	}
 	command.Interactive = buildinfo.SupportsGeminiInput(agentVersion)
 	if command.Goal != nil && !command.Interactive {
-		return protocol.StreamEvent{}, errors.New("Gemini goal requires the interactive ACP protocol")
+		return protocol.StreamEvent{}, stateConflict("Gemini goal requires the interactive ACP protocol")
 	}
 	if len(images) > 0 && !command.Interactive {
-		return protocol.StreamEvent{}, errors.New("update Agent to support Gemini images")
+		return protocol.StreamEvent{}, stateConflict("update Agent to support Gemini images")
 	}
 	command.Images = images
 	command.Steering = thread.SteerSupported
@@ -273,7 +273,7 @@ func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 	}
 	message, _ := json.Marshal(map[string]any{"text": prompt, "operation_id": opID, "model": model, "thinking_level": level, "images": images})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "gemini.user.message", OccurredAt: now, Payload: message}
-	err = tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), thread.ID)
+	event.Sequence, err = s.nextEventSequence(ctx, tx, thread.ID)
 	if err != nil {
 		return event, err
 	}
@@ -431,7 +431,8 @@ func (s *Store) ConfirmGeminiStopped(ctx context.Context, threadID, operationID 
 	}
 	payload, _ := json.Marshal(map[string]string{"status": "interrupted", "operation_id": operationID})
 	event := protocol.StreamEvent{EventID: operationID + ":completed", StreamID: threadID, Kind: "gemini.turn.completed", OccurredAt: now, Payload: payload}
-	if err := tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), threadID); err != nil {
+	event.Sequence, err = s.nextEventSequence(ctx, tx, threadID)
+	if err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, now, string(payload)); err != nil {
@@ -585,6 +586,11 @@ func (s *Store) CommitGeminiRewrite(ctx context.Context, threadID, operationID, 
 		return protocol.StreamEvent{}, false, ErrThreadActive
 	}
 	replacementID := operationID + ":user"
+	if s.isPostgres() {
+		if err := lockEventStream(ctx, tx, threadID); err != nil {
+			return protocol.StreamEvent{}, false, err
+		}
+	}
 	var exists int
 	if err := tx.GetContext(ctx, &exists, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND event_id=?"), threadID, replacementID); err != nil {
 		return protocol.StreamEvent{}, false, err

@@ -127,11 +127,27 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertGeminiGoalOnPostgres(t, scans)
 	assertGeminiModelConfigRevision(t, scans)
 	assertGeminiModelConfigMigration(t, scans)
+	t.Run("batch B retention", func(t *testing.T) { assertRetentionDefaultsAndOptIn(t, scans) })
+	t.Run("batch B requests", func(t *testing.T) { assertCodexRequestsReplayAndConflict(t, scans) })
+	t.Run("batch B literal paths", func(t *testing.T) { assertWorkspacePathFilterMatchesLiteralWildcards(t, scans) })
+	t.Run("batch B migration", func(t *testing.T) { assertRetentionMigrationIsRepeatableAndBackfillsImports(t, scans) })
+	t.Run("batch B stream locks", func(t *testing.T) { assertRemainingEventWritersUseStreamLock(t, scans) })
+	limited, err := OpenWithOptions(scanURL.String(), OpenOptions{PostgresMaxOpenConns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer limited.Close()
+	if got := limited.DB.Stats().MaxOpenConnections; got != 2 {
+		t.Fatalf("configured PostgreSQL pool limit: %d", got)
+	}
 }
 
 func assertPostgresInteractiveConnections(t *testing.T, database *Store) {
 	t.Helper()
 	ctx := context.Background()
+	if got := database.DB.Stats().MaxOpenConnections; got != 20 {
+		t.Fatalf("default PostgreSQL pool limit: %d", got)
+	}
 	// Hold connections simultaneously so this covers new pool connections,
 	// rather than only the connection used by Open and the migrations.
 	for i := 0; i < 3; i++ {

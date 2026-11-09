@@ -24,10 +24,11 @@ import (
 const maxAgentUpdateSize = 256 << 20
 
 type agentUpdateManifest struct {
-	Version string `json:"version"`
-	Binary  string `json:"binary"`
-	SHA256  string `json:"sha256"`
-	State   string `json:"state"`
+	Version        string `json:"version"`
+	Binary         string `json:"binary"`
+	SHA256         string `json:"sha256"`
+	State          string `json:"state"`
+	PreviousBinary string `json:"previous_binary,omitempty"`
 }
 
 func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpdateCommand) (restartPath string, updateErr error) {
@@ -85,11 +86,19 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 			return "", err
 		}
 	}
+	previous := ""
+	if old, _, err := readAgentUpdateManifest(updatesRoot); err == nil {
+		previous = old.Binary
+		if previous == filepath.ToSlash(filepath.Join(strings.ToLower(pkg.SHA256), "wio-agent")) {
+			previous = old.PreviousBinary
+		}
+	}
 	manifest := agentUpdateManifest{
-		Version: command.Version,
-		Binary:  filepath.ToSlash(filepath.Join(strings.ToLower(pkg.SHA256), "wio-agent")),
-		SHA256:  strings.ToLower(pkg.SHA256),
-		State:   "pending",
+		Version:        command.Version,
+		Binary:         filepath.ToSlash(filepath.Join(strings.ToLower(pkg.SHA256), "wio-agent")),
+		SHA256:         strings.ToLower(pkg.SHA256),
+		State:          "pending",
+		PreviousBinary: previous,
 	}
 	if err := writeAgentUpdateManifest(updatesRoot, manifest); err != nil {
 		return "", err
@@ -238,12 +247,17 @@ func ActivateCurrentUpdate(stateDir string) error {
 		_ = os.Remove(filepath.Join(updatesRoot, "current.json"))
 		return fmt.Errorf("Agent update %s did not start successfully and was rolled back", manifest.Version)
 	}
-	manifest.State = "attempting"
-	if err := writeAgentUpdateManifest(updatesRoot, manifest); err != nil {
-		return err
+	// A confirmed binary remains healthy across boots, including control-plane
+	// outages. Only its first, unconfirmed activation participates in rollback.
+	previousState := manifest.State
+	if manifest.State != "healthy" {
+		manifest.State = "attempting"
+		if err := writeAgentUpdateManifest(updatesRoot, manifest); err != nil {
+			return err
+		}
 	}
 	if err := execAgentBinary(binary); err != nil {
-		manifest.State = "pending"
+		manifest.State = previousState
 		_ = writeAgentUpdateManifest(updatesRoot, manifest)
 		return err
 	}
@@ -280,14 +294,17 @@ func confirmCurrentUpdate(stateDir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !matchesCurrentExecutable(binary) || manifest.State == "healthy" {
+	if !matchesCurrentExecutable(binary) {
 		return false, nil
+	}
+	if manifest.State == "healthy" {
+		return false, pruneAgentUpdates(updatesRoot, manifest)
 	}
 	manifest.State = "healthy"
 	if err := writeAgentUpdateManifest(updatesRoot, manifest); err != nil {
 		return false, err
 	}
-	return true, nil
+	return true, pruneAgentUpdates(updatesRoot, manifest)
 }
 
 func readAgentUpdateManifest(updatesRoot string) (agentUpdateManifest, string, error) {
@@ -376,4 +393,51 @@ func replaceFile(source, target string) error {
 		return err
 	}
 	return os.Rename(source, target)
+}
+
+// Keep both the confirmed binary and the previous version for recovery. Only
+// package directories named by a SHA256 digest belong to this cleanup policy.
+func pruneAgentUpdates(root string, manifest agentUpdateManifest) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	for _, binary := range []string{manifest.Binary, manifest.PreviousBinary} {
+		clean := filepath.Clean(filepath.FromSlash(binary))
+		parts := strings.Split(clean, string(filepath.Separator))
+		if len(parts) == 2 && parts[1] == "wio-agent" {
+			keep[parts[0]] = true
+		}
+	}
+	// Older manifests did not record a previous binary. Retain the newest
+	// other package on that first cleanup so migration keeps a recovery copy.
+	if manifest.PreviousBinary == "" {
+		previous := ""
+		var newest time.Time
+		for _, entry := range entries {
+			digest, err := hex.DecodeString(entry.Name())
+			if !entry.IsDir() || err != nil || len(digest) != sha256.Size || keep[entry.Name()] {
+				continue
+			}
+			info, err := os.Stat(filepath.Join(root, entry.Name(), "wio-agent"))
+			if err == nil && info.Mode().IsRegular() && (previous == "" || info.ModTime().After(newest)) {
+				previous, newest = entry.Name(), info.ModTime()
+			}
+		}
+		if previous != "" {
+			keep[previous] = true
+		}
+	}
+	var cleanupErr error
+	for _, entry := range entries {
+		digest, err := hex.DecodeString(entry.Name())
+		if !entry.IsDir() || err != nil || len(digest) != sha256.Size || keep[entry.Name()] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	return cleanupErr
 }

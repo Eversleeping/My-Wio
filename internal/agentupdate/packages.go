@@ -27,9 +27,9 @@ type Package struct {
 
 type Store struct {
 	assetDir string
-	once     sync.Once
+	mu       sync.Mutex
+	files    map[string]os.FileInfo
 	packages map[string]Package
-	err      error
 }
 
 func New(assetDir string) *Store {
@@ -67,38 +67,77 @@ func (s *Store) Package(architecture string) (Package, error) {
 	return pkg, nil
 }
 
-func (s *Store) load() (map[string]Package, error) {
-	s.once.Do(func() {
-		s.packages = make(map[string]Package)
-		for architecture, filename := range map[string]string{
-			"amd64": "wio-agent-linux-amd64",
-			"arm64": "wio-agent-linux-arm64",
-		} {
-			path := filepath.Join(s.assetDir, filename)
-			file, err := os.Open(path)
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil {
-				s.err = err
-				return
-			}
-			hash := sha256.New()
-			size, copyErr := io.Copy(hash, file)
-			closeErr := file.Close()
-			if copyErr != nil {
-				s.err = copyErr
-				return
-			}
-			if closeErr != nil {
-				s.err = closeErr
-				return
-			}
-			s.packages[architecture] = Package{Architecture: architecture, Filename: filename, Path: path, SHA256: hex.EncodeToString(hash.Sum(nil)), Size: size}
+func (s *Store) load() (result map[string]Package, loadErr error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() {
+		if loadErr != nil {
+			s.packages, s.files = nil, nil
 		}
-		if len(s.packages) == 0 {
-			s.err = ErrUnavailable
+	}()
+	packages := make(map[string]Package)
+	files := make(map[string]os.FileInfo)
+	for architecture, filename := range map[string]string{
+		"amd64": "wio-agent-linux-amd64",
+		"arm64": "wio-agent-linux-arm64",
+	} {
+		path := filepath.Join(s.assetDir, filename)
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-	})
-	return s.packages, s.err
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("Agent update package is not a regular file: %s", path)
+		}
+		if old := s.files[architecture]; old != nil && samePackageFile(old, info) {
+			packages[architecture] = s.packages[architecture]
+			files[architecture] = info
+			continue
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		opened, statErr := file.Stat()
+		if statErr != nil {
+			file.Close()
+			return nil, statErr
+		}
+		hash := sha256.New()
+		size, copyErr := io.Copy(hash, file)
+		after, statErr := file.Stat()
+		closeErr := file.Close()
+		if copyErr != nil {
+			return nil, copyErr
+		}
+		if statErr != nil {
+			return nil, statErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		current, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if size != opened.Size() || !samePackageFile(opened, after) || !samePackageFile(after, current) {
+			return nil, errors.New("Agent update package changed while reading; retry the request")
+		}
+		packages[architecture] = Package{Architecture: architecture, Filename: filename, Path: path, SHA256: hex.EncodeToString(hash.Sum(nil)), Size: size}
+		files[architecture] = current
+	}
+	if len(packages) == 0 {
+		return nil, ErrUnavailable
+	}
+	// Publish only a complete, successful snapshot. Errors are retried on the
+	// next call, and every call checks for additions, removals and replacements.
+	s.packages, s.files = packages, files
+	return packages, nil
+}
+
+func samePackageFile(left, right os.FileInfo) bool {
+	return os.SameFile(left, right) && left.Size() == right.Size() && left.ModTime().Equal(right.ModTime())
 }

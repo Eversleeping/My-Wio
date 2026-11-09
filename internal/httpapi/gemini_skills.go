@@ -54,7 +54,7 @@ func (a *API) manageWorkspaceGeminiSkill(w http.ResponseWriter, r *http.Request)
 	}
 	op, err := a.store.QueueGeminiSkillManagement(r.Context(), workspace, input.GeminiSkillManageCommand, input.RequestID)
 	if err != nil {
-		writeError(w, 409, err.Error())
+		writeStoreError(w, err, "could not queue request")
 		return
 	}
 	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "gemini.skills."+input.Action, "workspace", workspace.ID, map[string]string{"operation_id": op, "scope": input.Scope, "name": input.Name}, clientIP(r))

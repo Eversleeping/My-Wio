@@ -47,7 +47,7 @@ func (a *API) createScheduledTask(w http.ResponseWriter, r *http.Request) {
 	}
 	input, err := a.normalizeScheduledTaskRequest(r, request, nil)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeInputError(w, err)
 		return
 	}
 	next, err := schedule.Next(input.Schedule, input.Timezone, time.Now().UTC())
@@ -85,7 +85,7 @@ func (a *API) updateScheduledTask(w http.ResponseWriter, r *http.Request) {
 	}
 	input, err := a.normalizeScheduledTaskRequest(r, request, &task)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeInputError(w, err)
 		return
 	}
 	next, err := schedule.Next(input.Schedule, input.Timezone, time.Now().UTC())
@@ -219,7 +219,7 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	if kind == "gemini" {
 		thread, err := a.store.GeminiThread(r.Context(), threadID)
 		if err != nil {
-			return store.ScheduledTaskInput{}, errors.New("Gemini session not found")
+			return store.ScheduledTaskInput{}, inputStoreFailure{err}
 		}
 		if approval == "yolo" && !buildinfo.SupportsGeminiYolo(thread.AgentVersion) {
 			return store.ScheduledTaskInput{}, errors.New("update Gemini Agent to " + buildinfo.MinimumGeminiYoloVersion + " or newer to use Gemini without approvals")
@@ -233,7 +233,10 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 		}
 		if level != "" {
 			server, e := a.store.Server(r.Context(), thread.ServerID)
-			if e != nil || !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
+			if e != nil {
+				return store.ScheduledTaskInput{}, inputStoreFailure{e}
+			}
+			if !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
 				return store.ScheduledTaskInput{}, errors.New("update Gemini Agent to configure thinking")
 			}
 		}
@@ -243,7 +246,7 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	} else if kind == "claude" {
 		thread, err := a.store.ClaudeThread(r.Context(), threadID)
 		if err != nil {
-			return store.ScheduledTaskInput{}, errors.New("Claude session not found")
+			return store.ScheduledTaskInput{}, inputStoreFailure{err}
 		}
 		if !buildinfo.SupportsClaudeInput(thread.AgentVersion) {
 			return store.ScheduledTaskInput{}, errors.New("update Claude Agent to " + buildinfo.MinimumClaudeInputVersion + " or newer")
@@ -256,10 +259,7 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 			return store.ScheduledTaskInput{}, errors.New("invalid Claude model, effort or permission mode")
 		}
 	} else if _, err := a.store.Thread(r.Context(), threadID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return store.ScheduledTaskInput{}, errors.New("Codex session not found")
-		}
-		return store.ScheduledTaskInput{}, errors.New("could not load Codex session")
+		return store.ScheduledTaskInput{}, inputStoreFailure{err}
 	}
 	return store.ScheduledTaskInput{ThinkingLevel: level, AgentKind: kind, ThreadID: threadID, Name: name, Prompt: prompt, Schedule: expression, Timezone: timezone, Enabled: enabled, Model: model, ReasoningEffort: reasoning, ApprovalMode: approval}, nil
 }

@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -32,6 +33,10 @@ func TestStageAgentUpdateDownloadsAndVerifiesPackage(t *testing.T) {
 
 	stateDir := t.TempDir()
 	client := &Client{config: Config{ControlURL: server.URL, AgentToken: "agent-token", StateDir: stateDir}}
+	previousBinary := strings.Repeat("b", 64) + "/wio-agent"
+	if err := writeAgentUpdateManifest(filepath.Join(stateDir, "updates"), agentUpdateManifest{Version: "0.1.0", Binary: previousBinary, SHA256: strings.Repeat("b", 64), State: "healthy"}); err != nil {
+		t.Fatal(err)
+	}
 	command := protocol.AgentUpdateCommand{Version: "1.0.0", Packages: map[string]protocol.AgentUpdatePackage{
 		runtime.GOARCH: {URL: "/api/agent/update-package/" + runtime.GOARCH + "?version=1.0.0", SHA256: expectedSHA, Size: int64(len(packageBody))},
 	}}
@@ -46,7 +51,7 @@ func TestStageAgentUpdateDownloadsAndVerifiesPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Version != command.Version || manifest.State != "pending" || !samePath(path, resolved) {
+	if manifest.Version != command.Version || manifest.State != "pending" || manifest.PreviousBinary != previousBinary || !samePath(path, resolved) {
 		t.Fatalf("unexpected update manifest: %#v path=%q", manifest, resolved)
 	}
 	// The reservation must survive staging until exec; a rejected duplicate
@@ -185,5 +190,94 @@ func TestPendingUpdateRefusesNewNonIdempotentOperations(t *testing.T) {
 	envelope := receiveAgentEnvelope(t, client.outbound)
 	if json.Unmarshal(envelope.PayloadJSON, &result) != nil || strings.Contains(result.Message, "update is in progress") {
 		t.Fatalf("restart-safe read was refused during a pending update: %#v", result)
+	}
+}
+
+func TestHealthyAgentUpdateDoesNotBecomeAnUnconfirmedAttempt(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "updates")
+	body := []byte("invalid executable used to exercise failed exec without replacing the test process")
+	hash := sha256.Sum256(body)
+	checksum := hex.EncodeToString(hash[:])
+	dir := filepath.Join(root, checksum)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wio-agent"), body, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	manifest := agentUpdateManifest{Version: "1.0.0", Binary: checksum + "/wio-agent", SHA256: checksum, State: "healthy"}
+	if err := writeAgentUpdateManifest(root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := ActivateCurrentUpdate(filepath.Dir(root)); err == nil {
+			t.Fatal("invalid executable unexpectedly activated")
+		}
+		current, _, err := readAgentUpdateManifest(root)
+		if err != nil || current.State != "healthy" {
+			t.Fatalf("confirmed update lost healthy state across restart: %+v %v", current, err)
+		}
+	}
+}
+
+func TestPruneAgentUpdatesKeepsCurrentAndPreviousPackages(t *testing.T) {
+	root := t.TempDir()
+	current, previous, obsolete := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	for _, name := range []string{current, previous, obsolete, "unmanaged"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name, "wio-agent"), []byte(name), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := t.TempDir()
+	link := filepath.Join(root, strings.Repeat("d", 64))
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	manifest := agentUpdateManifest{Binary: current + "/wio-agent", PreviousBinary: previous + "/wio-agent"}
+	if err := pruneAgentUpdates(root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{current, previous, "unmanaged"} {
+		if _, err := os.Stat(filepath.Join(root, name, "wio-agent")); err != nil {
+			t.Fatalf("retained package removed: %s %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, obsolete)); !os.IsNotExist(err) {
+		t.Fatalf("obsolete package retained: %v", err)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("cleanup followed or removed a symlink: %v", err)
+	}
+}
+
+func TestPruneLegacyAgentUpdatesRetainsRecoveryPackage(t *testing.T) {
+	root := t.TempDir()
+	current, previous, obsolete := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	now := time.Now()
+	for i, name := range []string{current, previous, obsolete} {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "wio-agent")
+		if err := os.WriteFile(path, []byte(name), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		stamp := now.Add(-time.Duration(i) * time.Hour)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pruneAgentUpdates(root, agentUpdateManifest{Binary: current + "/wio-agent"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, previous, "wio-agent")); err != nil {
+		t.Fatalf("legacy cleanup lost recovery package: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, obsolete)); !os.IsNotExist(err) {
+		t.Fatalf("legacy cleanup retained obsolete package: %v", err)
 	}
 }

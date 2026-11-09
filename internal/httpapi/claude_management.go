@@ -11,7 +11,7 @@ import (
 func (a *API) archiveClaudeProject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "projectID")
 	if _, err := a.store.Project(r.Context(), id); err != nil {
-		writeError(w, 404, "project not found")
+		writeStoreError(w, err, "project not found")
 		return
 	}
 	server, ok := a.projectServerScope(w, r, id)
@@ -53,7 +53,7 @@ func (a *API) queueClaudeFork(w http.ResponseWriter, r *http.Request, worktree b
 	if worktree {
 		workspace, err := a.store.Workspace(r.Context(), t.WorkspaceID)
 		if err != nil {
-			writeError(w, 404, "workspace not found")
+			writeStoreError(w, err, "workspace not found")
 			return
 		}
 		c, err := newWorktreeCommand(workspace, input.createWorktreeInput)
@@ -65,7 +65,7 @@ func (a *API) queueClaudeFork(w http.ResponseWriter, r *http.Request, worktree b
 	}
 	op, target, err := a.store.QueueClaudeFork(r.Context(), t, command, input.EventID)
 	if err != nil {
-		writeError(w, 409, "finish the current turn and other workspace operations before continuing")
+		writeStoreError(w, err, "finish the current turn and other workspace operations before continuing")
 		return
 	}
 	a.gateway.Wake(t.ServerID)

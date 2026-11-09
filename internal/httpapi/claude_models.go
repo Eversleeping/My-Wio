@@ -42,7 +42,11 @@ func (a *API) workspaceClaudeModels(w http.ResponseWriter, r *http.Request) {
 	}
 	profile, err := a.store.CredentialProfile(r.Context(), config.ProfileID)
 	var key string
-	if err != nil || profile.Kind != "claude" || a.vault == nil || a.vault.Decrypt(profile.Ciphertext, &key) != nil || !validCredentialSecret(key) {
+	if err != nil {
+		writeStoreError(w, err, "could not load Claude profile")
+		return
+	}
+	if profile.Kind != "claude" || a.vault == nil || a.vault.Decrypt(profile.Ciphertext, &key) != nil || !validCredentialSecret(key) {
 		writeError(w, 409, "Claude API profile is unavailable; reapply the server credentials")
 		return
 	}
@@ -59,7 +63,15 @@ func (a *API) workspaceClaudeModels(w http.ResponseWriter, r *http.Request) {
 	}
 	latest, err := a.store.ClaudeModelConfiguration(r.Context(), workspace.ServerID)
 	currentProfile, profileErr := a.store.CredentialProfile(r.Context(), config.ProfileID)
-	if err != nil || profileErr != nil || latest.ProfileID != config.ProfileID || latest.ProfileRevision != config.ProfileRevision || !latest.AppliedAt.Equal(config.AppliedAt) || !currentProfile.UpdatedAt.Equal(profile.UpdatedAt) {
+	if err != nil {
+		writeStoreError(w, err, "could not load Claude configuration")
+		return
+	}
+	if profileErr != nil {
+		writeStoreError(w, profileErr, "could not load Claude profile")
+		return
+	}
+	if latest.ProfileID != config.ProfileID || latest.ProfileRevision != config.ProfileRevision || !latest.AppliedAt.Equal(config.AppliedAt) || !currentProfile.UpdatedAt.Equal(profile.UpdatedAt) {
 		writeError(w, 409, "Claude API configuration changed; reopen the session to retry")
 		return
 	}

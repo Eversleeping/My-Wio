@@ -54,26 +54,30 @@ func (a *API) createGeminiThread(w http.ResponseWriter, r *http.Request) {
 	if input.ThinkingLevel != "" || input.ApprovalMode == "yolo" || input.ApprovalMode == "plan" {
 		workspace, err := a.store.Workspace(r.Context(), input.WorkspaceID)
 		if err != nil {
-			writeError(w, 400, "workspace not found")
+			writeSessionCreateError(w, err, "workspace not found")
 			return
 		}
 		server, err := a.store.Server(r.Context(), workspace.ServerID)
-		if input.ApprovalMode == "plan" && (err != nil || !buildinfo.SupportsGeminiPlan(server.AgentVersion, server.GeminiVersion)) {
+		if err != nil {
+			writeStoreError(w, err, "could not load server")
+			return
+		}
+		if input.ApprovalMode == "plan" && !buildinfo.SupportsGeminiPlan(server.AgentVersion, server.GeminiVersion) {
 			writeError(w, 409, "Gemini plan mode requires Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
 			return
 		}
-		if input.ApprovalMode == "yolo" && (err != nil || !buildinfo.SupportsGeminiYolo(server.AgentVersion)) {
+		if input.ApprovalMode == "yolo" && !buildinfo.SupportsGeminiYolo(server.AgentVersion) {
 			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals")
 			return
 		}
-		if err != nil || (input.ThinkingLevel != "" && !buildinfo.SupportsGeminiThinking(server.AgentVersion)) {
+		if input.ThinkingLevel != "" && !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
 			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiThinkingVersion+" or newer to configure Gemini thinking")
 			return
 		}
 	}
 	thread, err := a.store.CreateGeminiThread(r.Context(), input.WorkspaceID, input.Model, input.ApprovalMode, input.ThinkingLevel)
 	if err != nil {
-		writeError(w, 400, "workspace not found or unavailable")
+		writeSessionCreateError(w, err, "workspace not found or unavailable")
 		return
 	}
 	a.auditGemini(r, "gemini.thread.create", thread.ID)
@@ -235,7 +239,7 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, 409, "could not queue Gemini turn; check active workspace operations")
+		writeStoreError(w, err, "could not queue Gemini turn; check active workspace operations")
 		return
 	}
 	if editEventID != "" {
@@ -255,7 +259,7 @@ func (a *API) interruptGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.InterruptGeminiTurn(r.Context(), thread); err != nil {
-		writeError(w, 409, "Gemini turn is no longer running")
+		writeStoreError(w, err, "Gemini turn is no longer running")
 		return
 	}
 	a.gateway.Wake(thread.ServerID)
@@ -282,7 +286,7 @@ func (a *API) confirmGeminiStopped(w http.ResponseWriter, r *http.Request) {
 	}
 	event, err := a.store.ConfirmGeminiStopped(r.Context(), thread.ID, input.OperationID)
 	if err != nil {
-		writeError(w, 409, "Gemini task changed or no longer needs confirmation")
+		writeStoreError(w, err, "Gemini task changed or no longer needs confirmation")
 		return
 	}
 	a.auditGemini(r, "gemini.turn.confirm_stopped", thread.ID)
@@ -303,7 +307,7 @@ func (a *API) answerGeminiQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.store.QueueGeminiAnswer(r.Context(), thread.ID, chi.URLParam(r, "requestID"), input.Answers)
 	if err != nil {
-		writeError(w, 409, err.Error())
+		writeQuestionAnswerError(w, err, "could not queue Gemini answer")
 		return
 	}
 	a.gateway.Wake(thread.ServerID)
@@ -340,7 +344,7 @@ func (a *API) updateGeminiThread(w http.ResponseWriter, r *http.Request) {
 		}
 		return a.store.UpdateGeminiThread(r.Context(), thread.ID, title, archived)
 	}(); err != nil {
-		writeError(w, 409, "finish or interrupt the Gemini turn first")
+		writeStoreError(w, err, "finish or interrupt the Gemini turn first")
 		return
 	}
 	if input.Pinned != nil {
@@ -360,7 +364,7 @@ func (a *API) deleteGeminiThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.DeleteGeminiThread(r.Context(), thread.ID); err != nil {
-		writeError(w, 409, "finish or interrupt the Gemini turn before deleting it")
+		writeStoreError(w, err, "finish or interrupt the Gemini turn before deleting it")
 		return
 	}
 	a.auditGemini(r, "gemini.thread.delete", thread.ID)

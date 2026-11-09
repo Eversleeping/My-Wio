@@ -116,7 +116,7 @@ test("switches the Codex action between interrupting and sending a correction", 
   await user.keyboard("{Enter}");
   await waitFor(() => expect(requests.some(request => request.url.endsWith("/steer"))).toBe(true));
   const correction = requests.find(request => request.url.endsWith("/steer"))!;
-  expect(correction.body).toEqual({ prompt: "Focus on failing tests", images: [] });
+  expect(correction.body).toEqual({ prompt: "Focus on failing tests", images: [], request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) });
   expect(requests.some(request => request.url.endsWith("/turns") || request.url.endsWith("/interrupt"))).toBe(false);
   await waitFor(() => expect(composer).toHaveValue(""));
   await user.click(screen.getByRole("button", { name: "Interrupt active turn" }));

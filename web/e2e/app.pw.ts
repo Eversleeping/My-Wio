@@ -173,6 +173,7 @@ const deploymentServer = {
   codex_target_version: "1.0.0",
   codex_update_available: false,
   codex_update_supported: true,
+  exact_rollback_supported: true,
   address: "",
   configuration: "",
   notes: "",
@@ -833,6 +834,9 @@ test("deployment editing shows configuration changes without exposing secret val
 
   const editDialog = page.getByRole("dialog", { name: "Edit deployment target" });
   await expect(editDialog.getByText("Configuration review", { exact: true })).toBeVisible();
+  // The review compares the last successful snapshot with the unsaved form values.
+  await editDialog.getByRole("textbox", { name: "Git ref", exact: true }).fill("release");
+  await editDialog.getByRole("textbox", { name: "Compose file", exact: true }).fill("deploy/compose.yaml");
   await expect(editDialog.getByText("deploy/compose.yaml", { exact: true }).first()).toBeVisible();
   await expect(editDialog.getByText("release", { exact: true }).first()).toBeVisible();
   await expect(editDialog.getByText(/Secret values are never shown\./)).toBeVisible();
@@ -877,4 +881,24 @@ test("deployment history shows immutable snapshots and can roll back a selected 
   expect(JSON.parse(rollbackRequest?.body ?? "{}")).toEqual({ deployment_id: successfulDeployment.id });
   await expect(page.locator(".toast")).toContainText("Rollback queued");
   await expect(page.getByRole("dialog", { name: "Deployment process logs" })).toBeVisible();
+});
+
+test("default mocks cover hidden projects, thread usage and Codex model refresh", async ({ page }) => {
+  await installMockApplication(page, { configured: false, expectedDefaultRequests: [
+    { path: "/projects/hidden", method: "GET" },
+    { path: "/threads/mock-thread/usage", method: "GET" },
+    { path: "/workspaces/mock-workspace/codex/models/refresh", method: "POST" }
+  ] });
+  await page.goto("/");
+  const results = await page.evaluate(async () => {
+    const requests = [["/projects/hidden", "GET"], ["/threads/mock-thread/usage", "GET"], ["/workspaces/mock-workspace/codex/models/refresh", "POST"]];
+    return Promise.all(requests.map(async ([path, method]) => {
+      const response = await fetch(`/api${path}`, { method });
+      return { status: response.status, body: await response.json() };
+    }));
+  });
+  expect(results.map(result => result.status)).toEqual([200, 200, 200]);
+  expect(results[0].body).toEqual([]);
+  expect(results[1].body).toMatchObject({ input_tokens: null, output_tokens: null, partial: false });
+  expect(results[2].body).toEqual({});
 });

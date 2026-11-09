@@ -45,7 +45,7 @@ func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, e
 	if err == nil {
 		var command protocol.GeminiSteerCommand
 		if json.Unmarshal([]byte(existing.Payload), &command) != nil || command.Prompt != prompt || command.OperationID != expected || !slices.Equal(command.Images, images) {
-			return protocol.StreamEvent{}, "", errors.New("steering request already has different content")
+			return protocol.StreamEvent{}, "", stateConflict("steering request already has different content")
 		}
 		return protocol.StreamEvent{}, existing.ID, nil
 	}
@@ -57,13 +57,16 @@ func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, e
 	}
 	var ready string
 	if err = tx.GetContext(ctx, &ready, s.Q("SELECT payload FROM events WHERE stream_id=? AND kind='gemini.steer.ready' ORDER BY sequence DESC LIMIT 1"), threadID); err != nil {
-		return protocol.StreamEvent{}, "", errors.New("Gemini steering is not ready for this turn")
+		if !errors.Is(err, sql.ErrNoRows) {
+			return protocol.StreamEvent{}, "", err
+		}
+		return protocol.StreamEvent{}, "", stateConflict("Gemini steering is not ready for this turn")
 	}
 	var state struct {
 		OperationID string `json:"operation_id"`
 	}
 	if json.Unmarshal([]byte(ready), &state) != nil || state.OperationID != expected {
-		return protocol.StreamEvent{}, "", errors.New("Gemini steering is not ready for this turn")
+		return protocol.StreamEvent{}, "", stateConflict("Gemini steering is not ready for this turn")
 	}
 	var finished int
 	if err = tx.GetContext(ctx, &finished, s.Q("SELECT count(*) FROM events WHERE stream_id=? AND kind IN ('gemini.result','gemini.error') AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM events WHERE stream_id=? AND kind='gemini.init')"), threadID, threadID); err != nil {
@@ -78,7 +81,7 @@ func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, e
 		return protocol.StreamEvent{}, "", err
 	}
 	if len(pending) >= 32 {
-		return protocol.StreamEvent{}, "", errors.New("too many steering instructions in this turn")
+		return protocol.StreamEvent{}, "", stateConflict("too many steering instructions in this turn")
 	}
 	allImages, textBytes := slices.Clone(images), len(prompt)
 	for _, payload := range pending {
@@ -90,7 +93,7 @@ func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, e
 		textBytes += len(previous.Prompt)
 	}
 	if textBytes > 64<<10 || protocol.ValidateGeminiImages(allImages) != nil {
-		return protocol.StreamEvent{}, "", errors.New("the running task has reached its steering input limit; wait for it to finish")
+		return protocol.StreamEvent{}, "", stateConflict("the running task has reached its steering input limit; wait for it to finish")
 	}
 	id, now := NewID(), time.Now().UTC()
 	command := protocol.GeminiSteerCommand{ThreadID: threadID, OperationID: expected, RequestID: requestID, Prompt: prompt, Images: images}
@@ -101,7 +104,8 @@ func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, e
 	}
 	message, _ := json.Marshal(map[string]any{"text": prompt, "images": images, "request_id": requestID, "operation_id": expected})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: threadID, Kind: "gemini.steer.queued", OccurredAt: now, Payload: message}
-	if err = tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), threadID); err != nil {
+	event.Sequence, err = s.nextEventSequence(ctx, tx, threadID)
+	if err != nil {
 		return event, "", err
 	}
 	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, threadID, event.Sequence, event.Kind, now, string(message))

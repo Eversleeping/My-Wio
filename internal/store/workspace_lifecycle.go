@@ -90,7 +90,7 @@ func (s *Store) RemoveWorkspaceRecord(ctx context.Context, workspaceID string) e
 		return err
 	}
 	if !plan.CanRemoveRecord {
-		return errors.New("workspace metadata cannot be removed while dependencies exist")
+		return stateConflict("workspace metadata cannot be removed while dependencies exist")
 	}
 	result, err := s.DB.ExecContext(ctx, s.Q(`DELETE FROM workspaces WHERE id=?
 		AND NOT EXISTS (SELECT 1 FROM agent_operations WHERE workspace_id=? AND status IN ('queued','delivered','running'))

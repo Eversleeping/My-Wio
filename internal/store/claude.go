@@ -181,7 +181,10 @@ func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread Clau
 	command.Images = images
 	if editID != "" {
 		target, err := s.claudeRewriteTarget(ctx, tx, thread.ID, editID)
-		if err != nil || sessionID == "" {
+		if err != nil {
+			return protocol.StreamEvent{}, err
+		}
+		if sessionID == "" {
 			return protocol.StreamEvent{}, ErrInvalidEditTarget
 		}
 		command.Rewrite = &target
@@ -209,7 +212,8 @@ func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread Clau
 	}
 	raw, _ := json.Marshal(map[string]any{"text": prompt, "images": images, "operation_id": opID})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "claude.user.message", OccurredAt: now, Payload: raw}
-	if err := tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), thread.ID); err != nil {
+	event.Sequence, err = s.nextEventSequence(ctx, tx, thread.ID)
+	if err != nil {
 		return event, err
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, now, string(raw)); err != nil {

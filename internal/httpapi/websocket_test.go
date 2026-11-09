@@ -180,8 +180,8 @@ func (c websocketGateConn) Write(payload []byte) (int, error) {
 }
 
 // websocketTestClient starts an API with a real listener and dials /api/ws with
-// a session that expires at expires.
-func websocketTestClient(t *testing.T, expires time.Time, listener net.Listener, options ...Option) (*websocket.Conn, *store.Store, *realtime.Hub, string) {
+// a session whose lifetime starts after database and server initialization.
+func websocketTestClient(t *testing.T, sessionLifetime time.Duration, listener net.Listener, options ...Option) (*websocket.Conn, *store.Store, *realtime.Hub, string) {
 	t.Helper()
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")
 	if err != nil {
@@ -194,9 +194,6 @@ func websocketTestClient(t *testing.T, expires time.Time, listener net.Listener,
 		t.Fatal(err)
 	}
 	const sessionToken = "websocket-session-token"
-	if err := database.CreateSession(ctx, user.ID, store.HashToken(sessionToken), "csrf", expires); err != nil {
-		t.Fatal(err)
-	}
 	hub := realtime.New()
 	vault := security.DevVault()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -208,6 +205,10 @@ func websocketTestClient(t *testing.T, expires time.Time, listener net.Listener,
 	}
 	server.Start()
 	t.Cleanup(server.Close)
+	// Schema migrations must not consume the expiry test's one-second lifetime.
+	if err := database.CreateSession(ctx, user.ID, store.HashToken(sessionToken), "csrf", time.Now().UTC().Add(sessionLifetime)); err != nil {
+		t.Fatal(err)
+	}
 	headers := http.Header{}
 	headers.Set("Cookie", (&http.Cookie{Name: sessionCookie, Value: sessionToken}).String())
 	connection, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/api/ws", headers)
@@ -247,7 +248,7 @@ func assertWebsocketClosedBySession(t *testing.T, connection *websocket.Conn) {
 }
 
 func TestWebsocketClosesAfterLogout(t *testing.T) {
-	connection, database, hub, token := websocketTestClient(t, time.Now().UTC().Add(time.Hour), nil, WithWebSocketSessionCheckInterval(10*time.Millisecond))
+	connection, database, hub, token := websocketTestClient(t, time.Hour, nil, WithWebSocketSessionCheckInterval(10*time.Millisecond))
 	// Survive several re-validations while the session is still valid.
 	time.Sleep(60 * time.Millisecond)
 	hub.Publish(protocol.StreamEvent{EventID: "still-active", StreamID: "thread-1", Kind: "thread.updated", Payload: json.RawMessage(`{}`)})
@@ -265,13 +266,13 @@ func TestWebsocketClosesAfterLogout(t *testing.T) {
 
 func TestWebsocketClosesAtSessionExpiry(t *testing.T) {
 	// The long interval leaves the expiry timer as the only way to close.
-	connection, _, hub, _ := websocketTestClient(t, time.Now().UTC().Add(time.Second), nil, WithWebSocketSessionCheckInterval(time.Hour))
+	connection, _, hub, _ := websocketTestClient(t, time.Second, nil, WithWebSocketSessionCheckInterval(time.Hour))
 	assertWebsocketClosedBySession(t, connection)
 	waitForCondition(t, "subscription cleanup after expiry", func() bool { return hub.Subscribers() == 0 })
 }
 
 func TestWebsocketReleasesSubscriptionWhenClientDisconnects(t *testing.T) {
-	connection, _, hub, _ := websocketTestClient(t, time.Now().UTC().Add(time.Hour), nil)
+	connection, _, hub, _ := websocketTestClient(t, time.Hour, nil)
 	// Drop the TCP connection without a close handshake, as a vanished peer would.
 	if err := connection.UnderlyingConn().Close(); err != nil {
 		t.Fatal(err)
@@ -285,7 +286,7 @@ func TestWebsocketSetsWriteDeadlineBeforeEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := &writeDeadlineRecorder{}
-	connection, _, hub, _ := websocketTestClient(t, time.Now().UTC().Add(time.Hour), recordingWriteDeadlineListener{Listener: listener, recorder: recorder})
+	connection, _, hub, _ := websocketTestClient(t, time.Hour, recordingWriteDeadlineListener{Listener: listener, recorder: recorder})
 	event := protocol.StreamEvent{EventID: "deadline-event", StreamID: "thread-1", Kind: "thread.updated", Payload: json.RawMessage(`{}`)}
 	hub.Publish(event)
 	connection.SetReadDeadline(time.Now().Add(2 * time.Second))

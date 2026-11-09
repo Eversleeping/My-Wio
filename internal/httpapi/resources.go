@@ -568,13 +568,17 @@ func (a *API) retryProjectCreation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), serverID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
 	provision, err := a.store.RetryBlankProject(r.Context(), projectID)
 	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
+		writeStoreError(w, err, "could not retry blank project")
 		return
 	}
 	operation, operationErr := a.store.Operation(r.Context(), provision.OperationID)
@@ -727,7 +731,11 @@ func (a *API) refreshWorkspaceGit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), workspace.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
@@ -812,7 +820,11 @@ func (a *API) queueWorkspaceGitWrite(w http.ResponseWriter, r *http.Request, com
 		return
 	}
 	server, err := a.store.Server(r.Context(), workspace.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
@@ -1035,7 +1047,11 @@ func (a *API) createWorktree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), workspace.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
@@ -1050,7 +1066,7 @@ func (a *API) createWorktree(w http.ResponseWriter, r *http.Request) {
 	}
 	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not queue worktree creation")
+		writeStoreError(w, err, "could not queue worktree creation")
 		return
 	}
 	a.gateway.Wake(workspace.ServerID)
@@ -1079,7 +1095,11 @@ func (a *API) forkThreadToWorktree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), workspace.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
@@ -1098,7 +1118,7 @@ func (a *API) forkThreadToWorktree(w http.ResponseWriter, r *http.Request) {
 	command.Title = thread.Title + " (continued)"
 	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree-fork:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not queue worktree continuation")
+		writeStoreError(w, err, "could not queue worktree continuation")
 		return
 	}
 	a.gateway.Wake(workspace.ServerID)
@@ -1866,7 +1886,7 @@ func (a *API) createThread(w http.ResponseWriter, r *http.Request) {
 	}
 	thread, err := a.store.CreateThread(r.Context(), input.WorkspaceID, "")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "could not create Codex session")
+		writeSessionCreateError(w, err, "could not create Codex session")
 		return
 	}
 	session := currentSession(r)
@@ -1984,8 +2004,9 @@ func (a *API) rewriteTurn(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Prompt string               `json:"prompt"`
-		Images []protocol.TurnImage `json:"images"`
+		RequestID string               `json:"request_id"`
+		Prompt    string               `json:"prompt"`
+		Images    []protocol.TurnImage `json:"images"`
 	}
 	if !decodeJSONLimit(w, r, &input, 6<<20) {
 		return
@@ -1997,6 +2018,14 @@ func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validTurnImages(input.Images) {
 		writeError(w, http.StatusBadRequest, "invalid or oversized turn images")
+		return
+	}
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	if len(input.RequestID) > 128 {
+		writeError(w, http.StatusBadRequest, "request_id is too long")
+		return
+	}
+	if a.replayCodexRequest(w, r, input.RequestID, "steer", store.CodexRequestInput{Prompt: input.Prompt, Images: input.Images}) {
 		return
 	}
 	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
@@ -2013,7 +2042,11 @@ func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), thread.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_offline", "error": "Agent must be online to steer a running turn"})
 		return
 	}
@@ -2031,13 +2064,16 @@ func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.SteerTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, ExpectedTurnID: turnID, Prompt: input.Prompt, Images: input.Images}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.turn.steer", command, "codex-steer:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not queue Codex steering")
+	operationID, event, err := a.store.QueueCodexSteerRequest(r.Context(), thread, command, input.RequestID)
+	if errors.Is(err, store.ErrThreadActive) {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_inactive", "error": "the target Codex turn is no longer active; send the correction as a new message"})
 		return
 	}
-	event, err := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: eventPayload(map[string]any{"text": input.Prompt, "image_count": len(input.Images), "steer": true, "operation_id": operationID, "turn_id": turnID})})
-	if err == nil {
+	if err != nil {
+		writeStoreError(w, err, "could not queue Codex steering")
+		return
+	}
+	if event.EventID != "" {
 		a.hub.Publish(event)
 	}
 	a.gateway.Wake(thread.ServerID)
@@ -2048,6 +2084,7 @@ func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventID string) {
 	threadID := chi.URLParam(r, "threadID")
 	var input struct {
+		RequestID       string               `json:"request_id"`
 		Prompt          string               `json:"prompt"`
 		Images          []protocol.TurnImage `json:"images"`
 		Model           string               `json:"model"`
@@ -2091,6 +2128,14 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 		writeError(w, http.StatusBadRequest, "invalid approval_mode")
 		return
 	}
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	if len(input.RequestID) > 128 {
+		writeError(w, http.StatusBadRequest, "request_id is too long")
+		return
+	}
+	if input.EditEventID == "" && a.replayCodexRequest(w, r, input.RequestID, "turn", store.CodexRequestInput{Prompt: input.Prompt, Images: input.Images, Model: input.Model, ReasoningEffort: input.ReasoningEffort, ApprovalMode: input.ApprovalMode}) {
+		return
+	}
 	thread, err := a.store.Thread(r.Context(), threadID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
@@ -2116,7 +2161,7 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 			return
 		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not rewrite Codex session")
+			writeStoreError(w, err, "could not rewrite Codex session")
 			return
 		}
 		a.gateway.Wake(thread.ServerID)
@@ -2125,16 +2170,18 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 		writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID})
 		return
 	}
-	operationID, event, err := a.store.QueueCodexTurn(r.Context(), thread, command)
+	operationID, event, err := a.store.QueueCodexTurnRequest(r.Context(), thread, command, input.RequestID)
 	if errors.Is(err, store.ErrThreadActive) {
 		writeError(w, http.StatusConflict, "active Codex session must finish before starting another turn")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not queue Codex turn")
+		writeStoreError(w, err, "could not queue Codex turn")
 		return
 	}
-	a.hub.Publish(event)
+	if event.EventID != "" {
+		a.hub.Publish(event)
+	}
 	a.gateway.Wake(thread.ServerID)
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "codex.turn.start", "thread", thread.ID, map[string]string{"operation_id": operationID}, clientIP(r))
@@ -2227,7 +2274,7 @@ func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 	command := protocol.InterruptTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, TurnID: turnID}
 	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.turn.interrupt", command, "codex-interrupt:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not queue interrupt")
+		writeStoreError(w, err, "could not queue interrupt")
 		return
 	}
 	a.gateway.Wake(thread.ServerID)
@@ -2281,7 +2328,7 @@ func (a *API) decideApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	err := a.store.DB.GetContext(r.Context(), &approval, a.store.Q(`SELECT a.id,a.thread_id,a.request_id,a.kind,a.detail,w.server_id FROM approvals a JOIN codex_threads t ON t.id=a.thread_id JOIN workspaces w ON w.id=t.workspace_id WHERE a.id=? AND a.status='pending' AND a.expires_at>?`), chi.URLParam(r, "approvalID"), time.Now().UTC())
 	if err != nil {
-		writeError(w, http.StatusNotFound, "pending approval not found")
+		writeStoreError(w, err, "could not load pending approval")
 		return
 	}
 	if approval.Kind == protocol.UserInputRequestMethod {
@@ -2355,7 +2402,7 @@ func (a *API) deleteSecretSet(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "secretID")
 	result, err := a.store.DB.ExecContext(r.Context(), a.store.Q("DELETE FROM secret_sets WHERE id=?"), id)
 	if err != nil {
-		writeError(w, http.StatusConflict, "secret set is in use")
+		writeStoreError(w, err, "could not delete secret set")
 		return
 	}
 	rows, _ := result.RowsAffected()
@@ -2447,19 +2494,25 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 		}
 	}
 	server, err := a.store.Server(ctx, input.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		return store.DeploymentTarget{}, inputStoreFailure{err}
+	}
+	if server.Status != "online" {
 		return store.DeploymentTarget{}, errors.New("target server must be online")
 	}
 	switch input.SourceType {
 	case "workspace":
 		workspace, err := a.store.Workspace(ctx, input.WorkspaceID)
-		if err != nil || workspace.ServerID != input.ServerID || workspace.Status != "ready" {
+		if err != nil {
+			return store.DeploymentTarget{}, inputStoreFailure{err}
+		}
+		if workspace.ServerID != input.ServerID || workspace.Status != "ready" {
 			return store.DeploymentTarget{}, errors.New("select an available project workspace on the target server")
 		}
 		input.ProjectID = workspace.ProjectID
 		project, err := a.store.Project(ctx, workspace.ProjectID)
 		if err != nil {
-			return store.DeploymentTarget{}, errors.New("could not load workspace project")
+			return store.DeploymentTarget{}, inputStoreFailure{err}
 		}
 		input.Repository = project.RemoteURL
 		if input.GitRef == "" {
@@ -2484,7 +2537,7 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 			project, err = a.store.CreateProject(ctx, repositoryName(input.Repository), input.Repository)
 		}
 		if err != nil {
-			return store.DeploymentTarget{}, errors.New("could not register repository project")
+			return store.DeploymentTarget{}, inputStoreFailure{err}
 		}
 		input.ProjectID = project.ID
 	default:
@@ -2520,7 +2573,7 @@ func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	targetInput, err := a.deploymentTargetFromInput(r.Context(), input)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeInputError(w, err)
 		return
 	}
 	target, err := a.store.CreateDeploymentTarget(r.Context(), targetInput)
@@ -2528,7 +2581,7 @@ func (a *API) createDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 		if databaseConflict(err) {
 			writeError(w, http.StatusConflict, "deployment target already exists")
 		} else {
-			writeError(w, http.StatusBadRequest, "could not create deployment target")
+			writeStoreError(w, err, "could not create deployment target")
 		}
 		return
 	}
@@ -2543,7 +2596,7 @@ func (a *API) updateDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := a.deploymentTargetFromInput(r.Context(), input)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeInputError(w, err)
 		return
 	}
 	target.ID = chi.URLParam(r, "targetID")
@@ -2560,7 +2613,7 @@ func (a *API) updateDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 		if databaseConflict(err) {
 			writeError(w, http.StatusConflict, "deployment target already exists")
 		} else {
-			writeError(w, http.StatusBadRequest, "could not update deployment target")
+			writeStoreError(w, err, "could not update deployment target")
 		}
 		return
 	}
@@ -2580,7 +2633,11 @@ func (a *API) deleteDeploymentTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), target.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "target server must be online before deleting the target")
 		return
 	}
@@ -2688,7 +2745,11 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), target.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "target server must be online before deployment")
 		return
 	}
@@ -2719,7 +2780,7 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create deployment")
+		writeStoreError(w, err, "could not create deployment")
 		return
 	}
 	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "deployment queued", Content: "Waiting for the target Agent to start deployment."})
@@ -2730,7 +2791,12 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err = a.store.Server(r.Context(), snapshot.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not load deployment server"})
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "target server is no longer online"})
 		writeError(w, http.StatusConflict, "target server must be online before deployment")
 		return
@@ -2783,7 +2849,11 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), target.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "target server must be online before rollback")
 		return
 	}
@@ -2835,7 +2905,7 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create rollback")
+		writeStoreError(w, err, "could not create rollback")
 		return
 	}
 	_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "rollback queued", Content: "Waiting for the target Agent to restore the selected historical release."})
@@ -2944,7 +3014,11 @@ func (a *API) deploymentContainerAction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	server, err := a.store.Server(r.Context(), target.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "target server must be online before changing containers")
 		return
 	}

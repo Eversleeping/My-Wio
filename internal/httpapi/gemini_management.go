@@ -10,7 +10,7 @@ import (
 func (a *API) archiveGeminiProject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "projectID")
 	if _, err := a.store.Project(r.Context(), id); err != nil {
-		writeError(w, 404, "project not found")
+		writeStoreError(w, err, "project not found")
 		return
 	}
 	serverID, ok := a.projectServerScope(w, r, id)
@@ -59,7 +59,7 @@ func (a *API) queueGeminiFork(w http.ResponseWriter, r *http.Request, worktree b
 	if worktree {
 		workspace, err := a.store.Workspace(r.Context(), thread.WorkspaceID)
 		if err != nil {
-			writeError(w, 404, "workspace not found")
+			writeStoreError(w, err, "workspace not found")
 			return
 		}
 		c, err := newWorktreeCommand(workspace, createWorktreeInput{Branch: input.Branch, Path: input.Path, BaseRef: input.BaseRef})
@@ -71,7 +71,7 @@ func (a *API) queueGeminiFork(w http.ResponseWriter, r *http.Request, worktree b
 	}
 	op, target, err := a.store.QueueGeminiFork(r.Context(), thread, input.EventID, command)
 	if err != nil {
-		writeError(w, 409, "could not branch Gemini conversation; finish the current turn and select a completed final reply")
+		writeStoreError(w, err, "could not branch Gemini conversation; finish the current turn and select a completed final reply")
 		return
 	}
 	a.gateway.Wake(thread.ServerID)

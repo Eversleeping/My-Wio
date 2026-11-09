@@ -46,7 +46,22 @@ const (
 	ControlPlaneAgentTokenKey = "control_plane_agent_token"
 )
 
+type OpenOptions struct {
+	// PostgresMaxOpenConns defaults to 20. SQLite always uses one connection.
+	PostgresMaxOpenConns int
+}
+
 func Open(databaseURL string) (*Store, error) {
+	return OpenWithOptions(databaseURL, OpenOptions{})
+}
+
+func OpenWithOptions(databaseURL string, options OpenOptions) (*Store, error) {
+	if options.PostgresMaxOpenConns < 0 {
+		return nil, errors.New("PostgresMaxOpenConns must be positive")
+	}
+	if options.PostgresMaxOpenConns == 0 {
+		options.PostgresMaxOpenConns = 20
+	}
 	driver, dsn := "sqlite", databaseURL
 	var db *sqlx.DB
 	var err error
@@ -72,6 +87,10 @@ func Open(databaseURL string) (*Store, error) {
 	}
 	if driver == "sqlite" {
 		db.SetMaxOpenConns(1)
+	} else {
+		db.SetMaxOpenConns(options.PostgresMaxOpenConns)
+		db.SetMaxIdleConns(min(5, options.PostgresMaxOpenConns))
+		db.SetConnMaxIdleTime(5 * time.Minute)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -162,6 +181,10 @@ func Open(databaseURL string) (*Store, error) {
 		}
 	}
 	if err := migrateMetricCapacity(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateRetentionAndCodexRequests(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1352,7 +1375,7 @@ type ProjectImportOperation struct {
 	Command    protocol.GitImportCommand
 }
 
-func (s *Store) listProjectImports(ctx context.Context) ([]ProjectImportOperation, error) {
+func (s *Store) listProjectImports(ctx context.Context, projectID ...string) ([]ProjectImportOperation, error) {
 	var rows []struct {
 		ID         string    `db:"id"`
 		ServerID   string    `db:"server_id"`
@@ -1362,7 +1385,14 @@ func (s *Store) listProjectImports(ctx context.Context) ([]ProjectImportOperatio
 		Payload    string    `db:"payload"`
 		CreatedAt  time.Time `db:"created_at"`
 	}
-	if err := s.DB.SelectContext(ctx, &rows, `SELECT o.id,o.server_id,s.name server_name,o.status,COALESCE(o.result,'') message,o.payload,o.created_at FROM agent_operations o JOIN servers s ON s.id=o.server_id WHERE o.kind='git.import' ORDER BY o.created_at DESC`); err != nil {
+	query := `SELECT o.id,o.server_id,s.name server_name,o.status,COALESCE(o.result,'') message,o.payload,o.created_at FROM projects p JOIN agent_operations o ON o.id=(SELECT newest.id FROM agent_operations newest WHERE newest.kind='git.import' AND newest.project_id=p.id ORDER BY newest.created_at DESC,newest.id DESC LIMIT 1) JOIN servers s ON s.id=o.server_id WHERE 1=1`
+	var args []any
+	if len(projectID) > 0 {
+		query += " AND p.id=?"
+		args = append(args, projectID[0])
+	}
+	query += ` ORDER BY o.created_at DESC,o.id DESC`
+	if err := s.DB.SelectContext(ctx, &rows, s.Q(query), args...); err != nil {
 		return nil, err
 	}
 	out := make([]ProjectImportOperation, 0, len(rows))
@@ -1377,7 +1407,7 @@ func (s *Store) listProjectImports(ctx context.Context) ([]ProjectImportOperatio
 }
 
 func (s *Store) LatestProjectImport(ctx context.Context, projectID string) (ProjectImportOperation, error) {
-	operations, err := s.listProjectImports(ctx)
+	operations, err := s.listProjectImports(ctx, projectID)
 	if err != nil {
 		return ProjectImportOperation{}, err
 	}
@@ -1390,16 +1420,9 @@ func (s *Store) LatestProjectImport(ctx context.Context, projectID string) (Proj
 }
 
 func (s *Store) HasActiveProjectImport(ctx context.Context, projectID string) (bool, error) {
-	operations, err := s.listProjectImports(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, operation := range operations {
-		if operation.Command.ProjectID == projectID && (operation.Status == "queued" || operation.Status == "delivered") {
-			return true, nil
-		}
-	}
-	return false, nil
+	var count int
+	err := s.DB.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE kind='git.import' AND project_id=? AND status IN ('queued','delivered','running')"), projectID)
+	return count > 0, err
 }
 
 func (s *Store) DeleteProject(ctx context.Context, projectID string) (bool, error) {
@@ -1441,8 +1464,8 @@ func (s *Store) ListWorkspacesFiltered(ctx context.Context, path, serverID, gitS
 	filters := make([]string, 0, 3)
 	args := make([]any, 0, 3)
 	if path = strings.TrimSpace(path); path != "" {
-		filters = append(filters, "w.path LIKE ?")
-		args = append(args, "%"+path+"%")
+		filters = append(filters, `w.path LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+likePatternEscaper.Replace(path)+"%")
 	}
 	if serverID = strings.TrimSpace(serverID); serverID != "" {
 		filters = append(filters, "w.server_id=?")
@@ -1722,6 +1745,14 @@ func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, paylo
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
+	}
+	// Legacy callers supply import metadata only in the payload. Indexed import
+	// lookups need the project association on new writes as well as migrated rows.
+	if kind == "git.import" && resource.ProjectID == "" {
+		var command protocol.GitImportCommand
+		if json.Unmarshal([]byte(payload), &command) == nil {
+			resource.ProjectID = command.ProjectID
+		}
 	}
 	resolved, err := s.resolveOperationResource(ctx, serverID, resource)
 	if err != nil {
@@ -2294,11 +2325,15 @@ func (s *Store) eventRowsQuery(ctx context.Context, db sqlx.QueryerContext, quer
 }
 
 func (s *Store) LatestActiveTurnID(ctx context.Context, threadID string) (string, error) {
+	return s.latestActiveTurnID(ctx, s.DB, threadID)
+}
+
+func (s *Store) latestActiveTurnID(ctx context.Context, db sqlx.QueryerContext, threadID string) (string, error) {
 	var event struct {
 		Kind    string `db:"kind"`
 		Payload string `db:"payload"`
 	}
-	if err := s.DB.GetContext(ctx, &event, s.Q("SELECT kind,payload FROM events WHERE stream_id=? AND kind IN ('turn.accepted','codex.turn.started','codex.turn.completed','codex.turn.failed','codex.turn.cancelled') ORDER BY sequence DESC LIMIT 1"), threadID); err != nil {
+	if err := sqlx.GetContext(ctx, db, &event, s.Q("SELECT kind,payload FROM events WHERE stream_id=? AND kind IN ('turn.accepted','codex.turn.started','codex.turn.completed','codex.turn.failed','codex.turn.cancelled') ORDER BY sequence DESC LIMIT 1"), threadID); err != nil {
 		return "", err
 	}
 	switch event.Kind {
@@ -2323,7 +2358,15 @@ func (s *Store) LatestActiveTurnID(ctx context.Context, threadID string) (string
 func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID string, command protocol.StartTurnCommand, userPayload json.RawMessage) (string, protocol.StreamEvent, error) {
 	var operationID string
 	var replacement protocol.StreamEvent
-	err := s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+	err := s.inTx(ctx, s.addEventTxOptions(), func(tx *sqlx.Tx) error {
+		if err := s.lockCodexRequestThread(ctx, tx, thread.ID); err != nil {
+			return err
+		}
+		if s.isPostgres() {
+			if err := lockEventStream(ctx, tx, thread.ID); err != nil {
+				return err
+			}
+		}
 		var status string
 		if err := tx.GetContext(ctx, &status, s.Q("SELECT status FROM codex_threads WHERE id=?"), thread.ID); err != nil {
 			return err
@@ -2389,7 +2432,15 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 func (s *Store) CommitThreadRewrite(ctx context.Context, threadID, codexThreadID, editEventID, replacementEventID string, replacementPayload json.RawMessage, cutoffSequence int64) (protocol.StreamEvent, bool, error) {
 	var event protocol.StreamEvent
 	var applied bool
-	err := s.inSerializableTx(ctx, func(tx *sqlx.Tx) error {
+	err := s.inTx(ctx, s.addEventTxOptions(), func(tx *sqlx.Tx) error {
+		if err := s.lockCodexRequestThread(ctx, tx, threadID); err != nil {
+			return err
+		}
+		if s.isPostgres() {
+			if err := lockEventStream(ctx, tx, threadID); err != nil {
+				return err
+			}
+		}
 		var target struct {
 			Sequence int64  `db:"sequence"`
 			Kind     string `db:"kind"`

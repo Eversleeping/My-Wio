@@ -35,7 +35,7 @@ func (a *API) workspaceGeminiModels(w http.ResponseWriter, r *http.Request) {
 	}
 	server, err := a.store.Server(r.Context(), workspace.ServerID)
 	if err != nil {
-		writeError(w, 404, "server not found")
+		writeStoreError(w, err, "server not found")
 		return
 	}
 	if server.GeminiProfileID == "" {
@@ -44,12 +44,16 @@ func (a *API) workspaceGeminiModels(w http.ResponseWriter, r *http.Request) {
 	}
 	config, err := a.store.GeminiModelConfiguration(r.Context(), server.ID)
 	if err != nil {
-		writeError(w, 409, "Gemini API configuration changed; reopen the session to retry")
+		writeStoreError(w, err, "Gemini API configuration changed; reopen the session to retry")
 		return
 	}
 	profile, err := a.store.CredentialProfile(r.Context(), config.ProfileID)
 	var key string
-	if err != nil || profile.Kind != "gemini" || a.vault == nil || a.vault.Decrypt(profile.Ciphertext, &key) != nil || !validCredentialSecret(key) {
+	if err != nil {
+		writeStoreError(w, err, "could not load Gemini profile")
+		return
+	}
+	if profile.Kind != "gemini" || a.vault == nil || a.vault.Decrypt(profile.Ciphertext, &key) != nil || !validCredentialSecret(key) {
 		writeError(w, 409, "Gemini API profile is unavailable; reapply the server credentials")
 		return
 	}
@@ -67,7 +71,15 @@ func (a *API) workspaceGeminiModels(w http.ResponseWriter, r *http.Request) {
 	// Do not return a list fetched with credentials superseded during the request.
 	latest, err := a.store.GeminiModelConfiguration(r.Context(), server.ID)
 	currentProfile, profileErr := a.store.CredentialProfile(r.Context(), config.ProfileID)
-	if err != nil || profileErr != nil || latest.Revision != config.Revision || !currentProfile.UpdatedAt.Equal(profile.UpdatedAt) {
+	if err != nil {
+		writeStoreError(w, err, "could not load Gemini configuration")
+		return
+	}
+	if profileErr != nil {
+		writeStoreError(w, profileErr, "could not load Gemini profile")
+		return
+	}
+	if latest.Revision != config.Revision || !currentProfile.UpdatedAt.Equal(profile.UpdatedAt) {
 		writeError(w, 409, "Gemini API configuration changed; reopen the session to retry")
 		return
 	}

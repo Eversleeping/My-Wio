@@ -39,7 +39,7 @@ func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command pro
 	if err == nil {
 		var previous protocol.ClaudeSteerCommand
 		if json.Unmarshal([]byte(existing.Payload), &previous) != nil || previous.OperationID != command.OperationID || previous.Prompt != command.Prompt || !slices.Equal(previous.Images, command.Images) {
-			return protocol.StreamEvent{}, "", errors.New("steering request already has different content")
+			return protocol.StreamEvent{}, "", stateConflict("steering request already has different content")
 		}
 		return protocol.StreamEvent{}, existing.ID, nil
 	}
@@ -52,7 +52,7 @@ func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command pro
 	}
 	thread.setSteerCapability()
 	if !thread.SteerReady || thread.OperationID != command.OperationID || thread.ArchivedAt != nil || thread.ServerStatus != "online" {
-		return protocol.StreamEvent{}, "", errors.New("Claude is not ready to receive instructions for this running task")
+		return protocol.StreamEvent{}, "", stateConflict("Claude is not ready to receive instructions for this running task")
 	}
 	var active int
 	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE id=? AND kind='claude.turn.start' AND status IN ('delivered','running')"), command.OperationID); err != nil {
@@ -66,7 +66,7 @@ func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command pro
 		return protocol.StreamEvent{}, "", err
 	}
 	if len(previous) >= 32 {
-		return protocol.StreamEvent{}, "", errors.New("too many steering instructions in this task")
+		return protocol.StreamEvent{}, "", stateConflict("too many steering instructions in this task")
 	}
 	textBytes := len(command.Prompt)
 	imageBytes := 0
@@ -84,7 +84,7 @@ func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command pro
 		}
 	}
 	if textBytes > 64<<10 || imageBytes > 6<<20 {
-		return protocol.StreamEvent{}, "", errors.New("this task has reached its steering input limit")
+		return protocol.StreamEvent{}, "", stateConflict("this task has reached its steering input limit")
 	}
 	id, now := NewID(), time.Now().UTC()
 	raw, _ := json.Marshal(command)
@@ -93,7 +93,8 @@ func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command pro
 	}
 	payload, _ := json.Marshal(map[string]any{"operation_id": command.OperationID, "request_id": command.RequestID, "text": command.Prompt, "images": command.Images})
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "claude.steer.queued", OccurredAt: now, Payload: payload}
-	if err = tx.GetContext(ctx, &event.Sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), thread.ID); err != nil {
+	event.Sequence, err = s.nextEventSequence(ctx, tx, thread.ID)
+	if err != nil {
 		return event, "", err
 	}
 	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, now, string(payload)); err != nil {

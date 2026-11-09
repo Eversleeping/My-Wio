@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -66,5 +67,41 @@ func TestReceiptReplaysAfterEvictionAndRestart(t *testing.T) {
 	envelope := receiveAgentEnvelope(t, c.outbound)
 	if err := json.Unmarshal(envelope.PayloadJSON, &result); err != nil || result.Message != "could not read previous operation result; refusing to repeat operation" {
 		t.Fatalf("corrupt receipt did not fail closed: %+v", result)
+	}
+}
+
+func TestPruneOperationReceiptsExpiresOnlyManagedOldFiles(t *testing.T) {
+	now := time.Now()
+	c := &Client{config: Config{StateDir: t.TempDir()}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for _, id := range []string{"old", "fresh"} {
+		if err := c.saveOperationResult(protocol.OperationResult{OperationID: id, Status: "succeeded"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := now.Add(-operationReceiptRetention - time.Hour)
+	if err := os.Chtimes(c.operationResultPath("old"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(c.operationResultPath("old"))
+	for _, name := range []string{".receipt-abandoned", "unmanaged.json.gz"} {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte("untouched"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.pruneOperationReceipts(now)
+	for _, path := range []string{c.operationResultPath("old"), filepath.Join(root, ".receipt-abandoned")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expired file was retained: %s %v", path, err)
+		}
+	}
+	if _, found, err := c.loadOperationResult("fresh"); !found || err != nil {
+		t.Fatalf("fresh receipt was removed: %v %v", found, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "unmanaged.json.gz")); err != nil {
+		t.Fatal("cleanup removed an unmanaged file")
 	}
 }

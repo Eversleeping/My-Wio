@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,7 +19,10 @@ func (s *Store) claudeRewriteTarget(ctx context.Context, tx *sqlx.Tx, threadID, 
 		At       time.Time `db:"occurred_at"`
 	}
 	if err := tx.GetContext(ctx, &event, s.Q("SELECT payload,sequence,occurred_at FROM events WHERE stream_id=? AND event_id=? AND kind IN ('claude.user.message','claude.steer.applied')"), threadID, eventID); err != nil {
-		return protocol.ClaudeRewriteTarget{}, ErrInvalidEditTarget
+		if errors.Is(err, sql.ErrNoRows) {
+			return protocol.ClaudeRewriteTarget{}, ErrInvalidEditTarget
+		}
+		return protocol.ClaudeRewriteTarget{}, err
 	}
 	var payload struct {
 		Text        string `json:"text"`
@@ -79,6 +84,11 @@ func (s *Store) CommitClaudeRewrite(ctx context.Context, threadID, operationID, 
 		return protocol.StreamEvent{}, false, ErrThreadActive
 	}
 	replacementID := operationID + ":user"
+	if s.isPostgres() {
+		if err := lockEventStream(ctx, tx, threadID); err != nil {
+			return protocol.StreamEvent{}, false, err
+		}
+	}
 	var exists int
 	if err := tx.GetContext(ctx, &exists, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND event_id=?"), threadID, replacementID); err != nil {
 		return protocol.StreamEvent{}, false, err

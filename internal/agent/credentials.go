@@ -41,7 +41,7 @@ func (c *Client) configureCredentials(command protocol.ConfigureCredentialsComma
 	if err := validateCredentialCommand(command, gitCredentials); err != nil {
 		return err
 	}
-	codexPaths := []string{c.config.CodexAPIKeyFile, filepath.Join(c.config.StateDir, ".codex", "config.toml")}
+	codexPaths := []string{codexAPIKeyPath(c.config), filepath.Join(c.config.StateDir, ".codex", "config.toml")}
 	gitPaths := []string{filepath.Join(c.config.StateDir, ".git-credentials"), filepath.Join(c.config.StateDir, ".gitconfig")}
 	var paths []string
 	if updateCodex {
@@ -209,39 +209,49 @@ func restoreCredentialFiles(snapshots []credentialFileSnapshot) {
 	}
 }
 
+// Legacy enrollment stores the bootstrap key in a root-owned directory. Keep
+// subsequent keys in StateDir so replacement is atomic as the service user.
+func codexAPIKeyPath(config Config) string {
+	if config.StateDir != "" && (config.CodexAPIKeyFile == "" || config.CodexAPIKeyFile == "/etc/wio-agent/codex.key") {
+		return filepath.Join(config.StateDir, "codex.key")
+	}
+	return config.CodexAPIKeyFile
+}
+
 func replaceCredentialFile(path string, data []byte) error {
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".wio-credential-*")
-	if err == nil {
-		temporaryPath := temporary.Name()
-		defer os.Remove(temporaryPath)
-		if _, err = temporary.Write(data); err == nil {
-			err = temporary.Chmod(0o600)
-		}
-		if closeErr := temporary.Close(); err == nil {
-			err = closeErr
-		}
-		if err == nil {
-			err = os.Rename(temporaryPath, path)
-		}
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if _, statErr := os.Stat(path); statErr != nil {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".wio-credential-*")
+	if err != nil {
+		return err // Never truncate the original when atomic replacement is unavailable.
+	}
+	defer os.Remove(temporary.Name())
+	defer temporary.Close()
+	if _, err := temporary.Write(data); err != nil {
 		return err
 	}
-	file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
-	if openErr != nil {
-		return openErr
+	if err := temporary.Chmod(mode); err != nil {
+		return err
 	}
-	_, writeErr := file.Write(data)
-	closeErr := file.Close()
-	if writeErr != nil {
-		return writeErr
+	if err := temporary.Sync(); err != nil {
+		return err
 	}
-	if closeErr != nil {
-		return closeErr
+	if err := temporary.Close(); err != nil {
+		return err
 	}
-	return os.Chmod(path, 0o600)
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func pointer(value string) *string { return &value }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -115,4 +116,44 @@ func (c *Client) loadOperationResult(id string) (protocol.OperationResult, bool,
 		err = errors.New("operation receipt ID mismatch")
 	}
 	return result, true, err
+}
+
+const operationReceiptRetention = 7 * 24 * time.Hour
+
+// At most once an hour, and once on startup, bound the durable receipt cache.
+// Temporary files from interrupted receipt writes use the same retention rule.
+func (c *Client) pruneOperationReceipts(now time.Time) {
+	if c.config.StateDir == "" {
+		return
+	}
+	c.receiptCleanupMu.Lock()
+	defer c.receiptCleanupMu.Unlock()
+	if !c.lastReceiptCleanup.IsZero() && now.Sub(c.lastReceiptCleanup) < time.Hour {
+		return
+	}
+	root := filepath.Join(c.config.StateDir, "operation-results")
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		c.lastReceiptCleanup = now
+		return
+	}
+	if err != nil {
+		c.log.Warn("could not list operation receipts", "error", err)
+		return
+	}
+	c.lastReceiptCleanup = now
+	for _, entry := range entries {
+		name := entry.Name()
+		digest, digestErr := hex.DecodeString(strings.TrimSuffix(name, ".json.gz"))
+		if entry.IsDir() || !(strings.HasPrefix(name, ".receipt-") || strings.HasSuffix(name, ".json.gz") && digestErr == nil && len(digest) == sha256.Size) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.ModTime().Before(now.Add(-operationReceiptRetention)) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(root, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.log.Warn("could not expire operation receipt", "error", err)
+		}
+	}
 }

@@ -29,6 +29,8 @@ type BlankProjectProvision struct {
 
 // CreateBlankProject atomically creates a provisioning project and its agent
 // operation. No workspace row is inserted until the operation succeeds.
+var ErrProjectRetryConflict = errors.New("blank project creation is active or cannot be retried")
+
 func (s *Store) CreateBlankProject(ctx context.Context, serverID, name, destination, initialBranch string, initializeREADME bool) (BlankProjectProvision, error) {
 	return s.createBlankProject(ctx, serverID, name, destination, initialBranch, initializeREADME, BlankProjectRemoteSpec{}, "queued")
 }
@@ -150,7 +152,7 @@ func (s *Store) RetryBlankProject(ctx context.Context, projectID string) (BlankP
 		return BlankProjectProvision{}, err
 	}
 	if project.Status != "failed" && project.Status != "partial" {
-		return BlankProjectProvision{}, errors.New("only a failed or partial blank project can be retried")
+		return BlankProjectProvision{}, ErrProjectRetryConflict
 	}
 	var row struct {
 		OperationID string `db:"id"`
@@ -173,7 +175,7 @@ func (s *Store) RetryBlankProject(ctx context.Context, projectID string) (BlankP
 		return BlankProjectProvision{}, err
 	}
 	if active != 0 {
-		return BlankProjectProvision{}, errors.New("blank project creation is already active")
+		return BlankProjectProvision{}, ErrProjectRetryConflict
 	}
 	now := time.Now().UTC()
 	operationID := NewID()

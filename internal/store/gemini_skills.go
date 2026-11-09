@@ -31,7 +31,7 @@ func (s *Store) QueueGeminiSkillManagement(ctx context.Context, workspace Worksp
 	err = tx.GetContext(ctx, &existing, s.Q(operationSelect+" WHERE idempotency_key=?"), key)
 	if err == nil {
 		if existing.Payload != string(raw) {
-			return "", errors.New("skill request already has different content")
+			return "", stateConflict("skill request already has different content")
 		}
 		return existing.ID, tx.Commit()
 	}

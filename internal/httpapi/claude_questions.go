@@ -24,7 +24,7 @@ func (a *API) answerClaudeQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.store.QueueClaudeAnswer(r.Context(), thread.ID, chi.URLParam(r, "requestID"), input.Answers)
 	if err != nil {
-		writeError(w, 409, err.Error())
+		writeQuestionAnswerError(w, err, "could not queue request")
 		return
 	}
 	a.gateway.Wake(thread.ServerID)

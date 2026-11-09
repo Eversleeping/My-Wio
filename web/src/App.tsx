@@ -1,3 +1,4 @@
+import { CodexRequests } from "./codexRequests";
 import { SessionUsage } from "./components/SessionUsage";
 import { ThemeSwitch } from "./theme";
 import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
@@ -948,6 +949,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const [imageBusy, setImageBusy] = useState(false);
   const imageCompressionRef = useRef<AbortController | null>(null);
   const [sending, setSending] = useState(false);
+  const codexRequests = useRef(new CodexRequests());
   const [interrupting, setInterrupting] = useState(false);
   const [editingEventID, setEditingEventID] = useState("");
   const [composerPreferences, setComposerPreferences] = useState(() => loadCodexComposerPreferences(thread.id));
@@ -1084,7 +1086,8 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     }
   };
   const queueGoalTurn = async (objective: string) => {
-    await post(`/threads/${thread.id}/turns`, { prompt: objective, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode });
+    const content = { prompt: objective, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode };
+    await codexRequests.current.send("goal", [thread.id, content], `/threads/${thread.id}/turns`, content);
   };
   const saveGoal = async (objective: string, status: string, tokenBudget: number | null, resume = false) => {
     ++goalRequestRef.current;
@@ -1300,7 +1303,9 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
       }
       const turnPath = steering ? `/threads/${thread.id}/steer` : editingEventID ? `/threads/${thread.id}/events/${editingEventID}/rewrite` : `/threads/${thread.id}/turns`;
       const content = { prompt, images: images.map(image => ({ data_url: image.dataURL })) };
-      await post(turnPath, steering ? content : { ...content, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode });
+      const options = { ...content, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode };
+      if (editingEventID) await post(turnPath, options);
+      else await codexRequests.current.send("composer", [thread.id, options], turnPath, steering ? content : options);
       setPrompt(""); setImages([]); setEditingEventID(""); notify(t(steering ? "codex.steerQueued" : editingEventID ? "codex.rewriteQueued" : "codex.turnQueued"));
     } catch (err) {
       const steerErrorKeys: Record<string, string> = { steer_inactive: "codex.steerInactive", steer_offline: "codex.steerOffline", steer_agent_update: "codex.steerAgentUpdate" };
@@ -1335,9 +1340,11 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     const questions = asyncQuestions(asRecord(asRecord(event.payload)?.item));
     const content = { prompt: questionReply(questions, answers), images: [] };
     const current = await api<Thread>(`/threads/${thread.id}`);
-    const start = () => post(`/threads/${thread.id}/turns`, { ...content, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode });
+    const options = { ...content, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode };
+    const sendAnswer = (path: string, body: Record<string, unknown>) => codexRequests.current.send(`question:${event.event_id}`, [thread.id, options], path, body);
+    const start = () => sendAnswer(`/threads/${thread.id}/turns`, options);
     if (current.status === "running") {
-      try { await post(`/threads/${thread.id}/steer`, content); }
+      try { await sendAnswer(`/threads/${thread.id}/steer`, content); }
       catch (error) {
         // Only retry a request explicitly rejected before it was queued.
         if (!(error instanceof APIError) || error.code !== "steer_inactive") throw error;

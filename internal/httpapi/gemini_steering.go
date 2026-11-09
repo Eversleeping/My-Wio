@@ -38,7 +38,7 @@ func (a *API) steerGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	event, id, err := a.store.QueueGeminiSteer(r.Context(), thread.ID, input.OperationID, input.RequestID, input.Prompt, input.Images...)
 	if err != nil {
-		writeError(w, 409, err.Error())
+		writeStoreError(w, err, "could not queue request")
 		return
 	}
 	if event.EventID != "" {

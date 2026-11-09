@@ -34,6 +34,7 @@ type Gateway struct {
 	reconcileAfter time.Duration
 	mu             sync.RWMutex
 	wakes          map[string]chan struct{}
+	connections    map[string]*serverConnections
 	metricMu       sync.Mutex
 	metricBreaches map[string]map[string]int
 }
@@ -68,22 +69,14 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 		return status.Error(codes.Unauthenticated, "invalid agent token")
 	}
 	wake := make(chan struct{}, 1)
-	g.mu.Lock()
-	g.wakes[serverID] = wake
-	g.mu.Unlock()
-	defer func() {
-		g.mu.Lock()
-		if g.wakes[serverID] == wake {
-			delete(g.wakes, serverID)
-		}
-		g.mu.Unlock()
-		_, _ = g.store.DB.ExecContext(context.Background(), g.store.Q("UPDATE servers SET status='offline' WHERE id=?"), serverID)
-	}()
+	connection := g.registerConnection(stream, serverID, strings.TrimSpace(auth[7:]), wake)
+	stream = connection
+	defer g.removeConnection(serverID, connection)
 
 	errCh := make(chan error, 1)
 	replies := make(chan *protocol.ControlEnvelope, 32)
 	go func() { errCh <- g.receiveWithTools(stream, serverID, replies) }()
-	if err := g.sendKeepalive(stream, serverID, time.Now()); err != nil {
+	if err := connection.run(func() error { return g.sendKeepalive(stream, serverID, time.Now()) }); err != nil {
 		return err
 	}
 	// Pending operations are also flushed when Wake is signalled. Keep a short
@@ -93,7 +86,7 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 	defer ticker.Stop()
 	defer keepalive.Stop()
 	for {
-		if err := g.flush(stream, serverID); err != nil {
+		if err := connection.run(func() error { return g.flush(stream, serverID) }); err != nil {
 			return err
 		}
 		select {
@@ -106,11 +99,11 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 			return stream.Context().Err()
 		case <-ticker.C:
 		case now := <-keepalive.C:
-			if err := g.sendKeepalive(stream, serverID, now); err != nil {
+			if err := connection.run(func() error { return g.sendKeepalive(stream, serverID, now) }); err != nil {
 				return err
 			}
 		case reply := <-replies:
-			if err := stream.Send(reply); err != nil {
+			if err := connection.run(func() error { return stream.Send(reply) }); err != nil {
 				return err
 			}
 		case <-wake:
@@ -154,12 +147,22 @@ func (g *Gateway) receiveWithTools(stream protocol.AgentServiceConnectServer, se
 		if msg.ServerID != "" && msg.ServerID != serverID {
 			return status.Error(codes.PermissionDenied, "server id mismatch")
 		}
-		if msg.Kind == "session_tool_request" {
-			g.receiveSessionTool(stream, serverID, msg, replies, limit)
-			continue
+		handle := func() error {
+			if msg.Kind == "session_tool_request" {
+				g.receiveSessionTool(stream, serverID, msg, replies, limit)
+				return nil
+			}
+			if err := g.handle(stream.Context(), serverID, msg); err != nil {
+				g.log.Warn("agent message rejected", "server_id", serverID, "kind", msg.Kind, "error", err)
+			}
+			return nil
 		}
-		if err := g.handle(stream.Context(), serverID, msg); err != nil {
-			g.log.Warn("agent message rejected", "server_id", serverID, "kind", msg.Kind, "error", err)
+		if connection, ok := stream.(*gatewayConnection); ok {
+			if err := connection.run(handle); err != nil {
+				return err
+			}
+		} else if err := handle(); err != nil {
+			return err
 		}
 	}
 }
@@ -1135,6 +1138,16 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 		if strings.HasPrefix(op.Payload, "v1:") {
 			if err := g.vault.Decrypt(op.Payload, &payload); err != nil {
 				g.log.Error("could not decrypt operation payload", "operation_id", op.ID, "error", err)
+				result := protocol.OperationResult{OperationID: op.ID, Status: "failed", Message: "Control plane could not decrypt the operation payload; reconfigure credentials or retry the operation"}
+				completed, completeErr := g.store.CompleteOperationIfActive(stream.Context(), result)
+				if completeErr != nil {
+					return completeErr
+				}
+				if completed {
+					if err := publishOperationResult(stream.Context(), g, serverID, result); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 		}

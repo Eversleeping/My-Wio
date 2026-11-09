@@ -36,9 +36,6 @@ func (s *Store) createCollaborationSessionTx(ctx context.Context, tx *sqlx.Tx, r
 		result, err = tx.ExecContext(ctx, s.Q("INSERT INTO codex_threads(id,workspace_id,title,created_at,updated_at) SELECT ?,w.id,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL"), ref.ID, title, now, now, workspaceID)
 	case "claude":
 		result, err = tx.ExecContext(ctx, s.Q("INSERT INTO claude_threads(id,workspace_id,title,model,permission_mode,created_at,updated_at) SELECT ?,w.id,?,?,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL"), ref.ID, title, model, mode, now, now, workspaceID)
-		if err == nil {
-			_, err = tx.ExecContext(ctx, s.Q("INSERT INTO claude_thread_options(thread_id,effort) VALUES(?,?)"), ref.ID, effort)
-		}
 	case "gemini":
 		result, err = tx.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,title,model,approval_mode,thinking_level,created_at,updated_at,model_credential_revision) SELECT ?,w.id,?,?,?,?,?,?,`+geminiCredentialRevision+` FROM workspaces w JOIN servers s ON s.id=w.server_id LEFT JOIN server_gemini_credential_profiles gcp ON gcp.server_id=s.id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), ref.ID, title, model, mode, effort, now, now, workspaceID)
 	default:
@@ -53,6 +50,11 @@ func (s *Store) createCollaborationSessionTx(ctx context.Context, tx *sqlx.Tx, r
 	}
 	if n != 1 {
 		return sql.ErrNoRows
+	}
+	if ref.Engine == "claude" {
+		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO claude_thread_options(thread_id,effort) VALUES(?,?)"), ref.ID, effort); err != nil {
+			return err
+		}
 	}
 	return s.showProjectForNewThread(ctx, tx, workspaceID)
 }
@@ -101,16 +103,7 @@ func (s *Store) queueCollaborationOperation(ctx context.Context, tx *sqlx.Tx, t 
 // QueueCodexTurn gives browser and collaboration calls the same atomic session
 // claim, operation and user message, including archived-session checks.
 func (s *Store) QueueCodexTurn(ctx context.Context, t Thread, command protocol.StartTurnCommand) (string, protocol.StreamEvent, error) {
-	tx, err := s.DB.BeginTxx(ctx, nil)
-	if err != nil {
-		return "", protocol.StreamEvent{}, err
-	}
-	defer tx.Rollback()
-	op, event, err := s.queueCodexTurnTx(ctx, tx, t, command)
-	if err != nil {
-		return op, event, err
-	}
-	return op, event, tx.Commit()
+	return s.QueueCodexTurnRequest(ctx, t, command, "")
 }
 
 func (s *Store) queueCodexTurnTx(ctx context.Context, tx *sqlx.Tx, t Thread, command protocol.StartTurnCommand) (string, protocol.StreamEvent, error) {

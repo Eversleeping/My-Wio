@@ -27,7 +27,7 @@ func (a *API) interruptOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	server, err := a.store.Server(r.Context(), operation.ServerID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeStoreError(w, err, "could not load server")
 		return
 	}
 	if !buildinfo.SupportsOperationInterrupt(server.AgentVersion) {

@@ -16,7 +16,7 @@ const questionEvent: StreamEvent = {
 const thread: Thread = { id: "async-test", workspace_id: "workspace", project_id: "project", codex_thread_id: "native", title: "Test", status: "running", path: "/srv/test", server_id: "server", server_name: "Server", project_name: "Project", created_at: "", updated_at: "", pinned_at: null, archived_at: null, project_pinned_at: null, project_hidden_at: null };
 let history: StreamEvent[];
 let current: Thread;
-let requests: { path: string; body: { prompt: string } }[];
+let requests: { path: string; body: { prompt: string; request_id: string } }[];
 let rejectSteer: boolean;
 let rejectSubmit: boolean;
 
@@ -56,7 +56,7 @@ test("renders the actual async message, selects an answer, and persists its repl
   await user.click(screen.getByRole("button", { name: "Submit answers" }));
   await waitFor(() => expect(requests).toHaveLength(1));
   const reply = [{ questionItemId: JSON.stringify(["request_user_input_async", callID, 0]), question: title, answer: "秋天" }];
-  expect(requests[0]).toEqual({ path: `/api/threads/${thread.id}/steer`, body: { prompt: `<send_user_message_question_reply>\n${JSON.stringify(reply)}\n</send_user_message_question_reply>`, images: [] } });
+  expect(requests[0]).toEqual({ path: `/api/threads/${thread.id}/steer`, body: { prompt: `<send_user_message_question_reply>\n${JSON.stringify(reply)}\n</send_user_message_question_reply>`, images: [], request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) } });
   expect(await screen.findByRole("button", { name: "Answers sent" })).toBeDisabled();
   unmount(); clearCodexSessionMemory(); render(view());
   expect(await screen.findByRole("radio", { name: "秋天" })).toBeChecked();
@@ -79,6 +79,7 @@ test("retains a custom answer after a failure and starts a new turn when the ses
   expect(await screen.findByRole("button", { name: "Answers sent" })).toBeDisabled();
   expect(requests[1].path).toBe(`/api/threads/${thread.id}/turns`);
   expect(requests[1].body.prompt).toContain('"answer":"雨季"');
+  expect(requests[1].body.request_id).toBe(requests[0].body.request_id);
 });
 
 test("handles a turn ending between status lookup and submitting the answer", async () => {
@@ -88,6 +89,7 @@ test("handles a turn ending between status lookup and submitting the answer", as
   await user.click(screen.getByRole("button", { name: "Submit answers" }));
   expect(await screen.findByRole("button", { name: "Answers sent" })).toBeDisabled();
   expect(requests.map(request => request.path)).toEqual([`/api/threads/${thread.id}/steer`, `/api/threads/${thread.id}/turns`]);
+  expect(requests[1].body.request_id).not.toBe(requests[0].body.request_id);
 });
 
 test("keeps archived async questions read only", async () => {

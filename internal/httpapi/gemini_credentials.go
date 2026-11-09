@@ -37,7 +37,11 @@ func (a *API) updateServerGeminiCredentialProfile(w http.ResponseWriter, r *http
 		return
 	}
 	profile, err := a.store.CredentialProfile(r.Context(), strings.TrimSpace(input.ProfileID))
-	if err != nil || profile.Kind != "gemini" {
+	if err != nil {
+		writeStoreError(w, err, "could not load credential profile")
+		return
+	}
+	if profile.Kind != "gemini" {
 		writeError(w, 400, "select a valid Gemini API profile")
 		return
 	}

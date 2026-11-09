@@ -109,7 +109,7 @@ func (a *API) copyWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 		operationID, err := a.store.QueueCrossServerWorkspaceClone(r.Context(), workspace, targetServer.ID, command)
 		if errors.Is(err, store.ErrWorkspaceWriteActive) {
-			writeError(w, http.StatusConflict, err.Error())
+			writeStoreError(w, err, "could not change workspace")
 			return
 		}
 		if err != nil {
@@ -228,7 +228,7 @@ func (a *API) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	switch mode {
 	case "metadata":
 		if err := a.store.RemoveWorkspaceRecord(r.Context(), workspace.ID); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
+			writeStoreError(w, err, "could not change workspace")
 			return
 		}
 		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "workspace.remove_record", "workspace", workspace.ID, map[string]string{"path": workspace.Path}, clientIP(r))
@@ -245,7 +245,11 @@ func (a *API) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		server, err := a.store.Server(r.Context(), workspace.ServerID)
-		if err != nil || server.Status != "online" || len(store.ManagedRoots(server)) == 0 {
+		if err != nil {
+			writeStoreError(w, err, "could not load server")
+			return
+		}
+		if server.Status != "online" || len(store.ManagedRoots(server)) == 0 {
 			writeError(w, http.StatusConflict, "server is offline or has no managed roots")
 			return
 		}
@@ -280,7 +284,11 @@ func (a *API) lifecycleWorkspace(w http.ResponseWriter, r *http.Request, action,
 		return store.Workspace{}, store.Server{}, false
 	}
 	server, err := a.store.Server(r.Context(), workspace.ServerID)
-	if err != nil || server.Status != "online" || len(store.ManagedRoots(server)) == 0 {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return store.Workspace{}, store.Server{}, false
+	}
+	if server.Status != "online" || len(store.ManagedRoots(server)) == 0 {
 		writeError(w, http.StatusConflict, "server is offline or has no managed roots")
 		return store.Workspace{}, store.Server{}, false
 	}
@@ -290,7 +298,7 @@ func (a *API) lifecycleWorkspace(w http.ResponseWriter, r *http.Request, action,
 func (a *API) queueWorkspaceLifecycle(w http.ResponseWriter, r *http.Request, workspace store.Workspace, server store.Server, command protocol.GitWorkspaceLifecycleCommand) {
 	operationID, err := a.store.QueueWorkspaceLifecycle(r.Context(), workspace, command)
 	if errors.Is(err, store.ErrWorkspaceWriteActive) {
-		writeError(w, http.StatusConflict, err.Error())
+		writeStoreError(w, err, "could not change workspace")
 		return
 	}
 	if err != nil {

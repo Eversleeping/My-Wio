@@ -78,7 +78,11 @@ func (a *API) writeWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server, err := a.store.Server(r.Context(), workspace.ServerID)
-	if err != nil || server.Status != "online" {
+	if err != nil {
+		writeStoreError(w, err, "could not load server")
+		return
+	}
+	if server.Status != "online" {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}

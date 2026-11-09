@@ -138,3 +138,15 @@ func lockEventStream(ctx context.Context, tx *sqlx.Tx, streamID string) error {
 	_, err := tx.ExecContext(ctx, tx.Rebind("SELECT pg_advisory_xact_lock(?, hashtext(?))"), eventStreamLockNamespace, streamID)
 	return err
 }
+
+// nextEventSequence must run at READ COMMITTED on Postgres (the default).
+func (s *Store) nextEventSequence(ctx context.Context, tx *sqlx.Tx, streamID string) (int64, error) {
+	if s.isPostgres() {
+		if err := lockEventStream(ctx, tx, streamID); err != nil {
+			return 0, err
+		}
+	}
+	var sequence int64
+	err := tx.GetContext(ctx, &sequence, s.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), streamID)
+	return sequence, err
+}

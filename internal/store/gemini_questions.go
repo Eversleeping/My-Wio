@@ -28,7 +28,7 @@ func (s *Store) QueueGeminiAnswer(ctx context.Context, threadID, requestID strin
 	}
 	var detail string
 	if err = tx.GetContext(ctx, &detail, s.Q("SELECT payload FROM events WHERE stream_id=? AND event_id=? AND kind='gemini.question'"), threadID, requestID); err != nil {
-		return "", errors.New("Gemini question not found")
+		return "", err
 	}
 	var question struct {
 		OperationID string `json:"operation_id"`
@@ -37,7 +37,7 @@ func (s *Store) QueueGeminiAnswer(ctx context.Context, threadID, requestID strin
 		return "", errors.New("invalid Gemini question")
 	}
 	if err = protocol.ValidateUserInputAnswers(json.RawMessage(detail), answers); err != nil {
-		return "", err
+		return "", invalidInput(err)
 	}
 	key := "gemini-answer:" + requestID
 	var existing struct {
@@ -49,7 +49,7 @@ func (s *Store) QueueGeminiAnswer(ctx context.Context, threadID, requestID strin
 		var command protocol.GeminiAnswerCommand
 		_ = json.Unmarshal([]byte(existing.Payload), &command)
 		if !reflect.DeepEqual(command.Answers, answers) {
-			return "", errors.New("Gemini question already has a different answer")
+			return "", stateConflict("Gemini question already has a different answer")
 		}
 		return existing.ID, tx.Commit()
 	}
@@ -57,7 +57,7 @@ func (s *Store) QueueGeminiAnswer(ctx context.Context, threadID, requestID strin
 		return "", err
 	}
 	if thread.OperationID != question.OperationID || thread.Status != "running" || thread.ArchivedAt != nil || thread.ServerStatus != "online" {
-		return "", errors.New("Gemini question has expired or Agent is offline")
+		return "", stateConflict("Gemini question has expired or Agent is offline")
 	}
 	command := protocol.GeminiAnswerCommand{ThreadID: threadID, OperationID: question.OperationID, RequestID: requestID, Answers: answers}
 	raw, _ := json.Marshal(command)

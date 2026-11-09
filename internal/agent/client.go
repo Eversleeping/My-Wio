@@ -71,6 +71,8 @@ type Client struct {
 	claudeVersionPath  string
 	claudeVersion      string
 	claudeVersionUntil time.Time
+	receiptCleanupMu   sync.Mutex
+	lastReceiptCleanup time.Time
 	// sentMu guards the one-slot retry buffer and the waiters for tracked
 	// messages; both are touched only by queueTracked and sendLoop.
 	sentMu      sync.Mutex
@@ -110,14 +112,19 @@ func NewClient(config Config, log *slog.Logger) *Client {
 }
 
 func codexEnvironment(config Config, log *slog.Logger) []string {
-	raw, err := os.ReadFile(config.CodexAPIKeyFile)
+	keyPath := codexAPIKeyPath(config)
+	raw, err := os.ReadFile(keyPath)
+	if errors.Is(err, os.ErrNotExist) && keyPath != config.CodexAPIKeyFile && config.CodexAPIKeyFile != "" {
+		keyPath = config.CodexAPIKeyFile
+		raw, err = os.ReadFile(keyPath)
+	}
 	if err != nil {
-		log.Warn("Codex API key is unavailable", "path", config.CodexAPIKeyFile, "error", err)
+		log.Warn("Codex API key is unavailable", "path", keyPath, "error", err)
 		return nil
 	}
 	key := strings.TrimSpace(string(raw))
 	if key == "" || strings.ContainsAny(key, "\r\n\x00") {
-		log.Warn("Codex API key file is invalid", "path", config.CodexAPIKeyFile)
+		log.Warn("Codex API key file is invalid", "path", keyPath)
 		return nil
 	}
 	return []string{"WIO_CODEX_API_KEY=" + key}
@@ -177,6 +184,9 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	traffic := make(chan struct{}, 1)
+	go watchControlTraffic(streamContext, cancel, traffic, time.Minute)
+	c.pruneOperationReceipts(time.Now())
 	// Start the app-server while the Agent connection is becoming ready. The
 	// first user turn can then reuse the initialized process instead of paying
 	// the process startup and handshake cost on its critical path.
@@ -195,6 +205,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	go func() {
 		defer close(sendDone)
 		c.sendLoop(streamContext, stream, sendErrors)
+		cancel()
 	}()
 	// The next connection's sendLoop must not start before this one has parked
 	// its failed message in the retry slot, or that message would be reordered.
@@ -209,6 +220,10 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		if err != nil {
 			cancel()
 			return connected, err
+		}
+		select {
+		case traffic <- struct{}{}:
+		default:
 		}
 		if !connected {
 			connected = true
@@ -281,6 +296,7 @@ func (c *Client) periodic(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-heartbeats.C:
+			c.pruneOperationReceipts(time.Now())
 			c.seenMu.Lock()
 			c.pruneCompletedOperations(time.Now())
 			c.seenMu.Unlock()

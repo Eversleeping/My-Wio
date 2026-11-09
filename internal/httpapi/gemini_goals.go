@@ -43,8 +43,12 @@ func (a *API) controlGeminiGoal(w http.ResponseWriter, r *http.Request) {
 	action := chi.URLParam(r, "action")
 	switch action {
 	case "pause":
-		if goal.Status != "active" || a.store.InterruptGeminiTurn(r.Context(), thread, "paused", goal.ID) != nil {
+		if goal.Status != "active" {
 			writeError(w, 409, "Gemini goal is no longer running")
+			return
+		}
+		if err := a.store.InterruptGeminiTurn(r.Context(), thread, "paused", goal.ID); err != nil {
+			writeStoreError(w, err, "could not pause Gemini goal")
 			return
 		}
 	case "cancel":
@@ -54,7 +58,7 @@ func (a *API) controlGeminiGoal(w http.ResponseWriter, r *http.Request) {
 			err = a.store.CancelInactiveGeminiGoal(r.Context(), thread.ID, goal.ID)
 		}
 		if err != nil {
-			writeError(w, 409, "Gemini goal changed or cannot be cancelled")
+			writeStoreError(w, err, "Gemini goal changed or cannot be cancelled")
 			return
 		}
 	case "resume":
@@ -76,7 +80,7 @@ func (a *API) controlGeminiGoal(w http.ResponseWriter, r *http.Request) {
 		command := &protocol.GeminiGoalCommand{ID: goal.ID, MaxContinuations: input.MaxContinuations, MaxSeconds: input.MaxSeconds}
 		event, err := a.store.QueueGeminiGoal(r.Context(), thread, "Continue the active goal and verify the remaining work.", thread.Model, thread.ApprovalMode, thread.ThinkingLevel, nil, command)
 		if err != nil {
-			writeError(w, 409, "Gemini goal cannot be resumed while the session or workspace is active")
+			writeStoreError(w, err, "Gemini goal cannot be resumed while the session or workspace is active")
 			return
 		}
 		a.hub.Publish(event)
