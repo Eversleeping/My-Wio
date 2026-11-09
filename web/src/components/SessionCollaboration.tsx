@@ -49,6 +49,8 @@ export function SessionCollaboration({ engine, id, workspaceID, projectID, revis
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setBusy(false); }
   };
+  // Send-task receipts only repeat what the child session already shows.
+  const requests = (state.data?.requests ?? []).filter(request => request.tool !== "wio_send_message").slice(0, 10);
   // Deleted and archived sessions no longer occupy the panel.
   const links = (state.data?.links ?? []).filter(link => !link.missing && !link.session?.archived_at);
   const deleteSession = async () => {
@@ -78,7 +80,7 @@ export function SessionCollaboration({ engine, id, workspaceID, projectID, revis
         <span>{child ? text("子会话", "Child session") : text("来源会话", "Source session")}</span>
         <><a href={link.session.url}>{link.session.title} · {link.session.engine}<ExternalLink size={12} /></a><Status value={link.session.recovery_pending ? "unknown" : link.session.waiting_user ? "waiting_user" : link.session.status} /><small>{link.session.workspace_id === workspaceID ? text("共享工作目录", "Shared working directory") : text("独立工作区", "Separate workspace")}</small></>
       </div>; })}
-      {(state.data?.requests ?? []).slice(0, 10).map(request => <div className="collaboration-card" key={request.id}><span>{toolLabel[request.tool] ?? request.tool}</span><Status value={request.status} />{request.error && <small role="alert">{request.error.code} · {request.error.message}</small>}{request.phase === "await_source" && <small>{text("等待来源会话本轮结束", "Waiting for the source turn to end")}</small>}{request.target_id && <a href={`/?view=${request.target_engine}&thread=${encodeURIComponent(request.target_id)}`}>{text("打开会话", "Open session")}</a>}<small title={request.operation_id}>{request.request_id}</small></div>)}
+      {requests.map(request => <div className="collaboration-card" key={request.id}><span>{toolLabel[request.tool] ?? request.tool}</span><Status value={request.status} />{request.error && <small role="alert">{request.error.code} · {request.error.message}</small>}{request.phase === "await_source" && <small>{text("等待来源会话本轮结束", "Waiting for the source turn to end")}</small>}{request.target_id && <a href={`/?view=${request.target_engine}&thread=${encodeURIComponent(request.target_id)}`}>{text("打开会话", "Open session")}</a>}<small title={request.operation_id}>{request.request_id}</small></div>)}
     </div>}
     <Dialog open={settings} title={text("会话协作设置", "Collaboration settings")} onClose={() => { if (!busy) setSettings(false); }} dismissDisabled={busy} closeLabel={t("common.close")}>
       <form className="collaboration-settings" onSubmit={event => { event.preventDefault(); void save(); }}>

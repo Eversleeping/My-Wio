@@ -9,7 +9,7 @@ afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
 test("saves explicit collaboration scope and displays child provenance", async () => {
   localStorage.setItem("wio_language", "en");
   const saved: unknown[] = [];
-  const state = { supported: true, grant: { enabled: false, workspace_ids: [], session_refs: [], worktree: false, auto_continue: false, delegate: false, target_modes: {} }, requests: [{ id: "r", request_id: "delegate-test", tool: "wio_create_session", status: "preparing", phase: "await_source", target_engine: "claude", target_id: "child" }], links: [{ source_key: "codex:source", target_key: "claude:child", relation: "created", missing: false, session: { engine: "claude", id: "child", title: "Test task", status: "running", waiting_user: true, workspace_id: "workspace", url: "/?view=claude&thread=child" } }] };
+  const state = { supported: true, grant: { enabled: false, workspace_ids: [], session_refs: [], worktree: false, auto_continue: false, delegate: false, target_modes: {} }, requests: [{ id: "r", request_id: "delegate-test", tool: "wio_create_session", status: "preparing", phase: "await_source", target_engine: "claude", target_id: "child" }, { id: "s", request_id: "send-test", tool: "wio_send_message", status: "failed", phase: "", target_engine: "claude", target_id: "child", error: { code: "BUSY", message: "session busy" } }], links: [{ source_key: "codex:source", target_key: "claude:child", relation: "created", missing: false, session: { engine: "claude", id: "child", title: "Test task", status: "running", waiting_user: true, workspace_id: "workspace", url: "/?view=claude&thread=child" } }] };
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, options: RequestInit = {}) => {
     if (options.method === "PUT") { saved.push(JSON.parse(String(options.body))); return new Response(JSON.stringify(state)); }
     return new Response(JSON.stringify(String(input).includes("/collaboration") ? state : []));
@@ -19,6 +19,9 @@ test("saves explicit collaboration scope and displays child provenance", async (
   await user.click(await screen.findByRole("button", { name: /Session collaboration/ }));
   expect(screen.getByRole("link", { name: /Test task/ })).toHaveAttribute("href", "/?view=claude&thread=child");
   expect(screen.getByText("Waiting for the source turn to end")).toBeInTheDocument();
+  expect(screen.getByText("delegate-test")).toBeInTheDocument();
+  expect(screen.queryByText("send-test")).not.toBeInTheDocument();
+  expect(screen.queryByText(/session busy/)).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Collaboration settings" }));
   await user.click(screen.getByRole("checkbox", { name: "Allow creating and managing child sessions" }));
   await user.click(screen.getByRole("checkbox", { name: "Allow creating separate worktrees" }));

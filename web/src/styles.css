@@ -2569,6 +2569,8 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .collaboration-settings label { display: flex; align-items: center; gap: .6rem; overflow-wrap: anywhere; }
 .collaboration-settings input[type=checkbox] { width: 1rem; height: 1rem; flex: 0 0 auto; }
 .collaboration-settings select { flex: 1; min-width: 0; }
+.collaboration-task > p:first-child { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+.collaboration-task .field small { font-size: 12px; }
 
 .collaboration-read { font-size: inherit; text-align: left; max-width: 100%; white-space: normal; }
 .status-tag.waiting-user, .status-tag.accepted { color: var(--amber); border-color: var(--amber-border); background: var(--amber-soft); }

@@ -21,6 +21,7 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
     if(url.endsWith("/claude/skills/skill-op")) return new Response(JSON.stringify(options.skillsError ? {status:"failed",error:"Could not initialize CLI"} : {status:"succeeded",skills:options.skills ?? []}),{status:200});
     if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/rewrite") && rewriteFailures-->0)return new Response(JSON.stringify({error:"Rewrite temporarily failed"}),{status:503}); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url.endsWith("/answer") ? {operation_id:"answer-op"} : url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
     else if (url.startsWith("/api/operations/")) body={status:"succeeded"};
+    else if (url === "/api/sessions/claude/claude-1/collaboration") body = { supported: true, grant: { enabled: true, worktree: false, target_modes: {} }, links: [], requests: [] };
     else if (url === "/api/workspaces/workspace-1/claude/models") body = { configured: true, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
     else if (url === "/api/workspaces") body = [{ id: "workspace-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
@@ -296,6 +297,21 @@ test("uses keyboard slash options locally and sends discovered native skills",as
  await user.type(input,"/plan");await user.keyboard("{Enter}");expect(screen.getByLabelText("Tool permissions")).toHaveValue("plan");expect(requests).toHaveLength(0);
  await user.type(input,"/review-code");await user.keyboard("{Enter}");expect(input).toHaveValue("/review-code ");await user.type(input,"inspect changes");await user.keyboard("{Enter}");
  await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns",body:{prompt:"/review-code inspect changes",model:"sonnet",permission_mode:"plan",effort:"max"}}));
+});
+
+test("creates a collaboration session through the /collab dialog",async()=>{
+ Element.prototype.scrollIntoView=vi.fn();
+ const {user,requests}=setup({selected:true});
+ const input=await screen.findByRole("textbox",{name:"Ask Claude to work on this project…"});
+ await user.type(input,"/collab");await user.keyboard("{Enter}");
+ const dialog=await screen.findByRole("dialog",{name:"Create collaboration session"});
+ await user.selectOptions(within(dialog).getByRole("combobox",{name:"Model"}),await within(dialog).findByRole("option",{name:"Custom upstream model · custom-upstream-model"}));
+ await user.selectOptions(within(dialog).getByRole("combobox",{name:"Thinking level"}),"max");
+ await user.type(within(dialog).getByRole("textbox",{name:"Task"}),"Check the tests");
+ await user.click(within(dialog).getByRole("button",{name:"Send to model"}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns",body:expect.objectContaining({model:"sonnet",effort:"high",prompt:expect.stringContaining('"engine": "claude",\n  "model": "custom-upstream-model",\n  "effort": "max",\n  "directory_mode": "shared"')})}));
+ expect(screen.queryByRole("dialog",{name:"Create collaboration session"})).not.toBeInTheDocument();
+ await waitFor(()=>expect(input).toHaveValue(""));
 });
 
 test("creates a scheduled Claude task with custom model, effort and permissions",async()=>{

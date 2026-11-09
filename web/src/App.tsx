@@ -88,12 +88,14 @@ import {
   Wrench,
   Wifi,
   WifiOff,
+  Workflow,
   X
 } from "lucide-react";
 import { api, APIError, onUnauthorized, patch, post, put, remove, setSession, socketURL } from "./api";
 import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
 import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
 import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
+import { CollaborationTaskDialog, useSubmitPrompt } from "./components/CollaborationTaskDialog";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "./components/Dialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
@@ -972,6 +974,9 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const [mcpOpen, setMcpOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [collabOpen, setCollabOpen] = useState(false);
+  const composerFormRef = useRef<HTMLFormElement>(null);
+  const submitPrompt = useSubmitPrompt(composerFormRef, prompt, setPrompt);
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const [compactBusy, setCompactBusy] = useState(false);
   const [statusSnapshot, setStatusSnapshot] = useState<CodexSnapshot<CodexStatusData> | null>(null);
@@ -1183,7 +1188,8 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     { id: "mcp", name: "/mcp", description: t("codex.slashMCPDescription"), icon: Network, onSelect: () => finishSlash(() => { setMcpOpen(true); void loadSnapshot<CodexMCPServer[]>("mcp"); }) },
     { id: "skills", name: "/skills", description: t("codex.slashSkillsDescription"), icon: Boxes, onSelect: () => finishSlash(() => { setSkillsOpen(true); void loadSnapshot<CodexSkill[]>("skills"); }) },
     { id: "plan", name: "/plan", description: t("codex.slashPlanDescription"), detail: t("codex.unsupported"), icon: StickyNote, onSelect: () => finishSlash(() => setPlanOpen(true)) },
-    { id: "project", name: "/project", description: t("codex.slashProjectDescription"), icon: Folder, onSelect: () => finishSlash(onNewTask) }
+    { id: "project", name: "/project", description: t("codex.slashProjectDescription"), icon: Folder, onSelect: () => finishSlash(onNewTask) },
+    { id: "collab", name: "/collab", description: t("codex.slashCollabDescription"), icon: Workflow, onSelect: () => finishSlash(() => setCollabOpen(true)) }
   ];
   const skillItems: SlashCommandItem[] = (skillsSnapshot?.data ?? []).filter(skill => skill.enabled).map(skill => ({ id: `skill:${skill.name}`, name: `$${skill.name}`, description: skill.short_description || skill.description, detail: skill.scope, section: t("codex.availableSkills"), icon: Boxes, onSelect: () => finishSlash(() => { setPrompt(`$${skill.name} `); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.setSelectionRange(skill.name.length + 2, skill.name.length + 2); }); }) }));
   const slashItems = slashMode === "model" ? modelItems : slashMode === "reasoning" ? reasoningItems : [...commandItems, ...skillItems];
@@ -1377,7 +1383,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
         </>}</>
       }
     </div>
-    {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <div className="composer-stack">{statusPanel}<form className={`composer ${composerMode === "goal" ? "goal-mode" : ""}`} onSubmit={send}>
+    {thread.archived_at ? <div className="snapshot-notice"><Archive size={16} />{t("codex.archivedReadOnly")}</div> : <div className="composer-stack">{statusPanel}<form ref={composerFormRef} className={`composer ${composerMode === "goal" ? "goal-mode" : ""}`} onSubmit={send}>
       {hasNewEventsBelow && <button type="button" className="secondary-button" aria-label={t("codex.jumpToLatestMessages")} onClick={scrollToLatestEvent}><ChevronDown size={16} />{t("codex.newMessages")}</button>}
       {subagents.length > 0 && <button type="button" className="subagent-progress-row" onClick={() => setSubagentsOpen(true)}><Users size={16} /><span><strong>{t("codex.subagentActivity")}</strong><small>{activeSubagents.length > 0 ? t("codex.subagentsRunning", { count: activeSubagents.length }) : t("codex.subagentsRecorded", { count: subagents.length })}</small></span><ChevronRight size={15} /></button>}
       {goal && composerMode !== "goal" && <div className="goal-progress-row"><Target size={16} /><span title={goal.objective}><strong>{goal.objective}</strong><small>{t("codex.goalUsage", { tokens: goal.tokens_used, seconds: goal.time_used_seconds })}</small></span><Status value={goalRuntimeStatus} /><div>{goal.status === "active" ? <button type="button" className="icon-button" disabled={nativeBusy === "goal"} title={t("codex.pauseGoal")} aria-label={t("codex.pauseGoal")} onClick={() => void updateGoalStatus("paused")}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={14} /> : <Pause size={14} />}</button> : <button type="button" className="icon-button" disabled={nativeBusy === "goal"} title={t("codex.resumeGoal")} aria-label={t("codex.resumeGoal")} onClick={() => void updateGoalStatus("active")}>{nativeBusy === "goal" ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}</button>}<button type="button" className="icon-button" title={t("codex.editGoal")} aria-label={t("codex.editGoal")} onClick={enterGoalMode}><Pencil size={14} /></button><button type="button" className="icon-button danger" disabled={nativeBusy === "goal"} title={t("codex.clearGoal")} aria-label={t("codex.clearGoal")} onClick={() => void clearCurrentGoal()}><Trash2 size={14} /></button></div></div>}
@@ -1390,6 +1396,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     <Dialog open={mcpOpen} title={t("codex.mcpTitle")} onClose={() => setMcpOpen(false)}><SnapshotNotice snapshot={mcpSnapshot} loading={nativeBusy === "mcp"} error={nativeError} />{mcpSnapshot?.data?.length ? <div className="native-list">{mcpSnapshot.data.map(server => <article key={server.name}><header><strong>{server.name}</strong><Status value={server.auth_status || "unknown"} /></header>{(server.server_name || server.server_version) && <small>{[server.server_name, server.server_version].filter(Boolean).join(" ")}</small>}<p>{server.tools.length ? server.tools.join(", ") : t("codex.noTools")}</p><small>{t("codex.mcpResources", { resources: server.resource_count, templates: server.resource_template_count })}</small></article>)}</div> : !nativeBusy && <Empty icon={<Network size={24} />} text={t("codex.noMCPServers")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "mcp"} onClick={() => void loadSnapshot<CodexMCPServer[]>("mcp", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
     <Dialog open={skillsOpen} title={t("codex.skillsTitle")} onClose={() => setSkillsOpen(false)}><SnapshotNotice snapshot={skillsSnapshot} loading={nativeBusy === "skills"} error={nativeError} />{skillsSnapshot?.data?.length ? <div className="native-list">{skillsSnapshot.data.map(skill => <article key={`${skill.scope}:${skill.name}`}><header><strong>{skill.display_name || skill.name}</strong><Status value={skill.enabled ? "enabled" : "disabled"} /></header><p>{skill.short_description || skill.description}</p><small>{skill.scope}</small></article>)}</div> : !nativeBusy && <Empty icon={<Boxes size={24} />} text={t("codex.noSkills")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "skills"} onClick={() => void loadSnapshot<CodexSkill[]>("skills", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
     <Dialog open={subagentsOpen} title={t("codex.subagentsTitle")} onClose={() => setSubagentsOpen(false)} wide>{subagents.length > 0 ? <div className="subagent-list">{subagents.map(agent => <article key={agent.threadID}><header><span><Users size={15} /><strong>{agent.path || t("codex.subagent")}</strong></span><Status value={agent.status} /></header><code>{agent.threadID}</code>{(agent.model || agent.reasoningEffort) && <small>{[agent.model, agent.reasoningEffort].filter(Boolean).join(" · ")}</small>}{agent.prompt && <p>{agent.prompt}</p>}{agent.message && <p className="subagent-message">{agent.message}</p>}</article>)}</div> : <Empty icon={<Users size={24} />} text={t("codex.noSubagents")} />}</Dialog>
+    <CollaborationTaskDialog open={collabOpen} engine="codex" sessionID={thread.id} workspaceID={thread.workspace_id} currentModel={model} onClose={() => setCollabOpen(false)} onSubmit={text => { setCollabOpen(false); setComposerMode("message"); setEditingEventID(""); submitPrompt(text); }} />
     <Dialog open={planOpen} title={t("codex.planTitle")} onClose={() => setPlanOpen(false)}><div className="unsupported-state"><StickyNote size={24} /><strong>{t("codex.planUnsupportedTitle")}</strong><p>{t("codex.planUnsupportedReason")}</p></div></Dialog>
   </>;
 }

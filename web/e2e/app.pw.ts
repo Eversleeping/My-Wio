@@ -902,3 +902,64 @@ test("default mocks cover hidden projects, thread usage and Codex model refresh"
   expect(results[1].body).toMatchObject({ input_tokens: null, output_tokens: null, partial: false });
   expect(results[2].body).toEqual({});
 });
+
+test("the /collab command creates a collaboration session through the current model", async ({ page }, testInfo) => {
+  let turnRequest: MockAPIRequest | null = null;
+  const collaboration = {
+    supported: true,
+    grant: { enabled: true, workspace_ids: [], session_refs: [], worktree: true, auto_continue: false, delegate: false, target_modes: { claude: "default" } },
+    notifications: [],
+    links: [],
+    requests: [
+      { id: "request-create", request_id: "create-1", tool: "wio_create_session", status: "succeeded", phase: "", target_engine: "claude", target_id: "", operation_id: "" },
+      { id: "request-send", request_id: "send-1", tool: "wio_send_message", status: "failed", phase: "", target_engine: "claude", target_id: "", operation_id: "", error: { code: "BUSY", message: "target busy" } }
+    ]
+  };
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/threads" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], has_more: false, next: null } };
+      if (request.path === "/threads" && request.search === "?limit=50" && request.method === "GET") return { body: { items: [codexThread], has_more: false, next: null } };
+      if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
+      if (request.path === `/threads/${codexThread.id}/events` && request.method === "GET") return { body: [] };
+      if (request.path === `/threads/${codexThread.id}/goal` && request.method === "GET") return { body: codexGoalSnapshot };
+      if (request.path === `/workspaces/${managedWorkspace.id}/files` && request.method === "GET") return { body: workspaceFilesSnapshot };
+      if (request.path === `/threads/${codexThread.id}` && request.method === "GET") return { body: codexThread };
+      if (request.path === `/sessions/codex/${codexThread.id}/collaboration` && request.method === "GET") return { body: collaboration };
+      if (request.path === `/workspaces/${managedWorkspace.id}/codex/models` && request.method === "GET") return { body: { status: "succeeded", supported: true, error: "", data: [{ id: "sol", model: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", description: "", isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: "low", description: "" }, { reasoningEffort: "high", description: "" }] }] } };
+      if (request.path === `/workspaces/${managedWorkspace.id}/claude/models` && request.method === "GET") return { body: { configured: true, models: [{ id: "claude-opus-5-5", name: "Claude Opus 5.5" }] } };
+      if (request.path === `/threads/${codexThread.id}/turns` && request.method === "POST") { turnRequest = request; return { body: { operation_id: "turn-1" } }; }
+      if (request.path === `/workspaces/${managedWorkspace.id}/codex/skills` && request.method === "GET") return { body: { status: "succeeded", supported: true, data: [], error: "" } };
+      return undefined;
+    }
+  });
+  await page.goto(`/?view=codex&thread=${codexThread.id}`);
+
+  await page.getByRole("button", { name: /Session collaboration/ }).click();
+  await expect(page.getByText("Create session", { exact: true })).toBeVisible();
+  await expect(page.getByText("Send task", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/target busy/)).toHaveCount(0);
+
+  const composer = page.locator("form.composer textarea");
+  await composer.fill("/collab");
+  await page.getByRole("option", { name: /\/collab/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Create collaboration session" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("combobox", { name: "Model" }).locator("option", { hasText: "GPT-5.6 Sol · gpt-5.6-sol" })).toHaveCount(1);
+  await dialog.getByRole("combobox", { name: "Agent" }).selectOption("claude");
+  await expect(dialog.getByRole("combobox", { name: "Model" }).locator("option", { hasText: "Claude Opus 5.5 · claude-opus-5-5" })).toHaveCount(1);
+  await dialog.getByRole("combobox", { name: "Model" }).selectOption("claude-opus-5-5");
+  await dialog.getByRole("combobox", { name: "Thinking level" }).selectOption("xhigh");
+  await dialog.getByRole("combobox", { name: "Working directory" }).selectOption("worktree");
+  await dialog.getByRole("textbox", { name: "Task" }).fill("Review the deployment parser");
+  await page.screenshot({ path: testInfo.outputPath("collab-dialog.png") });
+  await dialog.getByRole("button", { name: "Send to model" }).click();
+
+  await expect(dialog).not.toBeVisible();
+  await expect.poll(() => turnRequest).not.toBeNull();
+  const body = JSON.parse(turnRequest?.body ?? "{}");
+  expect(body.prompt).toContain('"engine": "claude",\n  "model": "claude-opus-5-5",\n  "effort": "xhigh",\n  "directory_mode": "worktree"');
+  expect(body.prompt.endsWith("Task:\nReview the deployment parser")).toBe(true);
+  await expect(composer).toHaveValue("");
+});

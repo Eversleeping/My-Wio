@@ -1,10 +1,11 @@
 import { SessionCollaboration } from "../components/SessionCollaboration";
 import { ClaudeQuestion } from "../components/ClaudeQuestion";
 import { type CSSProperties, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, MoreHorizontal, Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound } from "lucide-react";
+import { Copy, MoreHorizontal, Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound, Workflow } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field, WorkspaceFilesPanel, message, type FilePreviewSelection } from "../App";
 import { SlashCommandMenu, type SlashCommandItem } from "../SlashCommandMenu";
+import { CollaborationTaskDialog, useSubmitPrompt } from "../components/CollaborationTaskDialog";
 import { compressImage } from "../imageCompression";
 import { MessageImages } from "../components/MessageImages";
 import { SessionUsage } from "../components/SessionUsage";
@@ -220,6 +221,9 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
   const [slashDismissed,setSlashDismissed]=useState("");
   const [slashSection,setSlashSection]=useState("");
   const [helpOpen,setHelpOpen]=useState(false);
+  const [collabOpen,setCollabOpen]=useState(false);
+  const composerFormRef=useRef<HTMLFormElement>(null);
+  const submitPrompt=useSubmitPrompt(composerFormRef,prompt,setPrompt);
   useEffect(()=>()=>imageWork.current?.abort(),[]);
   const addImages=async(files:File[])=>{
     if (blocked || busy || imageBusy) return;
@@ -247,8 +251,9 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     {id:"new",name:"/new",description:t("claude.newSession"),icon:Plus,onSelect:()=>finishSlash(onNew)},
     {id:"schedule",name:"/schedule",description:t("codex.createScheduledTask"),icon:CalendarClock,onSelect:()=>finishSlash(onSchedule)},
     ...(thread.input_supported && thread.session_id ? [{id:"fork",name:"/fork",description:t("codex.continueInNewTask"),icon:GitFork,onSelect:()=>finishSlash(onFork)}] : []),
+    {id:"collab",name:"/collab",description:t("codex.slashCollabDescription"),icon:Workflow,onSelect:()=>finishSlash(()=>setCollabOpen(true))},
     {id:"help",name:"/help",description:t("claude.commandsHelp"),icon:MessageSquare,onSelect:()=>finishSlash(()=>setHelpOpen(true))},
-    ...nativeSkills.filter(skill=>!["model","effort","permissions","skill","skills","plan","new","schedule","fork","help"].includes(skill.name)).map(skillItem),
+    ...nativeSkills.filter(skill=>!["model","effort","permissions","skill","skills","plan","new","schedule","fork","collab","help"].includes(skill.name)).map(skillItem),
   ];
   const showInterrupt = running && (!steerReady || (!prompt.trim() && !images.length));
   const queuedInstructions = allEvents.filter(event=>event.kind==="claude.steer.queued").flatMap(event=>{
@@ -302,7 +307,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
       {queuedInstructions.map(instruction=><div key={instruction.id} className="claude-steer-instruction" role="status"><strong>{t(`claude.steer.${instruction.state}`)}</strong><p>{instruction.text}</p>{!!instruction.images?.length && <MessageImages sources={instruction.images.map(image=>image.data_url)} />}{instruction.state==="rejected" && <button type="button" className="text-button" disabled={busy || Boolean(prompt.trim()) || images.length>0} onClick={()=>{setPrompt(instruction.text);setImages((instruction.images??[]).map(image=>({id:crypto.randomUUID(),dataURL:image.data_url})));steeringRequest.current=undefined;promptRef.current?.focus();}}>{t("claude.steerRestore")}</button>}</div>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "claude.interrupting" : "claude.working")}</p>}
     </div>
-    <form className="composer gemini-composer claude-composer" onSubmit={send}>{error && <ErrorBanner text={error} />}{thread.recovery_pending && <><p className="gemini-hint" role="status">{t("claude.recovery")}</p><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>{t("claude.confirmStopped")}</button></>}{thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}{thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <>
+    <form ref={composerFormRef} className="composer gemini-composer claude-composer" onSubmit={send}>{error && <ErrorBanner text={error} />}{thread.recovery_pending && <><p className="gemini-hint" role="status">{t("claude.recovery")}</p><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>{t("claude.confirmStopped")}</button></>}{thread.server_status !== "online" && <p className="gemini-hint">{t("gemini.offline")}</p>}{thread.archived_at ? <p className="gemini-hint">{t("gemini.archivedHint")}</p> : <>
       {running && thread.status!=="interrupting" && <p className="gemini-hint" role="status">{t(steerReady ? "claude.steerHint" : thread.steer_supported ? "claude.steerStarting" : "claude.steerUpgrade")}</p>}
       {editingEventID && <div className="composer-editing"><Pencil size={14} /><span>{t("codex.editingMessage")}</span><button type="button" className="icon-button" title={t("codex.cancelEdit")} aria-label={t("codex.cancelEdit")} disabled={busy} onClick={() => { imageWork.current?.abort(); imageWork.current = null; setImageBusy(false); setEditingEventID(""); setPrompt(""); setImages([]); }}><X size={14} /></button></div>}
       {images.length>0 && <div className="composer-images">{images.map(image=><figure key={image.id}><img src={image.dataURL} alt=""/><button type="button" aria-label={t("common.close")} disabled={busy} onClick={()=>setImages(current=>current.filter(item=>item.id!==image.id))}><X size={13}/></button></figure>)}</div>}
@@ -310,6 +315,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
       {slashOpen && <SlashCommandMenu status={slashSection === "skills" ? skillsStatus : undefined} items={slashItems} query={slashSection ? "" : prompt === "/skills" ? "skill" : prompt.slice(1)} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashSection?()=>{setSlashSection("");setPrompt("/");}:undefined} onDismiss={()=>{setSlashDismissed(prompt);setSlashSection("");}} keyboardRef={slashKeyboardRef}/>}
       {availableModels.error && <small className="gemini-model-error" role="status">{t("claude.modelsRefreshFailed")} {availableModels.error}</small>}
       <textarea ref={promptRef} onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.type.startsWith("image/")).map(item=>item.getAsFile()).filter((file):file is File=>file!==null);if(files.length){event.preventDefault();void addImages(files);}}} aria-label={t("claude.prompt")} placeholder={t("claude.prompt")} value={prompt} disabled={busy || blocked} onChange={event => {setPrompt(event.target.value);if(steeringRequest.current && event.target.value!==steeringRequest.current.prompt)steeringRequest.current=undefined;setSlashDismissed("");if(!event.target.value.startsWith("/"))setSlashSection("");}} onKeyDown={event => { if(slashOpen && slashKeyboardRef.current?.(event))return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-bar"><ClaudeOptions compact requestCustom={requestCustomModel} availableModels={availableModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} effortSupported={thread.effort_supported} setModel={setModel} setMode={setMode} disabled={busy || blocked || running} />{showInterrupt ? <button type="button" className="secondary-button danger composer-action" aria-label={t("gemini.interrupt")} disabled={busy || thread.status === "interrupting" || thread.server_status !== "online"} onClick={() => void interrupt()}><Square size={15} /><span>{t("gemini.interrupt")}</span></button> : <button className="primary-button composer-action" aria-label={t(running ? "codex.steer" : "codex.send")} disabled={busy || blocked || imageBusy || slashOpen || (!prompt.trim() && !images.length) || !model.trim()}><ArrowUp size={16} /><span>{t(running ? "codex.steer" : "codex.send")}</span></button>}</div></>}</form>
+    <CollaborationTaskDialog open={collabOpen} engine="claude" sessionID={thread.id} workspaceID={thread.workspace_id} currentModel={model} onClose={()=>setCollabOpen(false)} onSubmit={text=>{setCollabOpen(false);submitPrompt(text);}} />
     <Dialog open={helpOpen} title={t("claude.commandsHelp")} onClose={()=>setHelpOpen(false)}><p>{t("claude.commandsDescription")}</p><p><a href="https://code.claude.com/docs/en/headless" target="_blank" rel="noreferrer">Claude Code</a></p></Dialog>
     <ConfirmDialog open={confirming} danger title={t("claude.confirmStopped")} impact={t("claude.confirmStoppedImpact")} confirmLabel={t("claude.confirmStopped")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setConfirming(false)} onConfirm={confirmStopped} />
   </section>;
