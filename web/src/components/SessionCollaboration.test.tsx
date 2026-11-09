@@ -22,7 +22,8 @@ test("saves explicit collaboration scope and displays child provenance", async (
   await user.click(screen.getByRole("button", { name: "Collaboration settings" }));
   await user.click(screen.getByRole("checkbox", { name: "Allow creating and managing child sessions" }));
   await user.click(screen.getByRole("checkbox", { name: "Allow creating separate worktrees" }));
+  await user.click(screen.getByRole("checkbox", { name: "Allow managing other agents' existing sessions in this project" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "claude collaboration permissions" }), "default");
   await user.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(saved).toEqual([expect.objectContaining({ enabled: true, worktree: true, auto_continue: false, target_modes: { claude: "default" } })]));
+  await waitFor(() => expect(saved).toEqual([expect.objectContaining({ enabled: true, all_project_sessions: true, session_refs: [], worktree: true, auto_continue: false, target_modes: { claude: "default" } })]));
 });

@@ -287,7 +287,10 @@ func collaborationError(id string, err error) sessiontools.Reply {
 	var e *sessiontools.Error
 	if !errors.As(err, &e) {
 		switch {
-		case errors.Is(err, ErrThreadActive), errors.Is(err, ErrWorkspaceWriteActive), errors.Is(err, ErrClaudeCredentialsBusy), errors.Is(err, ErrGeminiCredentialsBusy):
+		case errors.Is(err, ErrThreadActive):
+			// ErrThreadActive's text predates non-Codex sessions.
+			e = &sessiontools.Error{Code: "SESSION_BUSY", Message: "session is running, archived or cannot accept this action now"}
+		case errors.Is(err, ErrWorkspaceWriteActive), errors.Is(err, ErrClaudeCredentialsBusy), errors.Is(err, ErrGeminiCredentialsBusy):
 			e = &sessiontools.Error{Code: "SESSION_BUSY", Message: err.Error()}
 		case errors.Is(err, sql.ErrNoRows):
 			e = &sessiontools.Error{Code: "NOT_FOUND", Message: "session or resource no longer exists"}
@@ -314,6 +317,9 @@ func (s *Store) authorizeCollaboration(ctx context.Context, tx *sqlx.Tx, source 
 		return t, sessiontools.Fail("OUT_OF_SCOPE", "target belongs to another project")
 	}
 	if target == source.Ref() {
+		return t, nil
+	}
+	if grant.AllProjectSessions {
 		return t, nil
 	}
 	for _, r := range grant.SessionRefs {
@@ -346,6 +352,11 @@ func (s *Store) authorizeCollaboration(ctx context.Context, tx *sqlx.Tx, source 
 
 func (s *Store) saveCollaborationRequest(ctx context.Context, tx *sqlx.Tx, r *CollaborationRequest, reply sessiontools.Reply) error {
 	reply.RequestID = r.RequestKey
+	if data, ok := reply.Data.(map[string]any); ok && r.WorkspaceID != "" {
+		if _, reported := data["workspace_id"]; reported {
+			data["workspace_id"] = r.WorkspaceID
+		}
+	}
 	raw, err := json.Marshal(reply)
 	if err != nil {
 		return err
@@ -561,7 +572,8 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 		reply.Data = items
 		return reply, nil
 	case "wio_list_sessions":
-		var sessions []CollaborationSession
+		// Non-nil so an empty page encodes as [] rather than null.
+		sessions := []CollaborationSession{}
 		query := "SELECT * FROM (" + collaborationSessions + ") sessions WHERE project_id=? AND "
 		if p.Archived {
 			query += "archived_at IS NOT NULL"
@@ -580,6 +592,9 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 		for _, ref := range grant.SessionRefs {
 			query += " OR (engine=? AND id=?)"
 			args = append(args, ref.Engine, ref.ID)
+		}
+		if grant.AllProjectSessions {
+			query += " OR 1=1"
 		}
 		query += ")"
 		if p.Engine != "" {
@@ -645,7 +660,7 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 					return reply, err
 				}
 				if locks > 0 {
-					return reply, sessiontools.Fail("WAIT_DEPENDENCY", "the calling turn holds the shared workspace; end this turn before waiting")
+					return reply, sessiontools.Fail("WAIT_DEPENDENCY", "the calling turn holds the shared workspace; end this turn before waiting, or use directory_mode=worktree to run the child in parallel")
 				}
 			}
 			items = append(items, t)

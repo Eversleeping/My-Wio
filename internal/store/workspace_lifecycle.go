@@ -137,7 +137,7 @@ func (s *Store) QueueWorkspaceLifecycle(ctx context.Context, workspace Workspace
 	}
 	defer tx.Rollback()
 	var active int
-	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), workspace.ID); err != nil {
+	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND (workspace_write=1 OR kind='git.worktree.create') AND status IN ('queued','delivered','running')"), workspace.ID); err != nil {
 		return "", err
 	}
 	if active != 0 {
@@ -185,7 +185,7 @@ func (s *Store) QueueCrossServerWorkspaceClone(ctx context.Context, source Works
 		return "", sql.ErrNoRows
 	}
 	var active int
-	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), source.ID); err != nil {
+	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND (workspace_write=1 OR kind='git.worktree.create') AND status IN ('queued','delivered','running')"), source.ID); err != nil {
 		return "", err
 	}
 	if active != 0 {

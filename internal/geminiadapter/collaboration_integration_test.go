@@ -87,7 +87,12 @@ func TestNativeGeminiCollaboration(t *testing.T) {
 	}))
 	defer server.Close()
 	environment := []string{"GEMINI_CLI_HOME=" + home, "GEMINI_API_KEY=local-test-only", "GOOGLE_GEMINI_BASE_URL=" + server.URL, "GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + filepath.Join(home, "missing.json"), "GEMINI_CLI_SYSTEM_DEFAULTS_PATH=" + filepath.Join(home, "missing-defaults.json"), "HTTP_PROXY=http://127.0.0.1:1", "HTTPS_PROXY=http://127.0.0.1:1", "ALL_PROXY=http://127.0.0.1:1", "NO_PROXY=127.0.0.1,localhost", "http_proxy=http://127.0.0.1:1", "https_proxy=http://127.0.0.1:1", "all_proxy=http://127.0.0.1:1", "no_proxy=127.0.0.1,localhost"}
-	a := New(cli, func(e protocol.StreamEvent) error { if e.Kind == "gemini.question" || e.Kind == "gemini.tool_use" { t.Logf("%s: %s", e.Kind, e.Payload) }; return nil })
+	a := New(cli, func(e protocol.StreamEvent) error {
+		if e.Kind == "gemini.question" || e.Kind == "gemini.tool_use" {
+			t.Logf("%s: %s", e.Kind, e.Payload)
+		}
+		return nil
+	})
 	err = a.RunInTrustedWorkspaceWithEnvironment(ctx, "collaboration-op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "collaboration", Workspace: workspace, Prompt: "Use Wio context", Model: "gemini-2.5-flash", ApprovalMode: "default", CollaborationMCP: bridge}, environment)
 	if err != nil || calls.Load() != 1 || !received.Load() {
 		t.Fatalf("real MCP round trip: calls=%d received=%v err=%v", calls.Load(), received.Load(), err)

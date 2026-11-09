@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 
@@ -26,6 +27,10 @@ func (a *API) markSessionCollaborationRead(w http.ResponseWriter, r *http.Reques
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if input.Target == "" || input.Event == "" {
+		writeError(w, 400, "target_key and event_id are required")
+		return
+	}
 	if err := a.store.MarkCollaborationRead(r.Context(), ref, input.Target, input.Event); err != nil {
 		writeError(w, 500, "could not mark collaboration result read")
 		return
@@ -41,7 +46,11 @@ func (a *API) sessionCollaboration(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := a.store.ReadCollaborationState(r.Context(), ref)
 	if err != nil {
-		writeError(w, 404, "session not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, 404, "session not found")
+		} else {
+			writeError(w, 500, "could not load session collaboration")
+		}
 		return
 	}
 	writeJSON(w, 200, state)

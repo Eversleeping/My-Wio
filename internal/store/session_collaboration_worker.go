@@ -195,11 +195,15 @@ func (s *Store) advanceCollaborationPhase(ctx context.Context, tx *sqlx.Tx, sour
 			if !grant.Worktree || !collaborationWorkspaceAllowed(source, grant, w.ID) {
 				return sessiontools.Fail("OUT_OF_SCOPE", "worktree creation is no longer granted")
 			}
-			command, err := s.collaborationWorktree(ctx, tx, w, p)
+			command, err := s.collaborationWorktree(ctx, tx, w, p, r.TargetEngine)
 			if err != nil {
 				return err
 			}
-			r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, "git.worktree.create", command, true)
+			lock, err := s.collaborationWorktreeLock(ctx, tx, source, w.ID)
+			if err != nil {
+				return err
+			}
+			r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, "git.worktree.create", command, lock)
 			if err != nil {
 				return err
 			}
@@ -226,7 +230,7 @@ func (s *Store) advanceCollaborationPhase(ctx context.Context, tx *sqlx.Tx, sour
 		if err = tx.GetContext(ctx, &w, s.Q("SELECT * FROM workspaces WHERE id=? AND status='ready'"), origin.WorkspaceID); err != nil {
 			return err
 		}
-		command, err := s.collaborationWorktree(ctx, tx, w, p)
+		command, err := s.collaborationWorktree(ctx, tx, w, p, r.TargetEngine)
 		if err != nil {
 			return err
 		}

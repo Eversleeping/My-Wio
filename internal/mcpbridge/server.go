@@ -96,7 +96,7 @@ func Start(ctx context.Context, call sessiontools.Caller) (map[string]any, func(
 				respond(nil, -32602, "invalid parameters")
 				return
 			}
-			callCtx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+			callCtx, cancel := context.WithTimeout(r.Context(), 65*time.Second)
 			defer cancel()
 			reply, err := call(callCtx, p.Name, p.Arguments)
 			if err != nil {

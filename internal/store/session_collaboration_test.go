@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -163,6 +164,20 @@ func TestCollaborationAuthorizationAndRevocation(t *testing.T) {
 		}
 	}
 	grant, _ := f.db.CollaborationGrant(ctx, f.source)
+	grant.AllProjectSessions = true
+	if err = f.db.SetCollaborationGrant(ctx, f.source, grant); err != nil {
+		t.Fatal(err)
+	}
+	if reply := f.call(t, "wio_get_session", sessiontools.Params{Session: ref}); reply.Error != nil {
+		t.Fatalf("project-wide grant: %+v", reply)
+	}
+	grant.AllProjectSessions = false
+	if err = f.db.SetCollaborationGrant(ctx, f.source, grant); err != nil {
+		t.Fatal(err)
+	}
+	if reply := f.call(t, "wio_get_session", sessiontools.Params{Session: ref}); reply.Error == nil {
+		t.Fatal("project-wide grant survived revocation")
+	}
 	grant.TargetModes = nil
 	if err = f.db.SetCollaborationGrant(ctx, f.source, grant); err != nil {
 		t.Fatal(err)
@@ -282,10 +297,17 @@ func TestCollaborationDeferredSelfForkAndWaitCycles(t *testing.T) {
 	}
 	a := sessiontools.Ref{Engine: "codex", ID: "a"}
 	b := sessiontools.Ref{Engine: "claude", ID: "b"}
-	if err := f.db.RegisterCollaborationWait(ctx, a, []sessiontools.Ref{b}, time.Second); err != nil {
+	first, err := f.db.RegisterCollaborationWait(ctx, a, []sessiontools.Ref{b}, time.Second)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.db.RegisterCollaborationWait(ctx, b, []sessiontools.Ref{a}, time.Second); err == nil {
+	// A retry replaces the wait, and the old call's cleanup must keep the new edge.
+	time.Sleep(2 * time.Millisecond)
+	if _, err = f.db.RegisterCollaborationWait(ctx, a, []sessiontools.Ref{b}, time.Second); err != nil {
+		t.Fatalf("retry rejected: %v", err)
+	}
+	f.db.ClearCollaborationWait(ctx, a, first)
+	if _, err := f.db.RegisterCollaborationWait(ctx, b, []sessiontools.Ref{a}, time.Second); err == nil {
 		t.Fatal("wait cycle accepted")
 	}
 }
@@ -360,6 +382,9 @@ func assertCollaborationWorktreeEngineMatrix(t *testing.T, db *Store) {
 					if err = db.ReconcileAllCollaboration(ctx); err != nil {
 						t.Fatal(err)
 					}
+				}
+				if !strings.HasPrefix(command.Branch, target+"/wio-") {
+					t.Fatalf("branch %q does not name the target engine", command.Branch)
 				}
 				child, err := db.CollaborationSession(ctx, *reply.Session)
 				if err != nil || child.WorkspaceID != command.TargetWorkspaceID || child.OperationID == "" {
@@ -667,5 +692,153 @@ func TestCollaborationCodexWorktreeForkHonorsMessageBoundary(t *testing.T) {
 	events, err := f.db.Events(ctx, fork.Session.ID, 0, 100)
 	if err != nil || len(events) != 3 {
 		t.Fatalf("copied wrong history: %+v %v", events, err)
+	}
+}
+
+func TestCollaborationDeferredWorktreeReportsTargetWorkspace(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+	other := f.lockWorkspaceByAnotherSession(t)
+	created := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "deferred-worktree", Engine: "gemini", DirectoryMode: "worktree", Prompt: "verify"})
+	if created.Error != nil || created.Status != "accepted" {
+		t.Fatalf("deferred: %+v", created)
+	}
+	// The other session releases the shared workspace, so preparation can start.
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE agent_operations SET status='succeeded' WHERE id=?"), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reply := f.call(t, "wio_get_request", sessiontools.Params{RequestID: "deferred-worktree"})
+	if reply.Error != nil || reply.Status != "preparing" || reply.OperationID == "" {
+		t.Fatalf("advance: %+v", reply)
+	}
+	op, err := f.db.Operation(ctx, reply.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command protocol.GitWorktreeCreateCommand
+	if err = json.Unmarshal([]byte(op.Payload), &command); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(command.Branch, "gemini/wio-") {
+		t.Fatalf("branch %q does not name the target engine", command.Branch)
+	}
+	if data, _ := reply.Data.(map[string]any); data["workspace_id"] != command.TargetWorkspaceID {
+		t.Fatalf("reported workspace %v, want %s", data["workspace_id"], command.TargetWorkspaceID)
+	}
+}
+
+func TestCollaborationInterruptIdleAndBusyMessages(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	created := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "idle-child", Engine: "claude"})
+	if created.Error != nil || created.Session == nil {
+		t.Fatalf("create: %+v", created)
+	}
+	reply := f.call(t, "wio_interrupt_session", sessiontools.Params{RequestID: "interrupt-idle", Session: *created.Session})
+	if reply.Error == nil || reply.Error.Code != "SESSION_NOT_RUNNING" {
+		t.Fatalf("idle interrupt: %+v", reply)
+	}
+	busy := collaborationError("busy", ErrThreadActive)
+	if busy.Error.Code != "SESSION_BUSY" || strings.Contains(busy.Error.Message, "Codex") {
+		t.Fatalf("busy message: %+v", busy.Error)
+	}
+}
+
+func TestCollaborationNativeForkDefaultsToOrigin(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "claude")
+	child := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "gemini-child", Engine: "gemini"})
+	if child.Error != nil || child.Session == nil {
+		t.Fatalf("create: %+v", child)
+	}
+	// Without engine or workspace, a native fork follows the origin rather than the caller.
+	fork := f.call(t, "wio_fork_session", sessiontools.Params{RequestID: "native-default", Session: *child.Session, ForkMode: "native"})
+	if fork.Error != nil || fork.Session == nil || fork.Session.Engine != "gemini" {
+		t.Fatalf("native fork: %+v", fork)
+	}
+	// The Claude source turn holds the shared workspace; no worktree is involved.
+	if fork.Status != "accepted" || strings.Contains(fork.NextAction, "worktree") {
+		t.Fatalf("deferred shared fork: %+v", fork)
+	}
+}
+
+func TestCollaborationEmptySessionListIsArray(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	reply := f.call(t, "wio_list_sessions", sessiontools.Params{ChildrenOnly: true})
+	raw, err := json.Marshal(reply.Data)
+	if reply.Error != nil || err != nil || !strings.Contains(string(raw), `"sessions":[]`) {
+		t.Fatalf("empty list: %s %+v %v", raw, reply.Error, err)
+	}
+}
+
+// lockWorkspaceByAnotherSession makes an unrelated session hold the
+// workspace write lock and returns its operation ID.
+func (f collaborationFixture) lockWorkspaceByAnotherSession(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE agent_operations SET workspace_write=0 WHERE id=?"), f.operation); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := f.db.CreateClaudeThread(ctx, f.workspace, "sonnet", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.db.QueueClaudeTurn(ctx, thread, "other work", thread.Model, thread.PermissionMode, thread.Effort); err != nil {
+		t.Fatal(err)
+	}
+	thread, err = f.db.ClaudeThread(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return thread.OperationID
+}
+
+func TestCollaborationWorktreeChildDuringOwnTurnIsWaitable(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "claude")
+	ctx := context.Background()
+	// The Claude source turn itself holds the workspace write lock.
+	created := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "own-turn-worktree", Engine: "codex", DirectoryMode: "worktree", Prompt: "verify"})
+	if created.Error != nil || created.Status != "preparing" || created.Session == nil {
+		t.Fatalf("worktree child should start during the caller's turn: %+v", created)
+	}
+	op, err := f.db.Operation(ctx, created.OperationID)
+	if err != nil || op.Kind != "git.worktree.create" || op.WorkspaceWrite != 0 {
+		t.Fatalf("worktree operation: %+v %v", op, err)
+	}
+	if wait := f.call(t, "wio_wait_sessions", sessiontools.Params{Sessions: []sessiontools.Ref{*created.Session}}); wait.Error != nil {
+		t.Fatalf("caller cannot wait for its worktree child: %+v", wait.Error)
+	}
+	// A shared Gemini child still has to wait for the caller's turn to end.
+	shared := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "own-turn-shared", Engine: "gemini", Prompt: "verify"})
+	if shared.Error != nil || shared.Status != "accepted" || shared.Session == nil {
+		t.Fatalf("shared child: %+v", shared)
+	}
+	wait := f.call(t, "wio_wait_sessions", sessiontools.Params{Sessions: []sessiontools.Ref{*shared.Session}})
+	if wait.Error == nil || wait.Error.Code != "WAIT_DEPENDENCY" || !strings.Contains(wait.Error.Message, "directory_mode=worktree") {
+		t.Fatalf("shared wait: %+v", wait)
+	}
+	// Moving or deleting the source must wait for the lock-free worktree creation.
+	if _, err = f.db.DB.ExecContext(ctx, f.db.Q("UPDATE agent_operations SET status='succeeded' WHERE id=?"), f.operation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.db.DB.ExecContext(ctx, f.db.Q("UPDATE workspaces SET management_mode='managed' WHERE id=?"), f.workspace); err != nil {
+		t.Fatal(err)
+	}
+	w, err := f.db.Workspace(ctx, f.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.db.QueueWorkspaceLifecycle(ctx, w, protocol.GitWorkspaceLifecycleCommand{WorkspaceID: w.ID, ProjectID: w.ProjectID, Action: "delete", SourcePath: w.Path}); !errors.Is(err, ErrWorkspaceWriteActive) {
+		t.Fatalf("lifecycle during worktree creation: %v", err)
+	}
+}
+
+func TestCollaborationWorktreeChildDefersForOtherWriters(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	f.lockWorkspaceByAnotherSession(t)
+	created := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "other-writer-worktree", Engine: "claude", DirectoryMode: "worktree", Prompt: "verify"})
+	if created.Error != nil || created.Status != "accepted" || !strings.Contains(created.NextAction, "worktree") {
+		t.Fatalf("another session's write should still defer worktree creation: %+v", created)
 	}
 }

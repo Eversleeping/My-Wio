@@ -19,15 +19,18 @@ func (s *Service) Execute(ctx context.Context, serverID string, call sessiontool
 		return reply
 	}
 	var p sessiontools.Params
-	_ = json.Unmarshal(call.Arguments, &p)
+	if err := json.Unmarshal(call.Arguments, &p); err != nil {
+		return sessiontools.Reply{ID: call.ID, Status: "failed", Error: &sessiontools.Error{Code: "INVALID_ARGUMENT", Message: "invalid wait arguments"}}
+	}
 	if p.TimeoutMS == 0 {
 		reply.ID = call.ID
 		return reply
 	}
-	if err := s.Store.RegisterCollaborationWait(ctx, call.Source, p.Sessions, time.Duration(p.TimeoutMS)*time.Millisecond); err != nil {
+	expires, err := s.Store.RegisterCollaborationWait(ctx, call.Source, p.Sessions, time.Duration(p.TimeoutMS)*time.Millisecond)
+	if err != nil {
 		return sessiontools.Reply{ID: call.ID, Status: "failed", Error: &sessiontools.Error{Code: "WAIT_DEPENDENCY", Message: err.Error()}}
 	}
-	defer s.Store.ClearCollaborationWait(context.WithoutCancel(ctx), call.Source)
+	defer s.Store.ClearCollaborationWait(context.WithoutCancel(ctx), call.Source, expires)
 	deadline := time.NewTimer(time.Duration(p.TimeoutMS) * time.Millisecond)
 	defer deadline.Stop()
 	tick := time.NewTicker(250 * time.Millisecond)

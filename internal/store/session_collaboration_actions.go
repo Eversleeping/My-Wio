@@ -281,6 +281,7 @@ func (s *Store) linkCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 		child = grant
 		child.AutoContinue = false
 		child.SessionRefs = nil
+		child.AllProjectSessions = false
 	}
 	raw, _ := json.Marshal(child)
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO session_tool_grants(source_key,grant_json,parent_key,parent_version) VALUES(?,?,?,?)"), ref.Key(), string(raw), source.Ref().Key(), r.GrantVersion); err != nil {
@@ -294,10 +295,10 @@ func (s *Store) linkCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 	return err
 }
 
-func (s *Store) collaborationWorktree(ctx context.Context, tx *sqlx.Tx, w Workspace, p sessiontools.Params) (*protocol.GitWorktreeCreateCommand, error) {
+func (s *Store) collaborationWorktree(ctx context.Context, tx *sqlx.Tx, w Workspace, p sessiontools.Params, engine string) (*protocol.GitWorktreeCreateCommand, error) {
 	branch := strings.TrimSpace(p.Branch)
 	if branch == "" {
-		branch = "codex/wio-" + NewID()[:8]
+		branch = engine + "/wio-" + NewID()[:8]
 	}
 	if strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "\x00\r\n \\~^:?*[") || strings.Contains(branch, "..") {
 		return nil, sessiontools.Fail("INVALID_ARGUMENT", "invalid worktree branch")
@@ -336,11 +337,19 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 				return reply, sessiontools.Fail("OUT_OF_SCOPE", "restore the source session before forking")
 			}
 		}
-		engine := p.Engine
+		engine, workspace := p.Engine, p.WorkspaceID
+		// A native fork can only continue in the origin's engine and workspace.
+		if r.Tool == "wio_fork_session" && p.ForkMode != "handoff" {
+			if engine == "" {
+				engine = origin.Engine
+			}
+			if workspace == "" {
+				workspace = origin.WorkspaceID
+			}
+		}
 		if engine == "" {
 			engine = source.Engine
 		}
-		workspace := p.WorkspaceID
 		if workspace == "" {
 			workspace = source.WorkspaceID
 		}
@@ -399,7 +408,7 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 				if !grant.Worktree {
 					return reply, sessiontools.Fail("OUT_OF_SCOPE", "worktree creation is not granted")
 				}
-				worktree, err = s.collaborationWorktree(ctx, tx, w, p)
+				worktree, err = s.collaborationWorktree(ctx, tx, w, p, engine)
 				if err != nil {
 					return reply, err
 				}
@@ -410,7 +419,10 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 				reply.Status = "preparing"
 			} else if worktree != nil {
 				r.WorkspaceID = worktree.TargetWorkspaceID
-				r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, "git.worktree.create", worktree, true)
+				var lock bool
+				if lock, err = s.collaborationWorktreeLock(ctx, tx, source, w.ID); err == nil {
+					r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, "git.worktree.create", worktree, lock)
+				}
 				r.Phase = "worktree"
 				reply.Status = "preparing"
 			} else {
@@ -433,7 +445,7 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 						err = nil
 						r.Phase = "send_created"
 						reply.Status = "accepted"
-						reply.NextAction = "Waiting for the shared workspace. End this turn before waiting, or use a separate ready workspace."
+						reply.NextAction = "Waiting for the shared workspace. End this turn before waiting, or use directory_mode=worktree or a separate ready workspace to run it in parallel."
 					}
 				}
 			}
@@ -446,7 +458,10 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 					r.Phase = "await_workspace"
 					r.WorkspaceID = workspace
 					reply.Status = "accepted"
-					reply.NextAction = "Waiting for the source workspace before preparing the new worktree. End this turn before waiting."
+					reply.NextAction = "Waiting for the shared workspace before forking. End this turn before waiting."
+					if worktree != nil {
+						reply.NextAction = "Waiting for the source workspace before preparing the new worktree. End this turn before waiting."
+					}
 				} else {
 					return reply, err
 				}
@@ -509,7 +524,7 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 		reply.Status = "queued"
 	case "wio_interrupt_session":
 		if !target.Busy() {
-			return reply, ErrThreadActive
+			return reply, sessiontools.Fail("SESSION_NOT_RUNNING", "session is not running; nothing to interrupt")
 		}
 		switch target.Engine {
 		case "claude":
@@ -662,6 +677,29 @@ func (s *Store) collaborationFork(ctx context.Context, tx *sqlx.Tx, source Colla
 		return s.queueCollaborationOperation(ctx, tx, source, "codex.thread.fork", command, false)
 	}
 	return "", sessiontools.Fail("CAPABILITY_UNSUPPORTED", "native fork is unavailable")
+}
+
+// collaborationWorktreeLock reports whether a new worktree from workspace id
+// should take its write lock. `git worktree add` leaves the source working tree
+// untouched, so when the only active writer is the calling turn itself the
+// worktree is created without the lock; otherwise the caller could never wait
+// for the child it just delegated. Other writers still defer the request.
+func (s *Store) collaborationWorktreeLock(ctx context.Context, tx *sqlx.Tx, source CollaborationSession, id string) (bool, error) {
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), id); err != nil {
+		return false, err
+	}
+	var holders []string
+	if err := tx.SelectContext(ctx, &holders, s.Q("SELECT id FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), id); err != nil {
+		return false, err
+	}
+	switch {
+	case len(holders) == 0:
+		return true, nil
+	case len(holders) == 1 && source.OperationID != "" && holders[0] == source.OperationID:
+		return false, nil
+	default:
+		return false, ErrWorkspaceWriteActive
+	}
 }
 
 func (s *Store) collaborationWorkspaceBusy(ctx context.Context, tx *sqlx.Tx, id string) (bool, error) {

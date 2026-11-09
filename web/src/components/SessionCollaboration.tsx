@@ -9,12 +9,12 @@ import type { Workspace } from "../types";
 
 type Engine = "codex" | "claude" | "gemini";
 type Ref = { engine: Engine; id: string };
-type Grant = { enabled: boolean; workspace_ids: string[] | null; session_refs: Ref[] | null; worktree: boolean; auto_continue: boolean; delegate: boolean; target_modes: Partial<Record<Engine, string>> | null };
+type Grant = { enabled: boolean; workspace_ids: string[] | null; session_refs: Ref[] | null; all_project_sessions?: boolean; worktree: boolean; auto_continue: boolean; delegate: boolean; target_modes: Partial<Record<Engine, string>> | null };
 type RelatedSession = Ref & { title: string; status: string; workspace_id: string; url: string; operation_id: string; recovery_pending: boolean; waiting_user?: boolean; archived_at?: string | null };
 type Request = { id: string; request_id: string; tool: string; status: string; phase: string; target_engine: Engine; target_id: string; operation_id: string; error?: { code: string; message: string } };
 type State = { grant: Grant; supported: boolean; notifications?: { target_key: string; event_id: string }[]; links: { source_key: string; target_key: string; relation: string; session: RelatedSession; missing: boolean }[]; requests: Request[] };
 
-const emptyGrant: Grant = { enabled: false, workspace_ids: [], session_refs: [], worktree: false, auto_continue: false, delegate: false, target_modes: {} };
+const emptyGrant: Grant = { enabled: false, workspace_ids: [], session_refs: [], all_project_sessions: false, worktree: false, auto_continue: false, delegate: false, target_modes: {} };
 
 export function SessionCollaboration({ engine, id, workspaceID, projectID, revision }: { engine: Engine; id: string; workspaceID: string; projectID: string; revision: unknown }) {
   const { language, t } = useI18n();
@@ -28,27 +28,17 @@ export function SessionCollaboration({ engine, id, workspaceID, projectID, revis
   const path = `/sessions/${engine}/${encodeURIComponent(id)}/collaboration`;
   const state = useData<State>(path, `${revision}:${tick}`);
   const workspaces = useData<Workspace[]>(settings ? "/workspaces" : null, settings);
-  const [otherSessions, setOtherSessions] = useState<RelatedSession[]>([]);
   useEffect(() => {
     if (!state.data?.grant?.enabled && !state.data?.links?.length && !expanded) return;
     const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") setTick(value => value + 1); }, 3000);
     return () => window.clearInterval(timer);
   }, [state.data?.grant?.enabled, state.data?.links?.length, expanded]);
-  useEffect(() => {
-    if (!settings) return;
-    let cancelled = false;
-    Promise.allSettled([api<RelatedSession[]>("/threads"), api<RelatedSession[]>("/claude/threads"), api<RelatedSession[]>("/gemini/threads")]).then(results => {
-      if (cancelled) return;
-      setOtherSessions(results.flatMap((result, index) => result.status === "fulfilled" && Array.isArray(result.value) ? result.value.filter(item => "project_id" in item && item.project_id === projectID && item.id !== id).map(item => ({ ...item, engine: (["codex", "claude", "gemini"] as const)[index] })) : []));
-    });
-    return () => { cancelled = true; };
-  }, [settings, projectID, id]);
   // Older controllers can omit this optional surface without breaking chat.
   if (!state.data && !state.error) return null;
   const openSettings = () => { setGrant({ ...emptyGrant, ...state.data?.grant }); setError(""); setSettings(true); };
   const save = async () => {
     setBusy(true); setError("");
-    try { await put(path, grant); setSettings(false); state.reload(); }
+    try { await put(path, { ...grant, session_refs: [] }); setSettings(false); state.reload(); }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setBusy(false); }
   };
@@ -87,8 +77,7 @@ export function SessionCollaboration({ engine, id, workspaceID, projectID, revis
           {(workspaces.data ?? []).filter(workspace => workspace.project_id === projectID && workspace.id !== workspaceID && workspace.status === "ready").map(workspace => <label key={workspace.id}><input type="checkbox" checked={grant.workspace_ids?.includes(workspace.id) ?? false} onChange={event => setGrant({ ...grant, workspace_ids: event.target.checked ? [...(grant.workspace_ids ?? []), workspace.id] : (grant.workspace_ids ?? []).filter(value => value !== workspace.id) })} />{workspace.server_name} · {workspace.path}</label>)}
           <p>{text("跨模型执行权限（不得高于来源会话）：", "Cross-model execution permissions (cannot exceed the source session):")}</p>
           {(["codex", "claude", "gemini"] as const).filter(value => value !== engine).map(value => <label key={value}>{value}<select aria-label={`${value} ${text("协作权限", "collaboration permissions")}`} value={grant.target_modes?.[value] ?? ""} onChange={event => setGrant({ ...grant, target_modes: { ...grant.target_modes, [value]: event.target.value || undefined } })}><option value="">{text("未授权", "Not granted")}</option>{modes[value].map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}</select></label>)}
-          <p>{text("额外允许管理已有会话：", "Optionally allow managing existing sessions:")}</p>
-          {otherSessions.map(session => <label key={`${session.engine}:${session.id}`}><input type="checkbox" checked={grant.session_refs?.some(ref => ref.engine === session.engine && ref.id === session.id) ?? false} onChange={event => setGrant({ ...grant, session_refs: event.target.checked ? [...(grant.session_refs ?? []), { engine: session.engine, id: session.id }] : (grant.session_refs ?? []).filter(ref => ref.engine !== session.engine || ref.id !== session.id) })} />{session.engine} · {session.title}</label>)}
+          <label><input type="checkbox" checked={grant.all_project_sessions ?? false} onChange={event => setGrant({ ...grant, all_project_sessions: event.target.checked })} />{text("允许管理本项目其他 Agent 的已有会话", "Allow managing other agents' existing sessions in this project")}</label>
         </fieldset>
         {error && <p className="error-banner" role="alert">{error}</p>}
         <DialogActions><button className="primary-button" disabled={busy}>{busy ? t("common.loading") : t("common.save")}</button></DialogActions>

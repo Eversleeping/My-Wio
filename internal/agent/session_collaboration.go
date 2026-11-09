@@ -19,7 +19,7 @@ func (c *Client) sessionBridge(ctx context.Context, ref sessiontools.Ref, operat
 }
 
 func (c *Client) callSessionTool(ctx context.Context, ref sessiontools.Ref, operation, name string, args json.RawMessage) (sessiontools.Reply, error) {
-	ctx, cancel := context.WithTimeout(ctx, 38*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	id := uuid.NewString()
 	replyCh := make(chan sessiontools.Reply, 1)

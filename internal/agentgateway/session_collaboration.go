@@ -25,7 +25,8 @@ func (g *Gateway) RunSessionCollaboration(ctx context.Context) {
 			for _, stream := range streams {
 				g.hub.Publish(protocol.StreamEvent{StreamID: stream, Kind: "session.collaboration.updated", OccurredAt: started})
 			}
-			since = started
+			// Overlap covers late commits and clock skew; a repeated refresh is harmless.
+			since = started.Add(-10 * time.Second)
 		}
 		select {
 		case <-ctx.Done():
@@ -51,7 +52,8 @@ func (g *Gateway) receiveSessionTool(stream protocol.AgentServiceConnectServer, 
 	select {
 	case limit <- struct{}{}:
 	default:
-		respond(sessiontools.Reply{Status: "failed", Error: &sessiontools.Error{Code: "RATE_LIMITED", Message: "too many outstanding collaboration calls"}})
+		// Never block the Recv loop on a full replies channel.
+		go respond(sessiontools.Reply{Status: "failed", Error: &sessiontools.Error{Code: "RATE_LIMITED", Message: "too many outstanding collaboration calls"}})
 		return
 	}
 	go func() {
