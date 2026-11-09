@@ -107,5 +107,36 @@ func (s *Store) PruneRetainedData(ctx context.Context, now time.Time, policy Ret
 			}
 		}
 	}
+	collaborationCleanups := []string{
+		`DELETE FROM session_subscriptions WHERE (
+			target_key NOT IN (
+				SELECT 'codex:'||id FROM codex_threads
+				UNION ALL SELECT 'claude:'||id FROM claude_threads
+				UNION ALL SELECT 'gemini:'||id FROM gemini_threads
+			) AND NOT EXISTS (
+				SELECT 1 FROM session_tool_requests r
+				WHERE r.target_engine||':'||r.target_id = session_subscriptions.target_key
+				  AND r.phase<>'' AND r.status IN ('accepted','preparing')
+			)
+		) OR source_key NOT IN (
+			SELECT 'codex:'||id FROM codex_threads
+			UNION ALL SELECT 'claude:'||id FROM claude_threads
+			UNION ALL SELECT 'gemini:'||id FROM gemini_threads
+		)`,
+		`DELETE FROM session_links WHERE target_key NOT IN (
+			SELECT 'codex:'||id FROM codex_threads
+			UNION ALL SELECT 'claude:'||id FROM claude_threads
+			UNION ALL SELECT 'gemini:'||id FROM gemini_threads
+		) AND NOT EXISTS (
+			SELECT 1 FROM session_tool_requests r
+			WHERE r.id = session_links.request_id
+			  AND r.phase<>'' AND r.status IN ('accepted','preparing')
+		)`,
+	}
+	for _, cleanup := range collaborationCleanups {
+		if _, err := s.DB.ExecContext(ctx, s.Q(cleanup)); err != nil {
+			return fmt.Errorf("prune orphan collaboration records: %w", err)
+		}
+	}
 	return nil
 }

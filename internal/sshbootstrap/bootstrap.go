@@ -756,14 +756,17 @@ func connect(ctx context.Context, target Target, expectedFingerprint string) (*s
 	if err != nil {
 		return nil, hostKeyInfo{}, fmt.Errorf("%w: %v", ErrConnection, err)
 	}
-	deadline := time.Now().Add(90 * time.Second)
-	if value, ok := ctx.Deadline(); ok {
-		deadline = value
-	}
-	_ = connection.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() {
+		_ = connection.Close()
+	})
+	defer stop()
+	_ = connection.SetDeadline(handshakeDeadline(ctx, 90*time.Second))
 	clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, configuration)
 	if err != nil {
 		connection.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, hostKeyInfo{}, fmt.Errorf("%w: %w", ErrConnection, ctxErr)
+		}
 		if mismatch {
 			return nil, hostKeyInfo{}, ErrHostKeyMismatch
 		}
@@ -774,6 +777,14 @@ func connect(ctx context.Context, target Target, expectedFingerprint string) (*s
 		return nil, hostKeyInfo{}, fmt.Errorf("%w: could not clear SSH handshake deadline: %v", ErrConnection, err)
 	}
 	return ssh.NewClient(clientConnection, channels, requests), keyInfo, nil
+}
+
+func handshakeDeadline(ctx context.Context, maxDuration time.Duration) time.Time {
+	limit := time.Now().Add(maxDuration)
+	if d, ok := ctx.Deadline(); ok && d.Before(limit) {
+		return d
+	}
+	return limit
 }
 
 func classifyHandshakeError(err error) error {
@@ -793,11 +804,11 @@ func probeHostKey(ctx context.Context, target HostTarget) (HostKeyResult, error)
 		return HostKeyResult{}, fmt.Errorf("%w: %v", ErrConnection, err)
 	}
 	defer connection.Close()
-	deadline := time.Now().Add(15 * time.Second)
-	if value, ok := ctx.Deadline(); ok {
-		deadline = value
-	}
-	_ = connection.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() {
+		_ = connection.Close()
+	})
+	defer stop()
+	_ = connection.SetDeadline(handshakeDeadline(ctx, 15*time.Second))
 	var result HostKeyResult
 	configuration := &ssh.ClientConfig{
 		User:    "wio-host-key-probe",
@@ -813,6 +824,9 @@ func probeHostKey(ctx context.Context, target HostTarget) (HostKeyResult, error)
 	}
 	if result.Fingerprint != "" {
 		return result, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return HostKeyResult{}, fmt.Errorf("%w: %w", ErrConnection, ctxErr)
 	}
 	return HostKeyResult{}, fmt.Errorf("%w: %v", ErrConnection, err)
 }

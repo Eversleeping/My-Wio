@@ -2,16 +2,20 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/sessiontools"
+	"modernc.org/sqlite"
 )
 
 type collaborationFixture struct {
@@ -1006,5 +1010,714 @@ func TestCollaborationCreateWithModelAndEffort(t *testing.T) {
 	}
 	if bad := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "gemini-auto-effort", Engine: "gemini", Effort: "high"}); bad.Error == nil || bad.Error.Code != "INVALID_ARGUMENT" {
 		t.Fatalf("gemini auto effort: %+v", bad)
+	}
+}
+
+func TestCollaborationSteerRejectsHigherPermissions(t *testing.T) {
+	assertCollaborationSteerRejectsHigherPermissions(t, testStore(t))
+}
+
+func assertCollaborationSteerRejectsHigherPermissions(t *testing.T, db *Store) {
+	for _, engine := range []string{"codex", "claude", "gemini"} {
+		t.Run(engine, func(t *testing.T) {
+			f := newCollaborationFixture(t, db, "codex")
+			ctx := context.Background()
+			child := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "child", Engine: engine})
+			if child.Error != nil {
+				t.Fatal(child.Error)
+			}
+			switch engine {
+			case "codex":
+				_, err := f.db.QueueResourceOperation(ctx, f.server, "codex.turn.start", protocol.StartTurnCommand{ThreadID: child.Session.ID, ApprovalMode: "never"}, "higher-permission", OperationResource{ThreadID: child.Session.ID}, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='running',codex_thread_id='native' WHERE id=?"), child.Session.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: child.Session.ID, Kind: "turn.accepted", Payload: json.RawMessage(`{"turn_id":"active"}`)}); err != nil {
+					t.Fatal(err)
+				}
+			case "claude":
+				if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE claude_threads SET status='running',permission_mode='bypassPermissions' WHERE id=?"), child.Session.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "gemini":
+				if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE gemini_threads SET status='running',approval_mode='yolo' WHERE id=?"), child.Session.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reply := f.call(t, "wio_steer_session", sessiontools.Params{RequestID: "steer", Session: *child.Session, Prompt: "new instruction"})
+			if reply.Error == nil || reply.Error.Code != "OUT_OF_SCOPE" || !strings.Contains(reply.Error.Message, "permissions") {
+				t.Fatalf("higher-permission steer accepted or incorrectly rejected: %+v", reply)
+			}
+		})
+	}
+}
+
+func TestCollaborationMessagePaginationPreservesByteLimitedPages(t *testing.T) {
+	assertCollaborationMessagePaginationPreservesByteLimitedPages(t, testStore(t))
+}
+
+func assertCollaborationMessagePaginationPreservesByteLimitedPages(t *testing.T, db *Store) {
+	for _, tool := range []string{"wio_read_messages", "wio_get_result"} {
+		t.Run(tool, func(t *testing.T) {
+			f := newCollaborationFixture(t, db, "codex")
+			payload, _ := json.Marshal(map[string]string{"text": strings.Repeat("x", 300<<10)})
+			for i := 0; i < 3; i++ {
+				if _, err := f.db.AddEvent(context.Background(), protocol.StreamEvent{StreamID: f.source.ID, Kind: "codex.item.completed", Payload: payload}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			after := int64(1)
+			for page := 0; page < 3; page++ {
+				params := sessiontools.Params{Session: f.source, After: after, Limit: 100}
+				if tool == "wio_get_result" {
+					params.OperationID = f.operation
+				}
+				reply := f.call(t, tool, params)
+				if reply.Error != nil {
+					t.Fatal(reply.Error)
+				}
+				data := reply.Data.(map[string]any)
+				rows := data["messages"].([]protocol.StreamEvent)
+				if len(rows) != 1 || data["has_more"] != (page < 2) || data["next_after"] != after+1 {
+					t.Fatalf("page %d: count=%d has_more=%v next_after=%v", page, len(rows), data["has_more"], data["next_after"])
+				}
+				after = data["next_after"].(int64)
+			}
+		})
+	}
+}
+
+func TestCollaborationPaginationExactLimitAndOversizedEvent(t *testing.T) {
+	assertCollaborationPaginationExactLimitAndOversizedEvent(t, testStore(t))
+}
+
+func assertCollaborationPaginationExactLimitAndOversizedEvent(t *testing.T, db *Store) {
+	f := newCollaborationFixture(t, db, "codex")
+	payload, _ := json.Marshal(map[string]string{"text": strings.Repeat("x", 600<<10)})
+	if _, err := f.db.AddEvent(context.Background(), protocol.StreamEvent{StreamID: f.source.ID, Kind: "codex.item.completed", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"wio_read_messages", "wio_get_result"} {
+		params := sessiontools.Params{Session: f.source, After: 1, Limit: 1}
+		if tool == "wio_get_result" {
+			params.OperationID = f.operation
+		}
+		reply := f.call(t, tool, params)
+		if reply.Error != nil {
+			t.Fatal(reply.Error)
+		}
+		data := reply.Data.(map[string]any)
+		rows := data["messages"].([]protocol.StreamEvent)
+		if len(rows) != 1 || !strings.Contains(string(rows[0].Payload), `"truncated":true`) || data["has_more"] != false {
+			t.Fatalf("%s last page: %+v", tool, data)
+		}
+	}
+}
+
+func TestCollaborationSteerDoesNotEndTurnResult(t *testing.T) {
+	assertCollaborationSteerDoesNotEndTurnResult(t, testStore(t))
+}
+
+func assertCollaborationSteerDoesNotEndTurnResult(t *testing.T, db *Store) {
+	f := newCollaborationFixture(t, db, "codex")
+	ctx := context.Background()
+	child := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "child", Prompt: "task"})
+	if child.Error != nil {
+		t.Fatal(child.Error)
+	}
+	if err := f.db.CompleteOperation(ctx, protocol.OperationResult{OperationID: child.OperationID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='running',codex_thread_id='native' WHERE id=?"), child.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{EventID: NewID(), StreamID: child.Session.ID, Kind: "turn.accepted", Payload: json.RawMessage(`{"turn_id":"turn"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := f.db.Thread(ctx, child.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = f.db.QueueCodexSteerRequest(ctx, thread, protocol.SteerTurnCommand{ThreadID: thread.ID, CodexThread: "native", ExpectedTurnID: "turn", Prompt: "correction"}, "steer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.db.AddEvent(ctx, protocol.StreamEvent{EventID: NewID(), StreamID: child.Session.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"id":"turn","status":"completed"}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.SetThreadStatus(ctx, child.Session.ID, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	next := f.call(t, "wio_send_message", sessiontools.Params{RequestID: "next", Session: *child.Session, Prompt: "next"})
+	if next.Error != nil {
+		t.Fatal(next.Error)
+	}
+	reply := f.call(t, "wio_get_result", sessiontools.Params{Session: *child.Session, OperationID: child.OperationID})
+	if reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	data := reply.Data.(map[string]any)
+	raw, _ := json.Marshal(data["messages"])
+	t.Logf("turn_status=%v turn_ended=%v messages=%s", data["turn_status"], data["turn_ended"], raw)
+	if !strings.Contains(string(raw), "codex.turn.completed") {
+		t.Fatal("steer hid the completion event")
+	}
+	if data["turn_ended"] != true {
+		t.Fatal("completed turn reported unknown after steering and next turn")
+	}
+}
+
+func TestCodexRewriteMessagesCarryOperationID(t *testing.T) {
+	assertCodexRewriteMessagesCarryOperationID(t, testStore(t))
+}
+
+func assertCodexRewriteMessagesCarryOperationID(t *testing.T, db *Store) {
+	f := newCollaborationFixture(t, db, "codex")
+	ctx := context.Background()
+	events, err := f.db.Events(ctx, f.source.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.CompleteOperation(ctx, protocol.OperationResult{OperationID: f.operation, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.SetThreadStatus(ctx, f.source.ID, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := f.db.Thread(ctx, f.source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, replacement, err := f.db.RewriteThread(ctx, thread, events[0].EventID, protocol.StartTurnCommand{ThreadID: thread.ID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: "edited"}, json.RawMessage(`{"text":"edited","image_count":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var immediate map[string]any
+	if err = json.Unmarshal(replacement.Payload, &immediate); err != nil {
+		t.Fatal(err)
+	}
+	if immediate["operation_id"] != operation {
+		t.Errorf("immediate replacement lacks operation association: %s", replacement.Payload)
+	}
+	op, err := f.db.Operation(ctx, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command protocol.RewriteTurnCommand
+	if err = json.Unmarshal([]byte(op.Payload), &command); err != nil {
+		t.Fatal(err)
+	}
+	var staged map[string]any
+	if err = json.Unmarshal(command.ReplacementPayload, &staged); err != nil {
+		t.Fatal(err)
+	}
+	if staged["operation_id"] != operation {
+		t.Errorf("queued replacement lacks operation association: %s", command.ReplacementPayload)
+	}
+	// An older queued command/Agent may return replacement JSON without the new field.
+	committed, changed, err := f.db.CommitThreadRewrite(ctx, thread.ID, "native", command.EditEventID, command.ReplacementEventID, json.RawMessage(`{"text":"edited","image_count":0}`), command.CutoffSequence)
+	if err != nil || !changed {
+		t.Fatalf("commit: %v %v", changed, err)
+	}
+	var payload map[string]any
+	if err = json.Unmarshal(committed.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["operation_id"] != operation {
+		t.Fatalf("committed replacement lacks operation association: %s", committed.Payload)
+	}
+	f.operation = operation
+	result := f.call(t, "wio_get_result", sessiontools.Params{Session: f.source, OperationID: operation})
+	if result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if len(result.Data.(map[string]any)["messages"].([]protocol.StreamEvent)) == 0 {
+		t.Fatal("rewritten result has no messages")
+	}
+}
+
+func TestCollaborationLegacyMessagesRemainReadable(t *testing.T) {
+	assertCollaborationLegacyMessagesRemainReadable(t, testStore(t))
+}
+
+func assertCollaborationLegacyMessagesRemainReadable(t *testing.T, db *Store) {
+	f := newCollaborationFixture(t, db, "codex")
+	ctx := context.Background()
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: f.source.ID, Kind: "user.message", Payload: json.RawMessage(`{"text":"legacy message"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	reply := f.call(t, "wio_read_messages", sessiontools.Params{Session: f.source})
+	if reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	result := f.call(t, "wio_get_result", sessiontools.Params{Session: f.source, OperationID: f.operation})
+	if result.Error != nil {
+		t.Fatal(result.Error)
+	}
+}
+
+func TestCollaborationSessionDeletionCleansSubscriptionsAndLinks(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+
+	title := "Child"
+	created := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "child-codex", Engine: "codex", Title: &title})
+	if created.Error != nil || created.Session == nil {
+		t.Fatalf("create child: %+v", created)
+	}
+	childID := created.Session.ID
+	childKey := "codex:" + childID
+
+	var subCount, linkCount int
+	if err := f.db.DB.GetContext(ctx, &subCount, f.db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key=?"), childKey); err != nil || subCount != 1 {
+		t.Fatalf("expected 1 subscription for child, got %d %v", subCount, err)
+	}
+	if err := f.db.DB.GetContext(ctx, &linkCount, f.db.Q("SELECT COUNT(*) FROM session_links WHERE target_key=?"), childKey); err != nil || linkCount != 1 {
+		t.Fatalf("expected 1 link for child, got %d %v", linkCount, err)
+	}
+
+	if err := f.db.DeleteThread(ctx, childID); err != nil {
+		t.Fatalf("delete thread: %v", err)
+	}
+
+	if err := f.db.DB.GetContext(ctx, &subCount, f.db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key=? OR source_key=?"), childKey, childKey); err != nil || subCount != 0 {
+		t.Fatalf("expected 0 subscriptions after thread deletion, got %d %v", subCount, err)
+	}
+	if err := f.db.DB.GetContext(ctx, &linkCount, f.db.Q("SELECT COUNT(*) FROM session_links WHERE target_key=?"), childKey); err != nil || linkCount != 0 {
+		t.Fatalf("expected 0 links as target after thread deletion, got %d %v", linkCount, err)
+	}
+}
+
+func TestCollaborationNotifyCleansOrphanSubscriptions(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+
+	orphanTargetKey := "codex:non-existent-target"
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("INSERT INTO session_subscriptions(target_key,source_key,auto_continue,grant_version) VALUES(?,?,0,1)"), orphanTargetKey, f.source.Key()); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key=?"), orphanTargetKey); err != nil || count != 1 {
+		t.Fatalf("expected 1 orphan subscription, got %d %v", count, err)
+	}
+
+	if err := f.db.notifyCollaboration(ctx, f.server); err != nil {
+		t.Fatalf("notifyCollaboration: %v", err)
+	}
+
+	if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key=?"), orphanTargetKey); err != nil || count != 0 {
+		t.Fatalf("expected orphan subscription to be pruned, got %d %v", count, err)
+	}
+}
+
+var (
+	testGrantUpdateCounter atomic.Int64
+	testReconcileCounter   atomic.Int64
+)
+
+func init() {
+	_ = sqlite.RegisterScalarFunction("test_record_grant_update", 0, func(ctx *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		testGrantUpdateCounter.Add(1)
+		return int64(1), nil
+	})
+	_ = sqlite.RegisterScalarFunction("test_record_reconcile_write", 0, func(ctx *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		testReconcileCounter.Add(1)
+		return int64(1), nil
+	})
+}
+
+func TestCollaborationReadOnlyToolsDoNotRequireWriteLock(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+
+	// Create child session so get_session, read_messages, get_result, wait_sessions have a valid target
+	childTitle := "Child Target"
+	child := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "child-target-ro", Engine: "codex", Title: &childTitle})
+	if child.Error != nil || child.Session == nil {
+		t.Fatalf("create child target: %+v", child)
+	}
+
+	// Create a counter table and AFTER UPDATE trigger on session_tool_grants
+	if _, err := f.db.DB.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS grant_update_counts (count INTEGER NOT NULL DEFAULT 0)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, "DELETE FROM grant_update_counts"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, "INSERT INTO grant_update_counts(count) VALUES(0)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, `CREATE TRIGGER IF NOT EXISTS test_track_grant_updates AFTER UPDATE ON session_tool_grants
+BEGIN
+	UPDATE grant_update_counts SET count = count + 1;
+	SELECT test_record_grant_update();
+END`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reset counters
+	testGrantUpdateCounter.Store(0)
+	if _, err := f.db.DB.ExecContext(ctx, "UPDATE grant_update_counts SET count = 0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. wio_get_context
+	if reply := f.call(t, "wio_get_context", sessiontools.Params{}); reply.Error != nil {
+		t.Fatalf("wio_get_context failed: %+v", reply)
+	}
+	// 2. wio_list_sessions
+	if reply := f.call(t, "wio_list_sessions", sessiontools.Params{}); reply.Error != nil {
+		t.Fatalf("wio_list_sessions failed: %+v", reply)
+	}
+	// 3. wio_get_session
+	if reply := f.call(t, "wio_get_session", sessiontools.Params{Session: *child.Session}); reply.Error != nil {
+		t.Fatalf("wio_get_session failed: %+v", reply)
+	}
+	// 4. wio_read_messages
+	if reply := f.call(t, "wio_read_messages", sessiontools.Params{Session: *child.Session}); reply.Error != nil {
+		t.Fatalf("wio_read_messages failed: %+v", reply)
+	}
+	// 5. wio_get_result
+	if reply := f.call(t, "wio_get_result", sessiontools.Params{Session: *child.Session}); reply.Error != nil {
+		t.Fatalf("wio_get_result failed: %+v", reply)
+	}
+	// 6. wio_wait_sessions with timeout_ms=0
+	if reply := f.call(t, "wio_wait_sessions", sessiontools.Params{Sessions: []sessiontools.Ref{*child.Session}, TimeoutMS: 0}); reply.Error != nil {
+		t.Fatalf("wio_wait_sessions failed: %+v", reply)
+	}
+
+	// Assert count is 0 after all read-only tools
+	if updates := testGrantUpdateCounter.Load(); updates != 0 {
+		t.Fatalf("expected 0 grant updates for read-only tools, got %d", updates)
+	}
+	var count int
+	if err := f.db.DB.GetContext(ctx, &count, "SELECT count FROM grant_update_counts"); err != nil || count != 0 {
+		t.Fatalf("expected table count 0 for read-only tools, got %d %v", count, err)
+	}
+
+	// Calling a mutating tool (e.g. wio_update_session) must execute write lock and increment count
+	newTitle := "Updated Title"
+	if reply := f.call(t, "wio_update_session", sessiontools.Params{RequestID: "update-mutating", Session: *child.Session, Title: &newTitle}); reply.Error != nil {
+		t.Fatalf("wio_update_session failed: %+v", reply)
+	}
+	if updates := testGrantUpdateCounter.Load(); updates == 0 {
+		t.Fatal("expected grant updates > 0 after mutating tool")
+	}
+	if err := f.db.DB.GetContext(ctx, &count, "SELECT count FROM grant_update_counts"); err != nil || count <= 0 {
+		t.Fatalf("expected table count > 0 after mutating tool, got %d %v", count, err)
+	}
+}
+
+func TestCollaborationPollingPrecheck(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+
+	var projectID string
+	if err := f.db.DB.GetContext(ctx, &projectID, f.db.Q("SELECT project_id FROM workspaces WHERE id=?"), f.workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Create a child session
+	childTitle := "Child Precheck"
+	created := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "precheck-child-1", Engine: "codex", Title: &childTitle})
+	if created.Error != nil || created.Session == nil {
+		t.Fatalf("create child: %+v", created)
+	}
+	childID := created.Session.ID
+	childKey := "codex:" + childID
+
+	// Simulate child session finishing a turn
+	opID := NewID()
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,status,idempotency_key,created_at,completed_at) VALUES(?,?,?,?,?,'codex.turn.start','{}','succeeded',?,?,?)`), opID, f.server, projectID, f.workspace, childID, opID, time.Now().UTC(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='idle',updated_at=? WHERE id=?"), time.Now().UTC(), childID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: childID, Kind: "user.message", Payload: json.RawMessage(`{"operation_id":"` + opID + `"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: childID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"operation_id":"` + opID + `"}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// First ReconcileAllCollaboration records the final state notification
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	// a) Set up UPDATE tracking triggers on session_tool_grants and session_subscriptions
+	if _, err := f.db.DB.ExecContext(ctx, `CREATE TRIGGER IF NOT EXISTS test_track_reconcile_grants AFTER UPDATE ON session_tool_grants
+BEGIN
+	SELECT test_record_reconcile_write();
+END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, `CREATE TRIGGER IF NOT EXISTS test_track_reconcile_subs AFTER UPDATE ON session_subscriptions
+BEGIN
+	SELECT test_record_reconcile_write();
+END`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run ReconcileAllCollaboration again; precheck must avoid any writes
+	testReconcileCounter.Store(0)
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if writes := testReconcileCounter.Load(); writes != 0 {
+		t.Fatalf("expected 0 writes during idle reconcile on unchanged terminal subscription, got %d", writes)
+	}
+
+	// Archive child session; reconcile must also perform 0 writes
+	archiveTrue := true
+	if _, err := f.db.UpdateThread(ctx, childID, nil, nil, &archiveTrue); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	testReconcileCounter.Store(0)
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("reconcile after archive: %v", err)
+	}
+	if writes := testReconcileCounter.Load(); writes != 0 {
+		t.Fatalf("expected 0 writes during reconcile of archived session, got %d", writes)
+	}
+
+	// b) Unarchive child and start a new turn; next ReconcileAllCollaboration must write new session.collaboration.child event
+	archiveFalse := false
+	if _, err := f.db.UpdateThread(ctx, childID, nil, nil, &archiveFalse); err != nil {
+		t.Fatalf("unarchive: %v", err)
+	}
+	var eventsBefore int
+	if err := f.db.DB.GetContext(ctx, &eventsBefore, f.db.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='session.collaboration.child'"), f.source.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	newOpID := NewID()
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,status,idempotency_key,created_at) VALUES(?,?,?,?,?,'codex.turn.start','{}','running',?,?)`), newOpID, f.server, projectID, f.workspace, childID, newOpID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='running',updated_at=? WHERE id=?"), time.Now().UTC(), childID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("reconcile new turn: %v", err)
+	}
+	var eventsAfter int
+	if err := f.db.DB.GetContext(ctx, &eventsAfter, f.db.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='session.collaboration.child'"), f.source.ID); err != nil {
+		t.Fatal(err)
+	}
+	if eventsAfter <= eventsBefore {
+		t.Fatalf("expected new session.collaboration.child event after status change, before=%d, after=%d", eventsBefore, eventsAfter)
+	}
+
+	// c) auto_continue enabled but not yet continued: needsCollaborationNotification must return true
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE session_subscriptions SET auto_continue=1,last_continuation_id='' WHERE source_key=? AND target_key=?"), f.source.Key(), childKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE agent_operations SET status='succeeded',completed_at=? WHERE id=?"), time.Now().UTC(), newOpID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='idle',updated_at=? WHERE id=?"), time.Now().UTC(), childID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: childID, Kind: "user.message", Payload: json.RawMessage(`{"operation_id":"` + newOpID + `"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: childID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"operation_id":"` + newOpID + `"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE session_subscriptions SET last_event_id=? WHERE source_key=? AND target_key=?"), newOpID+":succeeded", f.source.Key(), childKey); err != nil {
+		t.Fatal(err)
+	}
+
+	needs, err := f.db.needsCollaborationNotification(ctx, f.source.Key(), childKey)
+	if err != nil {
+		t.Fatalf("needsCollaborationNotification: %v", err)
+	}
+	if !needs {
+		t.Fatal("expected needs=true when auto_continue is pending on terminal subscription")
+	}
+}
+
+func TestPruneRetainedDataCleansOrphanCollaborationRecords(t *testing.T) {
+	db := testStore(t)
+	ctx := context.Background()
+
+	// Insert orphan subscription where neither target nor source exists
+	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO session_subscriptions(target_key,source_key,auto_continue,grant_version) VALUES('codex:orphan-sub-1','codex:orphan-sub-2',0,1)")); err != nil {
+		t.Fatal(err)
+	}
+	// Insert required session_tool_requests row for session_links foreign key
+	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO session_tool_requests(id,source_key,request_key,tool,arguments,grant_version,status) VALUES('orphan-req-1','codex:orphan-root','orphan-req-1','wio_create_session','{}',1,'succeeded')")); err != nil {
+		t.Fatal(err)
+	}
+	// Insert orphan link where target does not exist
+	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO session_links(target_key,source_key,root_key,depth,request_id,relation) VALUES('codex:orphan-link-1','codex:orphan-root','codex:orphan-root',1,'orphan-req-1','child')")); err != nil {
+		t.Fatal(err)
+	}
+
+	var subCount, linkCount int
+	if err := db.DB.GetContext(ctx, &subCount, db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key='codex:orphan-sub-1'")); err != nil || subCount != 1 {
+		t.Fatalf("expected 1 orphan sub, got %d %v", subCount, err)
+	}
+	if err := db.DB.GetContext(ctx, &linkCount, db.Q("SELECT COUNT(*) FROM session_links WHERE target_key='codex:orphan-link-1'")); err != nil || linkCount != 1 {
+		t.Fatalf("expected 1 orphan link, got %d %v", linkCount, err)
+	}
+
+	// Run PruneRetainedData
+	if err := db.PruneRetainedData(ctx, time.Now().UTC(), RetentionPolicy{}); err != nil {
+		t.Fatalf("PruneRetainedData: %v", err)
+	}
+
+	// Verify orphans are cleaned up
+	if err := db.DB.GetContext(ctx, &subCount, db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key='codex:orphan-sub-1'")); err != nil || subCount != 0 {
+		t.Fatalf("expected 0 orphan subs after prune, got %d", subCount)
+	}
+	if err := db.DB.GetContext(ctx, &linkCount, db.Q("SELECT COUNT(*) FROM session_links WHERE target_key='codex:orphan-link-1'")); err != nil || linkCount != 0 {
+		t.Fatalf("expected 0 orphan links after prune, got %d", linkCount)
+	}
+}
+
+func TestCollaborationWorktreeChildPreparingPreservedAcrossReconcileAndPrune(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+
+	// Create child session with directory_mode=worktree
+	reply := f.call(t, "wio_create_session", sessiontools.Params{
+		RequestID:     "req-worktree-prep-test",
+		Engine:        "codex",
+		DirectoryMode: "worktree",
+	})
+	if reply.Error != nil {
+		t.Fatalf("create worktree child: %+v", reply)
+	}
+
+	var req struct {
+		TargetID string `db:"target_id"`
+		OpID     string `db:"operation_id"`
+	}
+	if err := f.db.DB.GetContext(ctx, &req, f.db.Q("SELECT target_id,operation_id FROM session_tool_requests WHERE request_key='req-worktree-prep-test'")); err != nil {
+		t.Fatalf("lookup tool request: %v", err)
+	}
+	targetKey := "codex:" + req.TargetID
+
+	// Target thread row must NOT exist yet during preparation
+	if _, err := f.db.Thread(ctx, req.TargetID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected ErrNoRows for preparing child thread, got: %v", err)
+	}
+
+	// Execute ReconcileAllCollaboration and PruneRetainedData during preparation
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("reconcile during preparation: %v", err)
+	}
+	if err := f.db.PruneRetainedData(ctx, time.Now().UTC(), RetentionPolicy{}); err != nil {
+		t.Fatalf("prune during preparation: %v", err)
+	}
+
+	// Subscriptions and links must NOT have been pruned as orphans!
+	var count int
+	if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key=?"), targetKey); err != nil || count != 1 {
+		t.Fatalf("expected subscription to be preserved during preparation, got %d %v", count, err)
+	}
+	if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT COUNT(*) FROM session_links WHERE target_key=?"), targetKey); err != nil || count != 1 {
+		t.Fatalf("expected link to be preserved during preparation, got %d %v", count, err)
+	}
+
+	// Now simulate git.worktree.create operation succeeding
+	op, err := f.db.Operation(ctx, req.OpID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cmd protocol.GitWorktreeCreateCommand
+	if err := json.Unmarshal([]byte(op.Payload), &cmd); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.CommitGitWorktree(ctx, cmd, protocol.GitWorktreeCreateResult{Path: cmd.TargetPath, Branch: cmd.Branch, CommitSHA: "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.CompleteOperation(ctx, protocol.OperationResult{OperationID: req.OpID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// ReconcileAllCollaboration advances the request from "worktree" to create target thread
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("reconcile advancing worktree: %v", err)
+	}
+
+	// Target thread must now exist
+	childThread, err := f.db.Thread(ctx, req.TargetID)
+	if err != nil {
+		t.Fatalf("expected child thread to exist after worktree preparation: %v", err)
+	}
+
+	// Simulate child completing a turn
+	var projectID string
+	if err := f.db.DB.GetContext(ctx, &projectID, f.db.Q("SELECT project_id FROM workspaces WHERE id=?"), childThread.WorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	turnOpID := NewID()
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,status,idempotency_key,created_at,completed_at) VALUES(?,?,?,?,?,'codex.turn.start','{}','succeeded',?,?,?)`), turnOpID, f.server, projectID, childThread.WorkspaceID, childThread.ID, turnOpID, time.Now().UTC(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE codex_threads SET status='idle',updated_at=? WHERE id=?"), time.Now().UTC(), childThread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: childThread.ID, Kind: "user.message", Payload: json.RawMessage(`{"operation_id":"` + turnOpID + `"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddEvent(ctx, protocol.StreamEvent{StreamID: childThread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"operation_id":"` + turnOpID + `"}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// ReconcileAllCollaboration must notify parent session
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("reconcile child turn completion: %v", err)
+	}
+
+	var childEvents int
+	if err := f.db.DB.GetContext(ctx, &childEvents, f.db.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='session.collaboration.child'"), f.source.ID); err != nil || childEvents == 0 {
+		t.Fatalf("expected parent to receive session.collaboration.child event, got %d %v", childEvents, err)
+	}
+}
+
+func TestCollaborationFailedPreparationOrphansPruned(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+
+	failReqID := "fail-prep-req-" + NewID()[:8]
+	failTargetID := "fail-child-" + NewID()[:8]
+	failTargetKey := "codex:" + failTargetID
+
+	// Insert preparation request that failed (phase is empty, status is failed)
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q(`INSERT INTO session_tool_requests(id,source_key,request_key,tool,arguments,grant_version,phase,status,target_engine,target_id) VALUES(?,?,?,?,?,1,'','failed','codex',?)`), failReqID, f.source.Key(), failReqID, "wio_create_session", "{}", failTargetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("INSERT INTO session_links(target_key,source_key,root_key,depth,request_id,relation) VALUES(?,?,?,1,?,'child')"), failTargetKey, f.source.Key(), f.source.Key(), failReqID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("INSERT INTO session_subscriptions(target_key,source_key,auto_continue,grant_version) VALUES(?,?,0,1)"), failTargetKey, f.source.Key()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Target thread row does not exist
+	if _, err := f.db.Thread(ctx, failTargetID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected ErrNoRows, got %v", err)
+	}
+
+	// Run PruneRetainedData; failed preparation orphans must be cleaned up
+	if err := f.db.PruneRetainedData(ctx, time.Now().UTC(), RetentionPolicy{}); err != nil {
+		t.Fatalf("PruneRetainedData: %v", err)
+	}
+
+	var count int
+	if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT COUNT(*) FROM session_subscriptions WHERE target_key=?"), failTargetKey); err != nil || count != 0 {
+		t.Fatalf("expected failed preparation subscription to be pruned, got %d", count)
+	}
+	if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT COUNT(*) FROM session_links WHERE target_key=?"), failTargetKey); err != nil || count != 0 {
+		t.Fatalf("expected failed preparation link to be pruned, got %d", count)
 	}
 }

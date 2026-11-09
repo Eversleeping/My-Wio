@@ -2819,6 +2819,15 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		serverAddress = strings.TrimSpace(server.Hostname)
 	}
 	command := protocol.DeployCommand{DeploymentID: deployment.ID, TargetID: target.ID, DeploymentMode: deploymenttemplate.ModeAuto, ServerAddress: serverAddress, PublicURL: snapshot.ConfiguredPublicURL, SourceType: snapshot.SourceType, SourcePath: snapshot.WorkspacePath, Repository: snapshot.Repository, CommitRef: snapshot.GitRef, ComposeFile: snapshot.ComposeFile, WorkingDir: snapshot.WorkingDir, BuildMode: snapshot.BuildMode, ReleaseRoot: snapshot.ReleaseRoot, Environment: environment, HealthChecks: checks}
+	command.Recovery, err = a.deploymentRecoveryForSnapshot(r.Context(), snapshot)
+	if errors.Is(err, store.ErrDeploymentSnapshotUnavailable) || errors.Is(err, errDeploymentSecretsUndecryptable) {
+		command.Recovery = nil
+		_ = a.store.AddDeploymentEvent(r.Context(), store.DeploymentEvent{DeploymentID: deployment.ID, Status: "queued", Message: "historical recovery configuration unavailable", Content: "Historical deployment secrets are unavailable. Automatic recovery will use this deployment's configuration as a best effort."})
+	} else if err != nil {
+		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not load historical recovery configuration"})
+		writeError(w, http.StatusInternalServerError, "could not load historical recovery configuration")
+		return
+	}
 	ciphertext, err := a.vault.Encrypt(command)
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not protect deployment operation"})
@@ -2960,6 +2969,34 @@ func (a *API) deploymentEnvironmentForSecretSet(ctx context.Context, secretSetID
 	return environment, nil
 }
 
+func (a *API) deploymentRecoveryForSnapshot(ctx context.Context, snapshot store.DeploymentSnapshot) (*protocol.DeploymentRecovery, error) {
+	previous, err := a.store.LatestDeploymentSnapshot(ctx, snapshot.TargetID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil // First deployment, or a legacy release without a snapshot.
+	}
+	if err != nil {
+		return nil, err
+	}
+	if previous.ServerID != snapshot.ServerID || previous.ReleaseRoot != snapshot.ReleaseRoot {
+		return nil, nil // The earlier release belongs to a different deployment root.
+	}
+	environment, err := a.deploymentEnvironmentForSnapshot(ctx, previous)
+	if err != nil {
+		return nil, err
+	}
+	releaseID := previous.DeploymentID
+	if previous.RollbackOfDeploymentID != "" {
+		releaseID = previous.RollbackOfDeploymentID
+	}
+	publicURL := previous.ConfiguredPublicURL
+	if publicURL == "" {
+		publicURL = previous.DetectedPublicURL
+	}
+	return &protocol.DeploymentRecovery{ReleaseDeploymentID: releaseID, ComposeFile: previous.ComposeFile, WorkingDir: previous.WorkingDir, PublicURL: publicURL, Environment: environment}, nil
+}
+
+var errDeploymentSecretsUndecryptable = errors.New("deployment secrets could not be decrypted")
+
 func (a *API) deploymentEnvironmentForSnapshot(ctx context.Context, snapshot store.DeploymentSnapshot) (map[string]string, error) {
 	if snapshot.SecretSetID == "" {
 		return map[string]string{}, nil
@@ -2979,7 +3016,7 @@ func (a *API) deploymentEnvironmentForSnapshot(ctx context.Context, snapshot sto
 	}
 	environment := map[string]string{}
 	if err := a.vault.Decrypt(ciphertext, &environment); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errDeploymentSecretsUndecryptable, err)
 	}
 	return environment, nil
 }

@@ -2402,6 +2402,20 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 		if err := tx.GetContext(ctx, &cutoffSequence, s.Q("SELECT COALESCE(MAX(sequence),0) FROM events WHERE stream_id=?"), thread.ID); err != nil {
 			return err
 		}
+		operationID = NewID()
+		var message map[string]json.RawMessage
+		if err := json.Unmarshal(userPayload, &message); err != nil {
+			return err
+		}
+		if message == nil {
+			return ErrInvalidEditTarget
+		}
+		message["operation_id"], _ = json.Marshal(operationID)
+		associatedPayload, err := json.Marshal(message)
+		if err != nil {
+			return err
+		}
+		userPayload = associatedPayload
 		replacement = protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: target.Sequence, Kind: "user.message", OccurredAt: time.Now().UTC(), Payload: userPayload}
 		rewrite := protocol.RewriteTurnCommand{
 			Start:              command,
@@ -2416,7 +2430,6 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 			return err
 		}
 		now := time.Now().UTC()
-		operationID = NewID()
 		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?)"), operationID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, thread.ID, "codex.turn.rewrite", string(operationPayload), "codex-rewrite:"+NewID(), now); err != nil {
 			return err
 		}
@@ -2467,6 +2480,43 @@ func (s *Store) CommitThreadRewrite(ctx context.Context, threadID, codexThreadID
 		}
 		if cutoffSequence < target.Sequence {
 			return ErrInvalidEditTarget
+		}
+		// Commands queued before operation_id was included can be acknowledged
+		// after an upgrade. Recover their association from the stored command;
+		// truly legacy events without a matching operation remain valid JSON.
+		var metadata struct {
+			OperationID string `json:"operation_id"`
+		}
+		if err := json.Unmarshal(replacementPayload, &metadata); err != nil {
+			return err
+		}
+		if metadata.OperationID == "" {
+			var candidates []struct {
+				ID      string `db:"id"`
+				Payload string `db:"payload"`
+			}
+			if err := tx.SelectContext(ctx, &candidates, s.Q("SELECT id,payload FROM agent_operations WHERE thread_id=? AND kind='codex.turn.rewrite' AND payload LIKE ?"), threadID, "%"+replacementEventID+"%"); err != nil {
+				return err
+			}
+			for _, candidate := range candidates {
+				var rewrite protocol.RewriteTurnCommand
+				if json.Unmarshal([]byte(candidate.Payload), &rewrite) != nil || rewrite.ReplacementEventID != replacementEventID {
+					continue
+				}
+				var message map[string]json.RawMessage
+				if err := json.Unmarshal(replacementPayload, &message); err != nil {
+					return err
+				}
+				if message != nil {
+					message["operation_id"], _ = json.Marshal(candidate.ID)
+					var err error
+					replacementPayload, err = json.Marshal(message)
+					if err != nil {
+						return err
+					}
+				}
+				break
+			}
 		}
 		var earlierMessages int
 		if err := tx.GetContext(ctx, &earlierMessages, s.Q("SELECT COUNT(*) FROM events WHERE stream_id=? AND kind='user.message' AND sequence<?"), threadID, target.Sequence); err != nil {

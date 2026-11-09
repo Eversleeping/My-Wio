@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/wio-platform/wio/internal/sessiontools"
@@ -359,11 +360,81 @@ func (s *Store) notifyCollaboration(ctx context.Context, serverID string) error 
 		return err
 	}
 	for _, pair := range targets {
+		needs, err := s.needsCollaborationNotification(ctx, pair.Source, pair.Target)
+		if err != nil {
+			needs = true
+		}
+		if !needs {
+			continue
+		}
 		if err := s.notifyCollaborationPair(ctx, pair.Source, pair.Target); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// needsCollaborationNotification performs a lightweight, read-only pre-check
+// to avoid acquiring table write locks and beginning write transactions every 2 seconds
+// when there are no state transitions or auto-continuations pending.
+func (s *Store) needsCollaborationNotification(ctx context.Context, sourceKey, targetKey string) (bool, error) {
+	var sub struct {
+		Auto      int    `db:"auto_continue"`
+		Last      string `db:"last_event_id"`
+		Continued string `db:"last_continuation_id"`
+	}
+	err := s.DB.GetContext(ctx, &sub, s.Q("SELECT auto_continue,last_event_id,last_continuation_id FROM session_subscriptions WHERE source_key=? AND target_key=?"), sourceKey, targetKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+
+	sourceRef, targetRef := refFromKey(sourceKey), refFromKey(targetKey)
+	var sourceState struct {
+		Status     string     `db:"status"`
+		ArchivedAt *time.Time `db:"archived_at"`
+	}
+	err = s.DB.GetContext(ctx, &sourceState, s.Q("SELECT status,archived_at FROM ("+collaborationSessions+") sessions WHERE engine=? AND id=?"), sourceRef.Engine, sourceRef.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+
+	var targetState struct {
+		Status      string `db:"status"`
+		OperationID string `db:"operation_id"`
+	}
+	err = s.DB.GetContext(ctx, &targetState, s.Q("SELECT status,operation_id FROM ("+collaborationSessions+") sessions WHERE engine=? AND id=?"), targetRef.Engine, targetRef.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		var preparing int
+		if e := s.DB.GetContext(ctx, &preparing, s.Q("SELECT COUNT(*) FROM session_tool_requests WHERE target_engine=? AND target_id=? AND phase<>'' AND status IN ('accepted','preparing')"), targetRef.Engine, targetRef.ID); e == nil && preparing > 0 {
+			return false, nil
+		}
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+
+	if targetState.OperationID == "" {
+		return false, nil
+	}
+
+	if !strings.HasPrefix(sub.Last, targetState.OperationID+":") {
+		return true, nil
+	}
+	lastStatus := strings.TrimPrefix(sub.Last, targetState.OperationID+":")
+	if lastStatus != "succeeded" && lastStatus != "failed" && lastStatus != "cancelled" {
+		return true, nil
+	}
+	if sub.Auto != 0 && sub.Continued != targetState.OperationID && sourceState.ArchivedAt == nil {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *Store) notifyCollaborationPair(ctx context.Context, sourceKey, targetKey string) error {
@@ -397,14 +468,23 @@ func (s *Store) notifyCollaborationPair(ctx context.Context, sourceKey, targetKe
 	}
 	source, err := s.collaborationSession(ctx, tx, refFromKey(sourceKey))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		_, _ = tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE source_key=? AND target_key=?"), sourceKey, targetKey)
+		return tx.Commit()
 	}
 	if err != nil {
 		return err
 	}
 	target, err := s.collaborationSession(ctx, tx, refFromKey(targetKey))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		// A child still being prepared (worktree, fork or deferred creation)
+		// has its link and subscription before its session row exists.
+		tRef := refFromKey(targetKey)
+		var preparing int
+		if e := tx.GetContext(ctx, &preparing, s.Q("SELECT COUNT(*) FROM session_tool_requests WHERE target_engine=? AND target_id=? AND phase<>'' AND status IN ('accepted','preparing')"), tRef.Engine, tRef.ID); e != nil || preparing > 0 {
+			return e
+		}
+		_, _ = tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE source_key=? AND target_key=?"), sourceKey, targetKey)
+		return tx.Commit()
 	}
 	if err != nil {
 		return err

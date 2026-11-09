@@ -92,6 +92,23 @@ func TestPruneOperationReceiptsExpiresOnlyManagedOldFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Set up old and fresh Claude snapshots
+	forksDir := filepath.Join(c.config.StateDir, "claude", "forks")
+	if err := os.MkdirAll(forksDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldSnapshot := filepath.Join(forksDir, "550e8400-e29b-41d4-a716-446655440001.jsonl")
+	freshSnapshot := filepath.Join(forksDir, "550e8400-e29b-41d4-a716-446655440002.jsonl")
+	if err := os.WriteFile(oldSnapshot, []byte("old-snapshot"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(freshSnapshot, []byte("fresh-snapshot"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(oldSnapshot, old, old); err != nil {
+		t.Fatal(err)
+	}
+
 	c.pruneOperationReceipts(now)
 	for _, path := range []string{c.operationResultPath("old"), filepath.Join(root, ".receipt-abandoned")} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -103,5 +120,13 @@ func TestPruneOperationReceiptsExpiresOnlyManagedOldFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "unmanaged.json.gz")); err != nil {
 		t.Fatal("cleanup removed an unmanaged file")
+	}
+
+	// Verify old Claude snapshot was pruned and fresh snapshot retained
+	if _, err := os.Stat(oldSnapshot); !os.IsNotExist(err) {
+		t.Fatalf("old Claude snapshot was not pruned: %s %v", oldSnapshot, err)
+	}
+	if _, err := os.Stat(freshSnapshot); err != nil {
+		t.Fatalf("fresh Claude snapshot was unexpectedly removed: %s %v", freshSnapshot, err)
 	}
 }

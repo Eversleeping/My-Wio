@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,10 +132,6 @@ func (g *Gateway) sendKeepalive(stream protocol.AgentServiceConnectServer, serve
 		return err
 	}
 	return stream.Send(&protocol.ControlEnvelope{Kind: protocol.ControlKindKeepalive, CreatedAtUnixMS: now.UnixMilli(), PayloadJSON: payload})
-}
-
-func (g *Gateway) receive(stream protocol.AgentServiceConnectServer, serverID string) error {
-	return g.receiveWithTools(stream, serverID, make(chan *protocol.ControlEnvelope, 32))
 }
 
 func (g *Gateway) receiveWithTools(stream protocol.AgentServiceConnectServer, serverID string, replies chan<- *protocol.ControlEnvelope) error {
@@ -382,7 +379,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	// late Agent result so it cannot resurrect a cancelled turn or overwrite
 	// its snapshot with stale data.
 	if operation.Status != "queued" && operation.Status != "delivered" && operation.Status != "running" {
-		return nil
+		return g.reconcileCompletedTurn(ctx, operation)
 	}
 	if result.Status == "cancelled" && protocol.CanInterruptOperation(operation.Kind) {
 		completed, err := g.store.CompleteInterruptedOperation(ctx, operation, result)
@@ -857,6 +854,73 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "operation." + result.Status, Payload: security.RedactJSON(payload)})
 }
 
+// A completion can commit its operation before a later session update fails.
+// Repair only the still-bound active turn, using the stored result rather than
+// the late Agent payload. In particular, a UI-cancelled session stays stopped.
+func (g *Gateway) reconcileCompletedTurn(ctx context.Context, operation store.Operation) error {
+	if operation.Status != "succeeded" && operation.Status != "failed" && operation.Status != "cancelled" {
+		return nil
+	}
+	engine := ""
+	switch operation.Kind {
+	case "claude.turn.interrupt", "gemini.turn.interrupt":
+		if operation.Status != "succeeded" {
+			return nil
+		}
+		result := protocol.OperationResult{OperationID: operation.ID, Status: operation.Status, Message: operation.Result, Data: json.RawMessage(operation.ResultData)}
+		if operation.Kind == "claude.turn.interrupt" {
+			return g.completeClaudeOperation(ctx, operation, result)
+		}
+		return g.completeGeminiOperation(ctx, operation, result)
+	case "claude.turn.start":
+		engine = "claude"
+	case "gemini.turn.start", "gemini.turn.rewrite":
+		engine = "gemini"
+	case "codex.turn.start", "codex.turn.rewrite":
+		if operation.Status != "failed" {
+			return nil // A successful Codex start only acknowledges acceptance.
+		}
+		engine = "codex"
+	default:
+		return nil
+	}
+	var command struct {
+		ThreadID string `json:"thread_id"`
+		Start    struct {
+			ThreadID string `json:"thread_id"`
+		} `json:"start"`
+	}
+	if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
+		return err
+	}
+	threadID := command.ThreadID
+	if threadID == "" {
+		threadID = command.Start.ThreadID
+	}
+	var active int
+	query := "SELECT COUNT(*) FROM " + engine + "_threads WHERE id=? AND status IN ('queued','running','interrupting')"
+	args := []any{threadID}
+	if engine != "codex" {
+		query += " AND operation_id=?"
+		args = append(args, operation.ID)
+	}
+	if err := g.store.DB.GetContext(ctx, &active, g.store.Q(query), args...); err != nil {
+		return err
+	}
+	if active == 0 {
+		return nil
+	}
+	result := protocol.OperationResult{OperationID: operation.ID, Status: operation.Status, Message: operation.Result, Data: json.RawMessage(operation.ResultData)}
+	switch engine {
+	case "claude":
+		return g.completeClaudeOperation(ctx, operation, result)
+	case "gemini":
+		return g.completeGeminiOperation(ctx, operation, result)
+	default:
+		return g.failCodexTurn(ctx, operation, result)
+	}
+}
+
 // A lost operation may have stopped half-way through moving, cloning or
 // creating files; keep the resource retryable instead of claiming it is clean.
 func uncertainStatus(outcomeUnknown bool, status string) string {
@@ -895,31 +959,43 @@ func (g *Gateway) reconcileOperation(ctx context.Context, serverID string, recon
 // The Agent reports deployment progress separately from the operation result,
 // so a lost deploy would otherwise stay "running" on the deployment page.
 func (g *Gateway) failLostDeployment(ctx context.Context, operation store.Operation) error {
+	return g.failDeploymentOperation(ctx, operation, protocol.OperationLostMessage)
+}
+
+func (g *Gateway) failDeploymentOperation(ctx context.Context, operation store.Operation, message string) error {
 	if operation.Kind != "deploy.start" && operation.Kind != "deploy.rollback" {
 		return nil
 	}
 	var command struct {
 		DeploymentID string `json:"deployment_id"`
 	}
-	// Deployment payloads carry secrets and are stored encrypted.
-	payload := json.RawMessage(operation.Payload)
-	if strings.HasPrefix(operation.Payload, "v1:") {
-		if err := g.vault.Decrypt(operation.Payload, &payload); err != nil {
+	// The relation is readable even when the Vault key no longer decrypts the
+	// command. Fall back to the payload for legacy operations not yet linked.
+	err := g.store.DB.GetContext(ctx, &command.DeploymentID, g.store.Q("SELECT id FROM deployments WHERE operation_id=?"), operation.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		payload := json.RawMessage(operation.Payload)
+		if strings.HasPrefix(operation.Payload, "v1:") {
+			if err := g.vault.Decrypt(operation.Payload, &payload); err != nil {
+				return nil
+			}
+		}
+		if err := json.Unmarshal(payload, &command); err != nil || command.DeploymentID == "" {
 			return nil
 		}
-	}
-	if err := json.Unmarshal(payload, &command); err != nil || command.DeploymentID == "" {
-		return nil
+	} else if err != nil {
+		return err
 	}
 	deployment, err := g.store.Deployment(ctx, command.DeploymentID)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
+	} else if err != nil {
+		return err
 	}
 	switch deployment.Status {
 	case "succeeded", "failed", "rolled_back", "canceled":
 		return nil
 	}
-	update := protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: "failed", Message: protocol.OperationLostMessage}
+	update := protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: "failed", Message: message}
 	if err := g.store.SaveDeploymentStatus(ctx, update); err != nil {
 		return err
 	}
@@ -1077,10 +1153,18 @@ func (g *Gateway) failCodexTurn(ctx context.Context, operation store.Operation, 
 	if threadID == "" {
 		return errors.New("Codex turn operation has no thread id")
 	}
-	if err := g.store.SetThreadStatus(ctx, threadID, "failed"); err != nil {
+	// Codex has no operation_id on the thread. Check for a newer start in the
+	// same statement so replaying an old failure cannot stop a subsequent turn.
+	updated, err := g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE codex_threads SET status='failed',updated_at=? WHERE id=? AND status IN ('queued','running','interrupting','idle','failed') AND NOT EXISTS (SELECT 1 FROM agent_operations WHERE thread_id=? AND kind IN ('codex.turn.start','codex.turn.rewrite') AND id<>? AND created_at>=?)`), time.Now().UTC(), threadID, threadID, operation.ID, operation.CreatedAt)
+	if err != nil {
 		return err
 	}
-	_ = g.store.MarkScheduledTaskByOperation(ctx, result.OperationID, "failed", result.Message)
+	if count, err := updated.RowsAffected(); err != nil || count == 0 {
+		return err
+	}
+	if err := g.store.MarkScheduledTaskByOperation(ctx, result.OperationID, "failed", result.Message); err != nil {
+		return err
+	}
 	payload, err := json.Marshal(map[string]string{"operation_id": result.OperationID, "text": result.Message})
 	if err != nil {
 		return err
@@ -1139,14 +1223,13 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 			if err := g.vault.Decrypt(op.Payload, &payload); err != nil {
 				g.log.Error("could not decrypt operation payload", "operation_id", op.ID, "error", err)
 				result := protocol.OperationResult{OperationID: op.ID, Status: "failed", Message: "Control plane could not decrypt the operation payload; reconfigure credentials or retry the operation"}
-				completed, completeErr := g.store.CompleteOperationIfActive(stream.Context(), result)
-				if completeErr != nil {
-					return completeErr
+				if err := g.failDeploymentOperation(stream.Context(), op, result.Message); err != nil {
+					return err
 				}
-				if completed {
-					if err := publishOperationResult(stream.Context(), g, serverID, result); err != nil {
-						return err
-					}
+				// Use normal result handling for container and credential state,
+				// rather than only terminating the transport operation.
+				if err := g.handleOperationResult(stream.Context(), serverID, result, false); err != nil {
+					return err
 				}
 				continue
 			}

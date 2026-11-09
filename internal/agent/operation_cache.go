@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wio-platform/wio/internal/claudeadapter"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -155,5 +156,8 @@ func (c *Client) pruneOperationReceipts(now time.Time) {
 		if err := os.Remove(filepath.Join(root, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.log.Warn("could not expire operation receipt", "error", err)
 		}
+	}
+	if err := claudeadapter.PruneSnapshots(c.config.StateDir, operationReceiptRetention, now); err != nil {
+		c.log.Warn("could not prune old Claude snapshots", "error", err)
 	}
 }

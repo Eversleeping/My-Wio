@@ -104,6 +104,28 @@ func (d *Deployer) Deploy(ctx context.Context, command protocol.DeployCommand, s
 	if _, current, err := currentRelease(command.ReleaseRoot, command.TargetID); err == nil {
 		previous = current
 	}
+	if previous != "" {
+		if recovery := command.Recovery; recovery != nil {
+			_, expected, err := releasePath(command.ReleaseRoot, command.TargetID, recovery.ReleaseDeploymentID)
+			if err == nil && filepath.Clean(expected) != filepath.Clean(previous) {
+				err = errors.New("historical recovery configuration does not match the current release")
+			}
+			if err == nil {
+				_, _, err = composePaths(previous, recovery.WorkingDir, recovery.ComposeFile)
+			}
+			if err == nil {
+				_, err = composeEnvironment(recovery.Environment, recovery.PublicURL)
+			}
+			if err != nil {
+				// The controller's last successful deployment can lag the Agent's
+				// current release. Do not let stale recovery metadata block a deploy.
+				command.Recovery = nil
+				status("preparing", "historical recovery configuration ignored", "", "", "Warning: "+err.Error()+"; recovery will use the incoming configuration as a best effort.")
+			}
+		} else {
+			status("preparing", "historical recovery configuration unavailable", "", "", "The controller or previous release has no recovery snapshot; recovery will use the incoming configuration as a best effort.")
+		}
+	}
 	progress := &releaseProgress{}
 	if err := d.deployRelease(ctx, command, ref, status, root, release, progress); err != nil {
 		return d.abandonRelease(ctx, command, status, root, release, previous, progress, err)
@@ -285,7 +307,16 @@ func (d *Deployer) recoverProject(ctx context.Context, command protocol.DeployCo
 	project := projectName(command.TargetID)
 	if previous != "" {
 		status("running", "restoring previous release", "", "", "The deployment failed after Docker Compose started it; starting the previous release again.")
-		output, err := d.restoreRelease(ctx, previous, command.WorkingDir, command.ComposeFile, progress.environment, project)
+		workingDir, composeFile, environment := command.WorkingDir, command.ComposeFile, progress.environment
+		if recovery := command.Recovery; recovery != nil {
+			workingDir, composeFile = recovery.WorkingDir, recovery.ComposeFile
+			var err error
+			environment, err = composeEnvironment(recovery.Environment, recovery.PublicURL)
+			if err != nil {
+				return "restoring the previous release failed: " + err.Error()
+			}
+		}
+		output, err := d.restoreRelease(ctx, previous, workingDir, composeFile, environment, project)
 		if err != nil {
 			if output == "" {
 				output = err.Error()

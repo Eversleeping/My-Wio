@@ -73,6 +73,12 @@ func TestTickQueuesDueTaskAndRecordsPrompt(t *testing.T) {
 	if err != nil || len(events) != 1 || events[0].Kind != "user.message" {
 		t.Fatalf("scheduled prompt event was not recorded: %#v %v", events, err)
 	}
+	var promptMetadata struct {
+		OperationID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal(events[0].Payload, &promptMetadata); err != nil || promptMetadata.OperationID != updated.LastOperationID {
+		t.Fatalf("scheduled prompt lacks operation association: %s (%v)", events[0].Payload, err)
+	}
 	operations, err := database.PendingOperations(ctx, server.ID)
 	if err != nil || len(operations) != 1 || operations[0].Kind != "codex.turn.start" {
 		t.Fatalf("scheduled turn was not queued: %#v %v", operations, err)

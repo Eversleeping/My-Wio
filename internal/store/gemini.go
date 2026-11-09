@@ -458,6 +458,13 @@ func (s *Store) DeleteGeminiThread(ctx context.Context, id string) error {
 	if count != 1 {
 		return ErrThreadActive
 	}
+	key := "gemini:" + id
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_links WHERE target_key=?"), key); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=?"), id); err != nil {
 		return err
 	}

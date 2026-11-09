@@ -1888,3 +1888,262 @@ func resourceTestAPI(database *store.Store) *API {
 	hub := realtime.New()
 	return &API{store: database, hub: hub, gateway: agentgateway.New(database, hub, vault, log), vault: vault, log: log}
 }
+
+func TestDeploymentQueuesEncryptedHistoricalRecovery(t *testing.T) {
+	database := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, database, "deployment-recovery-token")
+	ctx := context.Background()
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95"}); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(database)
+	ciphertext, err := api.vault.Encrypt(map[string]string{"API_TOKEN": "historical-recovery-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretID, err := database.UpsertSecretSet(ctx, "", "production", ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := database.CreateProject(ctx, "recovery", "https://example.com/recovery.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := database.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, SecretSetID: secretID, Environment: "production", Repository: project.RemoteURL, WorkingDir: "old-app", ComposeFile: "old.yaml", PublicURL: "http://example.com:4000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := database.CreateDeployment(ctx, target.ID, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: source.ID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err = api.vault.Encrypt(map[string]string{"API_TOKEN": "new-recovery-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.UpsertSecretSet(ctx, secretID, "production", ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.DB.ExecContext(ctx, database.Q("UPDATE deployment_targets SET working_dir='new-app',compose_file='new.yaml' WHERE id=?"), target.ID); err != nil {
+		t.Fatal(err)
+	}
+	response := deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/"+target.ID+"/deploy", "targetID", target.ID, map[string]string{"commit_ref": "main"}, api.startDeployment)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("deployment: %d %s", response.Code, response.Body.String())
+	}
+	var queued struct {
+		OperationID string `json:"operation_id"`
+	}
+	if err = json.Unmarshal(response.Body.Bytes(), &queued); err != nil {
+		t.Fatal(err)
+	}
+	op, err := database.Operation(ctx, queued.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(op.Payload, "v1:") || strings.Contains(op.Payload, "recovery-secret") {
+		t.Fatal("recovery secrets were not encrypted")
+	}
+	var command struct {
+		Environment map[string]string `json:"environment"`
+		Recovery    *struct {
+			ReleaseDeploymentID string            `json:"release_deployment_id"`
+			WorkingDir          string            `json:"working_dir"`
+			ComposeFile         string            `json:"compose_file"`
+			Environment         map[string]string `json:"environment"`
+		} `json:"recovery"`
+	}
+	if err = api.vault.Decrypt(op.Payload, &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.Recovery == nil || command.Recovery.ReleaseDeploymentID != source.ID || command.Recovery.WorkingDir != "old-app" || command.Recovery.ComposeFile != "old.yaml" || command.Recovery.Environment["API_TOKEN"] != "historical-recovery-secret" || command.Environment["API_TOKEN"] != "new-recovery-secret" {
+		t.Fatalf("incorrect recovery configuration: %+v", command)
+	}
+}
+
+func TestDeploymentRecoveryUsesRolledBackRelease(t *testing.T) {
+	db := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, db, "recovery-rollback")
+	ctx := context.Background()
+	project, err := db.CreateProject(ctx, "recovery-rollback", "https://example.com/rollback.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := db.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, Environment: "production", Repository: project.RemoteURL, WorkingDir: "app", ComposeFile: "old.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := db.CreateDeployment(ctx, target.ID, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: source.ID, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	rollback, err := db.CreateRollbackDeployment(ctx, target.ID, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: rollback.ID, Status: "rolled_back"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := db.DeploymentSnapshot(ctx, rollback.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := resourceTestAPI(db).deploymentRecoveryForSnapshot(ctx, snapshot)
+	if err != nil || recovery == nil || recovery.ReleaseDeploymentID != source.ID || recovery.WorkingDir != "app" || recovery.ComposeFile != "old.yaml" {
+		t.Fatalf("recovery must use the restored release, not the rollback operation directory: %+v %v", recovery, err)
+	}
+}
+
+func TestDeploymentQueuesWithoutUnavailableHistoricalSecrets(t *testing.T) {
+	for _, scenario := range []string{"legacy-version", "legacy-timestamp", "deleted-secret-set", "undecryptable"} {
+		t.Run(scenario, func(t *testing.T) {
+			db := openBootstrapTestStore(t)
+			server := enrollResourceTestServer(t, db, "recovery-unavailable")
+			ctx := context.Background()
+			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95"}); err != nil {
+				t.Fatal(err)
+			}
+			api := resourceTestAPI(db)
+			ciphertext, err := api.vault.Encrypt(map[string]string{"API_TOKEN": "historical-secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			secretID, err := db.UpsertSecretSet(ctx, "", "old-production", ciphertext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			project, err := db.CreateProject(ctx, "recovery-unavailable", "https://example.com/recovery.git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := db.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, SecretSetID: secretID, Environment: "production", Repository: project.RemoteURL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous, err := db.CreateDeployment(ctx, target.ID, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = db.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: previous.ID, Status: "succeeded"}); err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "legacy-version":
+				_, err = db.DB.ExecContext(ctx, db.Q("UPDATE deployment_config_snapshots SET secret_set_key_version=0 WHERE deployment_id=?"), previous.ID)
+			case "legacy-timestamp":
+				_, err = db.DB.ExecContext(ctx, db.Q("UPDATE deployment_config_snapshots SET secret_set_updated_at=NULL WHERE deployment_id=?"), previous.ID)
+			case "deleted-secret-set":
+				_, err = db.DB.ExecContext(ctx, db.Q("DELETE FROM secret_sets WHERE id=?"), secretID)
+			case "undecryptable":
+				_, err = db.DB.ExecContext(ctx, db.Q("UPDATE secret_set_versions SET ciphertext=? WHERE secret_set_id=?"), "v1:invalid-ciphertext", secretID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The next deployment has valid current credentials, regardless of
+			// whether its predecessor's historical credentials are still usable.
+			ciphertext, err = api.vault.Encrypt(map[string]string{"API_TOKEN": "incoming-secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentSecretID, err := db.UpsertSecretSet(ctx, "", "new-production", ciphertext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.DB.ExecContext(ctx, db.Q("UPDATE deployment_targets SET secret_set_id=? WHERE id=?"), currentSecretID, target.ID); err != nil {
+				t.Fatal(err)
+			}
+			response := deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/"+target.ID+"/deploy", "targetID", target.ID, map[string]string{"commit_ref": "main"}, api.startDeployment)
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("deployment: %d %s", response.Code, response.Body.String())
+			}
+			var queued struct {
+				Deployment  store.Deployment `json:"deployment"`
+				OperationID string           `json:"operation_id"`
+			}
+			if err = json.Unmarshal(response.Body.Bytes(), &queued); err != nil {
+				t.Fatal(err)
+			}
+			op, err := db.Operation(ctx, queued.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var command protocol.DeployCommand
+			if err = api.vault.Decrypt(op.Payload, &command); err != nil {
+				t.Fatal(err)
+			}
+			if op.Status != "queued" || command.Recovery != nil || command.Environment["API_TOKEN"] != "incoming-secret" {
+				t.Fatalf("incorrect fallback: operation=%s command=%+v", op.Status, command)
+			}
+			events, err := db.DeploymentEvents(ctx, queued.Deployment.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			warned := false
+			for _, event := range events {
+				if strings.Contains(event.Content, "Automatic recovery will use this deployment's configuration as a best effort") {
+					warned = true
+				}
+				if strings.Contains(event.Content, "historical-secret") || strings.Contains(event.Content, "incoming-secret") {
+					t.Fatal("deployment event exposed secrets")
+				}
+			}
+			if !warned {
+				t.Fatalf("missing fallback warning: %+v", events)
+			}
+		})
+	}
+}
+
+func TestDeploymentRecoveryPreservesDatabaseErrors(t *testing.T) {
+	for _, table := range []string{"deployment_config_snapshots", "secret_set_versions"} {
+		t.Run(table, func(t *testing.T) {
+			db := openBootstrapTestStore(t)
+			server := enrollResourceTestServer(t, db, "recovery-db-error")
+			ctx := context.Background()
+			api := resourceTestAPI(db)
+			ciphertext, err := api.vault.Encrypt(map[string]string{"API_TOKEN": "secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			secretID, err := db.UpsertSecretSet(ctx, "", "production", ciphertext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			project, err := db.CreateProject(ctx, "recovery-db-error", "https://example.com/recovery.git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := db.CreateDeploymentTarget(ctx, store.DeploymentTarget{ProjectID: project.ID, ServerID: server.ID, SecretSetID: secretID, Environment: "production", Repository: project.RemoteURL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous, err := db.CreateDeployment(ctx, target.ID, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = db.SaveDeploymentStatus(ctx, protocol.DeploymentStatus{DeploymentID: previous.ID, Status: "succeeded"}); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := db.DeploymentSnapshot(ctx, previous.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Make only the relevant read fail; this must remain an internal
+			// error rather than being classified as missing historical secrets.
+			if _, err = db.DB.ExecContext(ctx, "ALTER TABLE "+table+" RENAME TO unavailable_table"); err != nil {
+				t.Fatal(err)
+			}
+			recovery, err := api.deploymentRecoveryForSnapshot(ctx, snapshot)
+			if err == nil || errors.Is(err, store.ErrDeploymentSnapshotUnavailable) || errors.Is(err, errDeploymentSecretsUndecryptable) || recovery != nil {
+				t.Fatalf("database error was hidden: recovery=%+v error=%v", recovery, err)
+			}
+		})
+	}
+}

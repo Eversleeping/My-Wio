@@ -121,6 +121,13 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertCollaborationEngineMatrixAndReplay(t, scans)
 	assertCollaborationWorktreeEngineMatrix(t, scans)
 	assertCollaborationCodexTurnCompletion(t, scans)
+	assertCollaborationSteerRejectsHigherPermissions(t, scans)
+	assertCollaborationMessagePaginationPreservesByteLimitedPages(t, scans)
+	assertCollaborationPaginationExactLimitAndOversizedEvent(t, scans)
+	assertCollaborationSteerDoesNotEndTurnResult(t, scans)
+	assertCodexRewriteMessagesCarryOperationID(t, scans)
+	assertCollaborationLegacyMessagesRemainReadable(t, scans)
+
 	assertProjectServerPreferencesIsolation(t, scans)
 	assertHiddenServerProjectsRecovery(t, scans)
 	assertGeminiRecoveryOnPostgres(t, scans)
@@ -132,6 +139,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	t.Run("batch B literal paths", func(t *testing.T) { assertWorkspacePathFilterMatchesLiteralWildcards(t, scans) })
 	t.Run("batch B migration", func(t *testing.T) { assertRetentionMigrationIsRepeatableAndBackfillsImports(t, scans) })
 	t.Run("batch B stream locks", func(t *testing.T) { assertRemainingEventWritersUseStreamLock(t, scans) })
+	t.Run("collaboration orphan cleanup", func(t *testing.T) { assertCollaborationOrphanCleanupOnPostgres(t, scans) })
 	limited, err := OpenWithOptions(scanURL.String(), OpenOptions{PostgresMaxOpenConns: 2})
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -17,6 +18,48 @@ func SnapshotPath(stateDir, id string) (string, error) {
 		return "", errors.New("invalid Claude snapshot ID")
 	}
 	return filepath.Join(stateDir, "claude", "forks", id+".jsonl"), nil
+}
+
+// RemoveSnapshot deletes a snapshot transcript file by ID, returning nil if already gone.
+func RemoveSnapshot(stateDir, id string) error {
+	path, err := SnapshotPath(stateDir, id)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// PruneSnapshots removes old Claude snapshot transcripts exceeding maxAge.
+func PruneSnapshots(stateDir string, maxAge time.Duration, now time.Time) error {
+	if stateDir == "" {
+		return nil
+	}
+	root := filepath.Join(stateDir, "claude", "forks")
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	cutoff := now.Add(-maxAge)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(root, entry.Name()))
+		}
+	}
+	return nil
 }
 
 // Snapshot preserves the complete native transcript. Claude itself interprets

@@ -132,8 +132,15 @@ func (g *Gateway) completeClaudeOperation(ctx context.Context, op store.Operatio
 			}
 			stopped := protocol.OperationResult{OperationID: command.OperationID, Status: "cancelled", Message: "Claude process terminated"}
 			claimed, err := g.store.CompleteOperationIfActive(ctx, stopped)
-			if err != nil || !claimed {
+			if err != nil {
 				return err
+			}
+			if !claimed {
+				completed, err := g.store.Operation(ctx, command.OperationID)
+				if err != nil {
+					return err
+				}
+				return g.reconcileCompletedTurn(ctx, completed)
 			}
 			return g.completeClaudeOperation(ctx, original, stopped)
 		}

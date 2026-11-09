@@ -141,6 +141,13 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 		}
 		return ErrThreadActive
 	}
+	key := "codex:" + id
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_links WHERE target_key=?"), key); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=?"), id); err != nil {
 		return err
 	}

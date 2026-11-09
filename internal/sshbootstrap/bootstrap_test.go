@@ -501,3 +501,104 @@ func TestProgressReaderReportsUploadCompletion(t *testing.T) {
 		t.Fatalf("unexpected final progress: %#v", last)
 	}
 }
+
+func TestHandshakeDeadlineTakesEarlierOfLocalLimitAndContextDeadline(t *testing.T) {
+	now := time.Now()
+	// Later deadline (e.g. 45 min) must not override the 90s/15s local maximum
+	ctxLater, cancelLater := context.WithDeadline(context.Background(), now.Add(45*time.Minute))
+	defer cancelLater()
+	if d := handshakeDeadline(ctxLater, 90*time.Second); d.After(now.Add(91 * time.Second)) {
+		t.Fatalf("deadline was overwritten by longer context deadline: got %v", d)
+	}
+	if d := handshakeDeadline(ctxLater, 15*time.Second); d.After(now.Add(16 * time.Second)) {
+		t.Fatalf("probe deadline was overwritten by longer context deadline: got %v", d)
+	}
+
+	// Earlier deadline must be honored
+	ctxEarlier, cancelEarlier := context.WithDeadline(context.Background(), now.Add(5*time.Second))
+	defer cancelEarlier()
+	if d := handshakeDeadline(ctxEarlier, 90*time.Second); d.After(now.Add(6*time.Second)) || d.Before(now.Add(4*time.Second)) {
+		t.Fatalf("deadline did not use earlier context deadline: got %v", d)
+	}
+}
+
+func TestHandshakeRespondsToContextCancellation(t *testing.T) {
+	runTest := func(name string, testFunc func(ctx context.Context, host string, port int) error) {
+		t.Run(name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+
+			host, portStr, _ := net.SplitHostPort(listener.Addr().String())
+			port, _ := strconv.Atoi(portStr)
+
+			handshakeStarted := make(chan struct{})
+			closeServer := make(chan struct{})
+			serverFinished := make(chan struct{})
+			go func() {
+				defer close(serverFinished)
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+
+				// Read client SSH version line, proving the handshake started
+				buf := make([]byte, 1024)
+				n, _ := conn.Read(buf)
+				if n > 0 && strings.HasPrefix(string(buf[:n]), "SSH-") {
+					close(handshakeStarted)
+				}
+				// Keep connection open without sending server version until test finishes
+				<-closeServer
+			}()
+			t.Cleanup(func() {
+				close(closeServer)
+				<-serverFinished
+			})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			go func() {
+				select {
+				case <-handshakeStarted:
+					// Handshake has begun; cancel context to unblock client
+					cancel()
+				case <-time.After(5 * time.Second):
+					t.Errorf("handshake did not start in time")
+					cancel()
+				}
+			}()
+
+			start := time.Now()
+			err = testFunc(ctx, host, port)
+			duration := time.Since(start)
+
+			if duration > 2*time.Second {
+				t.Fatalf("handshake took too long to return after cancellation: %v", duration)
+			}
+			if err == nil {
+				t.Fatal("expected handshake to fail, got nil")
+			}
+			if !errors.Is(err, ErrConnection) {
+				t.Fatalf("expected error to wrap ErrConnection, got: %v", err)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected error to wrap context.Canceled, got: %v", err)
+			}
+		})
+	}
+
+	runTest("connect", func(ctx context.Context, host string, port int) error {
+		_, _, err := connect(ctx, Target{Host: host, Port: port, User: "test", AuthMethod: "none"}, "")
+		return err
+	})
+
+	runTest("probeHostKey", func(ctx context.Context, host string, port int) error {
+		_, err := probeHostKey(ctx, HostTarget{Host: host, Port: port})
+		return err
+	})
+}

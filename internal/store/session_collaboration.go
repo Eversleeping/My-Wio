@@ -412,8 +412,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 	if source.ServerID != serverID || source.ArchivedAt != nil || !source.Busy() || source.OperationID == "" || source.OperationID != call.OperationID {
 		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "source is not the active bound session turn"))
 	}
-	// Lock the root grant before any per-session mutation, serializing limits
-	// and revocation across sibling tool calls (also on PostgreSQL).
+	// Look up root grant key for per-session limits and delegation
 	root := call.Source.Key()
 	var parentRoot string
 	err = tx.GetContext(ctx, &parentRoot, s.Q("SELECT root_key FROM session_links WHERE target_key=?"), root)
@@ -422,14 +421,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return collaborationError(p.RequestID, err)
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), root); err != nil {
-		return collaborationError(p.RequestID, err)
-	}
-	if root != call.Source.Key() {
-		if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), call.Source.Key()); err != nil {
-			return collaborationError(p.RequestID, err)
-		}
-	}
+
 	grant, version, err := s.collaborationGrant(ctx, tx, call.Source.Key())
 	if err != nil {
 		return collaborationError(p.RequestID, err)
@@ -446,6 +438,24 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 			return collaborationError(p.RequestID, e)
 		}
 		return reply
+	}
+
+	// Lock the root grant before any per-session mutation, serializing limits
+	// and revocation across sibling tool calls (also on PostgreSQL).
+	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), root); err != nil {
+		return collaborationError(p.RequestID, err)
+	}
+	if root != call.Source.Key() {
+		if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), call.Source.Key()); err != nil {
+			return collaborationError(p.RequestID, err)
+		}
+	}
+	grant, version, err = s.collaborationGrant(ctx, tx, call.Source.Key())
+	if err != nil {
+		return collaborationError(p.RequestID, err)
+	}
+	if !grant.Enabled {
+		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration in this session's settings first"))
 	}
 	canonical, _ := json.Marshal(p)
 	var request CollaborationRequest
@@ -699,14 +709,9 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 			reply.Data = t
 			return reply, nil
 		}
-		rows, err := s.collaborationMessages(ctx, tx, t.ID, p.After, limit)
-		if err != nil {
-			return reply, err
-		}
-		data := map[string]any{"session": t, "messages": rows, "source_material": true, "has_more": len(rows) == limit, "next_after": p.After}
-		if len(rows) > 0 {
-			data["next_after"] = rows[len(rows)-1].Sequence
-		}
+		rows := []protocol.StreamEvent{}
+		hasMore, turnSpecific := false, false
+		data := map[string]any{"session": t, "source_material": true, "next_after": p.After}
 		if name == "wio_get_result" {
 			opID := p.OperationID
 			if opID == "" {
@@ -736,22 +741,27 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 					return reply, stateErr
 				}
 				data["turn_status"], data["turn_ended"] = turnStatus, ended
-				rows, err = s.collaborationTurnMessages(ctx, tx, t.ID, op.ID, p.After, limit)
+				rows, hasMore, err = s.collaborationTurnMessages(ctx, tx, t.ID, op.ID, p.After, limit)
 				if err != nil {
 					return reply, err
 				}
-				data["messages"] = rows
-				data["has_more"] = len(rows) == limit
-				data["next_after"] = p.After
-				if len(rows) > 0 {
-					data["next_after"] = rows[len(rows)-1].Sequence
-				}
+				turnSpecific = true
 			}
 			if opID == "" {
 				data["turn_ended"] = false
 				data["turn_status"] = "not_started"
 			}
 			data["model_claim_is_verification"] = false
+		}
+		if !turnSpecific {
+			rows, hasMore, err = s.collaborationMessages(ctx, tx, t.ID, p.After, limit)
+			if err != nil {
+				return reply, err
+			}
+		}
+		data["messages"], data["has_more"] = rows, hasMore
+		if len(rows) > 0 {
+			data["next_after"] = rows[len(rows)-1].Sequence
 		}
 		reply.Data = data
 		return reply, nil
@@ -794,17 +804,17 @@ func (s *Store) collaborationWorkspaceGranted(ctx context.Context, tx *sqlx.Tx, 
 	return err == nil && collaborationWorkspaceAllowed(source, g, id, project), err
 }
 
-func (s *Store) collaborationMessages(ctx context.Context, tx *sqlx.Tx, id string, after int64, limit int) ([]protocol.StreamEvent, error) {
+func (s *Store) collaborationMessages(ctx context.Context, tx *sqlx.Tx, id string, after int64, limit int) ([]protocol.StreamEvent, bool, error) {
 	return s.collaborationMessageRange(ctx, tx, id, after, 0, limit)
 }
 
-func (s *Store) collaborationTurnMessages(ctx context.Context, tx *sqlx.Tx, id, operation string, after int64, limit int) ([]protocol.StreamEvent, error) {
+func (s *Store) collaborationTurnMessages(ctx context.Context, tx *sqlx.Tx, id, operation string, after int64, limit int) ([]protocol.StreamEvent, bool, error) {
 	start, end, err := s.collaborationTurnBounds(ctx, tx, id, operation)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if start == 0 {
-		return []protocol.StreamEvent{}, nil
+		return []protocol.StreamEvent{}, false, nil
 	}
 	if after < start-1 {
 		after = start - 1
@@ -824,8 +834,12 @@ func (s *Store) collaborationTurnBounds(ctx context.Context, tx *sqlx.Tx, id, op
 	for _, row := range starts {
 		var payload struct {
 			Operation string `json:"operation_id"`
+			Steer     bool   `json:"steer"`
 		}
 		_ = json.Unmarshal([]byte(row.Payload), &payload)
+		if payload.Steer {
+			continue
+		}
 		if start != 0 {
 			end = row.Sequence
 			break
@@ -837,7 +851,7 @@ func (s *Store) collaborationTurnBounds(ctx context.Context, tx *sqlx.Tx, id, op
 	return start, end, nil
 }
 
-func (s *Store) collaborationMessageRange(ctx context.Context, tx *sqlx.Tx, id string, after, before int64, limit int) ([]protocol.StreamEvent, error) {
+func (s *Store) collaborationMessageRange(ctx context.Context, tx *sqlx.Tx, id string, after, before int64, limit int) ([]protocol.StreamEvent, bool, error) {
 	var rows []struct {
 		ID       string    `db:"event_id"`
 		Sequence int64     `db:"sequence"`
@@ -845,12 +859,20 @@ func (s *Store) collaborationMessageRange(ctx context.Context, tx *sqlx.Tx, id s
 		Payload  string    `db:"payload"`
 		At       time.Time `db:"occurred_at"`
 	}
-	err := tx.SelectContext(ctx, &rows, s.Q("SELECT event_id,sequence,kind,payload,occurred_at FROM events WHERE stream_id=? AND sequence>? AND (?=0 OR sequence<?) ORDER BY sequence LIMIT ?"), id, after, before, before, limit)
+	err := tx.SelectContext(ctx, &rows, s.Q("SELECT event_id,sequence,kind,payload,occurred_at FROM events WHERE stream_id=? AND sequence>? AND (?=0 OR sequence<?) ORDER BY sequence LIMIT ?"), id, after, before, before, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
 	result := []protocol.StreamEvent{}
 	budget := 512 << 10
-	for _, row := range rows {
+	hasMore := len(rows) > limit
+	for i, row := range rows {
+		if i == limit {
+			break
+		}
 		if len(row.Payload) > budget {
 			if len(result) > 0 {
+				hasMore = true
 				break
 			}
 			row.Payload = `{"truncated":true,"message":"Event exceeds tool output limit; open the Wio session to inspect it"}`
@@ -858,7 +880,7 @@ func (s *Store) collaborationMessageRange(ctx context.Context, tx *sqlx.Tx, id s
 		budget -= len(row.Payload)
 		result = append(result, protocol.StreamEvent{EventID: row.ID, StreamID: id, Sequence: row.Sequence, Kind: row.Kind, Payload: json.RawMessage(row.Payload), OccurredAt: row.At})
 	}
-	return result, err
+	return result, hasMore, nil
 }
 
 func (s *Store) collaborationWaitingUser(ctx context.Context, tx sqlx.QueryerContext, t CollaborationSession) (bool, error) {

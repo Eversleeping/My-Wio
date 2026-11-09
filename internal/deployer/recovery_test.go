@@ -381,3 +381,129 @@ func TestDeleteTargetRemovesRetainedReleaseImages(t *testing.T) {
 		})
 	}
 }
+
+func TestDeployRecoveryUsesHistoricalConfiguration(t *testing.T) {
+	docker, dockerLog := installFakeDeployTools(t)
+	if err := os.Rename(docker, docker+".real"); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, docker, `#!/bin/sh
+if [ "$1" = compose ]; then
+  echo "directory=$PWD token=$API_TOKEN port=$APP_PORT $*" >> "$DOCKER_LOG"
+  previous=""
+  for argument in "$@"; do
+    if [ "$previous" = --file ] && [ ! -f "$argument" ]; then exit 1; fi
+    previous="$argument"
+  done
+fi
+exec "`+docker+`.real" "$@"
+`)
+	releaseRoot := filepath.Join(t.TempDir(), "releases")
+	previous := createCurrentRelease(t, releaseRoot, "target-1")
+	if err := os.MkdirAll(filepath.Join(previous, "old-app"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(previous, "compose.yaml"), filepath.Join(previous, "old-app", "compose.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	command := deployCommand(releaseRoot)
+	command.WorkingDir, command.ComposeFile = "new-app", "new-compose.yaml"
+	command.Environment = map[string]string{"API_TOKEN": "new-secret"}
+	// JSON also exercises compatibility with older senders/receivers.
+	raw, _ := json.Marshal(command)
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["recovery"] = map[string]any{"release_deployment_id": "deployment-old", "working_dir": "old-app", "compose_file": "compose.yaml", "public_url": "http://203.0.113.10:4000", "environment": map[string]string{"API_TOKEN": "old-secret"}}
+	raw, _ = json.Marshal(fields)
+	if err := json.Unmarshal(raw, &command); err != nil {
+		t.Fatal(err)
+	}
+	release := filepath.Join(releaseRoot, "target-1", "releases", command.DeploymentID)
+	err := New(docker, filepath.Join(t.TempDir(), "missing.sock")).Deploy(context.Background(), command, func(status, message, resolved, url, content string) {
+		if message == "commit checked out" {
+			if err := os.MkdirAll(filepath.Join(release, "new-app"), 0o750); err != nil {
+				t.Error(err)
+			}
+			if err := os.WriteFile(filepath.Join(release, "new-app", "new-compose.yaml"), []byte("services: {}"), 0o600); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "the previous release was restored") {
+		t.Fatalf("historical recovery failed: %v\n%s", err, readLog(t, dockerLog))
+	}
+	log := readLog(t, dockerLog)
+	if !strings.Contains(log, "directory="+filepath.Join(previous, "old-app")+" token=old-secret port=4000") {
+		t.Fatalf("recovery did not use historical paths and environment:\n%s", log)
+	}
+	assertCurrent(t, filepath.Join(releaseRoot, "target-1"), previous)
+	if err := filepath.WalkDir(filepath.Join(releaseRoot, "target-1"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(data), "old-secret") || strings.Contains(string(data), "new-secret") {
+				t.Errorf("plaintext secret persisted in %s", path)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeployInvalidRecoveryFallsBackToIncomingConfiguration(t *testing.T) {
+	for _, scenario := range []string{"mismatched-release", "invalid-release", "invalid-working-dir", "invalid-compose-file", "invalid-environment"} {
+		t.Run(scenario, func(t *testing.T) {
+			docker, dockerLog := installFakeDeployTools(t)
+			if err := os.Rename(docker, docker+".real"); err != nil {
+				t.Fatal(err)
+			}
+			writeExecutable(t, docker, `#!/bin/sh
+if [ "$1" = compose ]; then
+  echo "directory=$PWD token=$API_TOKEN port=$APP_PORT $*" >> "$DOCKER_LOG"
+fi
+exec "`+docker+`.real" "$@"
+`)
+			releaseRoot := filepath.Join(t.TempDir(), "releases")
+			previous := createCurrentRelease(t, releaseRoot, "target-1")
+			command := deployCommand(releaseRoot)
+			command.Environment = map[string]string{"API_TOKEN": "incoming-secret"}
+			command.Recovery = &protocol.DeploymentRecovery{ReleaseDeploymentID: "deployment-old", ComposeFile: "compose.yaml", Environment: map[string]string{"API_TOKEN": "historical-secret"}}
+			switch scenario {
+			case "mismatched-release":
+				command.Recovery.ReleaseDeploymentID = "different-release"
+			case "invalid-release":
+				command.Recovery.ReleaseDeploymentID = "../outside"
+			case "invalid-working-dir":
+				command.Recovery.WorkingDir = "../outside"
+			case "invalid-compose-file":
+				command.Recovery.ComposeFile = "../outside.yaml"
+			case "invalid-environment":
+				command.Recovery.Environment["INVALID=KEY"] = "value"
+			}
+			events, err := runDeploy(t, docker, command)
+			if err == nil || !strings.Contains(err.Error(), "configured public port 5010 is not published") || !strings.Contains(err.Error(), "the previous release was restored") {
+				t.Fatalf("deployment did not proceed and recover: %v", err)
+			}
+			if !strings.Contains(events, "historical recovery configuration ignored") || !strings.Contains(events, "recovery will use the incoming configuration as a best effort") {
+				t.Fatalf("missing fallback warning:\n%s", events)
+			}
+			failed := filepath.Join(releaseRoot, "target-1", "releases", command.DeploymentID)
+			log := readLog(t, dockerLog)
+			started := strings.Index(log, "--file "+filepath.Join(failed, "compose.yaml")+" up -d")
+			restored := strings.Index(log, "directory="+previous+" token=incoming-secret port=5010")
+			if started < 0 || restored < started || strings.Contains(log, "historical-secret") {
+				t.Fatalf("recovery did not fall back to incoming configuration:\n%s", log)
+			}
+			assertNoRelease(t, failed)
+			assertCurrent(t, filepath.Join(releaseRoot, "target-1"), previous)
+		})
+	}
+}

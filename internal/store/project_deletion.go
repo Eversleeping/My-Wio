@@ -139,6 +139,26 @@ func (s *Store) DeleteProjectMetadata(ctx context.Context, projectID string) (bo
 	if !plan.CanDeleteMetadata {
 		return false, ErrProjectDeletionBlocked
 	}
+	_, err = tx.ExecContext(ctx, s.Q(`DELETE FROM session_subscriptions WHERE target_key IN (
+		SELECT 'codex:'||t.id FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+		UNION ALL SELECT 'claude:'||t.id FROM claude_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+		UNION ALL SELECT 'gemini:'||t.id FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+	) OR source_key IN (
+		SELECT 'codex:'||t.id FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+		UNION ALL SELECT 'claude:'||t.id FROM claude_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+		UNION ALL SELECT 'gemini:'||t.id FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+	)`), projectID, projectID, projectID, projectID, projectID, projectID)
+	if err != nil {
+		return false, err
+	}
+	_, err = tx.ExecContext(ctx, s.Q(`DELETE FROM session_links WHERE target_key IN (
+		SELECT 'codex:'||t.id FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+		UNION ALL SELECT 'claude:'||t.id FROM claude_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+		UNION ALL SELECT 'gemini:'||t.id FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.project_id=?
+	)`), projectID, projectID, projectID)
+	if err != nil {
+		return false, err
+	}
 	result, err := tx.ExecContext(ctx, s.Q(`DELETE FROM projects WHERE id=?`), projectID)
 	if err != nil {
 		return false, err

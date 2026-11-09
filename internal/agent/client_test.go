@@ -405,3 +405,11 @@ func TestRedactDeploymentTextHidesEnvironmentAndRepositoryCredentials(t *testing
 		}
 	}
 }
+
+func TestRedactDeploymentRecoverySecrets(t *testing.T) {
+	command := protocol.DeployCommand{Environment: map[string]string{"TOKEN": "new-secret"}, Recovery: &protocol.DeploymentRecovery{Environment: map[string]string{"TOKEN": "old-secret"}}}
+	redacted := redactDeploymentCommandText("new-secret old-secret", command)
+	if strings.Contains(redacted, "new-secret") || strings.Contains(redacted, "old-secret") {
+		t.Fatalf("deployment recovery output leaked a secret: %s", redacted)
+	}
+}

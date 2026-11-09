@@ -1035,6 +1035,9 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			if err := claudeadapter.PrepareRewrite(ctx, c.config.StateDir, envelope.OperationID, &command); err != nil {
 				return err
 			}
+			defer func() {
+				_ = claudeadapter.RemoveSnapshot(c.config.StateDir, envelope.OperationID)
+			}()
 		}
 		if command.ForkSnapshotID != "" && command.SessionID == "" {
 			if command.ForkSnapshotID != command.ThreadID {
@@ -1066,12 +1069,21 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		} else {
 			c.log.Warn("collaboration bridge unavailable", "engine", "claude")
 		}
-		return c.claudeTurns.Run(ctx, effectiveClaudePath(c.config.StateDir), envelope.OperationID, command, func(event protocol.StreamEvent) error {
+		forkSnapshotID := command.ForkSnapshotID
+		var observedInit bool
+		err = c.claudeTurns.Run(ctx, effectiveClaudePath(c.config.StateDir), envelope.OperationID, command, func(event protocol.StreamEvent) error {
 			if event.EventID == "" {
 				event.EventID = uuid.NewString()
 			}
+			if event.Kind == "claude.init" {
+				observedInit = true
+			}
 			return c.queue("claude_event", event, true)
 		}, environment...)
+		if err == nil && observedInit && forkSnapshotID != "" {
+			_ = claudeadapter.RemoveSnapshot(c.config.StateDir, forkSnapshotID)
+		}
+		return err
 	case "claude.question.answer":
 		var command protocol.ClaudeAnswerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
@@ -1203,13 +1215,22 @@ func (c *Client) runDeployment(ctx context.Context, command protocol.DeployComma
 		return errors.New("deployment workspace is outside configured inventory roots")
 	}
 	status := func(state, message, resolved, detectedPublicURL, content string) {
-		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, command.Repository), ResolvedCommit: resolved, DetectedPublicURL: detectedPublicURL, Content: redactDeploymentText(content, command.Environment, command.Repository)}, true)
+		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentCommandText(message, command), ResolvedCommit: resolved, DetectedPublicURL: detectedPublicURL, Content: redactDeploymentCommandText(content, command)}, true)
 	}
 	err := c.deployer.Deploy(ctx, command, status)
 	if err != nil {
 		status("failed", truncate(err.Error(), 8192), "", "", "")
+		return errors.New(redactDeploymentCommandText(err.Error(), command))
 	}
 	return err
+}
+
+func redactDeploymentCommandText(value string, command protocol.DeployCommand) string {
+	value = redactDeploymentText(value, command.Environment, command.Repository)
+	if command.Recovery != nil {
+		value = redactDeploymentText(value, command.Recovery.Environment, "")
+	}
+	return value
 }
 
 func pathWithinRoots(path string, roots []string) bool {

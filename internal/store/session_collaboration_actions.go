@@ -535,11 +535,13 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 	if p.Session == source.Ref() {
 		return reply, sessiontools.Fail("OUT_OF_SCOPE", "mutations target child or explicitly granted sessions, not the calling turn")
 	}
-	switch r.Tool {
-	case "wio_send_message":
+	if r.Tool == "wio_send_message" || r.Tool == "wio_steer_session" {
 		if collaborationPermissionRank(target.Engine, target.Mode) > collaborationPermissionRank(source.Engine, source.Mode) {
 			return reply, sessiontools.Fail("OUT_OF_SCOPE", "target execution permissions exceed the source session")
 		}
+	}
+	switch r.Tool {
+	case "wio_send_message":
 		if strings.TrimSpace(p.Prompt) == "" {
 			return reply, sessiontools.Fail("INVALID_ARGUMENT", "prompt must not be empty")
 		}
