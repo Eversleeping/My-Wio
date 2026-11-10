@@ -25,6 +25,10 @@ RUN apk add --no-cache bash ca-certificates docker-cli docker-cli-compose git tz
     && mkdir -p /var/lib/wio-agent/projects \
     && chmod 700 /var/lib/wio-agent
 ENV HOME=/var/lib/wio-agent
+# The built-in Agent runs as root inside this container. Claude Code refuses
+# bypassPermissions for root unless the environment is declared a sandbox, so
+# without this the mode fails here while it works on managed servers.
+ENV IS_SANDBOX=1
 COPY --from=go /wio-controlplane /usr/local/bin/wio-controlplane
 COPY --from=go /wio-agent-linux-amd64 /usr/local/share/wio/wio-agent-linux-amd64
 COPY --from=go /wio-agent-linux-arm64 /usr/local/share/wio/wio-agent-linux-arm64
