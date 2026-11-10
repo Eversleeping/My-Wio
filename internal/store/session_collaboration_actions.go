@@ -318,6 +318,8 @@ func (s *Store) linkCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 		child.AutoContinue = false
 		child.SessionRefs = nil
 		child.AllProjectSessions = false
+		// Display preferences are chosen per session, never inherited.
+		child.ShowUnreadResults, child.ShowCreationResults = false, false
 	}
 	raw, _ := json.Marshal(child)
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO session_tool_grants(source_key,grant_json,parent_key,parent_version) VALUES(?,?,?,?)"), ref.Key(), string(raw), source.Ref().Key(), r.GrantVersion); err != nil {

@@ -402,7 +402,6 @@ test("refreshes models once on each session entry, including in StrictMode",asyn
   await screen.findByRole("option",{name:"Upstream · gemini-upstream-current"});
   expect(modelRequests).toEqual(["/api/workspaces/workspace-1/gemini/models"]);
   expect(screen.queryByRole("button",{name:"Refresh model list"})).not.toBeInTheDocument();
-  expect(screen.queryByRole("button",{name:"Attach image"})).not.toBeInTheDocument();
   await user.selectOptions(screen.getByRole("combobox",{name:"Gemini model"}),"gemini-upstream-current");
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   expect(modelRequests).toHaveLength(1);

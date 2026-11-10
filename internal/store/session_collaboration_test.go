@@ -1721,3 +1721,60 @@ func TestCollaborationFailedPreparationOrphansPruned(t *testing.T) {
 		t.Fatalf("expected failed preparation link to be pruned, got %d", count)
 	}
 }
+
+func TestCollaborationDisplayPreferencesAreNotAuthorization(t *testing.T) {
+	f := newCollaborationFixture(t, testStore(t), "codex")
+	ctx := context.Background()
+	version := func(ref sessiontools.Ref) (v int) {
+		t.Helper()
+		if err := f.db.DB.GetContext(ctx, &v, f.db.Q("SELECT version FROM session_tool_grants WHERE source_key=?"), ref.Key()); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	grant, _ := f.db.CollaborationGrant(ctx, f.source)
+	grant.Delegate = true
+	grant.ShowUnreadResults, grant.ShowCreationResults = true, true
+	if err := f.db.SetCollaborationGrant(ctx, f.source, grant); err != nil {
+		t.Fatal(err)
+	}
+	reply := f.call(t, "wio_fork_session", sessiontools.Params{RequestID: "display", Session: f.source, Engine: "claude", ForkMode: "handoff", Handoff: "Goal: check tests.", Prompt: "Continue review"})
+	if reply.Error != nil || reply.Session == nil {
+		t.Fatalf("fork: %+v", reply)
+	}
+	child := *reply.Session
+	childGrant, err := f.db.CollaborationGrant(ctx, child)
+	if err != nil || !childGrant.Enabled || childGrant.ShowUnreadResults || childGrant.ShowCreationResults {
+		t.Fatalf("child inherited display preferences: %+v %v", childGrant, err)
+	}
+
+	before := version(f.source)
+	grant.ShowUnreadResults, grant.ShowCreationResults = false, true
+	grant.SessionRefs = []sessiontools.Ref{}
+	if err = f.db.SetCollaborationGrant(ctx, f.source, grant); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := f.db.CollaborationGrant(ctx, f.source)
+	if version(f.source) != before || saved.ShowUnreadResults || !saved.ShowCreationResults {
+		t.Fatalf("display-only save: version %d -> %d, grant %+v", before, version(f.source), saved)
+	}
+	if childGrant, err = f.db.CollaborationGrant(ctx, child); err != nil || !childGrant.Enabled {
+		t.Fatalf("display-only save revoked the delegated child: %+v %v", childGrant, err)
+	}
+
+	// A display-only save in the child keeps it under the parent's revocation.
+	childGrant.ShowUnreadResults = true
+	if err = f.db.SetCollaborationGrant(ctx, child, childGrant); err != nil {
+		t.Fatal(err)
+	}
+	grant.Worktree = !grant.Worktree
+	if err = f.db.SetCollaborationGrant(ctx, f.source, grant); err != nil {
+		t.Fatal(err)
+	}
+	if version(f.source) != before+1 {
+		t.Fatalf("scope change kept version %d", version(f.source))
+	}
+	if childGrant, err = f.db.CollaborationGrant(ctx, child); err != nil || childGrant.Enabled || !childGrant.ShowUnreadResults {
+		t.Fatalf("child after parent scope change: %+v %v", childGrant, err)
+	}
+}

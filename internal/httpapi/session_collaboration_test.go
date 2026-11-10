@@ -60,6 +60,15 @@ func TestCollaborationBrowserAuthorization(t *testing.T) {
 	if w := request("PUT", path, `{"enabled":true,"worktree":true}`, true, true); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":true`) {
 		t.Fatalf("grant: %d %s", w.Code, w.Body.String())
 	}
+	if w := request("GET", path, "", true, false); w.Code != 200 || !strings.Contains(w.Body.String(), `"show_unread_results":false`) || !strings.Contains(w.Body.String(), `"show_creation_results":false`) {
+		t.Fatalf("default display preferences: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("PUT", path, `{"enabled":true,"worktree":true,"show_unread_results":true,"show_creation_results":true}`, true, true); w.Code != 200 {
+		t.Fatalf("save display preferences: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", path, "", true, false); w.Code != 200 || !strings.Contains(w.Body.String(), `"show_unread_results":true`) || !strings.Contains(w.Body.String(), `"show_creation_results":true`) {
+		t.Fatalf("persisted display preferences: %d %s", w.Code, w.Body.String())
+	}
 	if w := request("POST", path+"/read", `{"target_key":"claude:other","event_id":"old"}`, true, false); w.Code != 403 {
 		t.Fatalf("read ack missing csrf: %d", w.Code)
 	}

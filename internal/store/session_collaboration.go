@@ -200,8 +200,48 @@ func (s *Store) SetCollaborationGrant(ctx context.Context, ref sessiontools.Ref,
 		}
 	}
 	raw, _ := json.Marshal(grant)
+	// Display preferences are not authorization. Saving only them keeps the
+	// version and parent link, so pending requests, auto-continuation and
+	// delegated children stay valid.
+	var current struct {
+		JSON    string `db:"grant_json"`
+		Version int    `db:"version"`
+	}
+	err = sqlx.GetContext(ctx, s.DB, &current, s.Q("SELECT grant_json,version FROM session_tool_grants WHERE source_key=?"), ref.Key())
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		var stored sessiontools.Grant
+		if json.Unmarshal([]byte(current.JSON), &stored) == nil && collaborationScope(stored) == collaborationScope(grant) {
+			result, e := s.DB.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET grant_json=?,updated_at=? WHERE source_key=? AND version=?"), string(raw), time.Now().UTC(), ref.Key(), current.Version)
+			if e != nil {
+				return e
+			}
+			if n, _ := result.RowsAffected(); n == 1 {
+				return nil
+			}
+		}
+	}
 	_, err = s.DB.ExecContext(ctx, s.Q(`INSERT INTO session_tool_grants(source_key,grant_json,version,updated_at) VALUES(?,?,1,?) ON CONFLICT(source_key) DO UPDATE SET grant_json=excluded.grant_json,parent_key='',parent_version=0,version=session_tool_grants.version+1,updated_at=excluded.updated_at`), ref.Key(), string(raw), time.Now().UTC())
 	return err
+}
+
+// collaborationScope encodes the authorization part of a grant for comparison.
+// Display preferences are left out, and empty lists equal missing ones.
+func collaborationScope(g sessiontools.Grant) string {
+	g.ShowUnreadResults, g.ShowCreationResults = false, false
+	if len(g.WorkspaceIDs) == 0 {
+		g.WorkspaceIDs = nil
+	}
+	if len(g.SessionRefs) == 0 {
+		g.SessionRefs = nil
+	}
+	if len(g.TargetModes) == 0 {
+		g.TargetModes = nil
+	}
+	raw, _ := json.Marshal(g)
+	return string(raw)
 }
 
 type CollaborationRequest struct {

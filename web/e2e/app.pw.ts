@@ -912,6 +912,7 @@ test("the /collab command creates a collaboration session through the current mo
     links: [],
     requests: [
       { id: "request-create", request_id: "create-1", tool: "wio_create_session", status: "succeeded", phase: "", target_engine: "claude", target_id: "", operation_id: "" },
+      { id: "request-pending", request_id: "create-2", tool: "wio_create_session", status: "running", phase: "", target_engine: "claude", target_id: "", operation_id: "" },
       { id: "request-send", request_id: "send-1", tool: "wio_send_message", status: "failed", phase: "", target_engine: "claude", target_id: "", operation_id: "", error: { code: "BUSY", message: "target busy" } }
     ]
   };
@@ -937,7 +938,9 @@ test("the /collab command creates a collaboration session through the current mo
   await page.goto(`/?view=codex&thread=${codexThread.id}`);
 
   await page.getByRole("button", { name: /Session collaboration/ }).click();
-  await expect(page.getByText("Create session", { exact: true })).toBeVisible();
+  // The pending request proves the panel rendered; finished creation results are opt-in.
+  await expect(page.getByText("create-2", { exact: true })).toBeVisible();
+  await expect(page.getByText("create-1", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Send task", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/target busy/)).toHaveCount(0);
 

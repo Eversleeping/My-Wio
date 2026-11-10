@@ -87,6 +87,9 @@ type Grant struct {
 	Delegate           bool `json:"delegate"`
 	// Cross-engine permission modes must be chosen by the user, never by a tool.
 	TargetModes map[string]string `json:"target_modes"`
+	// Browser display preferences are opt-in for existing and new sessions.
+	ShowUnreadResults   bool `json:"show_unread_results"`
+	ShowCreationResults bool `json:"show_creation_results"`
 }
 
 func (p Params) MarshalJSON() ([]byte, error) {
