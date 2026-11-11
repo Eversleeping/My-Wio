@@ -2,6 +2,8 @@
 
 本文是可复用的部署模板，不记录任何实际公网 IP、域名、SSH 用户、主机目录或既有基础设施状态。请在受控的密码管理工具或部署平台中保存本次部署的真实值；不要把 `.env`、私钥、Token 或机器清单提交到 Git。
 
+项目概览和本地启动见 [README](../README.md)，部署后的首次配置和日常操作见[用户手册](USER_GUIDE.md)。
+
 ## 本地部署档案
 
 每个实际部署环境都应在仓库根目录维护一份 `.deployment.local.md`。该文件已被 `.gitignore` 排除，只用于记录当前生产主机的 SSH 地址、账号、私钥相对路径、已核验的主机指纹、部署目录、Compose 项目名、Compose 文件组合和验收地址。实际值变化时必须同步更新该档案，禁止把真实值补进本文或提交到 Git。
@@ -21,6 +23,8 @@ git check-ignore .deployment.local.md '*.pem' .env
 - 选择“独立 Caddy”或“宿主机 Caddy”之一。两种方式不能同时占用同一主机的 80/443 端口。
 - 部署账户能够运行 Docker；如果使用宿主机 Caddy，另需具备校验和重载 Caddy 配置的权限。
 - 已确定部署方式及其目录暴露边界：**方案 A** 会直接映射宿主机的 `/srv`、`/opt`、`/home`；**方案 B** 才会将这些容器路径替换为专用工作区根目录下的子目录。需要最小化宿主机可见范围时必须选择方案 B。
+
+当前控制面镜像包含 Git、Docker CLI/Compose、Node.js/npm 及 Codex/Gemini/Claude CLI，两种方案均挂载 Docker socket。内置控制机 Agent 可操作容器可见的目录和宿主机 Docker；方案 B 缩小目录挂载范围，但不隔离 Docker 权限。实际 CLI 基线以 [Dockerfile](../deploy/controlplane.Dockerfile) 为准：其中 Gemini CLI 当前为 `0.65.0`，Goal、运行中追加和技能管理等要求 `0.66.0+` 的功能，需在部署后通过网页更新 CLI。
 
 ## 一次性部署变量
 
@@ -182,7 +186,7 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 
 ## 更新、回滚与备份
 
-- 更新前先备份 PostgreSQL 数据卷、`.env` 中的 `WIO_MASTER_KEY`，以及需要保留的 Agent 状态；这些内容应加密保存到 Docker 主机之外。
+- 更新前先备份 PostgreSQL 数据库、`.env` 和原始 `WIO_MASTER_KEY`，以及内置 Agent 的 `controlplane_agent_state` 卷。外部 Agent 需保留 `/etc/wio-agent`、`/var/lib/wio-agent` 和运行账号实际使用的 CLI 原生历史目录（默认 `~/.codex`、`~/.gemini`、`~/.claude`）；同时备份重要工作区、应用数据卷与 Caddy 证书卷。仅有控制面数据库不能恢复 CLI 原生续聊。这些内容应加密保存到 Docker 主机之外，备份命令见 [README](../README.md#备份与安全)。
 - 更新前核对远端工作树干净、Git remote 与预期仓库一致，并记录旧 HEAD；不要在存在未知改动时直接拉取或切换版本。
 - 备份至少应包含 `.env`、PostgreSQL 自定义格式 dump 和旧 HEAD 的 Git bundle，并将备份目录和各文件大小写入部署记录。
 - 使用与首次部署完全相同的 Compose 项目名和文件组合执行 `up -d --build`，避免创建重复的网络、卷或容器。

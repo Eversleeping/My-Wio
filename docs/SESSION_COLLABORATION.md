@@ -1,5 +1,7 @@
 # 内置会话协作
 
+日常授权和操作步骤见[用户手册](USER_GUIDE.md#11-会话协作)。本文面向需要理解工具契约和执行边界的维护者。
+
 Wio 为自己管理的 Codex、Claude、Gemini 进程自动注入会话协作工具，无需填写 MCP 地址或密钥。创建的目标是正式 Wio 会话，用户可以打开、接管、继续或归档。
 
 ## 开始使用
@@ -79,21 +81,8 @@ Agent 在回环地址创建带随机授权的进程级 HTTP MCP，仅通过现�
 
 Codex 在独立 app-server 的启动参数中注入；同一会话续聊时更新当前轮次绑定，进程退出、更新或空闲回收时关闭入口。Claude 使用进程级 `--mcp-config` 及精确工具白名单。Gemini 将协作服务作为额外 ACP MCP 服务，与原有提问、图片和目标服务共存。均不写用户全局 MCP 配置；桥接不可用时普通会话仍可使用。
 
-本机真实 CLI 验证使用 Codex `0.167.0-alpha.3.2`、Claude Code `2.1.161`、Gemini CLI `0.66.0`。Codex 验证了无模型调用的工具发现；Claude/Gemini 通过隔离配置及本机模拟模型接口验证了工具发现、授权调用及结果回传。其他 CLI 版本仍需按各版本发布流程验证，运行中追加指令沿用现有能力门槛。
+CLI 版本仍须满足对应适配器的能力门槛，运行中追加指令沿用各引擎的检查；控制面和 Agent 支持协作，不代表任意 CLI 版本都支持所有功能。
 
-## 验证与发布
+## 开发验证入口
 
-业务测试覆盖三种来源 × 三种目标，在共享工作区与独立 worktree 两种模式下检查创建、去重、首条任务、授权与恢复。另覆盖撤销继承授权、自分叉等待依赖、等待环、排队取消、历史轮次结果、未读通知及根任务续聊上限。数据库覆盖 SQLite 和 PostgreSQL。
-
-```powershell
-go test ./...
-go test -tags postgresintegration ./internal/store -run TestPostgresMigrationAndStorage -count=1
-# web 目录
-npm test
-npm run build
-npm run e2e
-```
-
-真实 CLI 测试是显式开启的集成测试：`WIO_COLLABORATION_LIVE_CODEX`、`WIO_CLAUDE_TEST_EXECUTABLE`、`WIO_GEMINI_V066_CLI` 分别指向对应可执行文件。测试只使用临时目录和本机服务。
-
-此代码变更不执行生产发布。发布时应先备份数据库、更新控制端，再升级测试 Agent，使用专用会话验证跨模型 worktree 委派、结果回传、授权自动续聊、旧 Agent 升级发现和重启恢复，随后逐步开放。关闭授权即可停止新的协作调用，普通会话不受影响。
+通用构建、数据库与浏览器测试命令见 [README](../README.md#开发与验证)。真实 CLI 集成测试需显式配置：`WIO_COLLABORATION_LIVE_CODEX`、`WIO_CLAUDE_TEST_EXECUTABLE`、`WIO_GEMINI_V066_CLI` 分别指向对应可执行文件。测试使用临时目录和本机模拟服务，不等同于真实上游调用或生产部署验收。
