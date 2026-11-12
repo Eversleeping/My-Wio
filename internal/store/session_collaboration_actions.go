@@ -35,7 +35,7 @@ func (s *Store) createCollaborationSessionTx(ctx context.Context, tx *sqlx.Tx, r
 	case "codex":
 		result, err = tx.ExecContext(ctx, s.Q("INSERT INTO codex_threads(id,workspace_id,title,created_at,updated_at) SELECT ?,w.id,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL"), ref.ID, title, now, now, workspaceID)
 	case "claude":
-		result, err = tx.ExecContext(ctx, s.Q("INSERT INTO claude_threads(id,workspace_id,title,model,permission_mode,created_at,updated_at) SELECT ?,w.id,?,?,?,?,? FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL"), ref.ID, title, model, mode, now, now, workspaceID)
+		result, err = tx.ExecContext(ctx, s.Q(`INSERT INTO claude_threads(id,workspace_id,title,model,permission_mode,created_at,updated_at,model_credential_revision) SELECT ?,w.id,?,?,?,?,?,`+claudeModelRevision+` FROM workspaces w JOIN servers s ON s.id=w.server_id LEFT JOIN server_claude_credential_profiles ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), ref.ID, title, model, mode, now, now, workspaceID)
 	case "gemini":
 		result, err = tx.ExecContext(ctx, s.Q(`INSERT INTO gemini_threads(id,workspace_id,title,model,approval_mode,thinking_level,created_at,updated_at,model_credential_revision) SELECT ?,w.id,?,?,?,?,?,?,`+geminiCredentialRevision+` FROM workspaces w JOIN servers s ON s.id=w.server_id LEFT JOIN server_gemini_credential_profiles gcp ON gcp.server_id=s.id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), ref.ID, title, model, mode, effort, now, now, workspaceID)
 	default:

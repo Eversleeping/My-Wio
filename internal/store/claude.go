@@ -12,6 +12,8 @@ import (
 )
 
 type ClaudeThread struct {
+	ModelCredentialRevision string `db:"model_credential_revision" json:"model_credential_revision"`
+
 	QuestionsSupported bool       `db:"-" json:"questions_supported"`
 	RewriteSupported   bool       `db:"-" json:"rewrite_supported"`
 	SteerSupported     bool       `db:"-" json:"steer_supported"`
@@ -160,7 +162,7 @@ func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread Clau
 	if len(title) > 60 {
 		title = title[:60]
 	}
-	result, err := tx.ExecContext(ctx, s.Q(`UPDATE claude_threads SET status='queued',operation_id=?,model=?,permission_mode=?,updated_at=?,title=CASE WHEN title='Claude' THEN ? ELSE title END
+	result, err := tx.ExecContext(ctx, s.Q(`UPDATE claude_threads SET model_credential_revision=`+claudeWorkspaceModelRevision+`,status='queued',operation_id=?,model=?,permission_mode=?,updated_at=?,title=CASE WHEN title='Claude' THEN ? ELSE title END
  WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, model, mode, now, string(title), thread.ID)
 	if err != nil {
 		return protocol.StreamEvent{}, err

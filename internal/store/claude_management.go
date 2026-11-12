@@ -108,7 +108,7 @@ func (s *Store) commitClaudeFork(ctx context.Context, tx *sqlx.Tx, c protocol.Cl
 		return nil
 	}
 	now := time.Now().UTC()
-	r, err := tx.ExecContext(ctx, s.Q(`INSERT INTO claude_threads(id,workspace_id,title,model,permission_mode,created_at,updated_at) SELECT ?,?,?,model,permission_mode,?,? FROM claude_threads WHERE id=? AND session_id=?`), c.TargetThreadID, c.WorkspaceID, c.Title, now, now, c.SourceThreadID, c.SessionID)
+	r, err := tx.ExecContext(ctx, s.Q(`INSERT INTO claude_threads(id,workspace_id,title,model,permission_mode,created_at,updated_at,model_credential_revision) SELECT ?,?,?,model,permission_mode,?,?,model_credential_revision FROM claude_threads WHERE id=? AND session_id=?`), c.TargetThreadID, c.WorkspaceID, c.Title, now, now, c.SourceThreadID, c.SessionID)
 	if err != nil {
 		return err
 	}

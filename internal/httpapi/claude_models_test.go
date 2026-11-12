@@ -98,7 +98,11 @@ func TestWorkspaceClaudeModelsUsesAppliedCredentials(t *testing.T) {
 	}
 	apply := func() {
 		t.Helper()
-		op, err := db.QueueClaudeCredentialUpdate(ctx, server.ID, profile.ID, "v1:synthetic-operation", profile.Model)
+		payload, err := a.vault.Encrypt(protocol.ConfigureClaudeCredentialsCommand{Endpoint: profile.Endpoint, APIKey: "synthetic-claude-key", Model: profile.Model})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := db.QueueClaudeCredentialUpdate(ctx, server.ID, profile.ID, payload, profile.Model)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -115,8 +119,28 @@ func TestWorkspaceClaudeModelsUsesAppliedCredentials(t *testing.T) {
 	if _, err := db.SaveCredentialProfile(ctx, profile, encrypted); err != nil {
 		t.Fatal(err)
 	}
+	if result = request(); result.Code != 200 || !strings.Contains(result.Body.String(), `"default_model":"custom-model"`) || !strings.Contains(result.Body.String(), `"credential_revision":`) {
+		t.Fatal("model-only edit required reapplying credentials", result.Code, result.Body.String())
+	}
+	// An endpoint or key edit still requires a successful credential apply.
+	originalEndpoint := profile.Endpoint
+	profile.Endpoint += "/changed"
+	if _, err := db.SaveCredentialProfile(ctx, profile, ""); err != nil {
+		t.Fatal(err)
+	}
 	if result = request(); result.Code != 409 || !strings.Contains(result.Body.String(), "reapply") {
-		t.Fatal("unapplied preset was used", result.Code, result.Body.String())
+		t.Fatal("unapplied endpoint was used", result.Code, result.Body.String())
+	}
+	profile.Endpoint = originalEndpoint
+	rotatedKey, _ := a.vault.Encrypt("synthetic-rotated-key")
+	if _, err := db.SaveCredentialProfile(ctx, profile, rotatedKey); err != nil {
+		t.Fatal(err)
+	}
+	if result = request(); result.Code != 409 || strings.Contains(result.Body.String(), "synthetic") {
+		t.Fatal("unapplied key was used", result.Code, result.Body.String())
+	}
+	if _, err := db.SaveCredentialProfile(ctx, profile, encrypted); err != nil {
+		t.Fatal(err)
 	}
 	apply()
 	if result = request(); result.Code != 200 {

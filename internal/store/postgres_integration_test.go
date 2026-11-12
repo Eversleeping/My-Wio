@@ -113,6 +113,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertMessageForkCopiesOnlySelectedHistory(t, scans)
 	assertGeminiCredentialBindingsAndReplay(t, scans)
 	assertClaudeCredentialBindingsAndReplay(t, scans)
+	assertClaudeModelConfigRevision(t, scans)
 	assertClaudeEffortStorage(t, scans)
 	assertClaudeManagementStorage(t, scans)
 	assertClaudeSteerStorage(t, scans)

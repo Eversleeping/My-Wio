@@ -36,3 +36,20 @@ test("ignores a late response after switching workspaces and reports refresh fai
   expect(result.current.models).toEqual([]);
   expect(result.current.error).toContain("Upstream unavailable");
 });
+
+test("clears a closed dialog's default and waits for fresh configuration on reopening", async () => {
+  let complete: (response: Response) => void = () => {};
+  const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({configured:true, default_model:"old-model", models:[]})))
+    .mockImplementationOnce(() => new Promise<Response>(resolve => { complete = resolve; }));
+  vi.stubGlobal("fetch", fetcher);
+  const {result, rerender} = renderHook(({workspace}) => useClaudeModels(workspace, "create"), {initialProps:{workspace:"workspace-1"}});
+  await waitFor(() => expect(result.current.data?.default_model).toBe("old-model"));
+  rerender({workspace:""});
+  rerender({workspace:"workspace-1"});
+  expect(result.current.loading).toBe(true);
+  expect(result.current.data).toBeNull();
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+  await act(async () => { complete(new Response(JSON.stringify({configured:true, default_model:"new-model", credential_revision:"new-config", models:[]}))); });
+  expect(result.current.data?.default_model).toBe("new-model");
+  expect(result.current.data?.credential_revision).toBe("new-config");
+});

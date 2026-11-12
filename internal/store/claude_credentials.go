@@ -14,6 +14,7 @@ var ErrClaudeCredentialsBusy = errors.New("finish active Claude turns, installat
 // ClaudeModelConfig identifies the successfully applied credential snapshot.
 // It contains binding metadata only, never a key or key hash.
 type ClaudeModelConfig struct {
+	Revision        string    `db:"revision"`
 	ProfileID       string    `db:"profile_id"`
 	ProfileRevision string    `db:"profile_revision"`
 	AppliedAt       time.Time `db:"updated_at"`
@@ -21,8 +22,19 @@ type ClaudeModelConfig struct {
 
 func (s *Store) ClaudeModelConfiguration(ctx context.Context, serverID string) (ClaudeModelConfig, error) {
 	var config ClaudeModelConfig
-	err := s.DB.GetContext(ctx, &config, s.Q(`SELECT COALESCE(profile_id,'') AS profile_id,profile_revision,updated_at FROM server_claude_credential_profiles WHERE server_id=?`), serverID)
+	err := s.DB.GetContext(ctx, &config, s.Q(`SELECT `+claudeModelRevision+` AS revision,COALESCE(ccp.profile_id,'') AS profile_id,ccp.profile_revision,ccp.updated_at FROM server_claude_credential_profiles ccp LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE ccp.server_id=?`), serverID)
 	return config, err
+}
+
+// Recover the encrypted command for the successfully applied revision, never
+// an unapplied or failed update. This lets model discovery distinguish a model
+// edit from a change to the endpoint or key, including edits made before upgrade.
+func (s *Store) AppliedClaudeCredentialPayload(ctx context.Context, serverID string, config ClaudeModelConfig) (string, error) {
+	var payload string
+	err := s.DB.GetContext(ctx, &payload, s.Q(`SELECT o.payload FROM server_claude_credential_updates u JOIN agent_operations o ON o.id=u.operation_id
+ WHERE u.server_id=? AND u.profile_id=? AND u.profile_revision=? AND o.status='succeeded' AND o.completed_at<=?
+ ORDER BY o.completed_at DESC LIMIT 1`), serverID, config.ProfileID, config.ProfileRevision, config.AppliedAt)
+	return payload, err
 }
 
 func (s *Store) QueueClaudeCredentialUpdate(ctx context.Context, serverID, profileID, ciphertext, model string, profileUpdatedAt ...time.Time) (string, error) {

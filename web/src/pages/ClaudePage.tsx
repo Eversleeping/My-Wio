@@ -44,7 +44,9 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const [archived, setArchived] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [workspaceID, setWorkspaceID] = useState("");
-  const [model, setModel] = useState("sonnet");
+  const [model, updateModel] = useState("sonnet");
+  const modelSelected = useRef(false);
+  const setModel = (value: string) => { modelSelected.current = true; updateModel(value); };
   const [effort, setEffort] = useState("");
   const [mode, setMode] = useState("default");
   const [busy, setBusy] = useState(false);
@@ -54,6 +56,9 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const [deleting, setDeleting] = useState<ClaudeThread | null>(null);
   const [mobile, setMobile] = useState("sessions");
   const newModels = useClaudeModels(createOpen ? workspaceID : "", "create");
+  useEffect(() => {
+    if (!modelSelected.current && newModels.data?.default_model) updateModel(newModels.data.default_model);
+  }, [newModels.data]);
   const dependency = `${realtime}:${tick}`;
   const threads = useData<ClaudeThread[]>(`/claude/threads?archived=${archived}`, dependency);
   const selected = useData<ClaudeThread>(selectedThreadID ? `/claude/threads/${selectedThreadID}` : null, dependency);
@@ -70,7 +75,7 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   useEffect(() => { if (selectedThreadID) setMobile("conversation"); }, [selectedThreadID]);
 
   const create = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault(); if (newModels.loading) return; setBusy(true); setError("");
     try {
       const created = await post<ClaudeThread>("/claude/threads", { workspace_id: workspaceID, model: model.trim(), permission_mode: mode, effort });
       setArchived(false); setCreateOpen(false); onSelectThread(created.id); refresh();
@@ -87,7 +92,7 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
     catch (err) { notify(message(err)); } finally { setBusy(false); }
   };
   const modelForWorkspace = (id: string) => { const workspace = workspaces.data?.find(item => item.id === id); return servers.data?.find(item => item.id === workspace?.server_id)?.claude_profile_model || "sonnet"; };
-  const newSession = (id = thread?.workspace_id ?? "") => { const previous = threads.data?.find(item => item.workspace_id === id); setWorkspaceID(id); setModel(modelForWorkspace(id)); setEffort(previous?.effort ?? ""); setMode(previous?.permission_mode ?? "default"); setError(""); setCreateOpen(true); };
+  const newSession = (id = thread?.workspace_id ?? "") => { const previous = threads.data?.find(item => item.workspace_id === id); setWorkspaceID(id); updateModel(modelForWorkspace(id)); modelSelected.current = false; setEffort(previous?.effort ?? ""); setMode(previous?.permission_mode ?? "default"); setError(""); setCreateOpen(true); };
 
   const groups = useMemo(() => groupClaudeThreads(threads.data ?? [], workspaces.data ?? [], search), [search, threads.data, workspaces.data]);
   const management = useClaudeManagement({ workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify });
@@ -137,10 +142,10 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
     </> : selectedThreadID && selected.error ? <ErrorState error={selected.error} reload={selected.reload} /> : <div className="gemini-welcome"><Bot size={40} /><h2>Claude</h2><p>{t("claude.intro")}</p><button className="primary-button" onClick={() => newSession()}><Plus size={17} />{t("claude.newSession")}</button></div>}</div>
     <Dialog open={createOpen} title={t("claude.newSession")} onClose={() => { if (!busy) setCreateOpen(false); }}><form onSubmit={create}>
       {workspaces.error && <ErrorState error={workspaces.error} reload={workspaces.reload} />}
-      <Field label={t("gemini.workspace")}><select required value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); setModel(modelForWorkspace(event.target.value)); setEffort(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{(workspaces.data ?? []).filter(item => item.status === "ready").map(item => <option key={item.id} value={item.id}>{item.project_name} · {item.server_name} · {item.path}</option>)}</select></Field>
+      <Field label={t("gemini.workspace")}><select required value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); updateModel(modelForWorkspace(event.target.value)); modelSelected.current = false; setEffort(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{(workspaces.data ?? []).filter(item => item.status === "ready").map(item => <option key={item.id} value={item.id}>{item.project_name} · {item.server_name} · {item.path}</option>)}</select></Field>
       <ClaudeOptions availableModels={newModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} setModel={setModel} setMode={setMode} disabled={busy} effortSupported={Boolean(servers.data?.find(item => item.id === workspaces.data?.find(workspace => workspace.id === workspaceID)?.server_id)?.claude_effort_supported)} />
       <p className="gemini-hint">{t("claude.permissionsHelp")}</p>{error && <ErrorBanner text={error} />}
-      <DialogActions><button className="primary-button" disabled={busy || !workspaceID || !model.trim()}>{t("claude.newSession")}</button></DialogActions>
+      <DialogActions><button className="primary-button" disabled={busy || newModels.loading || !workspaceID || !model.trim()}>{t("claude.newSession")}</button></DialogActions>
     </form></Dialog>
     <Dialog open={Boolean(renaming)} title={t("gemini.rename")} onClose={() => { if (!busy) setRenaming(null); }}><form onSubmit={event => { event.preventDefault(); if (renaming) void change(renaming, { title: title.trim() }); }}><Field label={t("gemini.title")}><input required maxLength={180} value={title} onChange={event => setTitle(event.target.value)} /></Field><DialogActions><button className="primary-button" disabled={busy || !title.trim()}>{t("common.save")}</button></DialogActions></form></Dialog>
     {management.dialogs}
@@ -163,7 +168,10 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
   const availableModels = useClaudeModels(thread.workspace_id, thread.id);
   const skillDiscovery = useClaudeSkills(thread.workspace_id, thread.id, Boolean(thread.skills_supported) && thread.server_status === "online");
   const [requestCustomModel, setRequestCustomModel] = useState(0);
-  const [prompt, setPrompt] = useState(""); const [model, setModel] = useState(thread.model); const [mode, setMode] = useState(thread.permission_mode); const [effort, setEffort] = useState(thread.effort ?? "");
+  const [prompt, setPrompt] = useState(""); const [model, updateModel] = useState(thread.model); const [mode, setMode] = useState(thread.permission_mode); const [effort, setEffort] = useState(thread.effort ?? "");
+  const modelSelected = useRef(false);
+  const handledModelRevision = useRef("");
+  const setModel = useCallback((value: string) => { modelSelected.current = true; updateModel(value); }, []);
   const [editingEventID, setEditingEventID] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [confirming, setConfirming] = useState(false);
   const [allEvents, setAllEvents] = useState<StreamEvent[]>([]); const [historyBusy, setHistoryBusy] = useState(false);
@@ -213,6 +221,13 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
   const steerState = [...allEvents].reverse().find(event => ["claude.steer.ready", "claude.steer.closed"].includes(event.kind) && (event.payload as {operation_id?:string}).operation_id === thread.operation_id);
   const steerReady = thread.status === "running" && Boolean(thread.steer_supported) && (steerState ? steerState.kind === "claude.steer.ready" : Boolean(thread.steer_ready));
   const blocked = (running && (!steerReady || Boolean(editingEventID))) || thread.recovery_pending || Boolean(thread.archived_at) || thread.server_status !== "online";
+  useEffect(() => {
+    const data = availableModels.data;
+    const revision = data?.credential_revision;
+    if (running || blocked || busy || !revision || !data.default_model || handledModelRevision.current === revision) return;
+    handledModelRevision.current = revision;
+    if (!modelSelected.current && thread.model_credential_revision !== revision) updateModel(data.default_model);
+  }, [availableModels.data, running, blocked, busy, thread.model_credential_revision]);
   const steeringRequest = useRef<{operation:string;prompt:string;images:string;id:string}>();
   const [images,setImages]=useState<{id:string;dataURL:string}[]>([]);
   const [imageBusy,setImageBusy]=useState(false);
@@ -268,7 +283,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
   const items = useMemo(() => claudeDisplayEvents(allEvents, t("claude.denied")), [allEvents, t]);
   useEffect(() => { if (follow.current && stream.current) stream.current.scrollTop = stream.current.scrollHeight; }, [items]);
   const send = async (event: FormEvent) => {
-    event.preventDefault(); if (blocked || busy || imageBusy || slashOpen || (!prompt.trim() && !images.length)) return;
+    event.preventDefault(); if (blocked || busy || (!running && availableModels.loading) || imageBusy || slashOpen || (!prompt.trim() && !images.length)) return;
     const option=!editingEventID && !running && /^\/(model|effort|permissions)\s+(\S+)\s*$/.exec(prompt);
     if(option){const [,command,value]=option;if(command==="model")setModel(value);else if(command==="effort" && ["default","low","medium","high","xhigh","max"].includes(value) && (value==="default" || thread.effort_supported))setEffort(value==="default"?"":value);else if(command==="permissions" && modes.includes(value))setMode(value);else {setError(t("claude.invalidCommandOption"));return;}setPrompt("");setError("");return;}
     setBusy(true); setError("");
@@ -315,7 +330,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
       {imageBusy && <p className="gemini-hint" role="status">{t("gemini.preparingImages")}</p>}
       {slashOpen && <SlashCommandMenu status={slashSection === "skills" ? skillsStatus : undefined} items={slashItems} query={slashSection ? "" : prompt === "/skills" ? "skill" : prompt.slice(1)} label={t("codex.slashMenu")} backLabel={t("codex.slashBackToCommands")} onBack={slashSection?()=>{setSlashSection("");setPrompt("/");}:undefined} onDismiss={()=>{setSlashDismissed(prompt);setSlashSection("");}} keyboardRef={slashKeyboardRef}/>}
       {availableModels.error && <small className="gemini-model-error" role="status">{t("claude.modelsRefreshFailed")} {availableModels.error}</small>}
-      <div className="composer-input"><ComposerImagePicker disabled={busy || blocked || imageBusy || images.length >= 4} onSelect={addImages} /><textarea ref={promptRef} onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.type.startsWith("image/")).map(item=>item.getAsFile()).filter((file):file is File=>file!==null);if(files.length){event.preventDefault();void addImages(files);}}} aria-label={t("claude.prompt")} placeholder={t("claude.prompt")} value={prompt} disabled={busy || blocked} onChange={event => {setPrompt(event.target.value);if(steeringRequest.current && event.target.value!==steeringRequest.current.prompt)steeringRequest.current=undefined;setSlashDismissed("");if(!event.target.value.startsWith("/"))setSlashSection("");}} onKeyDown={event => { if(slashOpen && slashKeyboardRef.current?.(event))return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /></div><div className="composer-bar"><ClaudeOptions compact requestCustom={requestCustomModel} availableModels={availableModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} effortSupported={thread.effort_supported} setModel={setModel} setMode={setMode} disabled={busy || blocked || running} />{showInterrupt ? <button type="button" className="secondary-button danger composer-action" aria-label={t("gemini.interrupt")} disabled={busy || thread.status === "interrupting" || thread.server_status !== "online"} onClick={() => void interrupt()}><Square size={15} /><span>{t("gemini.interrupt")}</span></button> : <button className="primary-button composer-action" aria-label={t(running ? "codex.steer" : "codex.send")} disabled={busy || blocked || imageBusy || slashOpen || (!prompt.trim() && !images.length) || !model.trim()}><ArrowUp size={16} /><span>{t(running ? "codex.steer" : "codex.send")}</span></button>}</div></>}</form>
+      <div className="composer-input"><ComposerImagePicker disabled={busy || blocked || imageBusy || images.length >= 4} onSelect={addImages} /><textarea ref={promptRef} onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.type.startsWith("image/")).map(item=>item.getAsFile()).filter((file):file is File=>file!==null);if(files.length){event.preventDefault();void addImages(files);}}} aria-label={t("claude.prompt")} placeholder={t("claude.prompt")} value={prompt} disabled={busy || blocked} onChange={event => {setPrompt(event.target.value);if(steeringRequest.current && event.target.value!==steeringRequest.current.prompt)steeringRequest.current=undefined;setSlashDismissed("");if(!event.target.value.startsWith("/"))setSlashSection("");}} onKeyDown={event => { if(slashOpen && slashKeyboardRef.current?.(event))return; if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /></div><div className="composer-bar"><ClaudeOptions compact requestCustom={requestCustomModel} availableModels={availableModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} effortSupported={thread.effort_supported} setModel={setModel} setMode={setMode} disabled={busy || blocked || running} />{showInterrupt ? <button type="button" className="secondary-button danger composer-action" aria-label={t("gemini.interrupt")} disabled={busy || thread.status === "interrupting" || thread.server_status !== "online"} onClick={() => void interrupt()}><Square size={15} /><span>{t("gemini.interrupt")}</span></button> : <button className="primary-button composer-action" aria-label={t(running ? "codex.steer" : "codex.send")} disabled={busy || blocked || (!running && availableModels.loading) || imageBusy || slashOpen || (!prompt.trim() && !images.length) || !model.trim()}><ArrowUp size={16} /><span>{t(running ? "codex.steer" : "codex.send")}</span></button>}</div></>}</form>
     <CollaborationTaskDialog open={collabOpen} engine="claude" sessionID={thread.id} workspaceID={thread.workspace_id} currentModel={model} onClose={()=>setCollabOpen(false)} onSubmit={text=>{setCollabOpen(false);submitPrompt(text);}} />
     <Dialog open={helpOpen} title={t("claude.commandsHelp")} onClose={()=>setHelpOpen(false)}><p>{t("claude.commandsDescription")}</p><p><a href="https://code.claude.com/docs/en/headless" target="_blank" rel="noreferrer">Claude Code</a></p></Dialog>
     <ConfirmDialog open={confirming} danger title={t("claude.confirmStopped")} impact={t("claude.confirmStoppedImpact")} confirmLabel={t("claude.confirmStopped")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setConfirming(false)} onConfirm={confirmStopped} />

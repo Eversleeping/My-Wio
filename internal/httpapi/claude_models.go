@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 type claudeModel struct {
@@ -51,8 +52,12 @@ func (a *API) workspaceClaudeModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if (config.ProfileRevision != "" && config.ProfileRevision != profile.UpdatedAt.UTC().Format(time.RFC3339Nano)) || (config.ProfileRevision == "" && profile.UpdatedAt.After(config.AppliedAt)) {
-		writeError(w, 409, "Claude API profile has changed; reapply the server credentials before refreshing models")
-		return
+		payload, err := a.store.AppliedClaudeCredentialPayload(r.Context(), workspace.ServerID, config)
+		var applied protocol.ConfigureClaudeCredentialsCommand
+		if err != nil || a.vault.Decrypt(payload, &applied) != nil || applied.Endpoint != profile.Endpoint || applied.APIKey != key {
+			writeError(w, 409, "Claude API profile has changed; reapply the server credentials before refreshing models")
+			return
+		}
 	}
 	models, err := fetchClaudeModels(r.Context(), profile.Endpoint, key)
 	if err != nil {
@@ -75,7 +80,7 @@ func (a *API) workspaceClaudeModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "Claude API configuration changed; reopen the session to retry")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"models": models, "configured": true})
+	writeJSON(w, 200, map[string]any{"models": models, "configured": true, "credential_revision": config.Revision, "default_model": profile.Model})
 }
 
 // Uses Anthropic's Models API, including its cursor pagination. No model turn

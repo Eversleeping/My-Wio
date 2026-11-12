@@ -9,9 +9,9 @@ vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
 const baseThread = { questions_supported: true, input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
 
-function setup(options: { selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; steerSupported?:boolean; steerReady?:boolean; steerFailures?:number; rewriteSupported?:boolean; rewriteFailures?:number; events?: unknown[] } = {}) {
+function setup(options: { defaultModel?: string; modelCredentialRevision?: string; credentialRevision?: string; modelResponseGate?: Promise<void>; modelsError?: boolean; selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; steerSupported?:boolean; steerReady?:boolean; steerFailures?:number; rewriteSupported?:boolean; rewriteFailures?:number; events?: unknown[] } = {}) {
   window.localStorage.setItem("wio_language", "en");
-  const thread = { ...baseThread, rewrite_supported: options.rewriteSupported ?? true, steer_supported: options.steerSupported ?? false, steer_ready:options.steerReady ?? false, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
+  const thread = { ...baseThread, model_credential_revision: options.modelCredentialRevision, rewrite_supported: options.rewriteSupported ?? true, steer_supported: options.steerSupported ?? false, steer_ready:options.steerReady ?? false, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
   const requests: Array<{ url: string; body: unknown }> = [];
   let steerFailures=options.steerFailures??0;
   let rewriteFailures=options.rewriteFailures??0;
@@ -22,7 +22,11 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
     if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/rewrite") && rewriteFailures-->0)return new Response(JSON.stringify({error:"Rewrite temporarily failed"}),{status:503}); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url.endsWith("/answer") ? {operation_id:"answer-op"} : url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
     else if (url.startsWith("/api/operations/")) body={status:"succeeded"};
     else if (url === "/api/sessions/claude/claude-1/collaboration") body = { supported: true, grant: { enabled: true, worktree: false, target_modes: {} }, links: [], requests: [] };
-    else if (url === "/api/workspaces/workspace-1/claude/models") body = { configured: true, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
+    else if (url === "/api/workspaces/workspace-1/claude/models") {
+      if (options.modelResponseGate) await options.modelResponseGate;
+      if (options.modelsError) return new Response(JSON.stringify({error:"Upstream unavailable"}), {status:502});
+      body = { configured: true, credential_revision: options.credentialRevision, default_model: options.defaultModel, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
+    }
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
     else if (url === "/api/workspaces") body = [{ id: "workspace-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
     else if (url.startsWith("/api/claude/threads?") && options.selected) body = [thread];
@@ -42,6 +46,58 @@ function setup(options: { selected?: boolean; recovery?: boolean; status?: strin
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
+
+test("adopts a changed API default on session entry and sends it without resetting effort", async () => {
+  const {user, requests} = setup({selected:true, credentialRevision:"new-config", modelCredentialRevision:"old-config", defaultModel:"claude-new-default"});
+  await waitFor(() => expect(screen.getByLabelText("Claude model or alias")).toHaveValue("claude-new-default"));
+  expect(screen.getByLabelText("Reasoning effort")).toHaveValue("high");
+  await user.type(screen.getByRole("textbox", {name:"Ask Claude to work on this project…"}), "Continue");
+  await user.click(screen.getByRole("button", {name:"Send"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns", body:expect.objectContaining({model:"claude-new-default", effort:"high"})}));
+});
+
+test("keeps the saved model when its configuration is unchanged", async () => {
+  setup({selected:true, credentialRevision:"same-config", modelCredentialRevision:"same-config", defaultModel:"claude-default"});
+  await screen.findByRole("option", {name:"Custom upstream model · custom-upstream-model"});
+  expect(screen.getByLabelText("Claude model or alias")).toHaveValue("sonnet");
+});
+
+test("defers a new default until the active turn finishes", async () => {
+  const {thread, refresh} = setup({selected:true, status:"running", credentialRevision:"new-config", modelCredentialRevision:"old-config", defaultModel:"claude-new-default"});
+  await screen.findByRole("option", {name:"Custom upstream model · custom-upstream-model"});
+  expect(screen.getByLabelText("Claude model or alias")).toHaveValue("sonnet");
+  thread.status = "idle";
+  refresh();
+  await waitFor(() => expect(screen.getByLabelText("Claude model or alias")).toHaveValue("claude-new-default"));
+});
+
+test("waits for discovery before sending and preserves a manual selection made while loading", async () => {
+  let complete: () => void = () => {};
+  const gate = new Promise<void>(resolve => { complete = resolve; });
+  const {user} = setup({selected:true, credentialRevision:"new-config", modelCredentialRevision:"old-config", defaultModel:"claude-new-default", modelResponseGate:gate});
+  const input = await screen.findByRole("textbox", {name:"Ask Claude to work on this project…"});
+  await user.type(input, "Continue");
+  expect(screen.getByRole("button", {name:"Send"})).toBeDisabled();
+  await user.selectOptions(screen.getByLabelText("Claude model or alias"), "opus");
+  complete();
+  await waitFor(() => expect(screen.getByRole("button", {name:"Send"})).toBeEnabled());
+  expect(screen.getByLabelText("Claude model or alias")).toHaveValue("opus");
+});
+
+test("keeps the current model after discovery fails", async () => {
+  setup({selected:true, credentialRevision:"new-config", modelCredentialRevision:"old-config", defaultModel:"claude-new-default", modelsError:true});
+  await screen.findByText(/Upstream unavailable/);
+  expect(screen.getByLabelText("Claude model or alias")).toHaveValue("sonnet");
+});
+
+test("uses the latest discovered default when creating a session", async () => {
+  const {user, requests} = setup({appliedModel:"old-default", defaultModel:"claude-new-default", credentialRevision:"new-config"});
+  await user.click((await screen.findAllByRole("button", {name:"New Claude session"}))[0]);
+  await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
+  await waitFor(() => expect(within(screen.getByRole("dialog")).getByLabelText("Claude model or alias")).toHaveValue("claude-new-default"));
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", {name:"New Claude session"}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/claude/threads", body:expect.objectContaining({model:"claude-new-default"})}));
+});
 
 test("shows token totals and average output below the Claude session title", async () => {
   setup({selected:true});
