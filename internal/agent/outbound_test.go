@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -66,6 +67,26 @@ func TestLimitOperationResultKeepsReceiptSmall(t *testing.T) {
 	limited := limitOperationResult(protocol.OperationResult{OperationID: "big", Status: "succeeded", Data: oversizedData()})
 	if limited.Status != "failed" || limited.OperationID != "big" || !strings.Contains(limited.Message, "result too large") {
 		t.Fatalf("oversized result was not limited: %#v", limited)
+	}
+}
+
+func TestLargestWorkspaceImageFitsAgentStream(t *testing.T) {
+	data, err := json.Marshal(protocol.WorkspaceFilePreviewResult{Path: "screen.png", Content: base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxWorkspaceImageBytes)), MIMEType: "image/png", Encoding: "base64", Size: protocol.MaxWorkspaceImageBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := limitOperationResult(protocol.OperationResult{OperationID: "image", Status: "succeeded", Data: data})
+	if result.Status != "succeeded" {
+		t.Fatalf("maximum image does not fit the stream: %s", result.Message)
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := outboundTestClient(1)
+	wire, err := protocol.Codec().Marshal(client.newEnvelope("operation_result", raw))
+	if err != nil || len(wire) >= maxAgentMessageBytes {
+		t.Fatalf("encoded image exceeds gRPC limit: %d %v", len(wire), err)
 	}
 }
 

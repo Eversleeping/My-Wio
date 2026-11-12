@@ -467,11 +467,14 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			err = scanner.WriteWorkspaceFile(ctx, command, c.inventoryRoots())
 		}
-	} else if envelope.Kind == "workspace.file.preview" {
+	} else if envelope.Kind == "workspace.file.preview" || envelope.Kind == "workspace.image.preview" {
 		var command protocol.WorkspaceFilePreviewCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.WorkspaceFilePreviewResult
 			result, err = scanner.ReadWorkspaceFile(ctx, command.Root, command.Path, c.inventoryRoots(), 1024*1024)
+			if err == nil && envelope.Kind == "workspace.image.preview" && result.Encoding != "base64" {
+				err = errors.New("image preview only supports JPEG, PNG, GIF and WebP files")
+			}
 			if err == nil {
 				resultData, err = json.Marshal(result)
 			}

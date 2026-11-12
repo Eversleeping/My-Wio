@@ -96,11 +96,16 @@ type WorkspaceFilePreviewCommand struct {
 type WorkspaceFilePreviewResult struct {
 	Path      string `json:"path"`
 	Content   string `json:"content"`
+	MIMEType  string `json:"mime_type,omitempty"`
+	Encoding  string `json:"encoding,omitempty"`
 	Size      int64  `json:"size"`
 	Truncated bool   `json:"truncated"`
 }
 
 const MaxWorkspaceFileBytes = 1024 * 1024
+
+// Base64-encoded images must fit the 8 MB Agent stream message limit.
+const MaxWorkspaceImageBytes = 4 * 1024 * 1024
 
 type WorkspaceFileWriteCommand struct {
 	WorkspaceID  string `json:"workspace_id"`

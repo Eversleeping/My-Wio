@@ -847,7 +847,13 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			return err
 		}
 	}
-	payload, err := json.Marshal(result)
+	// Image bytes are fetched through the authenticated preview APIs. Broadcasting
+	// them to every connected console duplicates multi-megabyte payloads.
+	eventResult := result
+	if operation.Kind == "workspace.image.preview" || operation.Kind == "workspace.file.preview" {
+		eventResult.Data = nil
+	}
+	payload, err := json.Marshal(eventResult)
 	if err != nil {
 		return err
 	}

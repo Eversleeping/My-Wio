@@ -172,6 +172,8 @@ CREATE TABLE IF NOT EXISTS workspace_file_previews (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   path TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL DEFAULT '',
+  mime_type TEXT NOT NULL DEFAULT '',
+  encoding TEXT NOT NULL DEFAULT '',
   size BIGINT NOT NULL DEFAULT 0,
   truncated INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'idle',

@@ -1,5 +1,6 @@
 import type { StreamEvent } from "./types";
 import type { Question } from "./components/UserInputPrompt";
+import { extractImageSources, imageContentText } from "./imageContent";
 
 export type GeminiMessage = { id: string; role: "user" | "assistant" | "tool" | "error" | "status" | "question" | "steer"; steerStatus?: "queued" | "applied" | "missed" | "failed"; text: string; time: string; title?: string; toolName?: string; toolInput?: string; toolOutput?: string; toolStatus?: string; stats?: Record<string, unknown>; images?: { data_url: string }[]; operationID?: string; questions?: Question[]; answers?: Record<string, string> };
 
@@ -29,6 +30,8 @@ function readable(value: unknown): string { return typeof value === "string" ? v
 
 // ACP wraps display text in content blocks; legacy JSONL emits strings/objects.
 function toolText(value: unknown): string {
+  const text = imageContentText(value);
+  if (text !== undefined) return text;
   if (Array.isArray(value) && value.every(block => record(block).type === "content" && record(record(block).content).type === "text")) {
     return value.map(block => readable(record(record(block).content).text)).join("\n");
   }
@@ -160,6 +163,7 @@ export function geminiMessages(events: StreamEvent[]): GeminiMessage[] {
         tool.toolStatus ??= readable(p.status) || "running";
       } else {
         tool.toolOutput = toolText(p.output ?? p.error);
+        tool.images = extractImageSources(p.output).map(data_url => ({ data_url }));
         tool.toolStatus = readable(p.status || (p.error ? "failed" : "completed"));
       }
       tool.text = tool.toolOutput ?? tool.toolInput ?? "";

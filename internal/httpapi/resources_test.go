@@ -299,6 +299,74 @@ func TestWorkspaceFilePreviewQueuesAgentReadAndReturnsContent(t *testing.T) {
 	if err != nil || current.Status != "loading" || current.Content != "" {
 		t.Fatalf("stale preview overwrote current selection: %#v %v", current, err)
 	}
+	image := protocol.WorkspaceFilePreviewResult{Path: "src/new.ts", Content: "AAAA", MIMEType: "image/png", Encoding: "base64", Size: 3}
+	if err := database.SaveWorkspaceFilePreview(ctx, workspace.ID, image.Path, image); err != nil {
+		t.Fatal(err)
+	}
+	imageResponse := workspaceResourceRequest(t, http.MethodGet, "/api/workspaces/"+workspace.ID+"/file-preview?path=src/new.ts", workspace.ID, nil, api.workspaceFilePreview)
+	var imageBody struct {
+		Content, Hash, Encoding string
+		MIMEType                string `json:"mime_type"`
+	}
+	if err := json.Unmarshal(imageResponse.Body.Bytes(), &imageBody); err != nil {
+		t.Fatal(err)
+	}
+	if imageBody.Content != image.Content || imageBody.MIMEType != image.MIMEType || imageBody.Encoding != "base64" || imageBody.Hash != "" {
+		t.Fatalf("image preview lost metadata or was made editable: %s", imageResponse.Body.String())
+	}
+	// Conversation image reads must not replace this selected file, even when
+	// several screenshots load at the same time.
+	for _, path := range []string{"screen-one.png", "screen-two.png"} {
+		response := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/image-preview", workspace.ID, map[string]string{"path": path}, api.requestWorkspaceImagePreview)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("image request failed: %s", response.Body.String())
+		}
+		var queued struct {
+			OperationID string `json:"operation_id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &queued); err != nil {
+			t.Fatal(err)
+		}
+		operation, err := database.Operation(ctx, queued.OperationID)
+		if err != nil || operation.Kind != "workspace.image.preview" || operation.WorkspaceID != workspace.ID {
+			t.Fatalf("unexpected image operation: %#v %v", operation, err)
+		}
+		image.Path = path
+		data, err := json.Marshal(image)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: operation.ID, Status: "succeeded", Data: data}); err != nil {
+			t.Fatal(err)
+		}
+		route := chi.NewRouteContext()
+		route.URLParams.Add("operationID", operation.ID)
+		status := directJSONRequest(t, http.MethodGet, "/api/operations/"+operation.ID, nil, nil, func(w http.ResponseWriter, r *http.Request) {
+			api.operationStatus(w, r.WithContext(context.WithValue(ctx, chi.RouteCtxKey, route)))
+		})
+		var result map[string]string
+		if err := json.Unmarshal(status.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result["result_data"] != string(data) {
+			t.Fatalf("image operation did not expose its result: %s", status.Body.String())
+		}
+	}
+	current, err = database.WorkspaceFilePreview(ctx, workspace.ID, "src/new.ts")
+	if err != nil || current.Content != "AAAA" || current.Encoding != "base64" {
+		t.Fatalf("conversation image replaced file preview: %#v %v", current, err)
+	}
+	invalidImage := workspaceResourceRequest(t, http.MethodPost, "/api/workspaces/"+workspace.ID+"/image-preview", workspace.ID, map[string]string{"path": "../secret.png"}, api.requestWorkspaceImagePreview)
+	if invalidImage.Code != http.StatusBadRequest {
+		t.Fatalf("image traversal accepted: %d", invalidImage.Code)
+	}
+	if err := database.BeginWorkspaceFilePreview(ctx, workspace.ID, "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := database.WorkspaceFilePreview(ctx, workspace.ID, "README.md")
+	if err != nil || cleared.Encoding != "" || cleared.MIMEType != "" {
+		t.Fatalf("image metadata leaked into next preview: %#v %v", cleared, err)
+	}
 }
 
 func TestWorkspaceChangesAndDiffPreviewQueueAgentReads(t *testing.T) {

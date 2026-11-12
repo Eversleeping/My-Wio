@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { FileDiffPane, FilePreviewPane } from "./App";
@@ -61,4 +61,30 @@ test("offers formatted Markdown from its diff view", async () => {
   render(<I18nProvider><FileDiffPane workspaceID="workspace" selection={{ path: "README.md", mode: "diff" }} realtime={0} writable={false} notify={vi.fn()} onOpenFile={open} onClose={vi.fn()} /></I18nProvider>);
   await userEvent.click(await screen.findByRole("button", { name: "Preview Markdown" }));
   expect(open).toHaveBeenCalledWith({ path: "README.md", mode: "file" });
+});
+
+test.each(["jpeg", "png", "gif", "webp"])("previews %s images with original size controls and disables text editing", async format => {
+  vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => new Response(JSON.stringify(init?.method === "POST" ? { operation_id: "image" } : {
+    path: "asset.bin", content: "AAAA", encoding: "base64", mime_type: `image/${format}`, hash: "a".repeat(64), size: 3, truncated: false, status: "succeeded", error: ""
+  }))));
+  render(<I18nProvider><FilePreviewPane workspaceID="workspace" selection={{ path: "asset.bin" }} realtime={0} writable onClose={vi.fn()} /></I18nProvider>);
+  const image = await screen.findByRole("img", { name: "asset.bin" });
+  expect(image).toHaveAttribute("src", `data:image/${format};base64,AAAA`);
+  expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
+  expect(document.querySelector(".file-code")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Original size" }));
+  expect(image.parentElement).toHaveClass("original");
+  await userEvent.click(screen.getByRole("button", { name: "Fit to view" }));
+  expect(image.parentElement).toHaveClass("fit");
+  fireEvent.error(image);
+  expect(screen.getByRole("alert")).toHaveTextContent("Could not display this image");
+});
+
+test("explains oversized image failures without rendering partial bytes", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => new Response(JSON.stringify(init?.method === "POST" ? { operation_id: "image" } : {
+    path: "large.png", content: "", status: "failed", error: "image preview exceeds the 4 MB limit"
+  }))));
+  render(<I18nProvider><FilePreviewPane workspaceID="workspace" selection={{ path: "large.png" }} realtime={0} onClose={vi.fn()} /></I18nProvider>);
+  expect(await screen.findByText("This image exceeds the 4 MB preview limit.")).toBeInTheDocument();
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
 });

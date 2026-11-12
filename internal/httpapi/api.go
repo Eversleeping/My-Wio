@@ -210,6 +210,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 			private.Post("/workspaces/{workspaceID}/files/refresh", api.refreshWorkspaceFiles)
 			private.Get("/workspaces/{workspaceID}/file-preview", api.workspaceFilePreview)
 			private.Post("/workspaces/{workspaceID}/file-preview", api.requestWorkspaceFilePreview)
+			private.Post("/workspaces/{workspaceID}/image-preview", api.requestWorkspaceImagePreview)
 			private.Get("/workspaces/{workspaceID}/changes", api.workspaceChanges)
 			private.Post("/workspaces/{workspaceID}/changes/refresh", api.refreshWorkspaceChanges)
 			private.Get("/workspaces/{workspaceID}/diff-preview", api.workspaceDiffPreview)

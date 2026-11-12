@@ -1410,13 +1410,23 @@ func (a *API) workspaceFilePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := ""
-	if preview.Status == "succeeded" && preview.Truncated == 0 {
+	if preview.Status == "succeeded" && preview.Truncated == 0 && preview.Encoding == "" {
 		hash = workspaceContentHash(preview.Content)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": preview.WorkspaceID, "path": preview.Path, "content": preview.Content, "hash": hash, "size": preview.Size, "truncated": preview.Truncated != 0, "status": preview.Status, "error": preview.Error, "requested_at": preview.RequestedAt, "updated_at": preview.UpdatedAt})
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_id": preview.WorkspaceID, "path": preview.Path, "content": preview.Content, "mime_type": preview.MIMEType, "encoding": preview.Encoding, "hash": hash, "size": preview.Size, "truncated": preview.Truncated != 0, "status": preview.Status, "error": preview.Error, "requested_at": preview.RequestedAt, "updated_at": preview.UpdatedAt})
 }
 
 func (a *API) requestWorkspaceFilePreview(w http.ResponseWriter, r *http.Request) {
+	a.requestWorkspacePreview(w, r, false)
+}
+
+// Conversation images use operation-scoped results so multiple thumbnails can
+// load without replacing the file panel's current workspace snapshot.
+func (a *API) requestWorkspaceImagePreview(w http.ResponseWriter, r *http.Request) {
+	a.requestWorkspacePreview(w, r, true)
+}
+
+func (a *API) requestWorkspacePreview(w http.ResponseWriter, r *http.Request, imageOnly bool) {
 	workspaceID := chi.URLParam(r, "workspaceID")
 	workspace, err := a.store.Workspace(r.Context(), workspaceID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1447,20 +1457,27 @@ func (a *API) requestWorkspaceFilePreview(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	if err := a.store.BeginWorkspaceFilePreview(r.Context(), workspace.ID, path); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not start workspace file preview")
-		return
+	kind := "workspace.file.preview"
+	if imageOnly {
+		kind = "workspace.image.preview"
+	} else {
+		if err := a.store.BeginWorkspaceFilePreview(r.Context(), workspace.ID, path); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not start workspace file preview")
+			return
+		}
 	}
 	command := protocol.WorkspaceFilePreviewCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.file.preview", command, "workspace-file-preview:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, kind, command, kind+":"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
-		_ = a.store.FailWorkspaceFilePreview(r.Context(), workspace.ID, path, "could not queue workspace file preview")
+		if !imageOnly {
+			_ = a.store.FailWorkspaceFilePreview(r.Context(), workspace.ID, path, "could not queue workspace file preview")
+		}
 		writeError(w, http.StatusInternalServerError, "could not queue workspace file preview")
 		return
 	}
 	a.gateway.Wake(workspace.ServerID)
 	session := currentSession(r)
-	_ = a.store.Audit(r.Context(), session.UserID, "workspace.file.preview", "workspace", workspace.ID, map[string]string{"operation_id": operationID, "path": path}, clientIP(r))
+	_ = a.store.Audit(r.Context(), session.UserID, kind, "workspace", workspace.ID, map[string]string{"operation_id": operationID, "path": path}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "path": path})
 }
 

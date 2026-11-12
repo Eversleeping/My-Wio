@@ -3,10 +3,12 @@ package scanner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -194,7 +196,29 @@ func ReadWorkspaceFile(ctx context.Context, root, relative string, allowedRoots 
 		return protocol.WorkspaceFilePreviewResult{}, err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	// Sniff the contents before applying the text limit. Images need all their
+	// bytes and have a separate limit; truncating them produces broken previews.
+	header := make([]byte, 512)
+	n, err := io.ReadFull(file, header)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return protocol.WorkspaceFilePreviewResult{}, err
+	}
+	mimeType := http.DetectContentType(header[:n])
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+		if info.Size() > protocol.MaxWorkspaceImageBytes {
+			return protocol.WorkspaceFilePreviewResult{}, errors.New("image preview exceeds the 4 MB limit")
+		}
+		data, err := io.ReadAll(io.LimitReader(io.MultiReader(bytes.NewReader(header[:n]), file), protocol.MaxWorkspaceImageBytes+1))
+		if err != nil {
+			return protocol.WorkspaceFilePreviewResult{}, err
+		}
+		if len(data) > protocol.MaxWorkspaceImageBytes {
+			return protocol.WorkspaceFilePreviewResult{}, errors.New("image preview exceeds the 4 MB limit")
+		}
+		return protocol.WorkspaceFilePreviewResult{Path: filepath.ToSlash(clean), Content: base64.StdEncoding.EncodeToString(data), MIMEType: mimeType, Encoding: "base64", Size: int64(len(data))}, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(io.MultiReader(bytes.NewReader(header[:n]), file), limit+1))
 	if err != nil {
 		return protocol.WorkspaceFilePreviewResult{}, err
 	}

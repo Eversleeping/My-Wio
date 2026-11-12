@@ -34,6 +34,7 @@ var AgentRestartSafeKinds = []string{
 	"inventory.scan",
 	"workspace.files",
 	"workspace.file.preview",
+	"workspace.image.preview",
 	"workspace.changes",
 	"workspace.diff.preview",
 	"git.workspace.inspect",

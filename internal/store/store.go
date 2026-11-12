@@ -137,6 +137,10 @@ func OpenWithOptions(databaseURL string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateWorkspaceFilePreviewMedia(ctx, db, driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateProjectWorkspaceOperations(ctx, db, driver); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1546,6 +1550,8 @@ type WorkspaceFilePreview struct {
 	WorkspaceID string     `db:"workspace_id" json:"workspace_id"`
 	Path        string     `db:"path" json:"path"`
 	Content     string     `db:"content" json:"content"`
+	MIMEType    string     `db:"mime_type" json:"mime_type"`
+	Encoding    string     `db:"encoding" json:"encoding"`
 	Size        int64      `db:"size" json:"size"`
 	Truncated   int        `db:"truncated" json:"truncated"`
 	Status      string     `db:"status" json:"status"`
@@ -1556,13 +1562,13 @@ type WorkspaceFilePreview struct {
 
 func (s *Store) WorkspaceFilePreview(ctx context.Context, workspaceID, path string) (WorkspaceFilePreview, error) {
 	var preview WorkspaceFilePreview
-	err := s.DB.GetContext(ctx, &preview, s.Q("SELECT workspace_id,path,content,size,truncated,status,error,requested_at,updated_at FROM workspace_file_previews WHERE workspace_id=? AND path=?"), workspaceID, path)
+	err := s.DB.GetContext(ctx, &preview, s.Q("SELECT workspace_id,path,content,mime_type,encoding,size,truncated,status,error,requested_at,updated_at FROM workspace_file_previews WHERE workspace_id=? AND path=?"), workspaceID, path)
 	return preview, err
 }
 
 func (s *Store) BeginWorkspaceFilePreview(ctx context.Context, workspaceID, path string) error {
 	now := time.Now().UTC()
-	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_file_previews(workspace_id,path,content,size,truncated,status,error,requested_at) VALUES(?,?,'',0,0,'loading','',?) ON CONFLICT(workspace_id) DO UPDATE SET path=excluded.path,content='',size=0,truncated=0,status='loading',error='',requested_at=excluded.requested_at,updated_at=NULL`), workspaceID, path, now)
+	_, err := s.DB.ExecContext(ctx, s.Q(`INSERT INTO workspace_file_previews(workspace_id,path,content,size,truncated,status,error,requested_at) VALUES(?,?,'',0,0,'loading','',?) ON CONFLICT(workspace_id) DO UPDATE SET path=excluded.path,content='',mime_type='',encoding='',size=0,truncated=0,status='loading',error='',requested_at=excluded.requested_at,updated_at=NULL`), workspaceID, path, now)
 	return err
 }
 
@@ -1571,12 +1577,12 @@ func (s *Store) SaveWorkspaceFilePreview(ctx context.Context, workspaceID, path 
 	if result.Truncated {
 		truncated = 1
 	}
-	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_file_previews SET content=?,size=?,truncated=?,status='succeeded',error='',updated_at=? WHERE workspace_id=? AND path=?"), result.Content, result.Size, truncated, time.Now().UTC(), workspaceID, path)
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_file_previews SET content=?,mime_type=?,encoding=?,size=?,truncated=?,status='succeeded',error='',updated_at=? WHERE workspace_id=? AND path=?"), result.Content, result.MIMEType, result.Encoding, result.Size, truncated, time.Now().UTC(), workspaceID, path)
 	return err
 }
 
 func (s *Store) FailWorkspaceFilePreview(ctx context.Context, workspaceID, path, message string) error {
-	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_file_previews SET content='',size=0,truncated=0,status='failed',error=?,updated_at=? WHERE workspace_id=? AND path=?"), message, time.Now().UTC(), workspaceID, path)
+	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE workspace_file_previews SET content='',mime_type='',encoding='',size=0,truncated=0,status='failed',error=?,updated_at=? WHERE workspace_id=? AND path=?"), message, time.Now().UTC(), workspaceID, path)
 	return err
 }
 

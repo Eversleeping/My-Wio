@@ -1092,6 +1092,15 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .file-preview-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; }
 .file-language, .file-size { padding: 3px 6px; color: #94a3b8; background: #131926; border: 1px solid var(--line); border-radius: 4px; font-size: 9px; white-space: nowrap; }
 .file-preview-body { min-width: 0; min-height: 0; position: relative; overflow: auto; }
+.image-preview-panel .file-preview-body { display: flex; flex-direction: column; overflow: hidden; }
+.image-viewer { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.image-viewer-toolbar { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.image-viewer-toolbar small { color: var(--muted); font-size: 11px; }
+.image-viewer-viewport { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
+.image-viewer-viewport.fit { display: flex; align-items: center; justify-content: center; }
+.image-viewer-viewport img { display: block; width: auto; height: auto; }
+.image-viewer-viewport.fit img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.image-viewer-viewport.original img { max-width: none; max-height: none; }
 .file-preview-panel.editing .file-preview-body { display: flex; flex-direction: column; overflow: hidden; }
 .workspace-file-editor { flex: 1; min-height: 220px; width: 100%; resize: none; border: 0; border-radius: 0; padding: 14px; font-family: Consolas, monospace; font-size: 12px; line-height: 1.6; tab-size: 2; white-space: pre; overflow: auto; background: #090c12; color: #e6edf3; }
 .workspace-add-file { display: grid; gap: 14px; }
@@ -1189,6 +1198,11 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .markdown-content a.unavailable-link { color: #64748b; cursor: not-allowed; text-decoration-style: dotted; }
 .markdown-image { width: min(100%, 560px); display: block; margin: 10px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #0c1018; text-decoration: none !important; }
 .markdown-image img { width: 100%; max-height: 460px; display: block; object-fit: contain; }
+.message-image { display: block; min-width: 0; max-width: 100%; padding: 0; overflow: hidden; border: 0; background: transparent; cursor: zoom-in; }
+.markdown-image .message-image { width: 100%; }
+.workspace-image { display: block; min-width: 0; }
+.workspace-image-loading, .workspace-image-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 72px; padding: 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.workspace-image-error { color: #fb7185; }
 .markdown-content hr { margin: 14px 0; border: 0; border-top: 1px solid var(--line); }
 .markdown-content input[type="checkbox"] { width: auto; min-height: auto; margin-right: 5px; }
 .message-image-count { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; color: #38bdf8; font-size: 11px; }
@@ -1205,13 +1219,11 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .remote-image-link small { color: var(--muted); }
 .remote-image-link svg { flex: 0 0 auto; }
 .message-images .remote-image-link { margin: 0; }
-.dialog.image-preview-dialog { width: fit-content; max-width: calc(100vw - 40px); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; overflow: hidden; background: #090c12; border-color: #232e42; }
+.dialog.image-preview-dialog { width: min(1100px, calc(100vw - 40px)); height: min(820px, calc(100dvh - 40px)); max-width: calc(100vw - 40px); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; overflow: hidden; background: #090c12; border-color: #232e42; }
 .image-preview-dialog > .dialog-heading { flex: 0 0 auto; color: #e6edf3; background: #090c12; border-bottom-color: #1e2638; }
 .image-preview-dialog > .dialog-heading h2 { font-size: 12px; font-weight: 500; }
 .image-preview-dialog > .dialog-heading .icon-button { color: #e6edf3; }
 .image-preview-dialog > .dialog-heading .icon-button:hover { background: #161d2d; }
-.image-preview-dialog > .dialog-heading + .image-preview-body { min-width: 0; min-height: 0; display: flex; justify-content: center; padding: 12px; }
-.image-preview-body > img { display: block; width: auto; height: auto; max-width: calc(100vw - 66px); max-height: calc(100dvh - 118px); object-fit: contain; }
 .message-actions { display: flex; align-items: center; gap: 3px; margin-top: 8px; }
 .message-menu .context-menu-button { width: 28px; height: 28px; flex-basis: 28px; border-radius: 6px; color: #8b949e; }
 .message-action { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; color: #8b949e; background: transparent; border: 0; border-radius: 4px; }

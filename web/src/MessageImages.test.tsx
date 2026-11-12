@@ -1,11 +1,12 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { MessageImages } from "./components/MessageImages";
 import MarkdownContent from "./MarkdownContent";
 import { I18nProvider } from "./i18n";
+import { WorkspaceImageContext } from "./components/WorkspaceImage";
 
-afterEach(() => { window.localStorage.clear(); document.body.style.overflow = ""; });
+afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); document.body.style.overflow = ""; });
 
 test("opens images outside the clipped conversation and restores focus and scrolling", async () => {
   window.localStorage.setItem("wio_language", "en");
@@ -71,4 +72,41 @@ test("renders remote markdown images as placeholders and keeps embedded images i
   expect(link).toHaveAttribute("rel", "noopener noreferrer");
   expect(Array.from(container.querySelectorAll("img"), image => image.getAttribute("src"))).toEqual(["data:image/png;base64,AAAA"]);
   expect(container.innerHTML).not.toContain("<img src=\"https://attacker.example");
+});
+
+test("opens embedded Markdown screenshots in a dialog", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const user = userEvent.setup();
+  const view = render(<I18nProvider><MarkdownContent text="![Screenshot](data:image/png;base64,AAAA)" workspaceRoot="/repo" /></I18nProvider>);
+  await user.click(screen.getByRole("button", { name: "Screenshot" }));
+  const dialog = screen.getByRole("dialog", { name: "Screenshot" });
+  expect(within(dialog).getByRole("img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
+  view.rerender(<I18nProvider><MarkdownContent text="![Screenshot](data:image/png;base64,AAAA)" workspaceRoot="/repo" onOpenFile={vi.fn()} /></I18nProvider>);
+  expect(screen.getByRole("dialog", { name: "Screenshot" })).toBe(dialog);
+  await user.click(within(dialog).getByRole("button", { name: "Original size" }));
+  expect(within(dialog).getByRole("img").parentElement).toHaveClass("original");
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("loads multiple local Markdown images without changing the file panel snapshot", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const reads: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/workspaces/workspace/image-preview" && init?.method === "POST") {
+      const path = JSON.parse(String(init.body)).path as string;
+      reads.push(path);
+      return new Response(JSON.stringify({ operation_id: path }));
+    }
+    if (url.startsWith("/api/operations/")) return new Response(JSON.stringify({ status: "succeeded", result_data: JSON.stringify({ path: decodeURIComponent(url.slice("/api/operations/".length)), content: "AAAA", mime_type: "image/png", encoding: "base64" }) }));
+    throw new Error(`Unexpected image request: ${url}`);
+  }));
+  render(<I18nProvider><WorkspaceImageContext.Provider value={{ workspaceID: "workspace", workspaceRoot: "/repo" }}><MarkdownContent text="![First](../screens/first.png) ![Second](/repo/screens/second.png) ![Blocked](../../outside.png)" workspaceRoot="/repo" filePath="docs/guide.md" /></WorkspaceImageContext.Provider></I18nProvider>);
+  expect(await screen.findByRole("img", { name: "First" })).toHaveAttribute("src", "data:image/png;base64,AAAA");
+  expect(await screen.findByRole("img", { name: "Second" })).toBeInTheDocument();
+  await waitFor(() => expect(reads.sort()).toEqual(["screens/first.png", "screens/second.png"]));
+  expect(screen.queryByRole("img", { name: "Blocked" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Second" }));
+  expect(screen.getByRole("dialog", { name: "Second" })).toBeInTheDocument();
 });

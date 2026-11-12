@@ -116,5 +116,9 @@ func (a *API) operationStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load operation")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"id": operation.ID, "status": operation.Status, "result": operation.Result})
+	response := map[string]string{"id": operation.ID, "status": operation.Status, "result": operation.Result}
+	if operation.Kind == "workspace.image.preview" && operation.Status == "succeeded" {
+		response["result_data"] = operation.ResultData
+	}
+	writeJSON(w, http.StatusOK, response)
 }

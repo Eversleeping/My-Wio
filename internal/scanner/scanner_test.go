@@ -1,9 +1,15 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"image"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -476,6 +482,85 @@ func TestReadWorkspaceFileEnforcesWorkspaceAndTextLimits(t *testing.T) {
 		if _, err := ReadWorkspaceFile(context.Background(), root, "outside-link.txt", []string{base}, 1024); err == nil {
 			t.Fatal("symlink outside the workspace was accepted")
 		}
+	}
+}
+
+func TestReadWorkspaceFilePreviewsImagesByContent(t *testing.T) {
+	bitmap := image.NewRGBA(image.Rect(0, 0, 2, 3))
+	fixtures := map[string]struct {
+		mime string
+		data []byte
+	}{}
+	for _, format := range []string{"jpeg", "png", "gif"} {
+		var buffer bytes.Buffer
+		var err error
+		switch format {
+		case "jpeg":
+			err = jpeg.Encode(&buffer, bitmap, nil)
+		case "png":
+			err = png.Encode(&buffer, bitmap)
+		case "gif":
+			err = gif.Encode(&buffer, bitmap, nil)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixtures[format] = struct {
+			mime string
+			data []byte
+		}{"image/" + format, buffer.Bytes()}
+	}
+	webp, err := base64.StdEncoding.DecodeString("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures["webp"] = struct {
+		mime string
+		data []byte
+	}{"image/webp", webp}
+	root := t.TempDir()
+	for format, fixture := range fixtures {
+		t.Run(format, func(t *testing.T) {
+			// A misleading extension cannot turn binary data into editable text.
+			path := format + ".txt"
+			if err := os.WriteFile(filepath.Join(root, path), fixture.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := ReadWorkspaceFile(context.Background(), root, path, []string{root}, 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := base64.StdEncoding.DecodeString(result.Content)
+			if err != nil || !bytes.Equal(decoded, fixture.data) || result.MIMEType != fixture.mime || result.Encoding != "base64" || result.Truncated || result.Size != int64(len(fixture.data)) {
+				t.Fatalf("image bytes or metadata changed: %#v %v", result, err)
+			}
+		})
+	}
+	// Images above the text limit still load in full, through the image limit.
+	for _, size := range []int{protocol.MaxWorkspaceFileBytes + 1, protocol.MaxWorkspaceImageBytes, protocol.MaxWorkspaceImageBytes + 1} {
+		data := make([]byte, size)
+		copy(data, fixtures["png"].data)
+		if err := os.WriteFile(filepath.Join(root, "large.png"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := ReadWorkspaceFile(context.Background(), root, "large.png", []string{root}, 0)
+		if size > protocol.MaxWorkspaceImageBytes {
+			if err == nil || !strings.Contains(err.Error(), "4 MB limit") {
+				t.Fatalf("oversized image was not rejected: %v", err)
+			}
+		} else if err != nil || result.Size != int64(size) || result.Truncated {
+			t.Fatalf("valid image size was truncated or rejected: %d %v", size, err)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(outside, fixtures["png"].data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape.png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadWorkspaceFile(context.Background(), root, "escape.png", []string{root}, 0); err == nil {
+		t.Fatal("image symlink escaped the workspace")
 	}
 }
 

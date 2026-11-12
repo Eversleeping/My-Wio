@@ -102,7 +102,9 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
 import { VirtualizedItems, VirtualizedList } from "./components/VirtualizedList";
 import { clearCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
-import { remoteImageURL, safeImageSource, type FilePreviewSelection } from "./codexContent";
+import { type FilePreviewSelection } from "./codexContent";
+import { extractImageSources, previewImageSource } from "./imageContent";
+import { ImageViewer } from "./components/ImageViewer";
 import { formatDate, formatTime, relative, shortSHA } from "./format";
 import { currentLocale, useI18n } from "./i18n";
 import { compressImage } from "./imageCompression";
@@ -1612,16 +1614,18 @@ function EditableFilePreviewPane({ workspaceID, selection, realtime, writable = 
   useEffect(() => { setShowSource(Boolean(selection.line)); }, [selection.line]);
   const data = preview.data;
   const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
-  const error = preview.error || data?.error || "";
+  const rawError = preview.error || data?.error || "";
+  const error = rawError === "image preview exceeds the 4 MB limit" ? t("codex.imagePreviewTooLarge") : rawError;
   const showData = data?.status === "succeeded";
   const updatedText = data?.updated_at ? t("codex.previewUpdated", { time: formatDate(data.updated_at) }) : "";
   const language = previewLanguage(selection.path);
   const fileName = selection.path.split("/").pop() || selection.path;
-  return <><section className={`file-preview-panel ${edit.editing ? "editing" : ""}`}>
-    <header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="file-language">{language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}{language.id === "markdown" && !edit.editing && <button type="button" className={`icon-button ${showSource ? "active" : ""}`} aria-pressed={showSource} title={t(showSource ? "codex.viewMarkdown" : "codex.viewSource")} aria-label={t(showSource ? "codex.viewMarkdown" : "codex.viewSource")} onClick={() => setShowSource(value => !value)}>{showSource ? <Eye size={15} /> : <Code2 size={15} />}</button>}<button type="button" className={`icon-button ${edit.editing ? "active" : ""}`} aria-pressed={edit.editing} disabled={edit.saving || (!edit.editing && (!writable || !showData || data.truncated || !data.hash || preview.loading))} title={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} aria-label={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} onClick={edit.editing ? edit.finish : edit.begin}><Pencil size={15} /></button><button type="button" className="icon-button" disabled={preview.requesting || edit.editing} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} disabled={edit.saving} onClick={edit.close}><X size={16} /></button></div></header>
+  const image = Boolean(data?.encoding);
+  return <><section className={`file-preview-panel ${edit.editing ? "editing" : ""} ${image ? "image-preview-panel" : ""}`}>
+    <header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="file-language">{image ? data.mime_type?.replace("image/", "").toUpperCase() : language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}{!image && language.id === "markdown" && !edit.editing && <button type="button" className={`icon-button ${showSource ? "active" : ""}`} aria-pressed={showSource} title={t(showSource ? "codex.viewMarkdown" : "codex.viewSource")} aria-label={t(showSource ? "codex.viewMarkdown" : "codex.viewSource")} onClick={() => setShowSource(value => !value)}>{showSource ? <Eye size={15} /> : <Code2 size={15} />}</button>}<button type="button" className={`icon-button ${edit.editing ? "active" : ""}`} aria-pressed={edit.editing} disabled={edit.saving || (!edit.editing && (!writable || !showData || image || data.truncated || !data.hash || preview.loading))} title={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} aria-label={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} onClick={edit.editing ? edit.finish : edit.begin}><Pencil size={15} /></button><button type="button" className="icon-button" disabled={preview.requesting || edit.editing} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} disabled={edit.saving} onClick={edit.close}><X size={16} /></button></div></header>
     <div className="file-preview-body">
       {showData && (error || preview.loading) && <PreviewStatusNote messageText={error ? t("codex.previewStale", { error }) : t("codex.previewRefreshing")} updatedText={updatedText} loading={preview.loading} retry={preview.retry} retryLabel={t("common.retry")} />}
-      {edit.editing ? edit.editor : error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}>{language.id === "markdown" && !showSource ? <div className="file-markdown"><MarkdownContentRenderer text={data.content} workspaceRoot={workspaceRoot} filePath={selection.path} onOpenFile={onOpenFile} /></div> : <HighlightedFile content={data.content} language={language.id} targetLine={selection.line} />}</Suspense></> : null}
+      {edit.editing ? edit.editor : error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : showData && image ? <ImageViewer src={previewImageSource(data)} alt={fileName} /> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}>{language.id === "markdown" && !showSource ? <div className="file-markdown"><MarkdownContentRenderer text={data.content} workspaceRoot={workspaceRoot} filePath={selection.path} onOpenFile={onOpenFile} /></div> : <HighlightedFile content={data.content} language={language.id} targetLine={selection.line} />}</Suspense></> : null}
     </div>
   </section>{edit.dialog}</>;
 }
@@ -2095,49 +2099,6 @@ function isCommandEvent(event: StreamEvent) {
   return asRecord(payload?.item)?.type === "commandExecution";
 }
 function asRecord(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
-// Remote sources are kept so MessageImages can offer them as links; it never loads them inline.
-function messageImageSource(value: unknown) {
-  return safeImageSource(value) || remoteImageURL(value);
-}
-function extractImageSources(payload: unknown): string[] {
-  const sources: string[] = [];
-  const seenSources = new Set<string>();
-  const seenObjects = new Set<object>();
-  const visit = (value: unknown) => {
-    const directSource = messageImageSource(value);
-    if (directSource) {
-      if (!seenSources.has(directSource)) {
-        seenSources.add(directSource);
-        sources.push(directSource);
-      }
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    const record = asRecord(value);
-    if (!record || seenObjects.has(record)) return;
-    seenObjects.add(record);
-    const type = String(record.type ?? "").toLowerCase();
-    if (type === "image" || type === "input_image" || type === "output_image" || type === "image_url") {
-      for (const key of ["url", "data_url", "image_url", "data"]) {
-        const candidate = asRecord(record[key])?.url ?? record[key];
-        const source = messageImageSource(candidate);
-        if (source && !seenSources.has(source)) {
-          seenSources.add(source);
-          sources.push(source);
-        }
-      }
-    }
-    for (const [key, child] of Object.entries(record)) {
-      if (key === "text" || key === "delta" || key === "message" || key === "output" || key === "aggregatedOutput") continue;
-      if (typeof child === "object" && child !== null) visit(child);
-    }
-  };
-  visit(payload);
-  return sources.slice(0, 8);
-}
 function extractText(payload: unknown): string {
   if (typeof payload === "string") return payload;
   if (Array.isArray(payload)) return payload.map(extractText).filter(Boolean).join("\n");

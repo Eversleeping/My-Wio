@@ -1011,6 +1011,38 @@ func TestWorkspaceFilesOperationStoresAgentSnapshot(t *testing.T) {
 	if err != nil || preview.Status != "succeeded" || preview.Content != "# Preview\n" {
 		t.Fatalf("unexpected workspace preview: %#v %v", preview, err)
 	}
+	imageID, err := database.QueueOperation(ctx, server.ID, "workspace.image.preview", protocol.WorkspaceFilePreviewCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: "screenshot.png"}, "image-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageData, err := json.Marshal(protocol.WorkspaceFilePreviewResult{Path: "screenshot.png", Content: "AAAA", MIMEType: "image/png", Encoding: "base64", Size: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imagePayload, err := json.Marshal(protocol.OperationResult{OperationID: imageID, Status: "succeeded", Data: imageData})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.handle(ctx, server.ID, &protocol.AgentEnvelope{Kind: "operation_result", PayloadJSON: imagePayload}); err != nil {
+		t.Fatal(err)
+	}
+	imageOperation, err := database.Operation(ctx, imageID)
+	if err != nil || imageOperation.ResultData != string(imageData) {
+		t.Fatalf("image result not persisted: %#v %v", imageOperation, err)
+	}
+	preview, err = database.WorkspaceFilePreview(ctx, workspace.ID, "README.md")
+	if err != nil || preview.Content != "# Preview\n" {
+		t.Fatalf("image operation changed file snapshot: %#v %v", preview, err)
+	}
+	events, err := database.Events(ctx, server.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if strings.Contains(string(event.Payload), `"operation_id":"`+imageID+`"`) && strings.Contains(string(event.Payload), "AAAA") {
+			t.Fatal("image bytes were broadcast into the global event stream")
+		}
+	}
 	changesID, err := database.QueueOperation(ctx, server.ID, "workspace.changes", protocol.WorkspaceChangesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}, "changes-operation")
 	if err != nil {
 		t.Fatal(err)

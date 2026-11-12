@@ -38,7 +38,7 @@ export function useFileEditor(workspaceID: string, path: string, data: Workspace
   const inFlight = useRef(false);
   const update = (value: Draft | null) => { if (value) drafts.set(key, value); else drafts.delete(key); setDraft(value); };
   const begin = () => {
-    if (writable && data?.status === "succeeded" && !data.truncated && data.hash) update({ content: data.content, hash: data.hash, crlf: data.content.includes("\r\n") && !/(?<!\r)\n/.test(data.content) });
+    if (writable && data?.status === "succeeded" && !data.encoding && !data.truncated && data.hash) update({ content: data.content, hash: data.hash, crlf: data.content.includes("\r\n") && !/(?<!\r)\n/.test(data.content) });
   };
   const save = async () => {
     if (!draft || !writable || inFlight.current) return;

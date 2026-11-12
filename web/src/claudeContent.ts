@@ -1,8 +1,9 @@
 import { safeImageSource } from "./codexContent";
+import { extractImageSources, imageContentText } from "./imageContent";
 import type { Question, QuestionValue } from "./components/UserInputPrompt";
 import type { StreamEvent } from "./types";
 
-export type ClaudeToolItem = { id: string; name: string; operationID?: string; occurredAt?: string; status?: "running" | "completed" | "failed" | "interrupted" | "unknown"; input?: string; output?: string; failed?: boolean };
+export type ClaudeToolItem = { id: string; name: string; operationID?: string; occurredAt?: string; status?: "running" | "completed" | "failed" | "interrupted" | "unknown"; input?: string; output?: string; images?: string[]; failed?: boolean };
 export type ClaudeCompaction = { status: "running" | "completed" | "failed" | "interrupted" | "unknown"; trigger?: "auto" | "manual"; preTokens?: number; postTokens?: number };
 export type ClaudeDisplayItem = { id: string; occurredAt?: string; endEventID?: string; operationID?: string; compaction?: ClaudeCompaction; questions?: Question[]; answers?: Record<string, QuestionValue>; cancelled?: boolean; role: "user" | "assistant" | "toolGroup" | "notice" | "question" | "compaction"; text: string; images?: string[]; tools?: ClaudeToolItem[] };
 
@@ -59,7 +60,8 @@ export function claudeDisplayEvents(events: StreamEvent[], denied: string): Clau
         tool.name = typeof p.name === "string" ? p.name : "";
         tool.input = JSON.stringify(p.input ?? {}, null, 2);
       } else {
-        tool.output = typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "", null, 2);
+        tool.output = imageContentText(p.content) ?? JSON.stringify(p.content ?? "", null, 2);
+        tool.images = extractImageSources(p.content);
         tool.failed = p.is_error === true;
         tool.status = tool.failed ? "failed" : "completed";
         pendingTools.delete(tool);

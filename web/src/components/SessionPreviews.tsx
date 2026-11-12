@@ -4,6 +4,7 @@ import { FileDiffPane, FilePreviewPane } from "../App";
 import type { FilePreviewSelection } from "../codexContent";
 import { useI18n } from "../i18n";
 import { hasFileDraft } from "../workspaceFileEditing";
+import { WorkspaceImageContext } from "./WorkspaceImage";
 
 type PreviewTab = { key: string; selection: FilePreviewSelection; closeRequest: number };
 type PreviewState = { scope: string; tabs: PreviewTab[]; active: string | null };
@@ -52,10 +53,10 @@ export function SessionPreviewTabs({ previews }: { previews: Previews }) {
 }
 
 export function SessionPreviewPanels({ previews, workspaceID, workspaceRoot, writable, realtime, notify, onOpenFile, children }: { previews: Previews; workspaceID: string; workspaceRoot: string; writable: boolean; realtime: number; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; children: ReactNode }) {
-  return <div className="session-panes">
+  return <WorkspaceImageContext.Provider value={{ workspaceID, workspaceRoot }}><div className="session-panes">
     <div className="session-conversation" hidden={previews.active !== null}>{children}</div>
     {previews.tabs.map(tab => <div className="session-preview" hidden={previews.active !== tab.key} key={tab.key}>
       {tab.selection.mode === "diff" ? <FileDiffPane workspaceID={workspaceID} selection={tab.selection} realtime={realtime} enabled={previews.active === tab.key} writable={writable} notify={notify} onOpenFile={onOpenFile} onClose={() => previews.remove(tab.key)} /> : <FilePreviewPane workspaceID={workspaceID} workspaceRoot={workspaceRoot} selection={tab.selection} realtime={realtime} enabled={previews.active === tab.key} closeRequest={tab.closeRequest} writable={writable} onOpenFile={onOpenFile} onClose={() => previews.remove(tab.key)} />}
     </div>)}
-  </div>;
+  </div></WorkspaceImageContext.Provider>;
 }
