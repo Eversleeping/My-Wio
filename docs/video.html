@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="在线播放 Wio 产品演示：服务器管理、项目与 Git、Codex / Gemini / Claude 会话协作及运维。">
+  <title>Wio · 产品演示</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: #e6edf3; background: #090c10; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 75% 0, #102338, transparent 60%), #090c10; }
+    main { width: min(1120px, calc(100% - 32px)); margin: auto; padding: 32px 0; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 32px; }
+    a { color: #8eddf3; text-underline-offset: 3px; }
+    a:focus-visible { outline: 2px solid #8eddf3; outline-offset: 5px; }
+    .brand { display: flex; align-items: center; gap: 10px; color: #e6edf3; font-size: 20px; font-weight: 700; text-decoration: none; }
+    .mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #06b6d4, #2563eb); color: #090c10; font-size: 26px; font-weight: 800; }
+    header > a:last-child { font-size: 13px; }
+    h1 { font-size: clamp(24px, 4vw, 36px); letter-spacing: -.03em; margin: 0 0 10px; }
+    .description { color: #9baec2; font-size: 14px; line-height: 1.7; margin: 0 0 20px; }
+    video { display: block; width: 100%; aspect-ratio: 16 / 9; border: 1px solid #263347; border-radius: 12px; background: #070a10; box-shadow: 0 24px 70px #0005; }
+    .meta { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-top: 16px; color: #9baec2; }
+    #error { color: #fca5a5; font-size: 14px; line-height: 1.6; }
+    footer { margin-top: 28px; color: #8295aa; font-size: 12px; line-height: 1.8; }
+    @media (max-width: 480px) { main { padding-top: 20px; } header { margin-bottom: 26px; } .description, .meta { font-size: 12px; } video { border-radius: 8px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="brand" href="https://github.com/Eversleeping/My-Wio"><span class="mark" aria-hidden="true">W</span>Wio</a>
+      <a href="https://github.com/Eversleeping/My-Wio#readme">返回 README ↗</a>
+    </header>
+    <h1>一个控制台，三个 Agent，一支团队。</h1>
+    <p class="description">服务器管理、项目与 Git 工作区、AI 会话协作，以及日常运维。点击播放，看看真实的 Wio。</p>
+    <video id="film" controls playsinline preload="metadata" poster="assets/wio-product-film-poster.jpg" aria-label="Wio 产品演示视频">
+      <source src="assets/wio-product-film.mp4" type="video/mp4">
+      浏览器无法播放此视频。可使用下方链接下载 MP4 观看。
+    </video>
+    <p id="error" role="alert" hidden>视频暂时无法加载，请刷新页面，或使用下方链接下载观看。</p>
+    <div class="meta"><span>02:09 · 1920×1080 · 60 FPS</span><a href="assets/wio-product-film.mp4" download="wio-product-film.mp4">下载 MP4</a></div>
+    <footer>
+      画面来自真实产品，协作运行过程经过延时剪辑。<br>
+      Music: “Getting it Done” — Kevin MacLeod (<a href="https://incompetech.com/">incompetech.com</a>) · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> · 已剪辑、调整音量并淡出
+    </footer>
+  </main>
+  <script>
+    document.querySelector('#film').addEventListener('error', () => { document.querySelector('#error').hidden = false; });
+  </script>
+</body>
+</html>
