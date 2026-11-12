@@ -85,8 +85,10 @@ func TestUpdateAvailableRequiresANewerTarget(t *testing.T) {
 }
 
 func TestCurrentVersionUpdatesExistingSelfUpdatingAgents(t *testing.T) {
-	if !UpdateAvailable("0.2.43", Version) {
-		t.Fatalf("current version %s must be newer than deployed Agent 0.2.43", Version)
+	for _, deployed := range []string{"0.2.43", "0.3.11"} {
+		if !UpdateAvailable(deployed, Version) {
+			t.Fatalf("current version %s must be newer than deployed Agent %s", Version, deployed)
+		}
 	}
 }
 
