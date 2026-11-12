@@ -174,7 +174,9 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 				}
 				if state == "offline" {
 					database.UpdateGeminiThread(ctx, thread.ID, "unarchived", false)
-					database.DB.ExecContext(ctx, database.Q("UPDATE servers SET last_seen_at=? WHERE id=?"), time.Now().Add(-time.Hour), server.ID)
+					if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE servers SET last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-time.Hour), server.ID); err != nil {
+						t.Fatal(err)
+					}
 				}
 				database.DB.ExecContext(ctx, database.Q("UPDATE gemini_scheduled_tasks SET next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID)
 				(&Runner{store: database, gateway: gateway, log: slog.New(slog.NewTextHandler(io.Discard, nil))}).tick(ctx)
@@ -445,12 +447,10 @@ func TestTickSeparatesBusyWorkspacesFromQueueFailures(t *testing.T) {
 			}
 			task := scheduledTask(t, database, store.ScheduledTaskInput{AgentKind: kind, ThreadID: threadID}, time.Now().UTC().Add(-time.Minute))
 
-			// Another session's turn holds the workspace write lock.
-			other, err := database.CreateGeminiThread(ctx, workspace.ID, "test-model", "default")
+			// File writes remain exclusive while independent Agent sessions can
+			// now share the workspace.
+			writer, err := database.QueueResourceOperation(ctx, workspace.ServerID, "workspace.file.write", map[string]string{}, "scheduled-writer", store.OperationResource{WorkspaceID: workspace.ID}, true)
 			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := database.QueueGeminiTurn(ctx, other, "occupy the workspace", "test-model", "default"); err != nil {
 				t.Fatal(err)
 			}
 			runner.tick(ctx)
@@ -459,8 +459,7 @@ func TestTickSeparatesBusyWorkspacesFromQueueFailures(t *testing.T) {
 				t.Fatalf("busy workspace: %#v %v", skipped, err)
 			}
 
-			other, _ = database.GeminiThread(ctx, other.ID)
-			if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: other.OperationID, Status: "succeeded"}); err != nil {
+			if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: writer, Status: "succeeded"}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := database.DB.ExecContext(ctx, `CREATE TRIGGER database_fails BEFORE INSERT ON agent_operations WHEN NEW.kind='`+kind+`.turn.start' BEGIN SELECT RAISE(ABORT,'simulated database failure'); END`); err != nil {
