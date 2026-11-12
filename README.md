@@ -4,6 +4,14 @@ Wio 是面向小规模 Linux 服务器集群的个人自托管控制平台。通
 
 面向单管理员、1–20 台 Linux 服务器、约 200 个项目的使用场景。控制面可在 Linux、macOS、Windows 上开发运行；Agent 与部署执行端仅支持 Linux。Wio 不提供通用终端或完整 Web IDE，不面向多租户或 Kubernetes。
 
+## 产品演示
+
+[![Wio 产品演示视频](docs/assets/wio-product-film-poster.jpg)](docs/assets/wio-product-film.mp4?raw=true)
+
+点击封面[观看或下载演示视频](docs/assets/wio-product-film.mp4?raw=true)（2 分 9 秒，1080p / 60 FPS），了解服务器管理、项目与 Git 工作区、三种 AI 引擎、多 Agent 协作、运维与移动端界面。画面来自真实产品，协作运行过程经过延时剪辑。
+
+音乐：“Getting it Done” — Kevin MacLeod（[incompetech.com](https://incompetech.com/)），采用 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 授权；已剪辑、调整音量并做结尾淡出。
+
 ## 文档入口
 
 | 文档 | 内容 |
