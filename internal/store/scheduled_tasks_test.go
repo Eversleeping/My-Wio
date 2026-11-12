@@ -182,13 +182,13 @@ func TestQueueScheduledTurnsRecordTheRunInTheQueueTransaction(t *testing.T) {
 		t.Fatalf("scheduled run does not reference the session's operation: %#v", thread)
 	}
 
-	// The workspace write lock is reported as busy, not as a database error,
-	// and the losing task records nothing.
-	if _, err := database.QueueScheduledGeminiTurn(ctx, geminiTask.ID, gemini, "review", "test-model", "default", "", now); !errors.Is(err, ErrWorkspaceWriteActive) {
-		t.Fatalf("busy workspace error = %v", err)
+	// Independent scheduled sessions share the workspace and record their own runs.
+	geminiOperationID, err := database.QueueScheduledGeminiTurn(ctx, geminiTask.ID, gemini, "review", "test-model", "default", "", now)
+	if err != nil || geminiOperationID == "" {
+		t.Fatalf("parallel scheduled Gemini turn: %q %v", geminiOperationID, err)
 	}
-	if task, _ := database.ScheduledTask(ctx, geminiTask.ID); task.LastRunStatus != "" || task.LastOperationID != "" {
-		t.Fatalf("rejected turn recorded a run: %#v", task)
+	if task, _ := database.ScheduledTask(ctx, geminiTask.ID); task.LastRunStatus != "queued" || task.LastOperationID != geminiOperationID {
+		t.Fatalf("parallel run was not recorded: %#v", task)
 	}
 
 	// The Agent can answer as soon as the queue transaction commits; the
@@ -203,14 +203,13 @@ func TestQueueScheduledTurnsRecordTheRunInTheQueueTransaction(t *testing.T) {
 		t.Fatalf("fast result was not attributed to the task: %#v", task)
 	}
 
-	operationID, err = database.QueueScheduledGeminiTurn(ctx, geminiTask.ID, gemini, "review", "test-model", "default", "", now)
-	if err != nil || operationID == "" {
-		t.Fatalf("queue scheduled Gemini turn: %q %v", operationID, err)
+	if _, err := database.QueueScheduledGeminiTurn(ctx, geminiTask.ID, gemini, "duplicate", "test-model", "default", "", now); !errors.Is(err, ErrThreadActive) {
+		t.Fatalf("overlapping scheduled turn: %v", err)
 	}
-	if task, _ := database.ScheduledTask(ctx, geminiTask.ID); task.LastRunStatus != "queued" || task.LastOperationID != operationID {
+	if task, _ := database.ScheduledTask(ctx, geminiTask.ID); task.LastRunStatus != "queued" || task.LastOperationID != geminiOperationID {
 		t.Fatalf("Gemini run was not recorded with the turn: %#v", task)
 	}
-	if thread, _ := database.GeminiThread(ctx, gemini.ID); thread.OperationID != operationID {
+	if thread, _ := database.GeminiThread(ctx, gemini.ID); thread.OperationID != geminiOperationID {
 		t.Fatalf("scheduled run does not reference the session's operation: %#v", thread)
 	}
 }

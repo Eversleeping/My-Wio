@@ -162,6 +162,24 @@ func TestManagedProjectDeletionStagesWorktreesBeforePrimary(t *testing.T) {
 	if primaryOperation.Status != "waiting" || worktreeOperation.Status != "queued" {
 		t.Fatalf("unexpected staged operation states: primary=%s worktree=%s", primaryOperation.Status, worktreeOperation.Status)
 	}
+	for _, engine := range []string{"claude", "gemini"} {
+		session := newConcurrentTestSession(t, database, primaryID, engine)
+		if err := session.queue(ctx, "during staged deletion"); !errors.Is(err, ErrWorkspaceWriteActive) {
+			t.Fatalf("%s started while primary deletion was waiting: %v", engine, err)
+		}
+	}
+	// Simulate a turn accepted by a legacy controller before this upgrade.
+	legacyTurn := NewID()
+	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO agent_operations(id,server_id,workspace_id,kind,workspace_write,idempotency_key) VALUES(?,?,?,'gemini.turn.start',1,?)"), legacyTurn, server.ID, primaryID, legacyTurn); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(protocol.GitProjectDeleteResult{ProjectID: project.ID, WorkspaceID: worktreeID, Path: "/srv/staged-delete-feature", Removed: true})
+	if err := database.CompleteProjectDeletion(ctx, worktreeOperation, protocol.OperationResult{OperationID: worktreeOperation.ID, Status: "succeeded", Data: data}); !errors.Is(err, ErrWorkspaceWriteActive) {
+		t.Fatalf("deletion promoted over a live legacy turn: %v", err)
+	}
+	if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: legacyTurn, Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
 	completeDeletionOperation(t, database, worktreeOperation, true, "")
 	primaryOperation, err = database.Operation(ctx, primaryOperation.ID)
 	if err != nil || primaryOperation.Status != "queued" {

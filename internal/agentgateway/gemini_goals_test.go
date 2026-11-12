@@ -10,6 +10,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/store"
 )
 
 func TestGeminiGoalReportRequiresCurrentOperationAndNormalCompletion(t *testing.T) {
@@ -201,11 +202,8 @@ func TestGeminiGoalResumePreservesImagesAndFailedReplacementKeepsGoal(t *testing
 		t.Fatal(err)
 	}
 	thread, _ = db.GeminiThread(ctx, thread.ID)
-	other, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "flash", "default")
+	writer, err := db.QueueResourceOperation(ctx, server.ID, "workspace.file.write", map[string]string{}, "goal-workspace-write", store.OperationResource{WorkspaceID: workspaces[0].ID}, true)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.QueueGeminiTurn(ctx, other, "Occupy workspace", "flash", "default"); err != nil {
 		t.Fatal(err)
 	}
 	replacement := &protocol.GeminiGoalCommand{Objective: "New goal", MaxContinuations: 2, MaxSeconds: 120}
@@ -216,8 +214,7 @@ func TestGeminiGoalResumePreservesImagesAndFailedReplacementKeepsGoal(t *testing
 	if stored.ID != goal.ID || stored.Status != "paused" {
 		t.Fatalf("failed replacement changed existing goal: %+v", stored)
 	}
-	other, _ = db.GeminiThread(ctx, other.ID)
-	if err := db.InterruptGeminiTurn(ctx, other); err != nil {
+	if err := db.CompleteOperation(ctx, protocol.OperationResult{OperationID: writer, Status: "succeeded"}); err != nil {
 		t.Fatal(err)
 	}
 	resume := &protocol.GeminiGoalCommand{ID: goal.ID, MaxContinuations: 3, MaxSeconds: 180}

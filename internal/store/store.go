@@ -473,7 +473,11 @@ func migrateProjectWorkspaceOperations(ctx context.Context, db *sqlx.DB, driver 
 		"CREATE INDEX IF NOT EXISTS operations_workspace_idx ON agent_operations(workspace_id, created_at)",
 		"CREATE INDEX IF NOT EXISTS operations_thread_idx ON agent_operations(thread_id, created_at)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS operations_project_import_active_unique ON agent_operations(server_id,project_id) WHERE project_id IS NOT NULL AND kind='git.import' AND status IN ('queued','delivered')",
-		"CREATE UNIQUE INDEX IF NOT EXISTS operations_workspace_active_write_unique ON agent_operations(workspace_id) WHERE workspace_id IS NOT NULL AND workspace_write=1 AND status IN ('queued','delivered','running')",
+		"CREATE UNIQUE INDEX IF NOT EXISTS operations_workspace_exclusive_write_unique ON agent_operations(workspace_id) WHERE workspace_id IS NOT NULL AND workspace_write=1 AND kind NOT IN ('claude.turn.start','gemini.turn.start','gemini.turn.rewrite') AND status IN ('queued','delivered','running')",
+		// Install the replacement before removing the legacy index. Agent turns
+		// retain workspace_write=1 for lifecycle and recovery checks, but can now
+		// coexist. Transactional workspace checks exclude them from other writers.
+		"DROP INDEX IF EXISTS operations_workspace_active_write_unique",
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("create resource operation index: %w", err)
@@ -1776,7 +1780,36 @@ func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, paylo
 		workspaceWrite = 1
 	}
 	id := NewID()
-	_, err = s.DB.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?, ?, NULLIF(?,''), NULLIF(?,''), NULLIF(?,''), ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING"), id, serverID, resolved.ProjectID, resolved.WorkspaceID, resolved.ThreadID, kind, payload, workspaceWrite, idempotency, time.Now().UTC())
+	query := s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?, ?, NULLIF(?,''), NULLIF(?,''), NULLIF(?,''), ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING")
+	args := []any{id, serverID, resolved.ProjectID, resolved.WorkspaceID, resolved.ThreadID, kind, payload, workspaceWrite, idempotency, time.Now().UTC()}
+	if write {
+		err = func() error {
+			tx, err := s.DB.BeginTxx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			busy, err := s.collaborationWorkspaceBusy(ctx, tx, resolved.WorkspaceID)
+			if err != nil {
+				return err
+			}
+			// A concurrent retry may already have queued this exact operation.
+			if err := tx.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); err == nil {
+				return nil
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if busy {
+				return ErrWorkspaceWriteActive
+			}
+			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+				return err
+			}
+			return tx.Commit()
+		}()
+	} else {
+		_, err = s.DB.ExecContext(ctx, query, args...)
+	}
 	if err != nil {
 		if getErr := s.DB.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); getErr == nil {
 			return existing, nil
@@ -1982,7 +2015,7 @@ func operationListLimit(limit int) int {
 
 func (s *Store) HasActiveWorkspaceWriteOperation(ctx context.Context, workspaceID string) (bool, error) {
 	var count int
-	err := s.DB.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), workspaceID)
+	err := s.DB.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('waiting','queued','delivered','running')"), workspaceID)
 	return count > 0, err
 }
 

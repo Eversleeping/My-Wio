@@ -152,15 +152,15 @@ func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	if command.SessionID != "native-session" || command.Model != "flash" {
 		t.Fatalf("resume: %+v", command)
 	}
-	// The workspace reservation rolls back the other session's claim and event.
+	// Separate Gemini sessions can share the workspace while retaining their own history.
 	other, _ := db.CreateGeminiThread(ctx, workspaces[0].ID, "auto", "default")
-	if _, err := db.QueueGeminiTurn(ctx, other, "conflict", "pro", "auto_edit"); err == nil {
-		t.Fatal("concurrent workspace write accepted")
+	if _, err := db.QueueGeminiTurn(ctx, other, "parallel", "pro", "auto_edit"); err != nil {
+		t.Fatalf("another Gemini session blocked the turn: %v", err)
 	}
 	other, _ = db.GeminiThread(ctx, other.ID)
 	events, _ := db.Events(ctx, other.ID, 0, 500)
-	if other.Status != "idle" || len(events) != 0 {
-		t.Fatalf("claim was not rolled back: %+v %v", other, events)
+	if other.Status != "queued" || len(events) != 1 {
+		t.Fatalf("parallel turn was not queued: %+v %v", other, events)
 	}
 	plan, err := db.WorkspaceDeletionPlan(ctx, workspaces[0].ID, false)
 	if err != nil || plan.ThreadCount != 2 || plan.CanRemoveRecord {
@@ -226,8 +226,8 @@ func TestGeminiInterruptOnlyReleasesWorkspaceAfterConfirmedStop(t *testing.T) {
 			if current.Status != test.wantStatus {
 				t.Fatalf("status=%s, want %s", current.Status, test.wantStatus)
 			}
-			other, _ := db.CreateGeminiThread(ctx, workspaces[0].ID, "auto", "default")
-			_, queueErr := db.QueueGeminiTurn(ctx, other, "second", "auto", "default")
+			// Exclusive file writes remain blocked until the process exit is verified.
+			_, queueErr := db.QueueResourceOperation(ctx, server.ID, "workspace.file.write", map[string]string{}, "write-after-stop", store.OperationResource{WorkspaceID: workspaces[0].ID}, true)
 			if test.stopped && target == thread.OperationID {
 				if queueErr != nil {
 					t.Fatalf("confirmed exit did not release workspace: %v", queueErr)
@@ -245,8 +245,8 @@ func TestGeminiInterruptOnlyReleasesWorkspaceAfterConfirmedStop(t *testing.T) {
 				if current.Status != "interrupted" {
 					t.Fatal("late result changed completed interruption")
 				}
-			} else if queueErr == nil {
-				t.Fatal("unverified stop released workspace")
+			} else if !errors.Is(queueErr, store.ErrWorkspaceWriteActive) {
+				t.Fatalf("unverified stop must block exclusive writes: %v", queueErr)
 			}
 		})
 	}

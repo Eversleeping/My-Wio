@@ -77,6 +77,13 @@ func TestClaudeRewriteCommitsOnlyAfterNativeImportAndRejectsStaleOutput(t *testi
 	if operation.Kind != "claude.turn.start" || operation.WorkspaceWrite != 1 || command.Rewrite == nil || command.Rewrite.MessageID == "" || command.Rewrite.StartedAt == "" || command.Rewrite.Before == "" {
 		t.Fatalf("wrong rewrite operation: %+v %+v", operation, command)
 	}
+	parallel, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "auto", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueGeminiTurn(ctx, parallel, "parallel to rewrite", "auto", "default"); err != nil {
+		t.Fatalf("Claude rewrite blocked another session: %v", err)
+	}
 	unchanged, _ := db.Events(ctx, thread.ID, 0, 500)
 	if len(unchanged) != len(original) {
 		t.Fatal("history changed before native import")

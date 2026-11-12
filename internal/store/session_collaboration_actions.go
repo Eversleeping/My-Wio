@@ -144,15 +144,6 @@ func (s *Store) collaborationSend(ctx context.Context, tx *sqlx.Tx, t Collaborat
 	if t.ArchivedAt != nil || t.Busy() {
 		return "", ErrThreadActive
 	}
-	if t.Engine != "codex" {
-		busy, err := s.collaborationWorkspaceBusy(ctx, tx, t.WorkspaceID)
-		if err != nil {
-			return "", err
-		}
-		if busy {
-			return "", ErrWorkspaceWriteActive
-		}
-	}
 	switch t.Engine {
 	case "codex":
 		op, _, err := s.queueCodexTurnTx(ctx, tx, Thread{ID: t.ID, ServerID: t.ServerID, ProjectID: t.ProjectID, WorkspaceID: t.WorkspaceID}, protocol.StartTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID, WorkspaceID: t.WorkspaceID, Workspace: t.Path, Prompt: prompt, Model: t.Model, ReasoningEffort: t.Effort, ApprovalMode: t.Mode})
@@ -553,7 +544,12 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 		if err = s.collaborationSendLimit(ctx, tx, source, target.Ref()); err != nil {
 			return reply, err
 		}
-		workspaceBusy, e := s.collaborationWorkspaceBusy(ctx, tx, target.WorkspaceID)
+		// Match turn queueing's server -> workspace lock order, including when
+		// another browser request starts a turn at the same time.
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), target.ServerID); err != nil {
+			return reply, err
+		}
+		workspaceBusy, e := s.workspaceWriteBusy(ctx, tx, target.WorkspaceID, true)
 		if e != nil {
 			return reply, e
 		}
@@ -670,6 +666,9 @@ func (s *Store) collaborationSendLimit(ctx context.Context, tx *sqlx.Tx, source 
 
 func (s *Store) collaborationFork(ctx context.Context, tx *sqlx.Tx, source CollaborationSession, target string, worktree *protocol.GitWorktreeCreateCommand, eventID string) (string, error) {
 	if source.Engine != "codex" || worktree != nil {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), source.ServerID); err != nil {
+			return "", err
+		}
 		busy, err := s.collaborationWorkspaceBusy(ctx, tx, source.WorkspaceID)
 		if err != nil {
 			return "", err
@@ -735,7 +734,7 @@ func (s *Store) collaborationWorktreeLock(ctx context.Context, tx *sqlx.Tx, sour
 		return false, err
 	}
 	var holders []string
-	if err := tx.SelectContext(ctx, &holders, s.Q("SELECT id FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), id); err != nil {
+	if err := tx.SelectContext(ctx, &holders, s.Q("SELECT id FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('waiting','queued','delivered','running')"), id); err != nil {
 		return false, err
 	}
 	switch {
@@ -749,11 +748,24 @@ func (s *Store) collaborationWorktreeLock(ctx context.Context, tx *sqlx.Tx, sour
 }
 
 func (s *Store) collaborationWorkspaceBusy(ctx context.Context, tx *sqlx.Tx, id string) (bool, error) {
+	return s.workspaceWriteBusy(ctx, tx, id, false)
+}
+
+// Claude and Gemini turns share a workspace with other turns. All other writers
+// remain exclusive. Every writer locks the workspace row before checking and
+// inserting its operation so these rules also hold across PostgreSQL connections.
+func (s *Store) workspaceWriteBusy(ctx context.Context, tx *sqlx.Tx, id string, sessionTurn bool) (bool, error) {
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), id); err != nil {
 		return false, err
 	}
+	condition := ""
+	if sessionTurn {
+		condition = " AND kind NOT IN ('claude.turn.start','gemini.turn.start','gemini.turn.rewrite')"
+	}
 	var count int
-	err := tx.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), id)
+	// Staged project deletion reserves the primary workspace while its
+	// worktrees are being removed, before its own operation becomes queued.
+	err := tx.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('waiting','queued','delivered','running')"+condition), id)
 	return count > 0, err
 }
 

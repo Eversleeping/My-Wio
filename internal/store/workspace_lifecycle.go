@@ -136,8 +136,11 @@ func (s *Store) QueueWorkspaceLifecycle(ctx context.Context, workspace Workspace
 		return "", err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), workspace.ID); err != nil {
+		return "", err
+	}
 	var active int
-	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND (workspace_write=1 OR kind='git.worktree.create') AND status IN ('queued','delivered','running')"), workspace.ID); err != nil {
+	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND (workspace_write=1 OR kind='git.worktree.create') AND status IN ('waiting','queued','delivered','running')"), workspace.ID); err != nil {
 		return "", err
 	}
 	if active != 0 {
@@ -184,8 +187,11 @@ func (s *Store) QueueCrossServerWorkspaceClone(ctx context.Context, source Works
 	if targetCount != 1 {
 		return "", sql.ErrNoRows
 	}
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), source.ID); err != nil {
+		return "", err
+	}
 	var active int
-	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND (workspace_write=1 OR kind='git.worktree.create') AND status IN ('queued','delivered','running')"), source.ID); err != nil {
+	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND (workspace_write=1 OR kind='git.worktree.create') AND status IN ('waiting','queued','delivered','running')"), source.ID); err != nil {
 		return "", err
 	}
 	if active != 0 {
@@ -353,11 +359,11 @@ func (s *Store) FailWorkspaceLifecycle(ctx context.Context, operation Operation,
 	return tx.Commit()
 }
 
-// isWorkspaceWriteConflict reports a violation of the one-active-write-per-
-// workspace index on agent_operations (SQLite or PostgreSQL wording).
+// isWorkspaceWriteConflict reports a violation of the exclusive workspace
+// writer index on agent_operations (SQLite or PostgreSQL wording).
 func isWorkspaceWriteConflict(err error) bool {
 	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "operations_workspace_active_write_unique") || strings.Contains(lower, "unique constraint failed: agent_operations.workspace_id")
+	return strings.Contains(lower, "operations_workspace_exclusive_write_unique") || strings.Contains(lower, "operations_workspace_active_write_unique") || strings.Contains(lower, "unique constraint failed: agent_operations.workspace_id")
 }
 
 func cleanLifecyclePath(value string) string {

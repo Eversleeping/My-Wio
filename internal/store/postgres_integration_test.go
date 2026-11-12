@@ -115,6 +115,8 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertClaudeCredentialBindingsAndReplay(t, scans)
 	assertClaudeModelConfigRevision(t, scans)
 	assertClaudeEffortStorage(t, scans)
+	assertAgentConcurrentSessions(t, scans)
+	assertSessionWorkspaceWriteRace(t, scans)
 	assertClaudeManagementStorage(t, scans)
 	assertClaudeSteerStorage(t, scans)
 	assertClaudeQuestionsStorage(t, scans)

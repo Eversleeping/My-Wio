@@ -102,7 +102,8 @@ func (s *Store) CreateClaudeThread(ctx context.Context, workspaceID, model, mode
 	return s.ClaudeThread(ctx, id)
 }
 
-// QueueClaudeTurn atomically claims the thread and the shared workspace write lock.
+// QueueClaudeTurn atomically claims the thread and shares the workspace with
+// other Claude/Gemini turns, while excluding Git, file writes, and other writers.
 func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt, model, mode, effort string, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
 	return s.queueClaudeInput(ctx, thread, "", prompt, model, mode, effort, nil, images...)
 }
@@ -153,6 +154,11 @@ func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread Clau
 	}
 	if n, err := locked.RowsAffected(); err != nil || n != 1 {
 		return protocol.StreamEvent{}, ErrThreadActive
+	}
+	if busy, err := s.workspaceWriteBusy(ctx, tx, thread.WorkspaceID, true); err != nil {
+		return protocol.StreamEvent{}, err
+	} else if busy {
+		return protocol.StreamEvent{}, ErrWorkspaceWriteActive
 	}
 	opID, now := NewID(), time.Now().UTC()
 	title := []rune(prompt)

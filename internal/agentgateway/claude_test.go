@@ -103,13 +103,13 @@ func TestClaudeSessionStreamsResumesAndSharesWorkspaceLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.QueueGeminiTurn(ctx, other, "conflict", "auto", "default"); err == nil {
-		t.Fatal("concurrent workspace write accepted")
+	if _, err := db.QueueGeminiTurn(ctx, other, "parallel", "auto", "default"); err != nil {
+		t.Fatalf("Claude blocked a separate Gemini session: %v", err)
 	}
 	other, _ = db.GeminiThread(ctx, other.ID)
 	events, _ := db.Events(ctx, other.ID, 0, 500)
-	if other.Status != "idle" || len(events) != 0 {
-		t.Fatalf("conflicting claim was not rolled back: %+v %+v", other, events)
+	if other.Status != "queued" || len(events) != 1 {
+		t.Fatalf("parallel Gemini turn was not queued: %+v %+v", other, events)
 	}
 	plan, err := db.WorkspaceDeletionPlan(ctx, workspaces[0].ID, false)
 	if err != nil || plan.ThreadCount != 2 || plan.CanRemoveRecord {

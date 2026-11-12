@@ -52,6 +52,11 @@ func (s *Store) QueueGeminiSkillManagement(ctx context.Context, workspace Worksp
 		return "", ErrGeminiSkillsBusy
 	}
 	id := NewID()
+	if busy, err := s.collaborationWorkspaceBusy(ctx, tx, workspace.ID); err != nil {
+		return "", err
+	} else if busy {
+		return "", ErrWorkspaceWriteActive
+	}
 	_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?,?,?,?,'gemini.skills.manage',?,1,?,?)`), id, workspace.ServerID, workspace.ProjectID, workspace.ID, string(raw), key, time.Now().UTC())
 	if err != nil {
 		return "", err

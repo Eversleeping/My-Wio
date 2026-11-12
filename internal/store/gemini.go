@@ -196,6 +196,11 @@ func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 	if configuring != 0 {
 		return protocol.StreamEvent{}, ErrGeminiCredentialsBusy
 	}
+	if busy, err := s.workspaceWriteBusy(ctx, tx, thread.WorkspaceID, true); err != nil {
+		return protocol.StreamEvent{}, err
+	} else if busy {
+		return protocol.StreamEvent{}, ErrWorkspaceWriteActive
+	}
 	opID, now := NewID(), time.Now().UTC()
 	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET model_credential_revision=COALESCE((SELECT `+geminiCredentialRevision+` FROM workspaces w JOIN server_gemini_credential_profiles gcp ON gcp.server_id=w.server_id WHERE w.id=gemini_threads.workspace_id),''),status='queued',operation_id=?,model=?,approval_mode=?,thinking_level=?,updated_at=?,title=CASE WHEN title='Gemini' THEN ? ELSE title END
  WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, model, mode, level, now, truncateGeminiTitle(prompt), thread.ID)

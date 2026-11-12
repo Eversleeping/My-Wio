@@ -52,8 +52,10 @@ func (s *Store) queueClaudeForkTx(ctx context.Context, tx *sqlx.Tx, t ClaudeThre
 	if busy > 0 {
 		return "", "", ErrClaudeCredentialsBusy
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), t.WorkspaceID); err != nil {
+	if busy, err := s.collaborationWorkspaceBusy(ctx, tx, t.WorkspaceID); err != nil {
 		return "", "", err
+	} else if busy {
+		return "", "", ErrWorkspaceWriteActive
 	}
 	opID, target := NewID(), collaborationTargetID(ctx)
 	r, err := tx.ExecContext(ctx, s.Q(`UPDATE claude_threads SET status='queued',operation_id=? WHERE id=? AND session_id=? AND session_id<>'' AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, t.ID, t.SessionID)

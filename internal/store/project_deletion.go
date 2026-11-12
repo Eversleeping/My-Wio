@@ -222,6 +222,11 @@ func (s *Store) QueueProjectManagedDeletion(ctx context.Context, projectID strin
 	}
 	operationIDs := make([]string, 0, len(managed))
 	for _, workspace := range managed {
+		if busy, err := s.collaborationWorkspaceBusy(ctx, tx, workspace.ID); err != nil {
+			return nil, false, err
+		} else if busy {
+			return nil, false, ErrProjectDeletionBlocked
+		}
 		command := protocol.GitProjectDeleteCommand{ProjectID: projectID, WorkspaceID: workspace.ID, Path: workspace.Path}
 		payload, err := json.Marshal(command)
 		if err != nil {
@@ -320,6 +325,24 @@ func (s *Store) CompleteProjectDeletion(ctx context.Context, operation Operation
 		return err
 	}
 	if waiting > 0 {
+		// Older controllers could accept a turn while primary deletion waited
+		// for worktrees. Do not promote the deletion over that live process.
+		var workspaceIDs []string
+		if err := tx.SelectContext(ctx, &workspaceIDs, s.Q("SELECT workspace_id FROM agent_operations WHERE project_id=? AND kind=? AND status='waiting' ORDER BY workspace_id"), operation.ProjectID, ProjectDeleteOperationKind); err != nil {
+			return err
+		}
+		for _, id := range workspaceIDs {
+			if _, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), id); err != nil {
+				return err
+			}
+			var writers int
+			if err := tx.GetContext(ctx, &writers, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), id); err != nil {
+				return err
+			}
+			if writers > 0 {
+				return ErrWorkspaceWriteActive
+			}
+		}
 		if _, err := tx.ExecContext(ctx, s.Q(`UPDATE agent_operations SET status='queued' WHERE project_id=? AND kind=? AND status='waiting'`), operation.ProjectID, ProjectDeleteOperationKind); err != nil {
 			return err
 		}

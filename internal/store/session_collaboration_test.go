@@ -813,17 +813,20 @@ func TestCollaborationWorktreeChildDuringOwnTurnIsWaitable(t *testing.T) {
 	if wait := f.call(t, "wio_wait_sessions", sessiontools.Params{Sessions: []sessiontools.Ref{*created.Session}}); wait.Error != nil {
 		t.Fatalf("caller cannot wait for its worktree child: %+v", wait.Error)
 	}
-	// A shared Gemini child still has to wait for the caller's turn to end.
+	// A shared Gemini child can also run during a Claude parent turn.
 	shared := f.call(t, "wio_create_session", sessiontools.Params{RequestID: "own-turn-shared", Engine: "gemini", Prompt: "verify"})
-	if shared.Error != nil || shared.Status != "accepted" || shared.Session == nil {
+	if shared.Error != nil || shared.Status != "queued" || shared.Session == nil {
 		t.Fatalf("shared child: %+v", shared)
 	}
 	wait := f.call(t, "wio_wait_sessions", sessiontools.Params{Sessions: []sessiontools.Ref{*shared.Session}})
-	if wait.Error == nil || wait.Error.Code != "WAIT_DEPENDENCY" || !strings.Contains(wait.Error.Message, "directory_mode=worktree") {
+	if wait.Error != nil {
 		t.Fatalf("shared wait: %+v", wait)
 	}
 	// Moving or deleting the source must wait for the lock-free worktree creation.
 	if _, err = f.db.DB.ExecContext(ctx, f.db.Q("UPDATE agent_operations SET status='succeeded' WHERE id=?"), f.operation); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.CompleteOperation(ctx, protocol.OperationResult{OperationID: shared.OperationID, Status: "succeeded"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = f.db.DB.ExecContext(ctx, f.db.Q("UPDATE workspaces SET management_mode='managed' WHERE id=?"), f.workspace); err != nil {

@@ -77,6 +77,13 @@ func TestGeminiRewriteCommitsOnlyAfterNativeImportAndRejectsStaleOutput(t *testi
 	if operation.Kind != "gemini.turn.rewrite" || operation.WorkspaceWrite != 1 || command.Rewrite == nil || command.Rewrite.StartedAt != "2026-10-25T00:01:00Z" || command.Rewrite.Before != "2026-10-25T00:02:00Z" {
 		t.Fatalf("wrong rewrite operation: %+v %+v", operation, command)
 	}
+	parallel, err := db.CreateClaudeThread(ctx, workspaces[0].ID, "sonnet", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueClaudeTurn(ctx, parallel, "parallel to rewrite", "sonnet", "default", ""); err != nil {
+		t.Fatalf("Gemini rewrite blocked another session: %v", err)
+	}
 	unchanged, _ := db.Events(ctx, thread.ID, 0, 500)
 	if len(unchanged) != len(original) {
 		t.Fatal("history changed before native import")

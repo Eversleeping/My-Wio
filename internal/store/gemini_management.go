@@ -61,6 +61,11 @@ func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 	if updating != 0 {
 		return "", "", ErrGeminiCredentialsBusy
 	}
+	if busy, err := s.collaborationWorkspaceBusy(ctx, tx, thread.WorkspaceID); err != nil {
+		return "", "", err
+	} else if busy {
+		return "", "", ErrWorkspaceWriteActive
+	}
 	opID, targetID := NewID(), collaborationTargetID(ctx)
 	r, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET operation_id=?,status='queued' WHERE id=? AND session_id<>'' AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, thread.ID)
 	if err != nil {
