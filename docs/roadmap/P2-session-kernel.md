@@ -82,6 +82,7 @@ type Ref struct {
 type Session struct {
     Ref
     WorkspaceID, ProjectID, ServerID, Path string
+    ProjectName, ServerName, ServerStatus string
     NativeID    string // codex_thread_id 或 session_id
     Title       string
     Status      string
@@ -90,6 +91,7 @@ type Session struct {
     Effort      string
     OperationID string
     PinnedAt, ArchivedAt *time.Time
+    ProjectPinnedAt, ProjectHiddenAt *time.Time
     CreatedAt, UpdatedAt time.Time
     Capabilities Capabilities
 }
@@ -132,7 +134,7 @@ type Driver interface {
 
 | 新路由 | 取代 |
 | --- | --- |
-| `GET /api/sessions?engine=&archived=` | `/threads`、`/gemini/threads`、`/claude/threads` |
+| `GET /api/sessions?engine=&archived=&q=&limit=&cursor=` | `/threads`、`/gemini/threads`、`/claude/threads` |
 | `POST /api/sessions/{engine}` | 三个创建接口 |
 | `GET、PATCH、DELETE /api/sessions/{engine}/{id}` | 三组详情、更新、删除 |
 | `GET /api/sessions/{engine}/{id}/events` | 三个事件接口，统一为 `before`、`after`、`limit` 游标 |
@@ -142,7 +144,9 @@ type Driver interface {
 | `GET /api/sessions/{engine}/{id}/usage` | 三个用量接口 |
 | `POST /api/sessions/{engine}/{id}/questions/{requestID}/answer` | Gemini 和 Claude 的回答接口 |
 
-列表路由省略 `engine` 参数时返回三种引擎的混合列表，排序和分页规则对三种引擎一致。按项目和工作区组织的新入口（总览的决策 D9）要靠它取数。
+列表路由省略 `engine` 参数时返回三种引擎的混合列表，排序和分页规则对三种引擎一致。`archived`、`q`、`engine` 都在分页前应用；不能沿用只在 Codex 里存在、数据变化时容易重复或跳项的裸 `offset`。列表项必须带上统一分组所需的 `engine`、项目和服务器名称、服务器状态、项目置顶和隐藏时间、会话置顶和归档时间；引擎独有字段仍通过能力对象或引擎模块表达。
+
+P6-01 的 T5 要先确认分页排序：候选 A 按会话级排序键（项目置顶、会话置顶、更新时间、引擎、ID）分页；候选 B 先按工作区组排序，再按组内会话排序，游标还要包含项目名、规范工作区标题和工作区 ID。两种候选都返回 `{items,next_cursor,groups}`，不能只从当前页推断哪些工作区有会话，否则 Q2 的“显示全部工作区”会把尚未翻到的工作区误判为空。`groups` 在 `engine`、`archived`、`q` 过滤后、会话分页前计算，至少包含 `workspace_id`、匹配会话数、最近更新时间和项目置顶时间；名称和工作区标题仍可与 `/workspaces` 合并后在前端生成。确认前 P2-05 可以完成公共字段归一、参数校验、驱动查询、响应骨架、分组摘要和旧路由兼容，不能固化混合列表的排序游标、搜索字段和相关契约测试；确认后再按 T1、T2、T5 一次性固化。按项目和工作区组织的新入口（总览的决策 D9）要靠它取数。
 
 引擎独有的接口保留在引擎命名空间下，例如 `/api/sessions/codex/{id}/goal`、`/api/sessions/gemini/{id}/goal`。请求的引擎不支持某个操作时，统一返回同一种错误码和错误结构，前端据此隐藏入口。
 
@@ -292,10 +296,11 @@ CREATE TABLE ai_sessions (
 **做法**
 
 1. 实现“目标设计”一节的 `/api/sessions/...` 路由，处理器只依赖驱动接口。
-2. 事件接口统一为同一套游标参数和默认窗口。当前 Gemini 和 Claude 的事件接口固定返回最多 500 条，Codex 的接口有自己的分页和 `view=raw` 参数；以功能最完整的一种为准，其余补齐。
-3. 旧路由全部保留，改为转发到新处理器。它们的响应必须与改动前逐字段一致，用契约测试保证。
-4. 审计动作名和实时事件类型保持不变，前端的实时刷新依赖它们。
-5. 为新路由写一份对三种引擎运行的契约测试，与 P2-01 的旧路由测试并存。
+2. 列表接口按“目标设计”统一筛选和公共字段。T1、T2、T5 确认前，先实现三种驱动的公共读模型、严格参数校验、响应骨架、分页前分组摘要、搜索与归档条件下推和旧路由适配；不冻结混合列表的排序游标和搜索字段。确认后补稳定分页，契约测试至少覆盖：省略 `engine` 的混合页、三种单引擎页、活动和归档视图、搜索在分页前执行、项目和会话置顶、相同时间戳下不重不漏、完整分组摘要不受当前页截断，以及三个驱动返回相同的公共分组字段。
+3. 事件接口统一为同一套游标参数和默认窗口。当前 Gemini 和 Claude 的事件接口固定返回最多 500 条，Codex 的接口有自己的分页和 `view=raw` 参数；以功能最完整的一种为准，其余补齐。
+4. 旧路由全部保留，改为转发到新处理器。它们的响应必须与改动前逐字段一致，用契约测试保证；其中 Codex 的数组/分页对象双响应和 `archived=all` 也属于兼容面，不能反向污染新路由的契约。
+5. 审计动作名和实时事件类型保持不变，前端的实时刷新依赖它们。
+6. 为新路由写一份对三种引擎运行的契约测试，与 P2-01 的旧路由测试并存。
 
 **验收**
 
@@ -313,7 +318,7 @@ CREATE TABLE ai_sessions (
 **做法**
 
 1. 建立 `web/src/sessions/` 的 `api.ts` 和 `types.ts`，只调用新路由。
-2. 先抽公共部分，不改页面结构：从 `ClaudePage.tsx` 和 `GeminiPage.tsx` 抽出列表与分组、侧栏、输入区、图片选择、重命名与删除对话框。这两个页面最相似，先让它们共用同一批组件。
+2. 先抽公共部分，不改页面结构：从 `ClaudePage.tsx` 和 `GeminiPage.tsx` 抽出列表与分组、侧栏、输入区、图片选择、重命名与删除对话框。这两个页面最相似，先让它们共用同一批组件。公共侧栏按 P6-01 的差异清单留出服务端搜索和游标翻页、完整工作区分组摘要、项目与会话置顶、归档操作以及（引擎，会话 ID）键；详情请求拿到但当前列表窗口没有的会话要合并进对应组。移动端保留当前三个页面都有的“会话 / 文件 / 对话”三态。列表刷新由外壳注入一个公共 revision，不在引擎页面内各建轮询器；P3-09 尚未完成时最多保留一个页面级、仅页面可见时运行的兜底轮询。
 3. 建立 `SessionPage` 外壳和引擎模块接口，把 Claude 迁移进去，然后是 Gemini。
 4. 最后迁移 Codex。它的会话视图是 `App.tsx` 里的 `SessionView`，逻辑最多（审批、状态快照、目标、子 Agent 活动、长会话分页），需要 P3-07 先把它移出 `App.tsx`。
 5. 每迁移一个引擎，对应的旧页面文件删除，旧测试改写为针对新外壳的测试，覆盖点不减少。
