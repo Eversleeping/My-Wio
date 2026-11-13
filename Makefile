@@ -1,4 +1,4 @@
-.PHONY: dev web build agent-linux test test-postgres
+.PHONY: dev web build agent-linux test test-postgres fmt-check verify
 
 dev:
 	go run ./cmd/controlplane
@@ -24,3 +24,16 @@ test: test-postgres
 
 test-postgres:
 	go test -tags=postgresintegration ./internal/store -run TestPostgresMigrationAndStorage -count=1
+
+fmt-check:
+	@files="$$(gofmt -l cmd internal web/embed.go)" || exit $$?; \
+		test -z "$$files" || { printf '%s\n' "$$files"; exit 1; }
+
+verify: fmt-check
+	npm --prefix web ci
+	npm --prefix web run build
+	npm --prefix web test
+	npm --prefix web run typecheck
+	go vet ./...
+	go test ./...
+	go build ./cmd/controlplane ./cmd/agent

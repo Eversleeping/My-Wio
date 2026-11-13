@@ -83,7 +83,7 @@ E2E 使用模拟 API，不连接真实服务器或模型。如果耗时明显长
 
 **做法**
 
-1. 在 `go` 作业里增加 `gofmt -l` 检查，输出非空即失败。当前输出为空，不需要先做格式化提交。
+1. 在 `go` 作业里增加 `gofmt -l` 检查，输出非空即失败。调用 `Makefile` 的 `fmt-check` 独立目标，文件范围只在 `Makefile` 里写一处。当前输出为空，不需要先做格式化提交。
 2. 评估 `staticcheck`：先在本地跑一遍，把现有告警数量记到“执行记录”。告警少就修完后设为门槛；告警多就只启用不产生告警的检查集，其余留作后续。
 3. 评估在 `web/tsconfig.app.json` 里开启 `noUnusedLocals` 和 `noUnusedParameters`：先数一遍现有的违例。数量少就清理后开启；数量多就把数字记到“执行记录”，留到 P3-07 之后再开。目前已知的一处残留见总览的“发现的问题”。
 4. 前端暂不引入 ESLint 和 Prettier，原因见总览的决策 D6。
@@ -117,7 +117,7 @@ E2E 使用模拟 API，不连接真实服务器或模型。如果耗时明显长
 
 **做法**
 
-在 `Makefile` 增加 `verify` 目标，内容与 CI 的 `web`、`go` 两个作业一致，并包含 `gofmt -l` 和版本号护栏。保留现有的 `make test`。
+在 `Makefile` 增加 `verify` 目标，内容与 CI 的 `web`、`go` 两个作业一致，并通过独立的 `fmt-check` 目标增加格式检查。版本号护栏由 P0-05 在实现脚本时接入。保留现有的 `make test`。
 
 更新 `README.md` 的“开发与验证”表格，加上 `make verify` 一行。
 
@@ -295,15 +295,19 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
   6. 执行记录草稿里去掉本机路径和“由协调者补记”这类过程性的话；返工后重跑 `-count=20`、`gofmt -l`、`go vet ./...` 和 `go test ./cmd/controlplane`，更新数字。
 - 之后还要做：返工通过后分两个提交合入，先是 `main.go` 的提取，再是测试和假引擎；推送后确认 CI 的 `go` 作业通过，再把状态改为 `已完成`。
 
-### 2026-11-14 P0-06（交接：改由 Codex 接手）
+### 2026-11-14 P0-06
 
-- 会话：`11-13 Gemini` 完成了实现和第一次验收，随后会话失败，没有交回。协调者 `11-13 Claude` 审阅了它留下的改动。按用户要求，`11-14 Codex` 在基于当前 `main` 的新 worktree（分支 `roadmap/p0-06-codex`）里接手，原会话已归档。这一条是交接记录，步骤完成时由正式的执行记录替换。
-- 留下的改动没有提交，在分支 `roadmap/p0-06` 对应的 worktree 里，基于 `4e157c9`：`Makefile` 增加 `verify` 目标，`README.md` 的命令表增加一行，本文件 P0-06 的做法改了一段并附有一份执行记录草稿。
-- `11-13 Gemini` 的验收结果，接手后要在干净检出上重新取得：`make verify` 一次通过，444 秒；临时加入一个未格式化的 Go 文件后，`make verify` 在格式检查一步失败并打印出文件名。
-- 审阅结论：
-  1. `verify` 目标依次是 CI `web` 作业的四条命令、`gofmt -l cmd internal web/embed.go`、CI `go` 作业的三条命令，命令和范围没有问题；`web/embed.go` 是 `cmd`、`internal` 之外唯一被跟踪的 Go 文件。
-  2. 格式检查只判断 `gofmt -l` 的标准输出是否为空。`gofmt` 不在 `PATH` 里或者自己报错（例如遇到语法错误）时输出同样为空，这一步照样通过，只在标准错误里留下一行报错；已用同样写法的命令确认。需要改成这两种情况也失败。格式检查宜做成独立目标，P0-04 在 CI 里调用同一个目标，文件范围只写一处。
-  3. 版本号护栏脚本还不存在，由 P0-05 实现并接入 `make verify`；P0-06 的做法要按这个分工改写成计划的陈述。
-  4. README 那一行的说明不够准确：没有写它会用 `npm ci` 重装前端依赖，也没有写它不含 PostgreSQL 集成测试和 E2E。
-  5. 执行记录草稿需要重写：构建耗时取的是构建工具自己报告的数字而不是命令耗时，有“已保存供协调者核对”一类过程性的话，没有写明运行时的 Git 配置环境。
-- 还剩什么：在新 worktree 里落实上面几条，从干净检出重新运行 `make verify` 和格式检查的反向验证，写正式的执行记录；协调者审阅后合入。
+- 会话：`11-13 Gemini` 完成实现和第一次验收；`11-14 Codex` 基于提交 `0e427dc` 接手，修正格式检查的错误处理并重新完成验收。Gemini 的一次完整取样通过，耗时 444 秒。
+- 做了什么：
+  - `Makefile` 新增 `fmt-check` 和 `verify` 两个伪目标。`verify` 先运行 `fmt-check`，再依次运行 CI `web` 作业的 `npm ci`、前端构建、Vitest、类型检查，最后运行 CI `go` 作业的 `go vet ./...`、`go test ./...` 和控制面及 Agent 的编译检查；保留原有的 `test`、`test-postgres` 等目标。
+  - `fmt-check` 检查 `cmd`、`internal` 和 `web/embed.go`。它只调用一次 `gofmt -l`，先检查命令状态；命令成功且输出非空时再打印文件名并失败。因此未格式化文件、`gofmt` 自身出错、找不到 `gofmt` 三种情况都会失败，同时不会重复维护文件范围。
+  - `README.md` 的命令表新增推送前门槛，并逐行核对已有说明；`make test` 等各行与对应目标一致。`docs/roadmap/P0-engineering-baseline.md` 明确 P0-04 复用 `fmt-check`，P0-05 在实现版本号护栏时把它接入 `verify`。
+- 验收环境：4 核；完整运行前 `web/node_modules` 和 `web/dist` 均不存在，环境中没有 `GIT_CONFIG*` 变量。
+- 完整验收：`make verify` 一条命令通过，退出码 0，墙钟时间 361.63 秒。`npm ci` 安装 552 个包；前端构建转换 1914 个模块并通过 bundle 检查；Vitest 的 61 个文件、449 个用例全部通过，runner 报告 64.57 秒；类型检查和 `go vet` 无诊断。Go 测试为 30 个包通过、3 个包无测试文件；最慢的包是 `internal/httpapi` 227.143 秒、`internal/store` 209.352 秒、`internal/agentgateway` 126.090 秒、`internal/scheduler` 19.163 秒。最后对两个 Go 命令包的编译检查通过，没有在仓库中留下可执行文件。
+- 格式检查反向验证：
+  - 临时加入语法正确但未格式化的探测文件，`make fmt-check` 打印 `internal/buildinfo/zz_gofmt_unformatted_probe.go`，退出码 2，耗时 0.27 秒。
+  - 临时加入有语法错误的探测文件，`gofmt` 打印 `internal/buildinfo/zz_gofmt_syntax_error_probe.go:3:34: expected '}', found 'EOF'`，`make fmt-check` 退出码 2，耗时 0.22 秒。
+  - 在裁剪后的 `PATH` 下先运行 `command -v gofmt`，确认退出码 127 且无输出；随后 `make fmt-check` 打印 `gofmt: not found`，退出码 2，耗时不足 0.01 秒。
+  - 删除探测文件后，`make fmt-check` 退出码 0，耗时 0.20 秒。另在未格式化探测文件存在时运行 `make verify`，它打印 `internal/buildinfo/zz_gofmt_verify_stop_probe.go` 并在首个目标以退出码 2 结束，耗时 0.18 秒；没有执行 npm 或后续 Go 命令，也没有生成 `web/node_modules` 或 `web/dist`。所有探测文件均已删除。
+- 其他检查：`git diff --check` 和 `make -n verify` 均以退出码 0 在不足 0.01 秒内完成；展开的命令顺序符合上述定义。`git ls-files '*.go'` 中不在 `cmd/`、`internal/` 下的文件只有 `web/embed.go`，因此范围覆盖全部被跟踪的 Go 文件，又不会扫描 `web/node_modules`。
+- 遗留事项：P0-05 实现版本号护栏后仍需接入 `make verify`；P0-04 在 CI 中调用 `fmt-check`。高负载下 Vitest 用例可能超时的问题已经登记在路线图总览的“发现的问题”中。
