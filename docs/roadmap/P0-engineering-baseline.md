@@ -43,7 +43,7 @@
 
 **做法**
 
-新增 `.github/workflows/ci.yml`，在推送到 `main` 和合并请求时触发，包含三个作业：
+新增 `.github/workflows/ci.yml`，在推送到 `main`、推送到 `ci/**` 临时验收分支和合并请求时触发，包含三个作业。仓库平时直接推送到 `main`，协调者的验收环境只有 `git push`、没有创建合并请求所需的工具和令牌，因此保留 `ci/**` 触发器，用临时分支完成“故意让测试失败、确认 CI 变红”的验收：
 
 | 作业 | 内容 |
 | --- | --- |
@@ -242,3 +242,36 @@ Git 配置环境导致的失败：
 既存失败或不稳定用例：干净 Git 配置环境下没有。两次前端测试和 E2E 结果一致；Go 的差异均已由可重复的环境注入解释。
 
 遗留事项：Git 相关测试应在测试进程内隔离或显式清除继承的 Git 配置环境，避免开发会话和 CI 的外部配置改变测试前置条件；本步骤只记录，不修改测试。协调者还需在总览“发现的问题”登记该项，并决定是否把总览的测试规模近似值更新为上述 runner 数字。
+
+### 2026-11-13 P0-02
+
+- 会话：`11-13 Codex`，分支 `roadmap/p0-02` 的独立 worktree。
+- 新增 `.github/workflows/ci.yml`，触发范围为推送到 `main`、推送到 `ci/**` 临时验收分支和所有合并请求。根级权限只有 `contents: read`。合并请求按源分支分组，新提交取消同一合并请求的旧运行；推送按每次运行的 ID 独立分组，确保 `main` 上每次推送都运行完成，不会遗漏 P0-05 后续按推送范围执行的检查。
+- `web` 使用 Node 22 和 `web/package-lock.json` 对应的 npm 缓存，依次安装、构建、运行 Vitest 和类型检查，再上传保留 1 天的 `web-dist` 制品。lockfile 当前 538 条 `resolved` 指向腾讯云镜像、64 条指向官方源；GitHub 托管运行器已确认普通 `npm ci` 可以安装，耗时 53 秒，因此不加 registry 参数也不改写 lockfile。如果以后镜像在运行器上不可达，备选是指定官方源并加 `--replace-registry-host=always`。
+- `go` 和 `postgres` 都显式依赖 `web`，把 `web-dist` 下载到 `web/dist` 后再验证；Go 版本由 `go.mod` 读取。`go` 运行 vet、全量测试和两个命令的构建；`postgres` 保持运行现有的 `make test-postgres`，没有修改 Makefile。
+- 从 embedded-postgres v1.34.0 源码确认，默认压缩包缓存目录实际是 `~/.embedded-postgres-go`，当前 `V16` 是 16.9.0。缓存键包含运行器 OS、架构、PostgreSQL 精确版本和 `go.sum` 哈希，避免跨平台、跨二进制版本或依赖版本复用。
+- 通过 `git ls-remote --tags` 核实并采用当时可用的最新主版本：`actions/checkout@v7`、`actions/setup-node@v7`、`actions/setup-go@v7`、`actions/upload-artifact@v7`、`actions/download-artifact@v8`、`actions/cache@v6`。超时按 P0-01 基线和冷缓存余量设置为 `web` 15 分钟、`go` 30 分钟、`postgres` 15 分钟。
+- GitHub 托管运行器不会注入 P0-01 所述的 `GIT_CONFIG*`，工作流不做防御性清理，避免掩盖测试对外部环境隔离不足的问题。
+
+本地从没有 `web/node_modules` 和 `web/dist` 的状态开始，使用 Go 1.22.12、Node 22 和 npm 10，按作业顺序串行验证。
+
+| 命令 | 结果 | 耗时与说明 |
+| --- | --- | --- |
+| `actionlint .github/workflows/ci.yml` | 通过 | 不足 1 秒；语法、表达式和工作流结构无诊断 |
+| `npm --prefix web ci`（本机会话指定的安装参数） | 通过 | 7 秒；安装 552 个包 |
+| `npm --prefix web run build` | 通过 | 35 秒；`web/dist` 正常生成，bundle 检查通过 |
+| `npm --prefix web test` | 最终通过 | 无其他重任务并发时 62 秒；61 个文件、449 个用例全部通过。前两次完整运行分别在 114 秒和 110 秒后因 2 个、1 个用例触发 5 秒超时；两次都观察到同机另一个会话正在运行 Go 全量测试或 Vitest，4 核负载明显超过核数。两个超时文件定向复跑 26 秒全部通过 |
+| `npm --prefix web run typecheck` | 通过 | 21 秒；无诊断 |
+| `go vet ./...` | 通过 | 8 秒；无输出 |
+| `go build ./cmd/controlplane ./cmd/agent` | 通过 | 2 秒；随后检查确认仓库里没有生成 `controlplane` 或 `agent` 文件 |
+| `make test-postgres` | 通过 | 25 秒；按现有目标只运行 `TestPostgresMigrationAndStorage` |
+
+GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完成，运行记录保留在仓库的 Actions 页面。本地没有运行 `go test ./...`，它由 P0-01 的基线和下面的托管运行覆盖。
+
+| 运行编号 | 分支与内容 | 结论 | 各作业结果与耗时 |
+| --- | --- | --- | --- |
+| 43435112844 | `ci/p0-02-probe`：第一版工作流，与最终版只差并发分组和 lockfile 注释 | 通过 | `web` 通过，143 秒（`npm ci` 53 秒、构建 17 秒、Vitest 55 秒、类型检查 10 秒）；`go` 通过，121 秒（`go vet` 44 秒、`go test` 61 秒、构建 1 秒）；`postgres` 通过，56 秒（`make test-postgres` 39 秒） |
+| 43437776090 | `ci/p0-02-fail`：在第一版上加入一个必定失败的 Go 测试 | 失败 | `go` 失败，120 秒：`go vet` 通过，“Test Go packages”一步失败，其后的构建步骤被跳过；`web` 通过，133 秒；`postgres` 通过，66 秒 |
+| 43443972352 | `ci/p0-02-final`：本步骤最终提交的工作流 | 通过 | `web` 通过，157 秒（`npm ci` 59 秒、构建 16 秒、Vitest 58 秒、类型检查 10 秒）；`go` 通过，124 秒（`go vet` 39 秒、`go test` 66 秒、构建 1 秒）；`postgres` 通过，61 秒（`make test-postgres` 40 秒） |
+
+两条验收项都满足：一次推送触发三个作业且全部通过；临时分支上的失败测试让 CI 变红。三个临时分支在验收后删除，失败测试没有进入 `main`。托管运行器上 `go test ./...` 约 1 分钟，明显短于 P0-01 在本机测得的 4 分钟左右，`go` 作业 30 分钟的超时余量充足。

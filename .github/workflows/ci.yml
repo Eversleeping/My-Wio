@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share a source-branch group so newer commits cancel stale runs.
+  # Pushes use run_id so every pushed range, especially on main, runs to completion.
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The lockfile contains URLs for Tencent's mirror and the official npm registry.
+      # Plain npm ci works on GitHub-hosted runners; if the mirror becomes unreachable,
+      # use the official registry with --replace-registry-host=always instead.
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Build web application
+        run: npm --prefix web run build
+
+      - name: Test web application
+        run: npm --prefix web test
+
+      - name: Type-check web application
+        run: npm --prefix web run typecheck
+
+      - name: Upload web distribution
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  go:
+    name: Go
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download web distribution
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Vet Go packages
+        run: go vet ./...
+
+      - name: Test Go packages
+        run: go test ./...
+
+      - name: Build Go commands
+        run: go build ./cmd/controlplane ./cmd/agent
+
+  postgres:
+    name: PostgreSQL
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download web distribution
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Cache embedded PostgreSQL archive
+        uses: actions/cache@v6
+        with:
+          path: ~/.embedded-postgres-go
+          key: embedded-postgres-${{ runner.os }}-${{ runner.arch }}-16.9.0-${{ hashFiles('go.sum') }}
+
+      - name: Test PostgreSQL integration
+        run: make test-postgres
