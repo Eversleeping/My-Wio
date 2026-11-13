@@ -157,4 +157,5 @@ type migration struct {
   - 新增结构夹具 `internal/store/testdata/schema/sqlite/` 和 `internal/store/testdata/schema/postgres/`，各有 0.2.12、0.2.58、0.3.12 三份。
   - `internal/store/postgres_integration_test.go` 增加 80 行，在 PostgreSQL 集成测试里加入同样的比较。
 - 会话留下的日志显示，`gofmt -l`、`go vet ./...`、`go test ./internal/store` 和 `go test ./...` 通过；两份反向验证的日志里，SQLite 和 PostgreSQL 的比较都报出了 `events_time_idx` 索引的差异。这些结果协调者没有复核。
+- 11-14 补充：会话在中断后恢复，交回了完整的实现和一份执行记录，仍在同一个 worktree 里，没有提交。夹具版本改成了 0.2.45、0.2.58、0.3.12，另外新增了一个 PostgreSQL 结构导出程序；上面两条是中断时的状态。交回的内容协调者还没有审阅，下面的清单仍然是审阅时要确认的事项。
 - 还没有做的：确认三份夹具确实是用对应版本的代码生成的；确认比较覆盖了做法第 2 步列出的各项；确认 `make test-postgres` 的最终结果；说明有没有发现迁移分叉（验收要求有分叉就登记并取得处理意见）；写正式的执行记录；协调者审阅。
