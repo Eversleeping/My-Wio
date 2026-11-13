@@ -22,6 +22,7 @@ Wio 是面向小规模 Linux 服务器集群的个人自托管控制平台。通
 | [Claude 接入](docs/CLAUDE.md) / [Gemini 接入](docs/GEMINI.md) | CLI 认证、兼容版本和运行限制 |
 | [会话协作协议](docs/SESSION_COLLABORATION.md) | 工具、授权范围、请求去重和执行生命周期 |
 | [前端 E2E](web/e2e/README.md) | 隔离浏览器测试的运行方式与覆盖边界 |
+| [架构调整路线图](docs/roadmap/README.md) | 分阶段的结构调整计划、执行规则和进度总表，供跨会话、跨 Agent 接力使用 |
 
 本文与用户手册按当前仓库实现维护；当前 Wio 版本见 [internal/buildinfo/version.go](internal/buildinfo/version.go)。功能是否开放还取决于目标 Agent 和实际 CLI 的版本，不能仅根据控制面版本判断。
 
