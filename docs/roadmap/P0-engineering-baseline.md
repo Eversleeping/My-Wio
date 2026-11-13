@@ -199,4 +199,46 @@ E2E 使用模拟 API，不连接真实服务器或模型。如果耗时明显长
 
 按时间顺序追加，每条包含日期、步骤编号、会话标识、做了什么、验收结果、遗留事项。
 
-（暂无）
+### 2026-11-13 P0-01
+
+- 会话：`11-13 Gemini` 完成第一遍取样后会话中断，未能写记录；`11-13 Codex` 在独立干净工作区重跑并记录。
+- 提交：`7be5a96`。相对路线图基线 `0247c1c`，`git diff --name-only 0247c1c HEAD` 只有文档和 `.gitignore`，没有产品代码、测试或构建配置变化，因此本记录同样适用于 `0247c1c`。
+- 工具版本：Go 1.22.12、Node.js 22.20.0、npm 10.9.3。
+- 运行方式：4 核机器上按表中顺序串行运行。耗时是命令的墙钟时间，不用于设置 CI 超时。
+
+| 命令 | `11-13 Gemini` 第一次取样 | `11-13 Codex` 第二次取样 | 关键统计 |
+| --- | --- | --- | --- |
+| `npm --prefix web ci` | 通过，7 秒 | 通过，6 秒 | 安装 552 个包 |
+| `npm --prefix web run build` | 通过，21 秒 | 通过，23 秒 | 两次 `check:bundle` 均通过；最大 JavaScript chunk 321.74 kB，小于 500.00 kB 限制 |
+| `go vet ./...` | 通过，5 秒 | 通过，6 秒 | 无输出 |
+| `go test ./...` | 失败，226 秒；相同环境立即复跑仍失败，3 秒（缓存命中） | 通过，236 秒 | 第一次：28 个包通过、3 个包无测试文件、2 个包失败；第二次：30 个包通过、3 个包无测试文件、0 个包失败。第一次失败完全由 Git 配置环境引起，见下文 |
+| `npm --prefix web test` | 通过，58 秒 | 通过，61 秒 | 两次均为 61 个测试文件、449 个用例全部通过 |
+| `npm --prefix web run typecheck` | 通过，13 秒 | 通过，13 秒 | 无诊断 |
+| `make test-postgres` | 通过，16 秒 | 通过，17 秒 | 两次 `TestPostgresMigrationAndStorage` 均通过 |
+| `npm --prefix web run e2e` | 通过，62 秒 | 通过，60 秒 | 两次均为 44 个 project 用例：33 通过、0 失败、11 跳过、0 不稳定 |
+
+Go 全量测试中耗时最久的包如下。第一次依次为 `internal/httpapi` 210.522 秒、`internal/store` 194.439 秒、`internal/agentgateway` 117.579 秒、`internal/scheduler` 17.610 秒；第二次依次为 221.609 秒、204.845 秒、123.908 秒、19.045 秒。
+
+E2E 按 project 的结果两次相同：`desktop-chromium` 共 22 个，21 通过、1 跳过；`mobile-chromium` 共 22 个，12 通过、10 跳过。Playwright 配置明确声明桌面和移动两个 project；用例代码按 project 显式跳过 1 个仅移动端覆盖的响应式导航用例，以及 10 个仅桌面端覆盖的导航、部署、服务器、工作区和 Codex 流程用例。因此 11 个跳过均为有意跳过，不是运行条件缺失。
+
+测试规模基线：
+
+| 测试集 | 数量 | 统计方式 |
+| --- | --- | --- |
+| Go 默认构建 | 852 个顶层测试函数 | `go test -list '^Test' ./...`，只统计以 `Test` 开头的列举结果 |
+| `internal/store` | 默认 168 个；`-tags=postgresintegration` 时 170 个，增加 2 个 | 分别列举该包的默认和 PostgreSQL 标签构建 |
+| Vitest | 61 个测试文件、449 个用例 | 取 Vitest 报告 |
+| Playwright | 44 个 project 用例 | 取 Playwright 报告；22 个源用例分别在两个 project 下展开 |
+
+总览的“约 846 个 / 约 336 个”与实际统计口径不一致：Go 实际为 852 个，比近似值多 6 个；Vitest 实际执行 449 个，比近似值多 113 个。Vitest 报告会展开参数化和生成的用例，不能用源码中的测试调用次数替代。总览是否改为精确的 runner 数字由协调者处理。
+
+Git 配置环境导致的失败：
+
+1. Wio Agent 为 Claude 和 Gemini 会话构造的 `GIT_CONFIG_PARAMETERS` 会注入 Git 身份和凭据助手配置。清除全部 `GIT_CONFIG*` 后，仅加入一份假的 Git 身份，`go test -count=1 ./internal/gitrepository ./internal/scanner` 可重复得到以下结果：`internal/scanner` 通过，`internal/gitrepository` 的 `TestCreateREADMEUsesConfiguredGitIdentityWhenOptionsAreEmpty`、`TestCreateREADMERejectsMissingGitIdentity`、`TestListCommitsPaginatesAndReturnsStructuredMetadata` 失败。原因是进程级配置覆盖了测试创建的身份或“缺少身份”前置条件。第二次取样的 shell 没有 `GIT_CONFIG*` 注入，Go 全量测试通过。
+2. Gemini CLI 的 shell 还会注入 `GIT_CONFIG_COUNT`、`GIT_CONFIG_KEY_n`、`GIT_CONFIG_VALUE_n`、`GIT_CONFIG_NOSYSTEM`、`GIT_CONFIG_SYSTEM` 等变量。第一次取样已经单独清除 `GIT_CONFIG_PARAMETERS`，但仍有三个用例稳定失败：`internal/gitrepository.TestInspectionDoesNotRunRepositoryPrograms`、`internal/gitrepository.TestMutationsKeepHooksOnlyForOwnedRepositories`、`internal/scanner.TestDiscoverDoesNotRunRepositoryPrograms`；立即复跑结果相同。清除全部 `GIT_CONFIG*` 后，两个受影响包通过。另用只覆盖 fsmonitor 和 hooks 路径的 `GIT_CONFIG_COUNT` 配置做机制验证，也准确复现这三个失败；这是失败机制验证，不是对 Gemini CLI 完整环境的还原。
+
+后续在 Wio 启动的 Claude、Gemini 会话中运行 Go 测试前，应清除全部 `GIT_CONFIG*` 变量，至少包括 `GIT_CONFIG_PARAMETERS`、`GIT_CONFIG_COUNT`、所有 `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`、`GIT_CONFIG_NOSYSTEM` 和 `GIT_CONFIG_SYSTEM`。只清除 `GIT_CONFIG_PARAMETERS` 不足以得到干净测试环境。
+
+既存失败或不稳定用例：干净 Git 配置环境下没有。两次前端测试和 E2E 结果一致；Go 的差异均已由可重复的环境注入解释。
+
+遗留事项：Git 相关测试应在测试进程内隔离或显式清除继承的 Git 配置环境，避免开发会话和 CI 的外部配置改变测试前置条件；本步骤只记录，不修改测试。协调者还需在总览“发现的问题”登记该项，并决定是否把总览的测试规模近似值更新为上述 runner 数字。
