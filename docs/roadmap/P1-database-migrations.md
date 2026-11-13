@@ -149,4 +149,12 @@ type migration struct {
 
 按时间顺序追加，每条包含日期、步骤编号、会话标识、做了什么、验收结果、遗留事项。
 
-（暂无）
+### 2026-11-13 P1-01（交接：会话中断，未审阅）
+
+- 会话：`11-13 Codex`。会话在跑最后一轮验收命令时，因 Codex 账号达到用量上限而中断，没有写执行记录，也没有交回报告。协调者 `11-13 Claude` 还没有审阅这些改动。这一条是交接记录，步骤完成时由正式的执行记录替换。
+- 改动没有提交，在分支 `roadmap/p1-01` 对应的 worktree 里，基于 `77b027b`：
+  - 新增 `internal/store/schema_consistency_test.go`，444 行。
+  - 新增结构夹具 `internal/store/testdata/schema/sqlite/` 和 `internal/store/testdata/schema/postgres/`，各有 0.2.12、0.2.58、0.3.12 三份。
+  - `internal/store/postgres_integration_test.go` 增加 80 行，在 PostgreSQL 集成测试里加入同样的比较。
+- 会话留下的日志显示，`gofmt -l`、`go vet ./...`、`go test ./internal/store` 和 `go test ./...` 通过；两份反向验证的日志里，SQLite 和 PostgreSQL 的比较都报出了 `events_time_idx` 索引的差异。这些结果协调者没有复核。
+- 还没有做的：确认三份夹具确实是用对应版本的代码生成的；确认比较覆盖了做法第 2 步列出的各项；确认 `make test-postgres` 的最终结果；说明有没有发现迁移分叉（验收要求有分叉就登记并取得处理意见）；写正式的执行记录；协调者审阅。

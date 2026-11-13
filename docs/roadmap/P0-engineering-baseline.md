@@ -275,3 +275,20 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
 | 43443972352 | `ci/p0-02-final`：本步骤最终提交的工作流 | 通过 | `web` 通过，157 秒（`npm ci` 59 秒、构建 16 秒、Vitest 58 秒、类型检查 10 秒）；`go` 通过，124 秒（`go vet` 39 秒、`go test` 66 秒、构建 1 秒）；`postgres` 通过，61 秒（`make test-postgres` 40 秒） |
 
 两条验收项都满足：一次推送触发三个作业且全部通过；临时分支上的失败测试让 CI 变红。三个临时分支在验收后删除，失败测试没有进入 `main`。托管运行器上 `go test ./...` 约 1 分钟，明显短于 P0-01 在本机测得的 4 分钟左右，`go` 作业 30 分钟的超时余量充足。
+
+### 2026-11-13 P0-07（交接：已交回，待返工）
+
+- 会话：`11-13 Codex` 交回了实现，协调者 `11-13 Claude` 审阅后有返工项，还没有合入。这一条是交接记录，步骤完成时由正式的执行记录替换。
+- 改动没有提交，在分支 `roadmap/p0-07` 对应的 worktree 里，基于 `77b027b`：
+  - `cmd/controlplane/main.go`：把 gRPC 服务、`httpapi.New` 和 h2c 分流提取成 `controlPlaneHandler`，`run` 改为调用它。
+  - 新增 `cmd/controlplane/cross_process_test.go`（`TestCrossProcessAcceptance`）和 `cmd/controlplane/testdata/fakeengine/`（三种引擎共用的假引擎）。
+  - 本文件：P0-07 做法第 5 条的修正（Codex 的 app-server 是长驻进程，中断只结束当前轮，进程不退出），以及一份执行记录草稿。
+- 审阅时已经核实的部分：`main.go` 的改动是纯移动；用例只通过 HTTP 接口操作和断言；没有改 `cmd/agent` 依赖的包，不需要升版本号；Agent 在启动和这些用例里不会调用 Docker。协调者独立重做了反向验证：用 `go test -overlay` 把 Agent 一侧的 `"claude.turn.interrupt"` 改错，新测试失败，`internal/agent` 原有测试不失败。会话交回的结果是 `-count=20` 连续通过，单次 2.65 到 2.93 秒。
+- 返工项：
+  1. 隔离用户主目录。把 `HOME` 指到空目录运行这个测试，Agent 会在里面创建 `.gemini/settings.json` 并写入 `hooks.BeforeModel`。现在的测试没有设置 `HOME`，所以会读写运行账号真实的 Gemini 配置，结果也取决于那份配置。要在编译假引擎之后把 `HOME` 指到临时目录，并让 `GEMINI_CLI_HOME`、`CLAUDE_CONFIG_DIR` 不指向真实目录；P0-07 做法第 3 条补上“用户级配置目录也指向临时目录”。
+  2. 数据库现在用 `defer database.Close()` 关闭，早于 `t.Cleanup` 里停止 Agent 和 HTTP 服务。改用 `t.Cleanup` 注册，让收尾顺序是 Agent、HTTP 和 gRPC、数据库、临时目录。
+  3. 断线重连用例有一个很窄的竞态。如果排队的操作在旧连接被网关发现断开之前已经发出，它会被标记为已下发，而 `PendingOperations` 要等 30 秒才重发这类操作，用例只等 10 秒。`/api/servers` 的在线状态按最近一次心跳加 90 秒宽限期计算，不能用来判断旧连接已经断开。需要让用例在两种时序下都稳定，例如把最后一次等待放宽到超过 30 秒，并在注释里写明原因。
+  4. 测试失败时，临时目录清理会报“directory not empty”，目录留在系统临时目录里。协调者做反向验证时每次都遇到，残留的是状态目录下 `operation-results/` 里的一个结果文件，看起来是 `agent.Client.Run` 返回之后仍有操作的结果在写入。先确认原因，再让失败路径也能清理干净；如果原因在 Agent 一侧，登记到总览的“发现的问题”，不在这一步改。
+  5. 假引擎里 Gemini 的非 ACP 分支没有用例走到，删除，或者写明保留的理由。
+  6. 执行记录草稿里去掉本机路径和“由协调者补记”这类过程性的话；返工后重跑 `-count=20`、`gofmt -l`、`go vet ./...` 和 `go test ./cmd/controlplane`，更新数字。
+- 之后还要做：返工通过后分两个提交合入，先是 `main.go` 的提取，再是测试和假引擎；推送后确认 CI 的 `go` 作业通过，再把状态改为 `已完成`。

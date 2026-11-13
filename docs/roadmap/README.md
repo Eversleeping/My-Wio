@@ -157,14 +157,14 @@ npm --prefix web run typecheck
 | 编号 | 步骤 | 规模 | 前置 | 状态 | 负责 | 提交 |
 | --- | --- | --- | --- | --- | --- | --- |
 | P0-01 | 记录测试基线 | S | 无 | 已完成 | 11-13 Codex | 4e157c9 |
-| P0-02 | GitHub Actions：前端、Go、PostgreSQL 三个作业 | S | P0-01 | 进行中 | 11-13 Codex | |
+| P0-02 | GitHub Actions：前端、Go、PostgreSQL 三个作业 | S | P0-01 | 已完成 | 11-13 Codex | c238aff |
 | P0-03 | E2E 作业 | S | P0-02 | 待开始 | | |
 | P0-04 | 格式与静态检查门槛 | S | P0-02 | 待开始 | | |
 | P0-05 | 版本号护栏脚本 | S | P0-02 | 待开始 | | |
 | P0-06 | 本地统一入口 `make verify` | S | P0-01 | 进行中 | 11-13 Gemini | |
-| P0-07 | 跨进程验收测试 | M | P0-02 | 进行中 | 11-13 Codex；与 P0-02 并行开工，P0-02 完成后合入 | |
+| P0-07 | 跨进程验收测试 | M | P0-02 | 进行中 | 11-13 Codex；已交回，审阅后有返工项，交接见 P0 的“执行记录” | |
 | P0-08 | 浏览器冒烟测试接入真实链路 | S | P0-03、P0-07 | 待开始 | | |
-| P1-01 | 旧库夹具与结构一致性测试 | M | P0-02 | 待开始 | | |
+| P1-01 | 旧库夹具与结构一致性测试 | M | P0-02 | 进行中 | 11-13 Codex；会话因 Codex 账号用量上限中断，交接见 P1 的“执行记录” | |
 | P1-02 | 迁移运行器与 `schema_migrations` | M | P1-01 | 待开始 | | |
 | P1-03 | 降级保护 | S | P1-02 | 待开始 | | |
 | P1-04 | 迁移编写规范与升级文档 | S | P1-02 | 待开始 | | |
@@ -245,6 +245,9 @@ npm --prefix web run typecheck
 | 2026-11-13 | P6-01 | Claude 的会话列表在 Store 里只按会话置顶和更新时间排序后取前 200 条，项目置顶是前端拿到结果后才排的；会话超过 200 条时，置顶项目的会话可能整个不在结果里。Gemini 的查询先按项目置顶排序，没有这个问题（P6 清单 D22） | P2-05 统一列表排序时消除；在那之前是否单独修由用户决定 |
 | 2026-11-13 | P6-01 | Gemini 和 Claude 的会话列表固定截断在 200 条，没有“加载更多”，侧栏搜索也只覆盖这 200 条（P6 清单 D04、D21） | P2-05 的游标分页和分页前搜索、P6-02 的侧栏解决 |
 | 2026-11-13 | P6-01 | 协作任务对话框（`web/src/components/CollaborationTaskDialog.tsx`）始终列出三种目标引擎，只检查源会话是否支持协作、授权和目标权限映射；`ReadCollaborationState`（`internal/store/session_collaboration.go`）也不返回目标引擎的 CLI、凭据和版本是否可用。这与 P6 新建对话框“不可用的引擎禁用并写明原因”不是同一套判断 | P6-03 第 5 步对齐 |
+| 2026-11-13 | P0-02、P0-06 | 本机负载高时，Vitest 有用例超过默认的 5 秒超时而失败。两个会话各自遇到过：同一台 4 核机器上另有 Go 全量测试或另一组 Vitest 在跑时，`web/src/GeminiPage.test.tsx` 的“exports all pages of a conversation rather than only the visible recent history”和 `web/src/DeploymentsPage.test.tsx` 的“creates and edits public access settings, manages containers, and exposes deployment links”超时。没有并发负载时两个文件都通过，GitHub 托管运行器上的运行也都通过 | 暂不处理，本机验收时不要让几组重任务同时运行。如果 CI 上也出现，再给这两个用例单独放宽超时。由用户决定 |
+| 2026-11-13 | P0-07 审阅 | `internal/geminiadapter` 的 `TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation`（`adapter_test.go`）没有隔离用户主目录。测试配置了自定义接口地址和默认模型，适配器因此调用 `ensureLoopAliases`，在运行账号的 `~/.gemini/settings.json` 里写入 `modelConfigs.customAliases` 下的 `loop-detection` 和 `loop-detection-double-check`。把 `HOME` 指到空目录后逐个运行该包的 52 个测试，只有这一个留下文件；`internal/agent`、`internal/claudeadapter`、`internal/codexadapter` 整包运行后主目录里没有新增文件。写入的值与产品写入的相同，所以在已经运行 Wio Agent 的账号下没有实际变化；在没有用过 Wio 的开发机上，跑一次 `go test ./...` 会改动个人的 Gemini CLI 配置 | 建议在这个测试里把 `HOME` 指到临时目录，只改测试代码。由用户决定 |
+| 2026-11-13 | P0-06 执行期间 | Wio 里的 Gemini 子会话第一轮正常结束后，再追加消息会立即失败，报错“Gemini CLI cannot synchronize restored history; update Wio's Gemini compatibility adapter before retrying”。报错出自 `internal/geminiadapter/acp.go`：`session/load` 的返回里没有 `_meta.wioHistoryReplayed` 标记，而这个标记由 `internal/geminiadapter/history-loader.mjs` 注入。出现问题的服务器上受管的 Gemini CLI 是 0.68.0。原因没有查明，可能是这个版本与注入方式不兼容 | 没有处理。在修好之前，Gemini 会话交回后的返工只能另开会话。由用户决定何时排查 |
 
 ## 变更记录
 
@@ -258,3 +261,4 @@ npm --prefix web run typecheck
 | 2026-11-13 | P0-01 完成，基线写入 P0 的“执行记录”；“基线数字”里的测试数量改用测试运行器的实测值；登记 Git 配置环境变量和 `make test-postgres` 两条问题 |
 | 2026-11-13 | P6-01 的差异盘点写入 P6：28 处差异，另有五项取舍 T1–T5 等用户确认，确认前 P6-01 保持 `进行中`。按盘点结果，P6“设计”里的移动端由两态改为三态，P6-02 的做法和验收有补充；P2 的列表路由、P2-05、P2-06 补上筛选、分页和分组摘要的要求；登记四条问题 |
 | 2026-11-13 | 按用户提高并行度的要求，在“并行”一节放宽领取规则（先开工、按依赖顺序合入）；P0-07 与 P0-02 并行开工 |
+| 2026-11-13 | P0-02 完成：CI 工作流合入，三个作业在 GitHub 托管运行器上通过，临时分支上故意失败的测试让 CI 变红，记录见 P0 的“执行记录”。P0-07 已交回，审阅后有返工项；P1-01 已派发，会话因 Codex 账号用量上限中断。两步的交接记录分别写在 P0、P1 的“执行记录”。登记三条问题：高负载下 Vitest 用例超时、`internal/geminiadapter` 有测试改写主目录下的配置、Gemini 子会话追加消息失败 |
