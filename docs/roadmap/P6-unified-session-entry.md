@@ -53,12 +53,14 @@
 - 侧栏的数据来自 P2-05 的 `GET /api/sessions`（省略 `engine` 参数的混合列表）和现有的 `/workspaces`。
 - 引擎标记用图标加文字，不只靠颜色区分。
 - 引擎筛选是本地偏好，不写进地址栏。
+- 搜索在服务端分页前执行，匹配组名、路径、标题、服务器名、Wio 会话 ID 和原生会话 ID。
+- 混合列表按会话级键（项目置顶、会话置顶、更新时间、引擎、ID）游标分页，同时返回分页前的完整工作区摘要；前端按项目置顶时间、项目名和规范工作区标题排组。
 
 ### 新建会话
 
 一个对话框，三段：
 
-1. 工作区。从某个工作区的右键菜单进入时已经选好。
+1. 工作区。只列出 `status=ready` 的工作区；从某个工作区的右键菜单进入时已经选好。
 2. 引擎。默认是这个工作区上一次使用的引擎。目标服务器上不可用的引擎显示为禁用并写明原因（CLI 未安装、Agent 版本不够、没有凭据），原因来自 P2-02 的能力解析，不在前端另写判断。
 3. 引擎自己的字段（模型、模式、思考程度等），由引擎模块提供，内容与现在各自的对话框一致。
 
@@ -89,6 +91,11 @@
 | Q4 | 归档视图 | 一个归档视图，包含三种引擎 |
 | Q5 | 首页是否改成“待处理事项”视图（等待回答的提问、待审批、失败的轮次） | 本阶段只把会话数改成三种引擎合计；待处理事项视图另行决定 |
 | Q6 | 导航里是否保留按引擎直达的快捷方式 | 不保留，用侧栏的引擎筛选代替 |
+| Q7 | 工作区组顺序 | 项目置顶时间倒序；未置顶组按项目名、规范工作区标题升序。顺序基于分页前的完整分组摘要，不只重排当前页 |
+| Q8 | 搜索字段和完整性 | 在 P2-05 服务端分页前搜索组名、路径、标题、服务器名、Wio 会话 ID 和原生会话 ID |
+| Q9 | 非 ready 工作区是否出现在新建对话框 | 不显示，与当前 Gemini、Claude 一致 |
+| Q10 | 归档视图允许哪些管理操作 | 保留项目置顶、重命名、隐藏，以及会话重命名、恢复、删除；删除继续二次确认 |
+| Q11 | 混合列表分页方式 | 按会话级键（项目置顶标志与时间、会话置顶标志与时间、`updated_at`、引擎、ID）分页，响应为 `{items,next_cursor,groups}`；`groups` 是分页前的完整工作区摘要 |
 
 ## 步骤
 
@@ -114,7 +121,7 @@
 
 **做法**
 
-1. 新增 `sessions` 视图和页面，侧栏按“设计”实现：三种引擎的会话按工作区合并分组，带引擎标记、引擎筛选、搜索和归档切换。分组、排序、置顶和分页规则按 P6-01 的确认结论只实现一份；工作区是否有会话不能只根据当前分页窗口判断。详情请求拿到但列表窗口中没有的选中会话要并入对应工作区组。
+1. 新增 `sessions` 视图和页面，侧栏按“设计”实现：三种引擎的会话按工作区合并分组，带引擎标记、引擎筛选、搜索和归档切换。分组、排序、置顶和分页规则按 Q7、Q8、Q11 只实现一份；工作区是否有会话不能只根据当前分页窗口判断。详情请求拿到但列表窗口中没有的选中会话要并入对应工作区组。归档视图按 Q10 保留项目置顶、重命名、隐藏和会话重命名、恢复、删除。
 2. 主区复用 P2-06 的会话外壳，按所选会话的引擎加载引擎模块。引擎模块继续按引擎懒加载，避免把三种引擎的代码打进同一个块。
 3. 地址解析支持新形式；旧形式在这一步仍然打开旧页面，不做转换。
 4. 实时刷新：页面订阅 `codex`、`gemini`、`claude` 三个范围的并集，用一个公共 revision 刷新列表；不保留 Gemini、Claude 各自的 5 秒轮询。P3-09 尚未完成时最多保留一个页面级、仅页面可见时运行的兜底轮询。实时事件类型和范围的划分不变。
@@ -224,7 +231,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 一致：分组范围 | 先滤掉隐藏项目，只为有会话的工作区建组 | 同左 | 同左 | 一致 | 直接合成一份；“显示全部工作区”开关另行把 `/workspaces` 中的空工作区补进来 | `web/src/pages/CodexPage.tsx:129-134` `CodexPage`；`web/src/pages/GeminiPage.tsx:68-79` `GeminiPage.groups`；`web/src/pages/ClaudePage.tsx:340-352` `groupClaudeThreads` |
 | D01 分组标题的兜底 | `项目名 · display_name/branch/目录名`；都取不到时还会退到目录名或工作区 ID | 主规则相同；取不到 identity 时只显示项目名 | 同 Gemini | 偶然；三份同类分组函数的兜底不同 | 采用 Codex：始终给工作区一个可区分的 identity，最后退到工作区 ID | `web/src/App.tsx:710-726` `groupThreadsByWorkspace`；`web/src/pages/GeminiPage.tsx:73-78` `GeminiPage.groups`；`web/src/pages/ClaudePage.tsx:347-351` `groupClaudeThreads` |
-| D02 工作区组顺序 | 项目置顶时间倒序；其后按项目名、组标题升序，但只对已加载会话分组 | 项目置顶时间倒序；其余保持接口首次出现顺序，实际受组内最靠前会话影响 | 同 Gemini；接口本身还未按项目置顶排序 | 偶然；没有引擎能力理由，Q3 只决定组内会话混排，未决定组顺序 | 组顺序必须基于分页前的完整分组摘要，不能只重排当前页。建议项目置顶时间倒序，其余按项目名、规范工作区标题升序；见 T1，分页方案见 T5 | `web/src/App.tsx:710-726` `groupThreadsByWorkspace`；`web/src/pages/GeminiPage.tsx:80-85` `GeminiPage.groups`；`web/src/pages/ClaudePage.tsx:353-358` `groupClaudeThreads` |
+| D02 工作区组顺序 | 项目置顶时间倒序；其后按项目名、组标题升序，但只对已加载会话分组 | 项目置顶时间倒序；其余保持接口首次出现顺序，实际受组内最靠前会话影响 | 同 Gemini；接口本身还未按项目置顶排序 | 偶然；没有引擎能力理由，Q3 只决定组内会话混排，未决定组顺序 | 按 Q7：组顺序基于分页前的完整分组摘要；项目置顶时间倒序，未置顶组按项目名、规范工作区标题升序 | `web/src/App.tsx:710-726` `groupThreadsByWorkspace`；`web/src/pages/GeminiPage.tsx:80-85` `GeminiPage.groups`；`web/src/pages/ClaudePage.tsx:353-358` `groupClaudeThreads` |
 | 一致：组内会话顺序 | 置顶时间倒序，再按 `updated_at` 倒序 | 接口已按项目置顶、会话置顶、更新时间排序，页面保持该顺序 | 接口按会话置顶、更新时间排序；页面稳定重排置顶项，效果相同 | 一致 | 跨引擎混排时采用：置顶会话先按 `pinned_at` 倒序，未置顶会话按 `updated_at` 倒序；最后加（引擎，ID）稳定破同值 | `web/src/App.tsx:724-726` `groupThreadsByWorkspace`；`internal/store/gemini.go:76-95` `GeminiThreads`；`internal/store/claude.go:59-75` `ClaudeThreads`；`web/src/pages/ClaudePage.tsx:126` `ClaudePage` |
 | D27 选中或深链会话不在列表窗口 | 单独请求详情后，用 `mergeThreads` 并入当前活动/归档列表，再参与分组 | 单独请求只供主区 `active` 使用，不进入 `groups` | 同 Gemini | 偶然；同一深链行为由三份页面实现不同 | 采用 Codex：详情成功后按（引擎，ID）去重并入正确归档视图和工作区组，但不改分页游标；P2-06 公共侧栏负责 | `web/src/pages/CodexPage.tsx:117-134` `CodexPage` 与 `web/src/App.tsx:543-552` `mergeThreads`；`web/src/pages/GeminiPage.tsx:57-68` `GeminiPage`；`web/src/pages/ClaudePage.tsx:63-75` `ClaudePage` |
 
@@ -234,7 +241,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | D03 是否有搜索入口 | 无 | 有 | 有 | 偶然；同一侧栏只有 Codex 未实现 | 统一页提供一个搜索框 | `web/src/pages/CodexPage.tsx:305-322` `CodexPage`；`web/src/pages/GeminiPage.tsx:125-140` `GeminiPage`；`web/src/pages/ClaudePage.tsx:108-131` `ClaudePage` |
 | 一致：Gemini/Claude 的匹配字段 | — | 组名、路径；不命中组时匹配标题、服务器名、Wio ID、原生 `session_id`，忽略大小写 | 同 Gemini | 一致 | 作为统一搜索的现状基线 | `web/src/pages/GeminiPage.tsx:80-85` `GeminiPage.groups`；`web/src/pages/ClaudePage.tsx:353-358` `groupClaudeThreads` |
-| D04 搜索完整性 | 无搜索；列表可逐页加载全部 | 只搜索接口截断后的最多 200 条 | 同 Gemini | 偶然；客户端搜索叠加不同列表上限导致结果不完整 | 搜索必须在 P2-05 服务端分页前执行，不能只过滤已加载页；精确字段见 T2 | `web/src/App.tsx:554-618` `useThreadList`；`web/src/pages/GeminiPage.tsx:57,68-86` `GeminiPage`；`web/src/pages/ClaudePage.tsx:63,97` `ClaudePage`；`internal/store/gemini.go:82` `GeminiThreads`；`internal/store/claude.go:65` `ClaudeThreads` |
+| D04 搜索完整性 | 无搜索；列表可逐页加载全部 | 只搜索接口截断后的最多 200 条 | 同 Gemini | 偶然；客户端搜索叠加不同列表上限导致结果不完整 | 按 Q8：P2-05 在服务端分页前搜索组名、路径、标题、服务器名、Wio 会话 ID 和原生会话 ID | `web/src/App.tsx:554-618` `useThreadList`；`web/src/pages/GeminiPage.tsx:57,68-86` `GeminiPage`；`web/src/pages/ClaudePage.tsx:63,97` `ClaudePage`；`internal/store/gemini.go:82` `GeminiThreads`；`internal/store/claude.go:65` `ClaudeThreads` |
 
 ### 置顶和归档的操作入口
 
@@ -242,9 +249,9 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 一致：页头入口 | 都有“恢复隐藏项目”、活动/归档切换；活动视图显示新建按钮，归档视图隐藏新建按钮 | 同左 | 同左 | 一致 | 直接合并；一个归档视图由 `archived` 筛选三种引擎 | `web/src/pages/CodexPage.tsx:307` `CodexPage`；`web/src/pages/GeminiPage.tsx:127-130` `GeminiPage`；`web/src/pages/ClaudePage.tsx:110-117` `ClaudePage` |
 | 一致：活动视图的置顶和归档 | 工作区菜单有项目置顶、归档项目会话；会话菜单有会话置顶、归档 | 同左 | 同左 | 一致 | 公共菜单实现一次；项目归档仍调用所选引擎的能力，P6-06 前不把三引擎批量归档混成一次操作 | `web/src/pages/CodexPage.tsx:264-280` `projectMenuActions/threadMenuActions`；`web/src/pages/geminiManagement.tsx:42-60` `projectActions/threadActions`；`web/src/pages/claudeManagement.tsx:42-60` 同名函数 |
-| D05 归档视图的工作区菜单 | 仍可打开，保留项目置顶、项目重命名、隐藏项目 | 标题不包 `ContextMenu`，没有工作区菜单 | 同 Gemini | 偶然；归档视图条件分支不同 | 建议保留菜单，但只显示归档状态下仍有效的项目置顶、重命名、隐藏；是否如此见 T4 | `web/src/pages/CodexPage.tsx:264-270,310` `projectMenuActions`；`web/src/pages/GeminiPage.tsx:133-135` `GeminiPage`；`web/src/pages/ClaudePage.tsx:121-126` `ClaudePage` |
-| D06 归档会话重命名 | 归档菜单不含重命名 | 归档菜单仍含重命名 | 同 Gemini | 偶然；后端都能更新标题，没有引擎能力差异 | 建议归档会话仍可重命名，见 T4 | `web/src/pages/CodexPage.tsx:272-285` `threadMenuActions`；`web/src/pages/GeminiPage.tsx:109-117` `threadMenuActions`；`web/src/pages/ClaudePage.tsx:99-105` `threadActions` |
-| D07 归档会话删除 | 归档列表不显示行内删除按钮 | 活动和归档列表都显示；只按运行/恢复状态禁用 | 同 Gemini | 偶然；三组删除接口都存在 | 建议归档视图允许删除并保留确认框，见 T4 | `web/src/pages/CodexPage.tsx:319` `CodexPage`；`web/src/pages/GeminiPage.tsx:135-138` `GeminiPage`；`web/src/pages/ClaudePage.tsx:126-129` `ClaudePage` |
+| D05 归档视图的工作区菜单 | 仍可打开，保留项目置顶、项目重命名、隐藏项目 | 标题不包 `ContextMenu`，没有工作区菜单 | 同 Gemini | 偶然；归档视图条件分支不同 | 按 Q10：归档视图保留项目置顶、重命名、隐藏 | `web/src/pages/CodexPage.tsx:264-270,310` `projectMenuActions`；`web/src/pages/GeminiPage.tsx:133-135` `GeminiPage`；`web/src/pages/ClaudePage.tsx:121-126` `ClaudePage` |
+| D06 归档会话重命名 | 归档菜单不含重命名 | 归档菜单仍含重命名 | 同 Gemini | 偶然；后端都能更新标题，没有引擎能力差异 | 按 Q10：归档会话仍可重命名 | `web/src/pages/CodexPage.tsx:272-285` `threadMenuActions`；`web/src/pages/GeminiPage.tsx:109-117` `threadMenuActions`；`web/src/pages/ClaudePage.tsx:99-105` `threadActions` |
+| D07 归档会话删除 | 归档列表不显示行内删除按钮 | 活动和归档列表都显示；只按运行/恢复状态禁用 | 同 Gemini | 偶然；三组删除接口都存在 | 按 Q10：归档视图允许删除并保留二次确认 | `web/src/pages/CodexPage.tsx:319` `CodexPage`；`web/src/pages/GeminiPage.tsx:135-138` `GeminiPage`；`web/src/pages/ClaudePage.tsx:126-129` `ClaudePage` |
 | D08 会话置顶标记位置 | 标题区域末尾单独显示图钉 | 图钉放在标题文字前 | 同 Gemini | 偶然；纯展示差异 | 统一为“引擎标记、图钉、标题”的固定顺序，不能只靠图钉颜色 | `web/src/pages/CodexPage.tsx:319` `CodexPage`；`web/src/pages/GeminiPage.tsx:135-137` `GeminiPage`；`web/src/pages/ClaudePage.tsx:126-128` `ClaudePage` |
 
 ### 工作区和会话的右键菜单项
@@ -275,7 +282,7 @@
 
 | 项目 | Codex | Gemini | Claude | 性质 | 合并后采用 | 出处 |
 | --- | --- | --- | --- | --- | --- | --- |
-| D13 工作区选项范围 | 列出 `/workspaces` 返回的全部工作区 | 只列 `status === "ready"` | 同 Gemini | 偶然；同一创建前提由页面各自过滤 | 建议显示全部但把非 ready 工作区禁用并写明状态，见 T3 | `web/src/App.tsx:940-945` `CreateThread`；`web/src/pages/GeminiPage.tsx:187-201` `CreateGeminiSession`；`web/src/pages/ClaudePage.tsx:143-149` `ClaudePage` |
+| D13 工作区选项范围 | 列出 `/workspaces` 返回的全部工作区 | 只列 `status === "ready"` | 同 Gemini | 偶然；同一创建前提由页面各自过滤 | 按 Q9：只显示 `status=ready` 的工作区 | `web/src/App.tsx:940-945` `CreateThread`；`web/src/pages/GeminiPage.tsx:187-201` `CreateGeminiSession`；`web/src/pages/ClaudePage.tsx:143-149` `ClaudePage` |
 | D14 顶部“新建”的初始工作区 | 空 | 有当前会话时预选其工作区，否则空 | 同 Gemini | 偶然；入口默认策略不一 | 统一为：从工作区菜单进入时预选该工作区；从页头进入时有当前会话则预选当前工作区，否则空 | `web/src/App.tsx:940-945` `CreateThread`；`web/src/pages/GeminiPage.tsx:87-90,153` `openNewSession`；`web/src/pages/ClaudePage.tsx:94-95,115,142-145` `newSession` |
 | D15 用户在已打开的对话框里改工作区 | 只有工作区字段 | 清空模型和思考程度，但保留原审批模式 | 重取服务器模型、清空 effort，但保留原权限模式 | 偶然；跨工作区残留模式来自局部 state 更新，并无产品说明 | 切换工作区时重新计算该工作区该引擎的全部默认值，不沿用另一工作区的模式；作为疑点登记 | `web/src/pages/GeminiPage.tsx:187-201` `CreateGeminiSession`；`web/src/pages/ClaudePage.tsx:94-95,143-146` `newSession/ClaudePage` |
 | D16 字段 | 工作区 | 工作区、模型、思考程度、审批模式 | 工作区、模型、effort、权限模式 | 有意；CLI 能力不同 | 公共段只放工作区和引擎；其余由引擎模块提供，字段不做伪统一 | `web/src/App.tsx:940-945` `CreateThread`；`web/src/pages/GeminiPage.tsx:159-201` `ModelOptions/CreateGeminiSession`；`web/src/pages/ClaudePage.tsx:143-163` `ClaudePage/ClaudeOptions` |
@@ -295,8 +302,8 @@
 | 项目 | Codex | Gemini | Claude | 性质 | 合并后采用 | 出处 |
 | --- | --- | --- | --- | --- | --- | --- |
 | D20 `archived` 参数 | 缺省为活动；`true` 为归档；`all` 为全部；其他值返回 400 | 只有字符串恰为 `true` 才查归档，其他任意值都当活动 | 同 Gemini | 偶然；三份处理器语法不一 | 新 `/api/sessions` 严格接受 `false`/缺省与 `true`；旧 Codex 路由继续兼容 `all`，旧三路由逐字段兼容 | `internal/httpapi/resources.go:1657-1698` `threads`；`internal/store/resources.go:50-63` `ListThreads`；`internal/httpapi/gemini.go:25-32` `geminiThreads`；`internal/httpapi/claude.go:23-30` `claudeThreads` |
-| D21 分页、上限和响应形状 | 不带分页参数时返回完整数组；带 `limit`/`offset` 时返回 `{items,has_more,next}`，默认 50、最大 100，前端有“加载更多” | 固定 `LIMIT 200`，返回数组，无游标和加载更多 | 同 Gemini | 偶然；历史实现能力不一，混合列表不能据此完整搜索或稳定翻页 | 新路由统一 `limit` 和不透明游标，过滤、搜索在分页前执行，并返回分页前的完整分组摘要；游标采用会话级还是组优先排序由 T5 确认。旧路由保持原响应 | `internal/httpapi/resources.go:99-117,1657-1698` `threads/threadListPageResponse`；`internal/store/resources.go:66-92` `ListThreadsPage`；`web/src/App.tsx:554-618` `useThreadList`；`internal/store/gemini.go:76-95` `GeminiThreads`；`internal/store/claude.go:59-75` `ClaudeThreads` |
-| D22 Store 排序 | 项目置顶、会话置顶、更新时间 | 项目置顶、会话置顶、更新时间 | 只按会话置顶、更新时间；页面在取完最多 200 条后才把置顶项目组移到前面 | 偶然；项目置顶是三引擎共享概念，Claude SQL 漏了一层 | 无论 T5 选哪种，项目置顶必须在分页前生效。会话级方案的游标为（项目置顶标志与时间、会话置顶标志与时间、`updated_at`、引擎、ID）；组优先方案为（项目置顶标志与时间、项目名、规范工作区标题、工作区 ID、会话置顶标志与时间、`updated_at`、引擎、ID）。建议会话级游标加完整分组摘要，见 T5 | `internal/store/resources.go:48-83` `ListThreads/ListThreadsPage`；`internal/store/gemini.go:56-82` `GeminiThreads`；`internal/store/claude.go:53-65` `ClaudeThreads`；`web/src/pages/ClaudePage.tsx:353-358` `groupClaudeThreads` |
+| D21 分页、上限和响应形状 | 不带分页参数时返回完整数组；带 `limit`/`offset` 时返回 `{items,has_more,next}`，默认 50、最大 100，前端有“加载更多” | 固定 `LIMIT 200`，返回数组，无游标和加载更多 | 同 Gemini | 偶然；历史实现能力不一，混合列表不能据此完整搜索或稳定翻页 | 按 Q11：新路由统一 `limit` 和不透明会话级游标，过滤、搜索在分页前执行，响应为 `{items,next_cursor,groups}`；旧路由保持原响应 | `internal/httpapi/resources.go:99-117,1657-1698` `threads/threadListPageResponse`；`internal/store/resources.go:66-92` `ListThreadsPage`；`web/src/App.tsx:554-618` `useThreadList`；`internal/store/gemini.go:76-95` `GeminiThreads`；`internal/store/claude.go:59-75` `ClaudeThreads` |
+| D22 Store 排序 | 项目置顶、会话置顶、更新时间 | 项目置顶、会话置顶、更新时间 | 只按会话置顶、更新时间；页面在取完最多 200 条后才把置顶项目组移到前面 | 偶然；项目置顶是三引擎共享概念，Claude SQL 漏了一层 | 按 Q11：项目置顶在分页前生效；游标为（项目置顶标志与时间、会话置顶标志与时间、`updated_at`、引擎、ID），并返回分页前完整分组摘要 | `internal/store/resources.go:48-83` `ListThreads/ListThreadsPage`；`internal/store/gemini.go:56-82` `GeminiThreads`；`internal/store/claude.go:53-65` `ClaudeThreads`；`web/src/pages/ClaudePage.tsx:353-358` `groupClaudeThreads` |
 | D23 相同排序值的破同值 | 只有分页查询最后追加 `t.id DESC`；不分页查询没有 | 没有 | 没有 | 偶然；复制实现和后加分页造成 | 新游标排序最后固定追加（引擎，ID），契约测试覆盖同时间戳不重不漏 | `internal/store/resources.go:62,83` `ListThreads/ListThreadsPage`；`internal/store/gemini.go:82` `GeminiThreads`；`internal/store/claude.go:65` `ClaudeThreads` |
 | D24 `revoked_at` 防御条件 | Codex 查询没有 `s.revoked_at IS NULL` | Gemini 查询保留该条件 | Claude 查询保留该条件 | 偶然；仅是历史残留的防御性实现差异，没有用户可见差异 | 统一查询保留 `s.revoked_at IS NULL` 作为旧库防御，不需要产品取舍。正常撤销会物理删除服务器；服务器到工作区、工作区到三张线程表均为级联删除；启动还会清理旧库残留 | `internal/store/resources.go:48-63` `codexThreadSelect/ListThreads`；`internal/store/gemini.go:76-82` `GeminiThreads`；`internal/store/claude.go:59-65` `ClaudeThreads`；`internal/store/store.go:838-909` `RevokeServer/purgeRevokedServers/deleteServerRecords`；`internal/store/schema.sql:120-150,498-529` |
 | 一致：公共返回字段 | ID、工作区/项目/服务器 ID，标题、状态、路径、项目名、服务器名，项目/会话置顶，项目隐藏，归档、创建和更新时间 | 同左 | 同左 | 一致 | 进入统一列表项；P2 的 `Session` 草图已补项目/服务器展示与项目偏好字段 | `internal/store/resources.go:22-39` `Thread`；`internal/store/gemini.go:16-54` `GeminiThread`；`internal/store/claude.go:14-51` `ClaudeThread` |
@@ -313,13 +320,9 @@
 
 1. **移动端不是两态。** 三个现有页面都有“会话 / 文件 / 对话”三个页签，并在选择会话或文件后切到对话。原 P6-02 第 6 条写成“列表 / 对话”两态，与代码冲突。已在 2026-11-13 对“设计”和 P6-02 第 6 条作最小修正，统一入口继续保留三态。出处：`web/src/pages/CodexPage.tsx:116,149-152,305-327` `CodexPage`；`web/src/pages/GeminiPage.tsx:55,63-67,125-151` `GeminiPage`；`web/src/pages/ClaudePage.tsx:57,69-75,108-142` `ClaudePage`。
 
-### 待用户确认的取舍
+### P6-01 确认结果
 
-1. **T1 工作区组顺序。** 选项 A：项目置顶时间倒序，未置顶组按项目名、规范工作区标题升序；选项 B：置顶组在前，其余按组内最近会话更新时间倒序；选项 C：包括置顶组在内全部按名称。三种选项都必须作用于分页前的完整分组摘要，不能只重排当前页。**建议 A**，侧栏位置稳定，同时保留“最近置顶最靠前”的反馈。Q3 只决定组内会话顺序，没有覆盖组顺序。
-2. **T2 搜索字段和完整性。** 选项 A：只搜用户可见的组名、路径、标题和服务器名；选项 B：在 A 的基础上也搜 Wio 会话 ID、原生会话 ID；选项 C：沿用 Gemini/Claude 的纯客户端过滤，只搜已加载页。**建议 B，并由 P2-05 在服务端分页前搜索**，方便从日志或 CLI ID 定位会话，也不会因 200 条上限漏结果。
-3. **T3 非 ready 工作区在新建对话框里的呈现。** 选项 A：像 Gemini/Claude 一样不显示；选项 B：显示但禁用并标出工作区状态；选项 C：像 Codex 一样允许选择，提交后再报错。**建议 B**，既不允许无效提交，也能解释工作区为什么不可用。
-4. **T4 归档视图允许哪些管理操作。** 选项 A：统一保留项目置顶/重命名/隐藏，以及会话重命名/恢复/删除；选项 B：归档视图只允许恢复和复制；选项 C：维持按引擎差异。**建议 A**，这是 Gemini/Claude 已有能力的超集，且统一入口不应因引擎改变同类会话的管理入口；删除继续二次确认。
-5. **T5 混合列表按会话分页还是按工作区组分页。** 选项 A：服务端按（项目置顶标志与时间、会话置顶标志与时间、`updated_at`、引擎、ID）分页，同时返回分页前的完整工作区摘要；前端按 T1 排组。工作区标题会立即出现，行项目按全局会话顺序逐页填入；某工作区最近会话很多时可能占据一页，其他工作区的标题仍存在，但会话要到后续页才出现。加载更多只填充已有组，不会把新组插到中间。选项 B：服务端先按（项目置顶标志与时间、项目名、规范工作区标题、工作区 ID）排组，再按（会话置顶标志与时间、`updated_at`、引擎、ID）排组内会话，游标包含两段键；同一组会话连续、组位置稳定，但一个大工作区会连续占用多页，后续工作区的会话更晚出现，而且后端必须复制目前只在前端存在的标题拼接规则。两种方案都返回完整分组摘要，并与 `/workspaces` 合并，因此 Q2 的“显示全部工作区”不会把尚未翻到会话的工作区误显示为空。**建议 A**，它不把大工作区强制集中到连续页面，也避免后端复制展示标题规则；响应采用 `{items,next_cursor,groups}`。
+用户在 2026-11-13 确认：T1 选 A、T2 选 B、T3 选 A、T4 选 A、T5 选 A。结论已写入“已确认事项”Q7 至 Q11，后续步骤直接按该表执行。
 
 ### 建议登记到总览“发现的问题”
 
@@ -339,3 +342,4 @@
 按时间顺序追加，每条包含日期、步骤编号、会话标识、做了什么、验收结果、遗留事项。
 
 - 2026-11-13，P6-01，11-13 Codex：逐项盘点 Codex、Gemini、Claude 的侧栏、分组与排序、搜索、置顶和归档、工作区和会话菜单、空状态、移动端、新建流程、本地偏好、深链选中与刷新机制，以及三个列表处理器和 Store 查询；记录 28 处差异（23 处偶然、5 处有意），列出 5 项待用户确认取舍和 4 项建议登记问题。验收：清单覆盖 P6-01 指定维度，每处差异均有代码出处，偶然差异均给出合并建议；复核确认 `revoked_at` 条件仅用于旧库防御，不构成用户可见取舍；同步修正移动端三态设计，并更新 P2-05 的混合列表筛选、搜索、分组摘要与游标分页要求和 P2-06 的公共侧栏约束；仅修改路线图文档，按纯文档步骤未运行构建测试。遗留：T1–T5 由协调者转交用户，确认后补进“已确认事项”；在此之前 P6-01 保持 `进行中`。四项疑点由协调者登记到总览。
+- 2026-11-13，P6-01，11-13 Codex：用户确认 T1=A、T2=B、T3=A、T4=A、T5=A；将结论补入“已确认事项”Q7 至 Q11，并按结论固化 P6-02 和 P2-05 的分组顺序、搜索字段、工作区范围、归档操作、会话级游标与分页前分组摘要契约。验收：P6-01 的取舍均已确认，清单、设计、后续步骤和 P2-05 契约已同步，验收项满足；按纯文档步骤未运行构建测试。遗留：无，由协调者更新总表并提交。
