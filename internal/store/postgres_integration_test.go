@@ -11,11 +11,13 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jmoiron/sqlx"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -45,6 +47,9 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	})
 
 	databaseURL := config.GetConnectionURL() + "?sslmode=disable"
+	t.Run("fixture schema consistency", func(t *testing.T) {
+		assertPostgresFixtureSchemaConsistency(t, databaseURL)
+	})
 	createLegacyPostgresSchema(t, databaseURL)
 
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -151,6 +156,160 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	if got := limited.DB.Stats().MaxOpenConnections; got != 2 {
 		t.Fatalf("configured PostgreSQL pool limit: %d", got)
 	}
+}
+
+func assertPostgresFixtureSchemaConsistency(t *testing.T, databaseURL string) {
+	t.Helper()
+	admin, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	for _, version := range schemaFixtureVersions {
+		version := version
+		t.Run(version, func(t *testing.T) {
+			fixture, err := schemaFixtures.ReadFile("testdata/schema/postgres/" + version + ".sql")
+			if err != nil {
+				t.Fatal(err)
+			}
+			suffix := strings.ReplaceAll(version, ".", "_")
+			migratedSchema := "fixture_" + suffix
+			freshSchema := "fresh_" + suffix
+			if _, err := admin.ExecContext(context.Background(), `CREATE SCHEMA `+migratedSchema+`; CREATE SCHEMA `+freshSchema); err != nil {
+				t.Fatal(err)
+			}
+			migratedURL := postgresSchemaURL(t, databaseURL, migratedSchema)
+			legacy, err := sql.Open("pgx", migratedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := legacy.ExecContext(context.Background(), string(fixture)); err != nil {
+				_ = legacy.Close()
+				t.Fatalf("apply PostgreSQL %s fixture: %v", version, err)
+			}
+			if err := legacy.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			migrated, err := Open(migratedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := inspectPostgresSchema(t, migrated.DB)
+			if err := migrated.Close(); err != nil {
+				t.Fatal(err)
+			}
+			migrated, err = Open(migratedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second := inspectPostgresSchema(t, migrated.DB)
+			if err := migrated.Close(); err != nil {
+				t.Fatal(err)
+			}
+			assertSchemaDifferences(t, "postgres", version+" second open", compareSchemas(first, second), nil)
+
+			fresh, err := Open(postgresSchemaURL(t, databaseURL, freshSchema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			freshStructure := inspectPostgresSchema(t, fresh.DB)
+			if err := fresh.Close(); err != nil {
+				t.Fatal(err)
+			}
+			assertSchemaDifferences(t, "postgres", version, compareSchemas(first, freshStructure), knownDivergences("postgres", version))
+		})
+	}
+}
+
+func inspectPostgresSchema(t *testing.T, db *sqlx.DB) inspectedSchema {
+	t.Helper()
+	ctx := context.Background()
+	result := newInspectedSchema()
+	var currentSchema string
+	if err := db.GetContext(ctx, &currentSchema, `SELECT current_schema()`); err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	if err := db.SelectContext(ctx, &tables, `SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_type='BASE TABLE' ORDER BY table_name`, currentSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, tableName := range tables {
+		result.Tables[tableName] = inspectedTable{Columns: map[string]inspectedColumn{}}
+	}
+	var columns []struct {
+		Table      string         `db:"table_name"`
+		Name       string         `db:"column_name"`
+		Type       string         `db:"data_type"`
+		NotNull    bool           `db:"not_null"`
+		Default    sql.NullString `db:"default_value"`
+		PrimaryKey int            `db:"primary_key"`
+	}
+	if err := db.SelectContext(ctx, &columns, `SELECT c.relname AS table_name,a.attname AS column_name,pg_catalog.format_type(a.atttypid,a.atttypmod) AS data_type,
+		a.attnotnull AS not_null,pg_get_expr(d.adbin,d.adrelid) AS default_value,
+		COALESCE((SELECT array_position(con.conkey,a.attnum) FROM pg_constraint con WHERE con.conrelid=c.oid AND con.contype='p'),0) AS primary_key
+		FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+		LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+		WHERE n.nspname=$1 AND c.relkind='r' AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname,a.attname`, currentSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range columns {
+		table := result.Tables[column.Table]
+		table.Columns[column.Name] = inspectedColumn{Type: normalizeSQL(column.Type), NotNull: column.NotNull, Default: normalizeSQL(column.Default.String), PrimaryKey: column.PrimaryKey}
+		result.Tables[column.Table] = table
+	}
+
+	var indexes []struct {
+		Table      string         `db:"table_name"`
+		Name       string         `db:"index_name"`
+		Unique     bool           `db:"is_unique"`
+		Predicate  sql.NullString `db:"predicate"`
+		Definition string         `db:"definition"`
+	}
+	if err := db.SelectContext(ctx, &indexes, `SELECT t.relname AS table_name,i.relname AS index_name,x.indisunique AS is_unique,
+		pg_get_expr(x.indpred,x.indrelid) AS predicate,pg_get_indexdef(x.indexrelid) AS definition
+		FROM pg_index x JOIN pg_class i ON i.oid=x.indexrelid JOIN pg_class t ON t.oid=x.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+		WHERE n.nspname=$1 ORDER BY i.relname`, currentSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range indexes {
+		// The column-number overload omits DESC, NULLS ordering, collation and
+		// opclass. Compare the complete definition, including method, INCLUDE,
+		// storage options and predicate, after removing our isolated schema name.
+		definition := inspectedIndex{
+			Table: index.Table, Unique: index.Unique,
+			Predicate:  normalizeSQL(index.Predicate.String),
+			Definition: normalizeSQL(strings.ReplaceAll(index.Definition, currentSchema+".", "")),
+		}
+		result.Indexes[index.Name] = definition
+	}
+	var foreignKeys []struct {
+		Table      string `db:"table_name"`
+		Name       string `db:"constraint_name"`
+		Definition string `db:"definition"`
+	}
+	if err := db.SelectContext(ctx, &foreignKeys, `SELECT c.relname AS table_name,con.conname AS constraint_name,pg_get_constraintdef(con.oid,true) AS definition
+		FROM pg_constraint con JOIN pg_class c ON c.oid=con.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+		WHERE n.nspname=$1 AND con.contype='f' ORDER BY c.relname,con.conname`, currentSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, foreignKey := range foreignKeys {
+		definition := strings.ReplaceAll(foreignKey.Definition, currentSchema+".", "")
+		result.ForeignKeys[foreignKey.Table+"."+foreignKey.Name] = normalizeSQL(definition)
+	}
+	return result
+}
+
+func postgresSchemaURL(t *testing.T, databaseURL, schema string) string {
+	t.Helper()
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func assertPostgresInteractiveConnections(t *testing.T, database *Store) {

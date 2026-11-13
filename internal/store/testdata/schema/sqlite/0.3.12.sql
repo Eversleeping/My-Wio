@@ -1,0 +1,662 @@
+-- Source: Wio 0.3.12, commit 74697fb45af6ce19209558eebec6ea871bc60e68.
+-- Generated: git archive; temporary Go program called that version's store.Open on an empty SQLite database; sqlite3 .schema exported the structure.
+-- Structure only; no business data.
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  auth_mode TEXT NOT NULL DEFAULT 'totp',
+  password_hash TEXT NOT NULL,
+  totp_secret TEXT NOT NULL,
+  recovery_hashes TEXT NOT NULL,
+  totp_last_counter BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  csrf_token TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  hostname TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'offline',
+  agent_version TEXT NOT NULL DEFAULT '',
+  codex_version TEXT NOT NULL DEFAULT '',
+  codex_ready INTEGER NOT NULL DEFAULT 0,
+  gemini_version TEXT NOT NULL DEFAULT '',
+  gemini_ready INTEGER NOT NULL DEFAULT 0,
+  scan_roots TEXT NOT NULL DEFAULT '[]',
+  managed_roots TEXT NOT NULL DEFAULT '[]',
+  is_control_plane INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TIMESTAMP
+);
+CREATE TABLE server_metadata (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  address TEXT NOT NULL DEFAULT '',
+  configuration TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE agent_credentials (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TIMESTAMP
+);
+CREATE TABLE enrollment_tokens (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  server_name TEXT NOT NULL,
+  scan_roots TEXT NOT NULL DEFAULT '[]',
+  expires_at TIMESTAMP NOT NULL,
+  consumed_at TIMESTAMP
+);
+CREATE TABLE enrollment_metadata (
+  enrollment_id TEXT PRIMARY KEY REFERENCES enrollment_tokens(id) ON DELETE CASCADE,
+  address TEXT NOT NULL DEFAULT '',
+  configuration TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  remote_url TEXT NOT NULL DEFAULT '',
+  normalized_remote TEXT NOT NULL DEFAULT '',
+  default_branch TEXT NOT NULL DEFAULT 'main',
+  status TEXT NOT NULL DEFAULT 'ready',
+  provision_error TEXT NOT NULL DEFAULT '',
+  pinned_at TIMESTAMP,
+  hidden_at TIMESTAMP,
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX projects_remote_unique ON projects(normalized_remote) WHERE normalized_remote <> '';
+CREATE TABLE project_server_preferences (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  pinned_at TIMESTAMP,
+  hidden_at TIMESTAMP,
+  PRIMARY KEY(project_id, server_id)
+);
+CREATE TABLE project_remotes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT 'origin',
+  mode TEXT NOT NULL DEFAULT 'existing',
+  provider TEXT NOT NULL DEFAULT '',
+  namespace TEXT NOT NULL DEFAULT '',
+  repository TEXT NOT NULL DEFAULT '',
+  visibility TEXT NOT NULL DEFAULT 'private',
+  credential_profile_id TEXT NOT NULL DEFAULT '',
+  fetch_url TEXT NOT NULL DEFAULT '',
+  push_url TEXT NOT NULL DEFAULT '',
+  web_url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ready',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, name)
+);
+CREATE INDEX project_remotes_project_idx ON project_remotes(project_id, name);
+CREATE TABLE workspaces (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  management_mode TEXT NOT NULL DEFAULT 'observed',
+  status TEXT NOT NULL DEFAULT 'ready',
+  kind TEXT NOT NULL DEFAULT 'primary',
+  parent_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  branch TEXT NOT NULL DEFAULT '',
+  commit_sha TEXT NOT NULL DEFAULT '',
+  dirty INTEGER NOT NULL DEFAULT 0,
+  last_git_refresh_at TIMESTAMP,
+  git_error TEXT NOT NULL DEFAULT '',
+  last_scanned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(server_id, path)
+);
+CREATE TABLE workspace_git_snapshots (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  data TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+CREATE TABLE codex_threads (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  codex_thread_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT 'New session',
+  status TEXT NOT NULL DEFAULT 'idle',
+  last_sequence INTEGER NOT NULL DEFAULT 0,
+  pinned_at TIMESTAMP,
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE workspace_file_snapshots (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  files TEXT NOT NULL DEFAULT '[]',
+  truncated INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+CREATE TABLE workspace_file_previews (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  path TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  mime_type TEXT NOT NULL DEFAULT '',
+  encoding TEXT NOT NULL DEFAULT '',
+  size BIGINT NOT NULL DEFAULT 0,
+  truncated INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+CREATE TABLE workspace_change_snapshots (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  changes TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+CREATE TABLE workspace_diff_previews (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  path TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  additions INTEGER NOT NULL DEFAULT 0,
+  deletions INTEGER NOT NULL DEFAULT 0,
+  is_binary INTEGER NOT NULL DEFAULT 0,
+  truncated INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+CREATE TABLE codex_snapshots (
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}',
+  supported INTEGER NOT NULL DEFAULT 1,
+  reason TEXT NOT NULL DEFAULT '',
+  codex_version TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'idle',
+  error TEXT NOT NULL DEFAULT '',
+  requested_at TIMESTAMP,
+  updated_at TIMESTAMP,
+  PRIMARY KEY(scope_type, scope_id, kind)
+);
+CREATE TABLE events (
+  event_id TEXT PRIMARY KEY,
+  stream_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  occurred_at TIMESTAMP NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(stream_id, sequence)
+);
+CREATE INDEX events_stream_idx ON events(stream_id, sequence);
+CREATE INDEX events_time_idx ON events(occurred_at);
+CREATE TABLE approvals (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES codex_threads(id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at TIMESTAMP NOT NULL,
+  resolved_at TIMESTAMP,
+  decision TEXT,
+  UNIQUE(thread_id, request_id)
+);
+CREATE TABLE agent_operations (
+  id TEXT PRIMARY KEY,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  thread_id TEXT REFERENCES codex_threads(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'queued',
+  workspace_write INTEGER NOT NULL DEFAULT 0,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  delivered_at TIMESTAMP,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  result TEXT,
+  result_data TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX operations_server_idx ON agent_operations(server_id, status, created_at);
+CREATE TABLE codex_scheduled_tasks (
+  thinking_level TEXT NOT NULL DEFAULT '',
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES codex_threads(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  model TEXT NOT NULL DEFAULT '',
+  reasoning_effort TEXT NOT NULL DEFAULT '',
+  approval_mode TEXT NOT NULL DEFAULT 'on-request',
+  next_run_at TIMESTAMP NOT NULL,
+  last_run_at TIMESTAMP,
+  last_run_status TEXT NOT NULL DEFAULT '',
+  last_run_message TEXT NOT NULL DEFAULT '',
+  last_operation_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX codex_scheduled_tasks_due_idx ON codex_scheduled_tasks(enabled, next_run_at);
+CREATE INDEX codex_scheduled_tasks_thread_idx ON codex_scheduled_tasks(thread_id);
+CREATE TABLE control_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE secret_sets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  ciphertext TEXT NOT NULL,
+  key_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE secret_set_versions (
+  secret_set_id TEXT NOT NULL REFERENCES secret_sets(id) ON DELETE CASCADE,
+  key_version INTEGER NOT NULL,
+  ciphertext TEXT NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  PRIMARY KEY(secret_set_id, key_version)
+);
+CREATE TABLE credential_profiles (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  username TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  commit_name TEXT NOT NULL DEFAULT '',
+  commit_email TEXT NOT NULL DEFAULT '',
+  ciphertext TEXT NOT NULL,
+  key_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(kind, name)
+);
+CREATE TABLE server_credential_profiles (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  codex_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  git_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE server_git_credential_profiles (
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  profile_id TEXT NOT NULL REFERENCES credential_profiles(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(server_id, profile_id)
+);
+CREATE TABLE server_credential_updates (
+  operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  codex_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  git_profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+  git_profile_ids TEXT NOT NULL DEFAULT '[]',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE deployment_targets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  source_type TEXT NOT NULL DEFAULT 'remote',
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  secret_set_id TEXT REFERENCES secret_sets(id) ON DELETE SET NULL,
+  environment TEXT NOT NULL,
+  repository TEXT NOT NULL,
+  git_ref TEXT NOT NULL DEFAULT 'main',
+  compose_file TEXT NOT NULL DEFAULT 'compose.yaml',
+  working_dir TEXT NOT NULL DEFAULT '',
+  build_mode TEXT NOT NULL DEFAULT 'build',
+  health_checks TEXT NOT NULL DEFAULT '[]',
+  release_root TEXT NOT NULL DEFAULT '/var/lib/wio-agent/releases',
+  public_url TEXT NOT NULL DEFAULT '',
+  detected_public_url TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, environment)
+);
+CREATE TABLE deployments (
+  id TEXT PRIMARY KEY,
+  target_id TEXT NOT NULL REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  operation_id TEXT,
+  commit_ref TEXT NOT NULL,
+  resolved_commit TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'queued',
+  message TEXT NOT NULL DEFAULT '',
+  started_at TIMESTAMP,
+  finished_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX deployments_target_idx ON deployments(target_id, created_at);
+CREATE TABLE deployment_config_snapshots (
+  deployment_id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  project_name TEXT NOT NULL DEFAULT '',
+  source_type TEXT NOT NULL DEFAULT 'remote',
+  environment TEXT NOT NULL DEFAULT '',
+  server_id TEXT NOT NULL DEFAULT '',
+  server_name TEXT NOT NULL DEFAULT '',
+  workspace_id TEXT NOT NULL DEFAULT '',
+  workspace_path TEXT NOT NULL DEFAULT '',
+  workspace_name TEXT NOT NULL DEFAULT '',
+  repository TEXT NOT NULL DEFAULT '',
+  git_ref TEXT NOT NULL DEFAULT '',
+  resolved_commit TEXT NOT NULL DEFAULT '',
+  compose_file TEXT NOT NULL DEFAULT '',
+  working_dir TEXT NOT NULL DEFAULT '',
+  build_mode TEXT NOT NULL DEFAULT '',
+  release_root TEXT NOT NULL DEFAULT '',
+  configured_public_url TEXT NOT NULL DEFAULT '',
+  detected_public_url TEXT NOT NULL DEFAULT '',
+  health_checks TEXT NOT NULL DEFAULT '[]',
+  secret_set_id TEXT NOT NULL DEFAULT '',
+  secret_set_name TEXT NOT NULL DEFAULT '',
+  secret_set_key_version INTEGER NOT NULL DEFAULT 0,
+  secret_set_updated_at TIMESTAMP,
+  rollback_of_deployment_id TEXT REFERENCES deployments(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX deployment_snapshots_target_idx ON deployment_config_snapshots(target_id, created_at);
+CREATE TABLE deployment_events (
+  id TEXT PRIMARY KEY,
+  deployment_id TEXT NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX deployment_events_deployment_idx ON deployment_events(deployment_id, occurred_at);
+CREATE TABLE deployment_container_state (
+  target_id TEXT PRIMARY KEY REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  operation_id TEXT,
+  action TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'unknown',
+  message TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX deployment_container_state_operation_idx ON deployment_container_state(operation_id);
+CREATE TABLE metric_rollups (
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  bucket_at TIMESTAMP NOT NULL,
+  resolution TEXT NOT NULL DEFAULT 'minute',
+  cpu_percent REAL NOT NULL,
+  memory_percent REAL NOT NULL,
+  disk_percent REAL NOT NULL,
+  memory_used_bytes BIGINT NOT NULL DEFAULT 0,
+  memory_total_bytes BIGINT NOT NULL DEFAULT 0,
+  disk_used_bytes BIGINT NOT NULL DEFAULT 0,
+  disk_total_bytes BIGINT NOT NULL DEFAULT 0,
+  load_1 REAL NOT NULL,
+  net_rx_bytes BIGINT NOT NULL,
+  net_tx_bytes BIGINT NOT NULL,
+  samples INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(server_id, bucket_at, resolution)
+);
+CREATE TABLE alerts (
+  id TEXT PRIMARY KEY,
+  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  opened_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TIMESTAMP,
+  acknowledged_at TIMESTAMP
+);
+CREATE TABLE audit_log (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '{}',
+  ip_address TEXT NOT NULL DEFAULT '',
+  occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX alerts_status_idx ON alerts(status, opened_at);
+CREATE INDEX audit_time_idx ON audit_log(occurred_at);
+CREATE TABLE gemini_threads (
+  model_credential_revision TEXT NOT NULL DEFAULT '',
+  thinking_level TEXT NOT NULL DEFAULT '',
+  id TEXT PRIMARY KEY,
+  pinned_at TIMESTAMP,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT 'Gemini',
+  model TEXT NOT NULL DEFAULT 'auto',
+  approval_mode TEXT NOT NULL DEFAULT 'default',
+  status TEXT NOT NULL DEFAULT 'idle',
+  operation_id TEXT NOT NULL DEFAULT '',
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX gemini_threads_workspace_idx ON gemini_threads(workspace_id, updated_at);
+CREATE TABLE claude_threads (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT 'Claude',
+  model TEXT NOT NULL DEFAULT 'sonnet',
+  permission_mode TEXT NOT NULL DEFAULT 'default',
+  status TEXT NOT NULL DEFAULT 'idle',
+  operation_id TEXT NOT NULL DEFAULT '',
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+, model_credential_revision TEXT NOT NULL DEFAULT '');
+CREATE INDEX claude_threads_workspace_idx ON claude_threads(workspace_id, updated_at);
+CREATE TABLE claude_thread_options (
+  thread_id TEXT PRIMARY KEY REFERENCES claude_threads(id) ON DELETE CASCADE,
+  effort TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE gemini_goals (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES gemini_threads(id) ON DELETE CASCADE,
+  objective TEXT NOT NULL,
+  images_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  continuations INTEGER NOT NULL DEFAULT 0,
+  max_continuations INTEGER NOT NULL,
+  max_seconds INTEGER NOT NULL,
+  report TEXT NOT NULL DEFAULT '',
+  evidence TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL
+);
+CREATE INDEX gemini_goals_thread_idx ON gemini_goals(thread_id, created_at);
+CREATE UNIQUE INDEX gemini_goals_active_idx ON gemini_goals(thread_id) WHERE status='active';
+CREATE TABLE server_gemini_credential_profiles (
+ profile_revision TEXT NOT NULL DEFAULT '',
+ server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE server_gemini_credential_updates (
+ profile_revision TEXT NOT NULL DEFAULT '',
+ operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
+ server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL
+);
+CREATE TABLE server_claude_cli (
+ server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+ version TEXT NOT NULL DEFAULT '',
+ ready INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE server_claude_credential_profiles (
+ server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+ profile_revision TEXT NOT NULL DEFAULT '',
+ model TEXT NOT NULL DEFAULT '',
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE server_claude_credential_updates (
+ operation_id TEXT PRIMARY KEY REFERENCES agent_operations(id) ON DELETE CASCADE,
+ server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+ profile_id TEXT REFERENCES credential_profiles(id) ON DELETE SET NULL,
+ profile_revision TEXT NOT NULL DEFAULT '',
+ model TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE gemini_scheduled_tasks (
+  thinking_level TEXT NOT NULL DEFAULT '',
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES gemini_threads(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  model TEXT NOT NULL DEFAULT '',
+  reasoning_effort TEXT NOT NULL DEFAULT '',
+  approval_mode TEXT NOT NULL DEFAULT 'default',
+  next_run_at TIMESTAMP NOT NULL,
+  last_run_at TIMESTAMP,
+  last_run_status TEXT NOT NULL DEFAULT '',
+  last_run_message TEXT NOT NULL DEFAULT '',
+  last_operation_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX gemini_scheduled_tasks_due_idx ON gemini_scheduled_tasks(enabled, next_run_at);
+CREATE INDEX gemini_scheduled_tasks_thread_idx ON gemini_scheduled_tasks(thread_id);
+CREATE TABLE claude_thread_management (
+ thread_id TEXT PRIMARY KEY REFERENCES claude_threads(id) ON DELETE CASCADE,
+ pinned_at TIMESTAMP,
+ fork_snapshot_id TEXT NOT NULL DEFAULT '',
+ fork_session_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE claude_scheduled_tasks (
+  thinking_level TEXT NOT NULL DEFAULT '',
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES claude_threads(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  model TEXT NOT NULL DEFAULT '',
+  reasoning_effort TEXT NOT NULL DEFAULT '',
+  approval_mode TEXT NOT NULL DEFAULT 'default',
+  next_run_at TIMESTAMP NOT NULL,
+  last_run_at TIMESTAMP,
+  last_run_status TEXT NOT NULL DEFAULT '',
+  last_run_message TEXT NOT NULL DEFAULT '',
+  last_operation_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX claude_scheduled_tasks_due_idx ON claude_scheduled_tasks(enabled, next_run_at);
+CREATE INDEX claude_scheduled_tasks_thread_idx ON claude_scheduled_tasks(thread_id);
+CREATE TABLE session_tool_grants (
+ source_key TEXT PRIMARY KEY,
+ grant_json TEXT NOT NULL,
+ parent_key TEXT NOT NULL DEFAULT '',
+ parent_version INTEGER NOT NULL DEFAULT 0,
+ version INTEGER NOT NULL DEFAULT 1,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE session_tool_requests (
+ id TEXT PRIMARY KEY,
+ source_key TEXT NOT NULL,
+ request_key TEXT NOT NULL,
+ tool TEXT NOT NULL,
+ arguments TEXT NOT NULL,
+ execution_json TEXT NOT NULL DEFAULT '{}',
+ grant_version INTEGER NOT NULL,
+ status TEXT NOT NULL,
+ phase TEXT NOT NULL DEFAULT '',
+ target_engine TEXT NOT NULL DEFAULT '',
+ target_id TEXT NOT NULL DEFAULT '',
+ workspace_id TEXT NOT NULL DEFAULT '',
+ operation_id TEXT NOT NULL DEFAULT '',
+ result TEXT NOT NULL DEFAULT '{}',
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(source_key,request_key)
+);
+CREATE INDEX session_tool_requests_pending_idx ON session_tool_requests(status,created_at);
+CREATE INDEX events_collaboration_time_idx ON events(occurred_at,stream_id) WHERE kind IN ('session.collaboration.request','session.collaboration.updated','session.collaboration.child');
+CREATE TABLE session_tool_waits (
+ source_key TEXT NOT NULL,
+ target_key TEXT NOT NULL,
+ expires_at TIMESTAMP NOT NULL,
+ PRIMARY KEY(source_key,target_key)
+);
+CREATE TABLE session_tool_wait_lock (id INTEGER PRIMARY KEY);
+CREATE TABLE session_links (
+ target_key TEXT PRIMARY KEY,
+ source_key TEXT NOT NULL,
+ root_key TEXT NOT NULL,
+ depth INTEGER NOT NULL,
+ request_id TEXT NOT NULL UNIQUE REFERENCES session_tool_requests(id),
+ relation TEXT NOT NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX session_links_source_idx ON session_links(source_key);
+CREATE INDEX session_links_root_idx ON session_links(root_key);
+CREATE TABLE session_subscriptions (
+ target_key TEXT NOT NULL,
+ source_key TEXT NOT NULL,
+ auto_continue INTEGER NOT NULL DEFAULT 0,
+ grant_version INTEGER NOT NULL,
+ last_event_id TEXT NOT NULL DEFAULT '',
+ last_continuation_id TEXT NOT NULL DEFAULT '',
+ continuation_count INTEGER NOT NULL DEFAULT 0,
+ unread_event_id TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(target_key,source_key)
+);
+CREATE INDEX session_subscriptions_source_idx ON session_subscriptions(source_key);
+CREATE INDEX operations_project_idx ON agent_operations(project_id, created_at);
+CREATE INDEX operations_workspace_idx ON agent_operations(workspace_id, created_at);
+CREATE INDEX operations_thread_idx ON agent_operations(thread_id, created_at);
+CREATE UNIQUE INDEX operations_project_import_active_unique ON agent_operations(server_id,project_id) WHERE project_id IS NOT NULL AND kind='git.import' AND status IN ('queued','delivered');
+CREATE UNIQUE INDEX operations_workspace_exclusive_write_unique ON agent_operations(workspace_id) WHERE workspace_id IS NOT NULL AND workspace_write=1 AND kind NOT IN ('claude.turn.start','gemini.turn.start','gemini.turn.rewrite') AND status IN ('queued','delivered','running');
+CREATE INDEX sessions_expiry_idx ON sessions(expires_at);
+CREATE INDEX metrics_bucket_idx ON metric_rollups(bucket_at);
+CREATE INDEX operations_kind_project_time_idx ON agent_operations(kind,project_id,created_at,id);
+CREATE INDEX operations_completed_idx ON agent_operations(completed_at) WHERE status IN ('succeeded','failed','cancelled');
+CREATE INDEX events_stream_kind_sequence_idx ON events(stream_id,kind,sequence);
+CREATE INDEX events_operation_time_idx ON events(occurred_at,stream_id) WHERE kind IN ('operation.succeeded','operation.failed','operation.cancelled');
+CREATE TABLE codex_requests (
+ thread_id TEXT NOT NULL REFERENCES codex_threads(id) ON DELETE CASCADE,
+ request_id TEXT NOT NULL,
+ action TEXT NOT NULL,
+ input_hash TEXT NOT NULL,
+ operation_id TEXT NOT NULL,
+ PRIMARY KEY(thread_id,request_id)
+ );
