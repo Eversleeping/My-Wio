@@ -134,6 +134,7 @@ jobs:
 
   e2e:
     name: Browser E2E
+    needs: web
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -147,6 +148,18 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download web distribution
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
       - name: Install web dependencies
         run: npm --prefix web ci
 
@@ -157,6 +170,9 @@ jobs:
       - name: Test browser interactions
         run: npm --prefix web run e2e
 
+      - name: Test real service smoke chain
+        run: npm --prefix web run e2e:real
+
       - name: Upload failed browser diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
@@ -165,4 +181,7 @@ jobs:
           path: |
             outputs/playwright/report
             outputs/playwright/test-results
+            outputs/playwright/real-report
+            outputs/playwright/real-test-results
+            outputs/playwright/real-controlplane.log
           retention-days: 7

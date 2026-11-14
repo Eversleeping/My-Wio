@@ -29,6 +29,7 @@ const chromium = {
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.pw.ts",
+  testIgnore: "**/real/**",
   outputDir: "../outputs/playwright/test-results",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),

@@ -180,7 +180,8 @@ npm --prefix web run dev
 | `make version-check` | 对本地待推送改动（含工作区及未忽略的新 Go 文件）检查 Agent 版本递增；可用 `scripts/check-agent-version.sh BASE HEAD` 精确检查提交范围 |
 | `make staticcheck` | 固定版本的 Go 安全静态检查；现有告警的暂缓范围见 `staticcheck.conf`，须已有 `web/dist` |
 | `go vet ./...` | Go 静态检查，须已有 `web/dist` |
-| `npm --prefix web run e2e` | Playwright 桌面/移动端隔离测试 |
+| `npm --prefix web run e2e` | Playwright 桌面/移动端模拟 API 测试 |
+| `npm --prefix web run e2e:real` | Linux 真实控制面、内置 Agent 和独立假引擎的浏览器冒烟；先构建前端，要求 Go、Git、Chromium |
 
 控制面通过 `go:embed` 嵌入 `web/dist`，干净检出必须先构建前端。PostgreSQL 集成测试会下载并启动临时 PostgreSQL 16，需要可用下载源且应以非 root 账号运行；不连接生产数据库。E2E 首次需在 `web` 目录执行 `npx playwright install chromium`，测试使用模拟 API，不验证真实服务器或付费模型调用。
 
