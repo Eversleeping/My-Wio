@@ -86,6 +86,6 @@ func (a *API) updateSessionCollaboration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "session.collaboration.grant", "session", ref.Key(), grant, clientIP(r))
-	a.hub.Publish(protocol.StreamEvent{StreamID: ref.ID, Kind: "session.collaboration.grant.updated"})
+	a.hub.Publish(protocol.StreamEvent{StreamID: ref.ID, Kind: protocol.EventSessionCollaborationGrantUpdated})
 	a.sessionCollaboration(w, r)
 }

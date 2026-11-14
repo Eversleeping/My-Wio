@@ -126,7 +126,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 		if err != nil {
 			return err
 		}
-		event := protocol.StreamEvent{StreamID: command.ThreadID, Kind: "claude." + kind, Payload: raw}
+		event := protocol.StreamEvent{StreamID: command.ThreadID, Kind: protocol.EventClaudePrefix + kind, Payload: raw}
 		if kind == "question" {
 			event.EventID, _ = data["request_id"].(string)
 		}

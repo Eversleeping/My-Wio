@@ -169,7 +169,7 @@ func (s *Store) CompleteInterruptedOperation(ctx context.Context, operation Oper
 	if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 		return false, err
 	}
-	if operation.Kind == "workspace.files" {
+	if operation.Kind == protocol.OpWorkspaceFiles {
 		return s.CompleteWorkspaceFileScan(ctx, operation, command.WorkspaceID, result)
 	}
 	tx, err := s.DB.BeginTxx(ctx, nil)
@@ -187,21 +187,21 @@ func (s *Store) CompleteInterruptedOperation(ctx context.Context, operation Oper
 	}
 	table := ""
 	switch operation.Kind {
-	case "git.workspace.inspect":
+	case protocol.OpGitWorkspaceInspect:
 		table = "workspace_git_snapshots"
-	case "workspace.files":
+	case protocol.OpWorkspaceFiles:
 		table = "workspace_file_snapshots"
-	case "workspace.changes":
+	case protocol.OpWorkspaceChanges:
 		table = "workspace_change_snapshots"
-	case "workspace.file.preview":
+	case protocol.OpWorkspaceFilePreview:
 		table = "workspace_file_previews"
-	case "workspace.diff.preview":
+	case protocol.OpWorkspaceDiffPreview:
 		table = "workspace_diff_previews"
 	}
 	if table != "" {
 		query := "UPDATE " + table + " SET status='failed',error=? WHERE workspace_id=? AND requested_at<=? AND status IN ('scanning','refreshing','loading')"
 		args := []any{result.Message, command.WorkspaceID, operation.CreatedAt}
-		if operation.Kind == "workspace.file.preview" || operation.Kind == "workspace.diff.preview" {
+		if operation.Kind == protocol.OpWorkspaceFilePreview || operation.Kind == protocol.OpWorkspaceDiffPreview {
 			query += " AND path=?"
 			args = append(args, command.Path)
 		}

@@ -30,7 +30,7 @@ func (c *Client) reconcileOperations(raw json.RawMessage) {
 			case <-execution.done:
 				result := execution.result
 				c.seenMu.Unlock()
-				_ = c.queue("operation_result", result, true)
+				_ = c.queue(protocol.AgentKindOperationResult, result, true)
 			default:
 				c.seenMu.Unlock()
 				_ = c.queue(protocol.AgentKindOperationReconcile, protocol.OperationReconcile{OperationID: id, State: protocol.OperationReconcileActive}, true)
@@ -45,7 +45,7 @@ func (c *Client) reconcileOperations(raw json.RawMessage) {
 			continue
 		}
 		if found {
-			_ = c.queue("operation_result", result, true)
+			_ = c.queue(protocol.AgentKindOperationResult, result, true)
 			continue
 		}
 		_ = c.queue(protocol.AgentKindOperationReconcile, protocol.OperationReconcile{OperationID: id, State: protocol.OperationReconcileUnknown}, true)

@@ -71,20 +71,20 @@ func (s *Store) queueClaudeForkTx(ctx context.Context, tx *sqlx.Tx, t ClaudeThre
 			ID   string `db:"event_id"`
 			Kind string `db:"kind"`
 		}
-		if err := tx.GetContext(ctx, &latest, s.Q("SELECT event_id,kind FROM events WHERE stream_id=? AND kind IN ('claude.message','claude.user.message','claude.steer.applied') ORDER BY sequence DESC LIMIT 1"), t.ID); err != nil || latest.ID != eventID[0] || latest.Kind != "claude.message" {
+		if err := tx.GetContext(ctx, &latest, s.Q("SELECT event_id,kind FROM events WHERE stream_id=? AND kind IN ('claude.message','claude.user.message','claude.steer.applied') ORDER BY sequence DESC LIMIT 1"), t.ID); err != nil || latest.ID != eventID[0] || latest.Kind != protocol.EventClaudeMessage {
 			return "", "", ErrInvalidEditTarget
 		}
 	}
 	if err = tx.GetContext(ctx, &c.CutoffSequence, s.Q("SELECT COALESCE(MAX(sequence),0) FROM events WHERE stream_id=?"), t.ID); err != nil {
 		return "", "", err
 	}
-	kind := "claude.thread.fork"
+	kind := protocol.OpClaudeThreadFork
 	var payload []byte
 	if w != nil {
 		c.WorkspaceID = w.TargetWorkspaceID
 		c.Workspace = w.TargetPath
 		w.ClaudeFork = &c
-		kind = "git.worktree.create"
+		kind = protocol.OpGitWorktreeCreate
 		payload, err = json.Marshal(w)
 	} else {
 		payload, err = json.Marshal(c)

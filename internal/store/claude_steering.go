@@ -92,7 +92,7 @@ func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command pro
 		return protocol.StreamEvent{}, "", err
 	}
 	payload, _ := json.Marshal(map[string]any{"operation_id": command.OperationID, "request_id": command.RequestID, "text": command.Prompt, "images": command.Images})
-	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "claude.steer.queued", OccurredAt: now, Payload: payload}
+	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: protocol.EventClaudeSteerQueued, OccurredAt: now, Payload: payload}
 	event.Sequence, err = s.nextEventSequence(ctx, tx, thread.ID)
 	if err != nil {
 		return event, "", err

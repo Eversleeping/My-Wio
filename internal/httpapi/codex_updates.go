@@ -172,7 +172,7 @@ func (a *API) updateCodexCLI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "Codex CLI is already at or newer than the target version")
 		return
 	}
-	active, err := a.store.HasActiveOperation(r.Context(), server.ID, "codex.update")
+	active, err := a.store.HasActiveOperation(r.Context(), server.ID, protocol.OpCodexUpdate)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not check Codex CLI update queue")
 		return
@@ -182,7 +182,7 @@ func (a *API) updateCodexCLI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.CodexUpdateCommand{Version: version}
-	operationID, err := a.store.QueueOperation(r.Context(), server.ID, "codex.update", command, "codex-update:"+server.ID+":"+version+":"+store.NewID())
+	operationID, err := a.store.QueueOperation(r.Context(), server.ID, protocol.OpCodexUpdate, command, "codex-update:"+server.ID+":"+version+":"+store.NewID())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Codex CLI update")
 		return

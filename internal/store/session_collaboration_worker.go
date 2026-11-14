@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -110,7 +111,7 @@ func (s *Store) advanceCollaboration(ctx context.Context, id string) error {
 				}
 			}
 		}
-		if r.TargetEngine == "codex" && (op.Kind == "codex.turn.start" || op.Kind == "codex.turn.rewrite") {
+		if r.TargetEngine == "codex" && (op.Kind == protocol.OpCodexTurnStart || op.Kind == protocol.OpCodexTurnRewrite) {
 			if target, e := s.collaborationSession(ctx, tx, sessiontools.Ref{Engine: r.TargetEngine, ID: r.TargetID}); e == nil {
 				state, _, stateErr := s.collaborationTurnState(ctx, tx, target, op)
 				if stateErr != nil {
@@ -132,7 +133,7 @@ func (s *Store) advanceCollaboration(ctx context.Context, id string) error {
 		if err = s.saveCollaborationRequest(ctx, tx, &r, reply); err != nil {
 			return err
 		}
-		if err = s.addCollaborationEvent(ctx, tx, refFromKey(r.SourceKey).ID, "session.collaboration.updated", map[string]any{"request_id": r.RequestKey, "status": reply.Status, "operation_id": r.OperationID}); err != nil {
+		if err = s.addCollaborationEvent(ctx, tx, refFromKey(r.SourceKey).ID, protocol.EventSessionCollaborationUpdated, map[string]any{"request_id": r.RequestKey, "status": reply.Status, "operation_id": r.OperationID}); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -172,7 +173,7 @@ func (s *Store) advanceCollaboration(ctx context.Context, id string) error {
 	if err = s.saveCollaborationRequest(ctx, tx, &r, reply); err != nil {
 		return err
 	}
-	if err = s.addCollaborationEvent(ctx, tx, source.ID, "session.collaboration.updated", map[string]any{"request_id": r.RequestKey, "status": reply.Status, "session": sessiontools.Ref{Engine: r.TargetEngine, ID: r.TargetID}, "error": reply.Error}); err != nil {
+	if err = s.addCollaborationEvent(ctx, tx, source.ID, protocol.EventSessionCollaborationUpdated, map[string]any{"request_id": r.RequestKey, "status": reply.Status, "session": sessiontools.Ref{Engine: r.TargetEngine, ID: r.TargetID}, "error": reply.Error}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -205,7 +206,7 @@ func (s *Store) advanceCollaborationPhase(ctx context.Context, tx *sqlx.Tx, sour
 			if err != nil {
 				return err
 			}
-			r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, "git.worktree.create", command, lock)
+			r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, protocol.OpGitWorktreeCreate, command, lock)
 			if err != nil {
 				return err
 			}
@@ -537,7 +538,7 @@ func (s *Store) notifyCollaborationPair(ctx context.Context, sourceKey, targetKe
 	}
 	eventID := target.OperationID + ":" + status
 	if eventID != sub.Last {
-		if err = s.addCollaborationEvent(ctx, tx, source.ID, "session.collaboration.child", map[string]any{"session": target.Ref(), "title": target.Title, "url": target.URL, "status": status, "operation_id": target.OperationID, "turn_ended": ended}); err != nil {
+		if err = s.addCollaborationEvent(ctx, tx, source.ID, protocol.EventSessionCollaborationChild, map[string]any{"session": target.Ref(), "title": target.Title, "url": target.URL, "status": status, "operation_id": target.OperationID, "turn_ended": ended}); err != nil {
 			return false, err
 		}
 		if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_subscriptions SET last_event_id=? WHERE source_key=? AND target_key=?"), eventID, sourceKey, targetKey); err != nil {

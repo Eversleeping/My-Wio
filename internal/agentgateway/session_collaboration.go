@@ -23,7 +23,7 @@ func (g *Gateway) RunSessionCollaboration(ctx context.Context) {
 		var streams []string
 		if err := g.store.DB.SelectContext(ctx, &streams, g.store.Q("SELECT DISTINCT stream_id FROM events WHERE kind IN ('session.collaboration.request','session.collaboration.updated','session.collaboration.child') AND occurred_at>=?"), since); err == nil {
 			for _, stream := range streams {
-				g.hub.Publish(protocol.StreamEvent{StreamID: stream, Kind: "session.collaboration.updated", OccurredAt: started})
+				g.hub.Publish(protocol.StreamEvent{StreamID: stream, Kind: protocol.EventSessionCollaborationUpdated, OccurredAt: started})
 			}
 			// Overlap covers late commits and clock skew; a repeated refresh is harmless.
 			since = started.Add(-10 * time.Second)
@@ -45,7 +45,7 @@ func (g *Gateway) receiveSessionTool(stream protocol.AgentServiceConnectServer, 
 		reply.ID = call.ID
 		raw, _ := json.Marshal(reply)
 		select {
-		case replies <- &protocol.ControlEnvelope{Kind: "session_tool_response", CreatedAtUnixMS: time.Now().UnixMilli(), PayloadJSON: raw}:
+		case replies <- &protocol.ControlEnvelope{Kind: protocol.ControlKindSessionToolResponse, CreatedAtUnixMS: time.Now().UnixMilli(), PayloadJSON: raw}:
 		case <-stream.Context().Done():
 		}
 	}

@@ -93,7 +93,7 @@ func (s *Store) queueCollaborationOperation(ctx context.Context, tx *sqlx.Tx, t 
 		w = 1
 	}
 	var threadID any
-	if strings.HasPrefix(kind, "codex.") {
+	if strings.HasPrefix(kind, protocol.CodexKindPrefix) {
 		threadID = t.ID
 	}
 	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,workspace_write,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)"), id, t.ServerID, t.ProjectID, t.WorkspaceID, threadID, kind, string(raw), w, "session-tool:"+id, time.Now().UTC())
@@ -119,12 +119,12 @@ func (s *Store) queueCodexTurnTx(ctx context.Context, tx *sqlx.Tx, t Thread, com
 		return "", protocol.StreamEvent{}, err
 	}
 	command.CodexThread = native
-	op, err := s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: t.ID, ServerID: t.ServerID, ProjectID: t.ProjectID, WorkspaceID: t.WorkspaceID}, "codex.turn.start", command, false)
+	op, err := s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: t.ID, ServerID: t.ServerID, ProjectID: t.ProjectID, WorkspaceID: t.WorkspaceID}, protocol.OpCodexTurnStart, command, false)
 	if err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
 	raw, _ := json.Marshal(map[string]any{"text": command.Prompt, "image_count": len(command.Images), "operation_id": op})
-	event := protocol.StreamEvent{EventID: NewID(), StreamID: t.ID, Kind: "user.message", Payload: raw, OccurredAt: time.Now().UTC()}
+	event := protocol.StreamEvent{EventID: NewID(), StreamID: t.ID, Kind: protocol.EventUserMessage, Payload: raw, OccurredAt: time.Now().UTC()}
 	if s.isPostgres() {
 		if err = lockEventStream(ctx, tx, t.ID); err != nil {
 			return "", event, err
@@ -456,7 +456,7 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 				r.WorkspaceID = worktree.TargetWorkspaceID
 				var lock bool
 				if lock, err = s.collaborationWorktreeLock(ctx, tx, source, w.ID); err == nil {
-					r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, "git.worktree.create", worktree, lock)
+					r.OperationID, err = s.queueCollaborationOperation(ctx, tx, CollaborationSession{ID: source.ID, ServerID: w.ServerID, ProjectID: w.ProjectID, WorkspaceID: w.ID}, protocol.OpGitWorktreeCreate, worktree, lock)
 				}
 				r.Phase = "worktree"
 				reply.Status = "preparing"
@@ -714,7 +714,7 @@ func (s *Store) collaborationFork(ctx context.Context, tx *sqlx.Tx, source Colla
 			worktree.TargetThreadID = target
 			worktree.CodexThread = source.NativeID
 			worktree.Title = source.Title + " (continued)"
-			return s.queueCollaborationOperation(ctx, tx, source, "git.worktree.create", worktree, true)
+			return s.queueCollaborationOperation(ctx, tx, source, protocol.OpGitWorktreeCreate, worktree, true)
 		}
 		command := protocol.ForkThreadCommand{SourceThreadID: source.ID, TargetThreadID: target, CodexThread: source.NativeID, WorkspaceID: source.WorkspaceID, Workspace: source.Path, Title: source.Title + " (continued)"}
 		if eventID != "" {
@@ -724,7 +724,7 @@ func (s *Store) collaborationFork(ctx context.Context, tx *sqlx.Tx, source Colla
 				return "", err
 			}
 		}
-		return s.queueCollaborationOperation(ctx, tx, source, "codex.thread.fork", command, false)
+		return s.queueCollaborationOperation(ctx, tx, source, protocol.OpCodexThreadFork, command, false)
 	}
 	return "", sessiontools.Fail("CAPABILITY_UNSUPPORTED", "native fork is unavailable")
 }
@@ -787,11 +787,11 @@ func (s *Store) collaborationCodexControl(ctx context.Context, tx *sqlx.Tx, t Co
 			if _, err = tx.ExecContext(ctx, s.Q("UPDATE codex_scheduled_tasks SET last_run_status='cancelled',last_run_message='cancelled before Codex turn started',updated_at=? WHERE last_operation_id=?"), time.Now().UTC(), t.OperationID); err != nil {
 				return "", err
 			}
-			return t.OperationID, s.addCollaborationEvent(ctx, tx, t.ID, "codex.turn.cancelled", map[string]string{"operation_id": t.OperationID, "source": "control"})
+			return t.OperationID, s.addCollaborationEvent(ctx, tx, t.ID, protocol.EventCodexTurnCancelled, map[string]string{"operation_id": t.OperationID, "source": "control"})
 		}
 		// Delivered turns can be stopped before the native accepted event arrives.
 		if t.Status == "queued" {
-			return s.queueCollaborationOperation(ctx, tx, t, "codex.turn.interrupt", protocol.InterruptTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID}, false)
+			return s.queueCollaborationOperation(ctx, tx, t, protocol.OpCodexTurnInterrupt, protocol.InterruptTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID}, false)
 		}
 	}
 	if t.Status != "running" || t.NativeID == "" {
@@ -819,9 +819,9 @@ func (s *Store) collaborationCodexControl(ctx context.Context, tx *sqlx.Tx, t Co
 		return "", ErrThreadActive
 	}
 	if interrupt {
-		return s.queueCollaborationOperation(ctx, tx, t, "codex.turn.interrupt", protocol.InterruptTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID, TurnID: turn}, false)
+		return s.queueCollaborationOperation(ctx, tx, t, protocol.OpCodexTurnInterrupt, protocol.InterruptTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID, TurnID: turn}, false)
 	}
-	return s.queueCollaborationOperation(ctx, tx, t, "codex.turn.steer", protocol.SteerTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID, ExpectedTurnID: turn, Prompt: prompt}, false)
+	return s.queueCollaborationOperation(ctx, tx, t, protocol.OpCodexTurnSteer, protocol.SteerTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID, ExpectedTurnID: turn, Prompt: prompt}, false)
 }
 
 func (s *Store) collaborationSteer(ctx context.Context, tx *sqlx.Tx, t CollaborationSession, prompt, key string) (string, error) {

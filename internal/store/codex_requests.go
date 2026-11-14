@@ -158,7 +158,7 @@ func (s *Store) QueueCodexSteerRequest(ctx context.Context, thread Thread, comma
 			return err
 		}
 		payload, _ := json.Marshal(map[string]any{"text": command.Prompt, "image_count": len(command.Images), "steer": true, "operation_id": operationID, "turn_id": turnID})
-		event = protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: sequence, Kind: "user.message", OccurredAt: now, Payload: payload}
+		event = protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: sequence, Kind: protocol.EventUserMessage, OccurredAt: now, Payload: payload}
 		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, now, string(payload)); err != nil {
 			return err
 		}

@@ -558,7 +558,7 @@ func (a *API) retryProjectCreation(w http.ResponseWriter, r *http.Request) {
 	}
 	serverID := ""
 	for _, operation := range operations {
-		if operation.Kind == "git.project.create" {
+		if operation.Kind == protocol.OpGitProjectCreate {
 			serverID = operation.ServerID
 			break
 		}
@@ -744,7 +744,7 @@ func (a *API) refreshWorkspaceGit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not start workspace Git refresh")
 		return
 	}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.workspace.inspect", command, "git-inspect:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpGitWorkspaceInspect, command, "git-inspect:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		_ = a.store.FailWorkspaceGitRefresh(r.Context(), workspace.ID, "could not queue workspace Git refresh")
 		writeError(w, http.StatusInternalServerError, "could not queue workspace Git refresh")
@@ -849,7 +849,7 @@ func (a *API) queueWorkspaceGitWrite(w http.ResponseWriter, r *http.Request, com
 		writeError(w, http.StatusInternalServerError, "could not start workspace Git operation")
 		return
 	}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.workspace.write", command, "git-write:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpGitWorkspaceWrite, command, "git-write:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if errors.Is(err, store.ErrWorkspaceWriteActive) {
 		// A concurrent write won the race after the check above. Nothing ran
 		// for this request, so put the snapshot back instead of failing it.
@@ -1064,7 +1064,7 @@ func (a *API) createWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpGitWorktreeCreate, command, "git-worktree:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if err != nil {
 		writeStoreError(w, err, "could not queue worktree creation")
 		return
@@ -1116,7 +1116,7 @@ func (a *API) forkThreadToWorktree(w http.ResponseWriter, r *http.Request) {
 	command.TargetThreadID = store.NewID()
 	command.CodexThread = thread.CodexThreadID
 	command.Title = thread.Title + " (continued)"
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "git.worktree.create", command, "git-worktree-fork:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpGitWorktreeCreate, command, "git-worktree-fork:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, true)
 	if err != nil {
 		writeStoreError(w, err, "could not queue worktree continuation")
 		return
@@ -1230,7 +1230,7 @@ func (a *API) retryProjectImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.GitImportCommand{ProjectID: project.ID, Name: project.Name, RemoteURL: project.RemoteURL, Destination: latest.Command.Destination}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), server.ID, "git.import", command, "git-import-retry:"+project.ID+":"+store.NewID(), store.OperationResource{ProjectID: project.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), server.ID, protocol.OpGitImport, command, "git-import-retry:"+project.ID+":"+store.NewID(), store.OperationResource{ProjectID: project.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Git import retry")
 		return
@@ -1371,7 +1371,7 @@ func (a *API) refreshWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.WorkspaceFilesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.files", command, "workspace-files:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpWorkspaceFiles, command, "workspace-files:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue workspace file scan")
 		return
@@ -1457,9 +1457,9 @@ func (a *API) requestWorkspacePreview(w http.ResponseWriter, r *http.Request, im
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	kind := "workspace.file.preview"
+	kind := protocol.OpWorkspaceFilePreview
 	if imageOnly {
-		kind = "workspace.image.preview"
+		kind = protocol.OpWorkspaceImagePreview
 	} else {
 		if err := a.store.BeginWorkspaceFilePreview(r.Context(), workspace.ID, path); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not start workspace file preview")
@@ -1532,7 +1532,7 @@ func (a *API) refreshWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.WorkspaceChangesCommand{WorkspaceID: workspace.ID, Path: workspace.Path}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.changes", command, "workspace-changes:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpWorkspaceChanges, command, "workspace-changes:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		_ = a.store.FailWorkspaceChangeScan(r.Context(), workspace.ID, "could not queue workspace change scan")
 		writeError(w, http.StatusInternalServerError, "could not queue workspace change scan")
@@ -1631,7 +1631,7 @@ func (a *API) requestWorkspaceDiffPreview(w http.ResponseWriter, r *http.Request
 		return
 	}
 	command := protocol.WorkspaceDiffCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path, OldPath: oldPath}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "workspace.diff.preview", command, "workspace-diff-preview:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpWorkspaceDiffPreview, command, "workspace-diff-preview:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		_ = a.store.FailWorkspaceDiffPreview(r.Context(), workspace.ID, path, "could not queue workspace diff preview")
 		writeError(w, http.StatusInternalServerError, "could not queue workspace diff preview")
@@ -1877,7 +1877,7 @@ func (a *API) forkThread(w http.ResponseWriter, r *http.Request) {
 		}
 		command.Title = thread.Title + " (branch)"
 	}
-	opID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.thread.fork", command, "codex-fork:"+targetID, store.OperationResource{ThreadID: thread.ID}, false)
+	opID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, protocol.OpCodexThreadFork, command, "codex-fork:"+targetID, store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Codex session continuation")
 		return
@@ -2272,7 +2272,7 @@ func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 		if cancelled {
 			_ = a.store.SetThreadStatus(r.Context(), thread.ID, "idle")
 			_ = a.store.MarkScheduledTaskByOperation(r.Context(), activeOperation.ID, "cancelled", "cancelled before Codex turn started")
-			event, eventErr := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.cancelled", Payload: eventPayload(map[string]string{"operation_id": activeOperation.ID, "source": "control", "text": "cancelled before Codex turn started"})})
+			event, eventErr := a.store.AddEvent(r.Context(), protocol.StreamEvent{StreamID: thread.ID, Kind: protocol.EventCodexTurnCancelled, Payload: eventPayload(map[string]string{"operation_id": activeOperation.ID, "source": "control", "text": "cancelled before Codex turn started"})})
 			if eventErr == nil {
 				a.hub.Publish(event)
 			}
@@ -2292,7 +2292,7 @@ func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.InterruptTurnCommand{ThreadID: thread.ID, CodexThread: thread.CodexThreadID, TurnID: turnID}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.turn.interrupt", command, "codex-interrupt:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, protocol.OpCodexTurnInterrupt, command, "codex-interrupt:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		writeStoreError(w, err, "could not queue interrupt")
 		return
@@ -2854,7 +2854,7 @@ func (a *API) startDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not protect deployment operation")
 		return
 	}
-	operationID, err := a.store.QueueEncryptedResourceOperation(r.Context(), snapshot.ServerID, "deploy.start", ciphertext, "deploy:"+deployment.ID, store.OperationResource{ProjectID: snapshot.ProjectID, WorkspaceID: snapshot.WorkspaceID})
+	operationID, err := a.store.QueueEncryptedResourceOperation(r.Context(), snapshot.ServerID, protocol.OpDeployStart, ciphertext, "deploy:"+deployment.ID, store.OperationResource{ProjectID: snapshot.ProjectID, WorkspaceID: snapshot.WorkspaceID})
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not queue deployment"})
 		writeError(w, http.StatusInternalServerError, "could not queue deployment")
@@ -2959,7 +2959,7 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not protect rollback operation")
 		return
 	}
-	operationID, err := a.store.QueueEncryptedResourceOperation(r.Context(), target.ServerID, "deploy.rollback", ciphertext, "rollback:"+deployment.ID, store.OperationResource{ProjectID: target.ProjectID, WorkspaceID: target.WorkspaceID})
+	operationID, err := a.store.QueueEncryptedResourceOperation(r.Context(), target.ServerID, protocol.OpDeployRollback, ciphertext, "rollback:"+deployment.ID, store.OperationResource{ProjectID: target.ProjectID, WorkspaceID: target.WorkspaceID})
 	if err != nil {
 		_ = a.store.SaveDeploymentStatus(r.Context(), protocol.DeploymentStatus{DeploymentID: deployment.ID, Status: "failed", Message: "could not queue rollback"})
 		writeError(w, http.StatusInternalServerError, "could not queue rollback")

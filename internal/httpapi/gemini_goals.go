@@ -92,6 +92,6 @@ func (a *API) controlGeminiGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	a.gateway.Wake(thread.ServerID)
 	a.auditGemini(r, "gemini.goal."+action, thread.ID)
-	a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
+	a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadUpdated)
 	writeJSON(w, 202, map[string]bool{"ok": true})
 }

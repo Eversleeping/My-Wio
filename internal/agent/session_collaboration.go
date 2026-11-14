@@ -31,7 +31,7 @@ func (c *Client) callSessionTool(ctx context.Context, ref sessiontools.Ref, oper
 	c.toolMu.Unlock()
 	defer func() { c.toolMu.Lock(); delete(c.toolReplies, id); c.toolMu.Unlock() }()
 	payload, _ := json.Marshal(sessiontools.Call{ID: id, Source: ref, OperationID: operation, Name: name, Arguments: args})
-	envelope := &protocol.AgentEnvelope{MessageID: id, ServerID: c.config.ServerID, Kind: "session_tool_request", OccurredAtUnixMS: time.Now().UnixMilli(), PayloadJSON: payload}
+	envelope := &protocol.AgentEnvelope{MessageID: id, ServerID: c.config.ServerID, Kind: protocol.AgentKindSessionToolRequest, OccurredAtUnixMS: time.Now().UnixMilli(), PayloadJSON: payload}
 	if err := ctx.Err(); err != nil {
 		return sessiontools.Reply{}, err
 	}

@@ -111,7 +111,7 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 // The running agent.update itself is exempt; updatePending serializes those.
 func (c *Client) agentUpdateBlocker() error {
 	for _, execution := range c.seen {
-		if execution.kind == "agent.update" || protocol.SafeDuringAgentRestart(execution.kind) {
+		if execution.kind == protocol.OpAgentUpdate || protocol.SafeDuringAgentRestart(execution.kind) {
 			continue
 		}
 		select {
@@ -120,7 +120,7 @@ func (c *Client) agentUpdateBlocker() error {
 		default:
 		}
 		switch execution.kind {
-		case "gemini.turn.start", "gemini.turn.rewrite", "gemini.thread.fork", "claude.turn.start", "claude.thread.fork", "git.worktree.create", "gemini.skills.manage":
+		case protocol.OpGeminiTurnStart, protocol.OpGeminiTurnRewrite, protocol.OpGeminiThreadFork, protocol.OpClaudeTurnStart, protocol.OpClaudeThreadFork, protocol.OpGitWorktreeCreate, protocol.OpGeminiSkillsManage:
 			return errors.New("finish or interrupt active Gemini or Claude tasks before updating the Agent")
 		}
 		return fmt.Errorf("finish active operations before updating the Agent (%s is still running)", execution.kind)

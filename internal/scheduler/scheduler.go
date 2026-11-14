@@ -119,14 +119,14 @@ func (r *Runner) enqueue(ctx context.Context, task store.ScheduledTask, now time
 		ReasoningEffort: task.ReasoningEffort,
 		ApprovalMode:    normalizedApprovalMode(task.ApprovalMode),
 	}
-	operationID, err := r.store.QueueResourceOperation(ctx, thread.ServerID, "codex.turn.start", command, "codex-scheduled:"+task.ID+":"+now.Format(time.RFC3339Nano), store.OperationResource{ThreadID: thread.ID}, false)
+	operationID, err := r.store.QueueResourceOperation(ctx, thread.ServerID, protocol.OpCodexTurnStart, command, "codex-scheduled:"+task.ID+":"+now.Format(time.RFC3339Nano), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		_ = r.store.SetThreadStatus(ctx, thread.ID, "idle")
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", err.Error(), "", now)
 		return
 	}
 	payload, _ := json.Marshal(map[string]any{"text": task.Prompt, "scheduled_task_id": task.ID, "operation_id": operationID})
-	if _, eventErr := r.store.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "user.message", Payload: payload}); eventErr != nil {
+	if _, eventErr := r.store.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: protocol.EventUserMessage, Payload: payload}); eventErr != nil {
 		r.log.Warn("could not record scheduled Codex prompt", "task_id", task.ID, "error", eventErr)
 		_, _ = r.store.CancelOperation(ctx, operationID, "could not record scheduled Codex prompt")
 		_ = r.store.SetThreadStatus(ctx, thread.ID, "idle")

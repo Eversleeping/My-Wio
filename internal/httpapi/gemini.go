@@ -81,7 +81,7 @@ func (a *API) createGeminiThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auditGemini(r, "gemini.thread.create", thread.ID)
-	a.publishGeminiChange(r, thread.ID, "gemini.thread.created")
+	a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadCreated)
 	writeJSON(w, 201, thread)
 }
 
@@ -244,7 +244,7 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	a.userMessaged(r, "gemini", thread.ID)
 	if editEventID != "" {
-		a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
+		a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadUpdated)
 		a.auditGemini(r, "gemini.turn.rewrite", thread.ID)
 	} else {
 		a.hub.Publish(event)
@@ -265,7 +265,7 @@ func (a *API) interruptGeminiTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	a.gateway.Wake(thread.ServerID)
 	a.auditGemini(r, "gemini.turn.interrupt", thread.ID)
-	a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
+	a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadUpdated)
 	writeJSON(w, 202, map[string]bool{"ok": true})
 }
 
@@ -355,7 +355,7 @@ func (a *API) updateGeminiThread(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.auditGemini(r, "gemini.thread.update", thread.ID)
-	a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
+	a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadUpdated)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -369,7 +369,7 @@ func (a *API) deleteGeminiThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auditGemini(r, "gemini.thread.delete", thread.ID)
-	a.publishGeminiChange(r, thread.ID, "gemini.thread.deleted")
+	a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadDeleted)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

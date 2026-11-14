@@ -1773,7 +1773,7 @@ func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, paylo
 	}
 	// Legacy callers supply import metadata only in the payload. Indexed import
 	// lookups need the project association on new writes as well as migrated rows.
-	if kind == "git.import" && resource.ProjectID == "" {
+	if kind == protocol.OpGitImport && resource.ProjectID == "" {
 		var command protocol.GitImportCommand
 		if json.Unmarshal([]byte(payload), &command) == nil {
 			resource.ProjectID = command.ProjectID
@@ -2068,7 +2068,7 @@ func (s *Store) MarkDelivered(ctx context.Context, id string) error {
 // Operation kinds excluded from the generic result reconcile: Gemini and
 // Claude turns have their own ownership probe (their CLI can outlive the
 // Agent), and interruptions are re-sent by PendingOperations instead.
-var reconcileExcludedKinds = []string{"gemini.turn.start", "gemini.turn.rewrite", "claude.turn.start", "operation.interrupt"}
+var reconcileExcludedKinds = []string{protocol.OpGeminiTurnStart, protocol.OpGeminiTurnRewrite, protocol.OpClaudeTurnStart, protocol.OpOperationInterrupt}
 
 // ReconcileOperationLimit bounds one keepalive's reconcile request.
 const ReconcileOperationLimit = 200
@@ -2391,7 +2391,7 @@ func (s *Store) latestActiveTurnID(ctx context.Context, db sqlx.QueryerContext, 
 		return "", err
 	}
 	switch event.Kind {
-	case "codex.turn.completed", "codex.turn.failed", "codex.turn.cancelled":
+	case protocol.EventCodexTurnCompleted, protocol.EventCodexTurnFailed, protocol.EventCodexTurnCancelled:
 		return "", nil
 	}
 	var value struct {
@@ -2403,7 +2403,7 @@ func (s *Store) latestActiveTurnID(ctx context.Context, db sqlx.QueryerContext, 
 	if err := json.Unmarshal([]byte(event.Payload), &value); err != nil {
 		return "", err
 	}
-	if event.Kind == "codex.turn.started" {
+	if event.Kind == protocol.EventCodexTurnStarted {
 		return value.Turn.ID, nil
 	}
 	return value.TurnID, nil
@@ -2439,7 +2439,7 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 			}
 			return err
 		}
-		if target.Kind != "user.message" {
+		if target.Kind != protocol.EventUserMessage {
 			return ErrInvalidEditTarget
 		}
 		var metadata struct {
@@ -2470,7 +2470,7 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 			return err
 		}
 		userPayload = associatedPayload
-		replacement = protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: target.Sequence, Kind: "user.message", OccurredAt: time.Now().UTC(), Payload: userPayload}
+		replacement = protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Sequence: target.Sequence, Kind: protocol.EventUserMessage, OccurredAt: time.Now().UTC(), Payload: userPayload}
 		rewrite := protocol.RewriteTurnCommand{
 			Start:              command,
 			NumTurns:           numTurns,
@@ -2484,7 +2484,7 @@ func (s *Store) RewriteThread(ctx context.Context, thread Thread, editEventID st
 			return err
 		}
 		now := time.Now().UTC()
-		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?)"), operationID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, thread.ID, "codex.turn.rewrite", string(operationPayload), "codex-rewrite:"+NewID(), now); err != nil {
+		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,thread_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?)"), operationID, thread.ServerID, thread.ProjectID, thread.WorkspaceID, thread.ID, protocol.OpCodexTurnRewrite, string(operationPayload), "codex-rewrite:"+NewID(), now); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',updated_at=? WHERE id=?"), now, thread.ID)
@@ -2529,7 +2529,7 @@ func (s *Store) CommitThreadRewrite(ctx context.Context, threadID, codexThreadID
 			applied = false
 			return nil
 		}
-		if target.Kind != "user.message" {
+		if target.Kind != protocol.EventUserMessage {
 			return ErrInvalidEditTarget
 		}
 		if cutoffSequence < target.Sequence {
@@ -2580,7 +2580,7 @@ func (s *Store) CommitThreadRewrite(ctx context.Context, threadID, codexThreadID
 			return err
 		}
 		now := time.Now().UTC()
-		event = protocol.StreamEvent{EventID: replacementEventID, StreamID: threadID, Sequence: target.Sequence, Kind: "user.message", OccurredAt: now, Payload: replacementPayload}
+		event = protocol.StreamEvent{EventID: replacementEventID, StreamID: threadID, Sequence: target.Sequence, Kind: protocol.EventUserMessage, OccurredAt: now, Payload: replacementPayload}
 		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(event.Payload)); err != nil {
 			return err
 		}

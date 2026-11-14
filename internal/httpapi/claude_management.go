@@ -24,7 +24,7 @@ func (a *API) archiveClaudeProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "claude.project.archive", "project", id, map[string]any{"archived": n, "server_id": server}, clientIP(r))
-	a.publishClaudeChange(r, id, "claude.thread.updated")
+	a.publishClaudeChange(r, id, protocol.EventClaudeThreadUpdated)
 	writeJSON(w, 200, map[string]int64{"archived": n})
 }
 func (a *API) forkClaudeThread(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +70,6 @@ func (a *API) queueClaudeFork(w http.ResponseWriter, r *http.Request, worktree b
 	}
 	a.gateway.Wake(t.ServerID)
 	a.auditClaude(r, "claude.thread.fork", t.ID)
-	a.publishClaudeChange(r, t.ID, "claude.thread.updated")
+	a.publishClaudeChange(r, t.ID, protocol.EventClaudeThreadUpdated)
 	writeJSON(w, 202, map[string]string{"operation_id": op, "target_thread_id": target})
 }

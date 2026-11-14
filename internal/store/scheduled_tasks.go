@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 type ScheduledTask struct {
@@ -338,7 +340,7 @@ func (s *Store) ActiveCodexTurnOperation(ctx context.Context, threadID string) (
 			continue
 		}
 		candidate := command.ThreadID
-		if operation.Kind == "codex.turn.rewrite" {
+		if operation.Kind == protocol.OpCodexTurnRewrite {
 			candidate = command.Start.ThreadID
 		}
 		if candidate == threadID {
@@ -365,7 +367,7 @@ func (s *Store) HasPendingTurnCancellation(ctx context.Context, threadID string)
 		}
 		return false, err
 	}
-	if event.Kind != "codex.turn.cancelled" {
+	if event.Kind != protocol.EventCodexTurnCancelled {
 		return false, nil
 	}
 	var marker struct {

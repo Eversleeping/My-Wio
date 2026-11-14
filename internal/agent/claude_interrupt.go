@@ -10,7 +10,7 @@ import (
 
 var claudeTurnOwner = turnOwner{
 	name:        "Claude",
-	kinds:       []string{"claude.turn.start"},
+	kinds:       []string{protocol.OpClaudeTurnStart},
 	lostMessage: protocol.ClaudeOwnershipLostMessage,
 	verifyError: func(error) error { return errors.New("could not verify Claude task completion") },
 }
@@ -32,10 +32,10 @@ func (c *Client) reconcileClaudeOperations(raw json.RawMessage) {
 			case <-execution.done:
 				result := execution.result
 				c.seenMu.Unlock()
-				_ = c.queue("operation_result", result, true)
+				_ = c.queue(protocol.AgentKindOperationResult, result, true)
 			default:
 				c.seenMu.Unlock()
-				_ = c.queue("claude_ownership_active", protocol.GeminiOwnership{OperationID: id}, true)
+				_ = c.queue(protocol.AgentKindClaudeOwnershipActive, protocol.GeminiOwnership{OperationID: id}, true)
 			}
 			continue
 		}
@@ -43,7 +43,7 @@ func (c *Client) reconcileClaudeOperations(raw json.RawMessage) {
 			// Only an interruption that beat this turn's start is known; it says
 			// nothing about a CLI that an earlier Agent process started.
 			c.seenMu.Unlock()
-			_ = c.queue("claude_ownership_lost", protocol.GeminiOwnership{OperationID: id}, true)
+			_ = c.queue(protocol.AgentKindClaudeOwnershipLost, protocol.GeminiOwnership{OperationID: id}, true)
 			continue
 		}
 		result, found, err := c.loadOperationResult(id)
@@ -53,9 +53,9 @@ func (c *Client) reconcileClaudeOperations(raw json.RawMessage) {
 			continue
 		}
 		if found {
-			_ = c.queue("operation_result", result, true)
+			_ = c.queue(protocol.AgentKindOperationResult, result, true)
 		} else {
-			_ = c.queue("claude_ownership_lost", protocol.GeminiOwnership{OperationID: id}, true)
+			_ = c.queue(protocol.AgentKindClaudeOwnershipLost, protocol.GeminiOwnership{OperationID: id}, true)
 		}
 	}
 }

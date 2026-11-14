@@ -14,7 +14,7 @@ import (
 // A restart can lose outbound messages after both receipts have been persisted.
 // Replaying a successful interruption must also replay its target's receipt.
 func (c *Client) replayOperationResult(ctx context.Context, envelope *protocol.ControlEnvelope, result protocol.OperationResult) {
-	if envelope.Kind == "operation.interrupt" && result.Status == "succeeded" {
+	if envelope.Kind == protocol.OpOperationInterrupt && result.Status == "succeeded" {
 		var command protocol.OperationInterruptCommand
 		err := json.Unmarshal(envelope.PayloadJSON, &command)
 		if err == nil {
@@ -27,7 +27,7 @@ func (c *Client) replayOperationResult(ctx context.Context, envelope *protocol.C
 		}
 	}
 	c.claimInterruptedStart(envelope)
-	_ = c.queue("operation_result", result, true)
+	_ = c.queue(protocol.AgentKindOperationResult, result, true)
 }
 
 func (c *Client) interruptOperation(ctx context.Context, command protocol.OperationInterruptCommand) error {
@@ -51,7 +51,7 @@ func (c *Client) interruptOperation(ctx context.Context, command protocol.Operat
 			c.seenMu.Lock()
 			result := execution.result
 			c.seenMu.Unlock()
-			return c.queue("operation_result", result, true)
+			return c.queue(protocol.AgentKindOperationResult, result, true)
 		case <-ctx.Done():
 			return fmt.Errorf("operation has not confirmed termination: %w", ctx.Err())
 		}
@@ -74,7 +74,7 @@ func (c *Client) interruptOperation(ctx context.Context, command protocol.Operat
 		c.seen[command.OperationID] = execution
 	}
 	c.seenMu.Unlock()
-	return c.queue("operation_result", result, true)
+	return c.queue(protocol.AgentKindOperationResult, result, true)
 }
 
 // preStartInterruptMessage marks the tombstone an interruption leaves for a

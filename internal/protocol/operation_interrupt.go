@@ -8,7 +8,7 @@ type OperationInterruptCommand struct {
 // Only synchronous, read-only operations whose lifetime follows their context.
 func CanInterruptOperation(kind string) bool {
 	switch kind {
-	case "git.workspace.inspect", "inventory.scan", "workspace.files", "workspace.changes", "workspace.file.preview", "workspace.diff.preview":
+	case OpGitWorkspaceInspect, OpInventoryScan, OpWorkspaceFiles, OpWorkspaceChanges, OpWorkspaceFilePreview, OpWorkspaceDiffPreview:
 		return true
 	}
 	return false

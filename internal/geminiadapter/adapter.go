@@ -264,7 +264,7 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 			}
 		}
 		raw, _ := json.Marshal(payload)
-		if err := a.emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: "gemini." + kind, Payload: raw}); err != nil {
+		if err := a.emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: protocol.EventGeminiPrefix + kind, Payload: raw}); err != nil {
 			streamErr = err
 			break
 		}

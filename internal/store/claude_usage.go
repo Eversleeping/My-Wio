@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"math"
 	"time"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 // Claude's result.usage is per native turn, including in streaming-input mode.
@@ -49,11 +51,11 @@ func (s *Store) claudeSessionUsage(ctx context.Context, threadID string, running
 			operations[id] = op
 		}
 		switch kind {
-		case "claude.init":
+		case protocol.EventClaudeInit:
 			if op.start.IsZero() {
 				op.start = at
 			}
-		case "claude.result":
+		case protocol.EventClaudeResult:
 			id := p.ResultID
 			if id == "" {
 				// Older Agents already persist per-turn usage, without the native UUID.
@@ -74,7 +76,7 @@ func (s *Store) claudeSessionUsage(ctx context.Context, threadID string, running
 			if !op.completed && at.After(op.end) {
 				op.end = at
 			}
-		case "claude.turn.completed":
+		case protocol.EventClaudeTurnCompleted:
 			op.completed = true
 			op.interrupted = p.Status == "interrupted"
 			if at.After(op.end) {

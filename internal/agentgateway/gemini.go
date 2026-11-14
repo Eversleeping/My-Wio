@@ -35,15 +35,15 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		return nil
 	}
 	switch event.Kind {
-	case "gemini.init":
+	case protocol.EventGeminiInit:
 		if payload.SessionID == "" || len(payload.SessionID) > 128 {
 			return errors.New("invalid Gemini session id")
 		}
-	case "gemini.mode":
+	case protocol.EventGeminiMode:
 		if payload.Mode != "default" && payload.Mode != "auto_edit" && payload.Mode != "yolo" && payload.Mode != "plan" {
 			return errors.New("invalid Gemini approval mode update")
 		}
-	case "gemini.message", "gemini.activity", "gemini.commands", "gemini.tool_use", "gemini.tool_result", "gemini.error", "gemini.result", "gemini.question", "gemini.question.answered", "gemini.steer.ready", "gemini.steer.applied", "gemini.goal.progress", "gemini.goal.usage", "gemini.goal.diagnostic":
+	case protocol.EventGeminiMessage, protocol.EventGeminiActivity, protocol.EventGeminiCommands, protocol.EventGeminiToolUse, protocol.EventGeminiToolResult, protocol.EventGeminiError, protocol.EventGeminiResult, protocol.EventGeminiQuestion, protocol.EventGeminiQuestionAnswered, protocol.EventGeminiSteerReady, protocol.EventGeminiSteerApplied, protocol.EventGeminiGoalProgress, protocol.EventGeminiGoalUsage, protocol.EventGeminiGoalDiagnostic:
 	default:
 		return errors.New("unsupported Gemini event")
 	}
@@ -54,12 +54,12 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 	}
 	event.Payload = security.RedactJSON(event.Payload)
 	switch event.Kind {
-	case "gemini.init":
+	case protocol.EventGeminiInit:
 		operation, err := g.store.Operation(ctx, payload.OperationID)
 		if err != nil {
 			return err
 		}
-		if operation.Kind == "gemini.turn.rewrite" {
+		if operation.Kind == protocol.OpGeminiTurnRewrite {
 			replacement, changed, err := g.store.CommitGeminiRewrite(ctx, thread.ID, payload.OperationID, payload.SessionID)
 			if err != nil {
 				return err
@@ -72,12 +72,12 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 		if err != nil {
 			return err
 		}
-	case "gemini.mode":
+	case protocol.EventGeminiMode:
 		_, err = g.store.DB.ExecContext(ctx, g.store.Q(`UPDATE gemini_threads SET approval_mode=?,updated_at=? WHERE id=? AND operation_id=? AND status IN ('queued','running','interrupting','interrupted') AND EXISTS (SELECT 1 FROM agent_operations WHERE id=? AND status IN ('queued','delivered','running'))`), payload.Mode, time.Now().UTC(), thread.ID, payload.OperationID, payload.OperationID)
 		if err != nil {
 			return err
 		}
-	case "gemini.goal.progress":
+	case protocol.EventGeminiGoalProgress:
 		var progress protocol.GeminiGoalProgress
 		if err := json.Unmarshal(event.Payload, &progress); err != nil {
 			return err
@@ -90,7 +90,7 @@ func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw js
 }
 
 func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operation, result protocol.OperationResult) error {
-	if op.Kind == "gemini.turn.steer" {
+	if op.Kind == protocol.OpGeminiTurnSteer {
 		if result.Status == "succeeded" {
 			return nil
 		}
@@ -99,9 +99,9 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 			return err
 		}
 		raw, _ := json.Marshal(map[string]string{"operation_id": command.OperationID, "request_id": command.RequestID, "message": result.Message})
-		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":rejected", StreamID: command.ThreadID, Kind: "gemini.steer.rejected", Payload: security.RedactJSON(raw)})
+		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":rejected", StreamID: command.ThreadID, Kind: protocol.EventGeminiSteerRejected, Payload: security.RedactJSON(raw)})
 	}
-	if op.Kind == "gemini.turn.interrupt" {
+	if op.Kind == protocol.OpGeminiTurnInterrupt {
 		var command protocol.GeminiInterruptCommand
 		if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
 			return err
@@ -169,7 +169,7 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 			return err
 		}
 		raw, _ := json.Marshal(map[string]any{"message": result.Message, "severity": "error", "operation_id": command.OperationID})
-		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":interrupt-failed", StreamID: command.ThreadID, Kind: "gemini.error", Payload: security.RedactJSON(raw)})
+		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":interrupt-failed", StreamID: command.ThreadID, Kind: protocol.EventGeminiError, Payload: security.RedactJSON(raw)})
 	}
 	var command protocol.GeminiTurnCommand
 	if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
@@ -200,7 +200,7 @@ func (g *Gateway) completeGeminiOperation(ctx context.Context, op store.Operatio
 		return err
 	}
 	raw, _ := json.Marshal(map[string]string{"status": status, "message": result.Message, "operation_id": op.ID})
-	return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":completed", StreamID: command.ThreadID, Kind: "gemini.turn.completed", Payload: security.RedactJSON(raw)})
+	return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":completed", StreamID: command.ThreadID, Kind: protocol.EventGeminiTurnCompleted, Payload: security.RedactJSON(raw)})
 }
 
 func (g *Gateway) markGeminiOwnershipLost(ctx context.Context, serverID, operationID string) error {
@@ -216,7 +216,7 @@ func (g *Gateway) updateGeminiOwnership(ctx context.Context, serverID, operation
 	if err != nil {
 		return err
 	}
-	if op.ServerID != serverID || (op.Kind != "gemini.turn.start" && op.Kind != "gemini.turn.rewrite") {
+	if op.ServerID != serverID || (op.Kind != protocol.OpGeminiTurnStart && op.Kind != protocol.OpGeminiTurnRewrite) {
 		return errors.New("Gemini ownership check operation mismatch")
 	}
 	var command protocol.GeminiTurnCommand
@@ -238,9 +238,9 @@ func (g *Gateway) updateGeminiOwnership(ctx context.Context, serverID, operation
 	if err != nil || count == 0 {
 		return err
 	}
-	status, kind, condition := "interrupted", "gemini.turn.ownership_lost", "status IN ('queued','running','interrupting')"
+	status, kind, condition := "interrupted", protocol.EventGeminiTurnOwnershipLost, "status IN ('queued','running','interrupting')"
 	if active {
-		status, kind, condition = "running", "gemini.turn.ownership_active", "status='interrupted'"
+		status, kind, condition = "running", protocol.EventGeminiTurnOwnershipActive, "status='interrupted'"
 	}
 	// A lost owner keeps the workspace reserved until the Agent proves the
 	// process stopped or supplies its original result.

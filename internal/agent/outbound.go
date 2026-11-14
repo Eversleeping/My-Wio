@@ -70,7 +70,7 @@ func (c *Client) boundedEnvelope(envelope *protocol.AgentEnvelope) *protocol.Age
 
 func (c *Client) replaceOversized(envelope *protocol.AgentEnvelope) *protocol.AgentEnvelope {
 	size := len(envelope.PayloadJSON)
-	if envelope.Kind == "operation_result" {
+	if envelope.Kind == protocol.AgentKindOperationResult {
 		var result protocol.OperationResult
 		if err := json.Unmarshal(envelope.PayloadJSON, &result); err == nil && result.OperationID != "" {
 			replacement := protocol.OperationResult{OperationID: result.OperationID, Status: "failed", Message: operationResultTooLargeMessage(size)}

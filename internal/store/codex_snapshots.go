@@ -16,7 +16,7 @@ const codexSnapshotTimeoutMessage = "Codex information refresh timed out. Please
 
 func IsReadOnlyCodexSnapshotOperation(kind string) bool {
 	switch kind {
-	case "codex.models.list", "codex.skills.list", "codex.mcp.list", "codex.status.snapshot":
+	case protocol.OpCodexModelsList, protocol.OpCodexSkillsList, protocol.OpCodexMCPList, protocol.OpCodexStatusSnapshot:
 		return true
 	default:
 		return false
@@ -89,7 +89,7 @@ func (s *Store) CompleteCodexSnapshotOperation(ctx context.Context, operation Op
 		return false, err
 	}
 	if newer == 0 && command.ScopeID != "" && (command.ScopeType == "workspace" || command.ScopeType == "thread") {
-		kind := strings.TrimPrefix(operation.Kind, "codex.")
+		kind := strings.TrimPrefix(operation.Kind, protocol.CodexKindPrefix)
 		if result.Status == "succeeded" {
 			supported := 0
 			if snapshot.Supported {

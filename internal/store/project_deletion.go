@@ -12,7 +12,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
-const ProjectDeleteOperationKind = "git.project.delete"
+const ProjectDeleteOperationKind = protocol.OpGitProjectDelete
 
 var ErrProjectDeletionBlocked = errors.New("project deletion is blocked")
 

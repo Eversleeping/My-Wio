@@ -540,7 +540,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 	if err = s.saveCollaborationRequest(ctx, tx, &request, reply); err != nil {
 		return collaborationError(p.RequestID, err)
 	}
-	if err = s.addCollaborationEvent(ctx, tx, source.ID, "session.collaboration.request", map[string]any{"request_id": p.RequestID, "tool": call.Name, "status": reply.Status, "target_engine": request.TargetEngine, "target_id": request.TargetID}); err != nil {
+	if err = s.addCollaborationEvent(ctx, tx, source.ID, protocol.EventSessionCollaborationRequest, map[string]any{"request_id": p.RequestID, "tool": call.Name, "status": reply.Status, "target_engine": request.TargetEngine, "target_id": request.TargetID}); err != nil {
 		return collaborationError(p.RequestID, err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -788,7 +788,7 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 				if err = tx.GetContext(ctx, &op, s.Q(operationSelect+" WHERE id=? AND server_id=?"), opID, t.ServerID); err != nil {
 					return reply, false, err
 				}
-				if op.Kind != t.Engine+".turn.start" && op.Kind != t.Engine+".turn.rewrite" {
+				if op.Kind != t.Engine+protocol.OpTurnStartSuffix && op.Kind != t.Engine+protocol.OpTurnRewriteSuffix {
 					return reply, false, sessiontools.Fail("INVALID_ARGUMENT", "operation must identify a model turn")
 				}
 				var command struct {
@@ -960,7 +960,7 @@ func (s *Store) collaborationWaitingUser(ctx context.Context, tx sqlx.QueryerCon
 		Kind    string `db:"kind"`
 		Payload string `db:"payload"`
 	}
-	err := sqlx.SelectContext(ctx, tx, &events, s.Q("SELECT event_id,kind,payload FROM events WHERE stream_id=? AND kind IN (?,?,?) ORDER BY sequence"), t.ID, t.Engine+".question", t.Engine+".question.answered", t.Engine+".question.cancelled")
+	err := sqlx.SelectContext(ctx, tx, &events, s.Q("SELECT event_id,kind,payload FROM events WHERE stream_id=? AND kind IN (?,?,?) ORDER BY sequence"), t.ID, t.Engine+protocol.EventQuestionSuffix, t.Engine+protocol.EventQuestionAnsweredSuffix, t.Engine+protocol.EventQuestionCancelledSuffix)
 	if err != nil {
 		return false, err
 	}
@@ -975,7 +975,7 @@ func (s *Store) collaborationWaitingUser(ctx context.Context, tx sqlx.QueryerCon
 		if id == "" {
 			id = event.ID
 		}
-		if event.Kind == t.Engine+".question" {
+		if event.Kind == t.Engine+protocol.EventQuestionSuffix {
 			if p.OperationID == t.OperationID {
 				pending[id] = true
 			}

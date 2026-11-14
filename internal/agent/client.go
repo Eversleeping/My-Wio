@@ -97,13 +97,13 @@ func NewClient(config Config, log *slog.Logger) *Client {
 		if event.EventID == "" {
 			event.EventID = uuid.NewString()
 		}
-		return client.queue("event", event, true)
+		return client.queue(protocol.AgentKindEvent, event, true)
 	})
 	client.gemini = geminiadapter.New(effectiveGeminiPath(config.StateDir), func(event protocol.StreamEvent) error {
 		if event.EventID == "" {
 			event.EventID = uuid.NewString()
 		}
-		return client.queue("gemini_event", event, true)
+		return client.queue(protocol.AgentKindGeminiEvent, event, true)
 	})
 	if err := client.loadGeminiCredentials(); err != nil {
 		log.Warn("Gemini API configuration could not be loaded")
@@ -247,7 +247,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			if confirmErr != nil {
 				c.log.Warn("could not confirm Agent update", "error", confirmErr)
 			} else if confirmed {
-				_ = c.queue("agent_update_status", map[string]string{"version": buildinfo.Version, "status": "healthy"}, true)
+				_ = c.queue(protocol.AgentKindAgentUpdateStatus, map[string]string{"version": buildinfo.Version, "status": "healthy"}, true)
 			}
 			c.log.Info("connected to Wio control plane", "server_id", c.config.ServerID)
 		}
@@ -257,7 +257,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			return connected, err
 		default:
 		}
-		if command.Kind == "session_tool_response" {
+		if command.Kind == protocol.ControlKindSessionToolResponse {
 			c.receiveSessionToolReply(command.PayloadJSON)
 			continue
 		}
@@ -329,13 +329,13 @@ func operationContext(parent context.Context, kind string) (context.Context, con
 	// Gemini turns run synchronously until inference and all tools finish, and
 	// can also wait for user input. Their lifetime follows explicit interruption
 	// or Agent shutdown, rather than the maintenance-operation deadline.
-	if kind == "gemini.turn.start" || kind == "gemini.turn.rewrite" || kind == "claude.turn.start" {
+	if kind == protocol.OpGeminiTurnStart || kind == protocol.OpGeminiTurnRewrite || kind == protocol.OpClaudeTurnStart {
 		return context.WithCancel(parent)
 	}
 	timeout := 10 * time.Minute
-	if strings.HasPrefix(kind, "deploy.") {
+	if strings.HasPrefix(kind, protocol.OpDeployPrefix) {
 		timeout = time.Hour
-	} else if kind == "agent.update" || kind == "codex.update" {
+	} else if kind == protocol.OpAgentUpdate || kind == protocol.OpCodexUpdate {
 		timeout = 30 * time.Minute
 	}
 	return context.WithTimeout(parent, timeout)
@@ -356,7 +356,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		default:
 			// The control plane re-sends a delivered operation only when its start
 			// notice never arrived; repeat it so the re-sends stop.
-			_ = c.queue("operation_started", protocol.OperationStarted{OperationID: envelope.OperationID}, true)
+			_ = c.queue(protocol.AgentKindOperationStarted, protocol.OperationStarted{OperationID: envelope.OperationID}, true)
 		}
 		select {
 		case <-done:
@@ -383,9 +383,9 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	c.seen[envelope.OperationID] = execution
 	// Checked under seenMu, like stageAgentUpdate's scan of active executions,
 	// so an operation cannot slip in between staging and exec and be wiped.
-	blockedByUpdate := c.updatePending && envelope.Kind != "agent.update" && !protocol.SafeDuringAgentRestart(envelope.Kind)
+	blockedByUpdate := c.updatePending && envelope.Kind != protocol.OpAgentUpdate && !protocol.SafeDuringAgentRestart(envelope.Kind)
 	c.seenMu.Unlock()
-	if err := c.queue("operation_started", protocol.OperationStarted{OperationID: envelope.OperationID}, true); err != nil {
+	if err := c.queue(protocol.AgentKindOperationStarted, protocol.OperationStarted{OperationID: envelope.OperationID}, true); err != nil {
 		c.log.Warn("could not queue operation start", "operation_id", envelope.OperationID, "error", err)
 	}
 	var restartPath string
@@ -394,19 +394,19 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	var err error
 	if blockedByUpdate {
 		err = errors.New("Agent update is in progress; retry the task after it reconnects")
-	} else if envelope.Kind == "operation.interrupt" {
+	} else if envelope.Kind == protocol.OpOperationInterrupt {
 		var command protocol.OperationInterruptCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
 			err = c.interruptOperation(stopContext, command)
 			stopCancel()
 		}
-	} else if envelope.Kind == "agent.update" {
+	} else if envelope.Kind == protocol.OpAgentUpdate {
 		var command protocol.AgentUpdateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			restartPath, err = c.stageAgentUpdate(ctx, command)
 		}
-	} else if envelope.Kind == "gemini.turn.interrupt" {
+	} else if envelope.Kind == protocol.OpGeminiTurnInterrupt {
 		var command protocol.GeminiInterruptCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -416,12 +416,12 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
 			}
 		}
-	} else if envelope.Kind == "claude.turn.steer" {
+	} else if envelope.Kind == protocol.OpClaudeTurnSteer {
 		var command protocol.ClaudeSteerCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			err = c.claudeTurns.Steer(ctx, command)
 		}
-	} else if envelope.Kind == "claude.turn.interrupt" {
+	} else if envelope.Kind == protocol.OpClaudeTurnInterrupt {
 		var command protocol.ClaudeInterruptCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -431,7 +431,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(protocol.GeminiInterruptResult{OperationID: command.OperationID, Stopped: true})
 			}
 		}
-	} else if envelope.Kind == "gemini.skills.manage" {
+	} else if envelope.Kind == protocol.OpGeminiSkillsManage {
 		var command protocol.GeminiSkillManageCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			if c.agentUpdatePending() {
@@ -447,7 +447,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 		}
-	} else if envelope.Kind == "claude.skills.list" {
+	} else if envelope.Kind == protocol.OpClaudeSkillsList {
 		var command protocol.ClaudeSkillsCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.ClaudeSkillsResult
@@ -456,7 +456,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "gemini.skills.list" {
+	} else if envelope.Kind == protocol.OpGeminiSkillsList {
 		var command protocol.GeminiSkillsCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var root string
@@ -469,7 +469,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 		}
-	} else if envelope.Kind == "workspace.files" {
+	} else if envelope.Kind == protocol.OpWorkspaceFiles {
 		var command protocol.WorkspaceFilesCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.WorkspaceFilesResult
@@ -478,24 +478,24 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "workspace.file.write" {
+	} else if envelope.Kind == protocol.OpWorkspaceFileWrite {
 		var command protocol.WorkspaceFileWriteCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			err = scanner.WriteWorkspaceFile(ctx, command, c.inventoryRoots())
 		}
-	} else if envelope.Kind == "workspace.file.preview" || envelope.Kind == "workspace.image.preview" {
+	} else if envelope.Kind == protocol.OpWorkspaceFilePreview || envelope.Kind == protocol.OpWorkspaceImagePreview {
 		var command protocol.WorkspaceFilePreviewCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.WorkspaceFilePreviewResult
 			result, err = scanner.ReadWorkspaceFile(ctx, command.Root, command.Path, c.inventoryRoots(), 1024*1024)
-			if err == nil && envelope.Kind == "workspace.image.preview" && result.Encoding != "base64" {
+			if err == nil && envelope.Kind == protocol.OpWorkspaceImagePreview && result.Encoding != "base64" {
 				err = errors.New("image preview only supports JPEG, PNG, GIF and WebP files")
 			}
 			if err == nil {
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "workspace.changes" {
+	} else if envelope.Kind == protocol.OpWorkspaceChanges {
 		var command protocol.WorkspaceChangesCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var changes []gitrepository.WorkspaceChange
@@ -508,7 +508,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "workspace.diff.preview" {
+	} else if envelope.Kind == protocol.OpWorkspaceDiffPreview {
 		var command protocol.WorkspaceDiffCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var diff gitrepository.WorkspaceDiff
@@ -518,16 +518,16 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if strings.HasPrefix(envelope.Kind, "codex.goal.") || envelope.Kind == "codex.mcp.list" || envelope.Kind == "codex.skills.list" || envelope.Kind == "codex.models.list" || envelope.Kind == "codex.status.snapshot" || envelope.Kind == "codex.thread.compact" {
+	} else if strings.HasPrefix(envelope.Kind, protocol.OpCodexGoalPrefix) || envelope.Kind == protocol.OpCodexMCPList || envelope.Kind == protocol.OpCodexSkillsList || envelope.Kind == protocol.OpCodexModelsList || envelope.Kind == protocol.OpCodexStatusSnapshot || envelope.Kind == protocol.OpCodexThreadCompact {
 		var result protocol.CodexCapabilityResult
 		result, err = c.codex.CodexOperation(ctx, envelope.Kind, envelope.PayloadJSON)
-		if err == nil && envelope.Kind == "codex.thread.compact" && !result.Supported {
+		if err == nil && envelope.Kind == protocol.OpCodexThreadCompact && !result.Supported {
 			err = errors.New(result.Reason)
 		}
 		if err == nil {
 			resultData, err = json.Marshal(result)
 		}
-	} else if envelope.Kind == "codex.thread.fork" {
+	} else if envelope.Kind == protocol.OpCodexThreadFork {
 		var command protocol.ForkThreadCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.ForkThreadResult
@@ -536,7 +536,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "git.project.create" {
+	} else if envelope.Kind == protocol.OpGitProjectCreate {
 		var command protocol.GitProjectCreateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitProjectCreateResult
@@ -546,7 +546,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				refreshInventory = err == nil
 			}
 		}
-	} else if envelope.Kind == "git.project.delete" {
+	} else if envelope.Kind == protocol.OpGitProjectDelete {
 		var command protocol.GitProjectDeleteCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitProjectDeleteResult
@@ -556,7 +556,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				refreshInventory = err == nil
 			}
 		}
-	} else if envelope.Kind == "git.workspace.inspect" {
+	} else if envelope.Kind == protocol.OpGitWorkspaceInspect {
 		var command protocol.GitWorkspaceInspectCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitWorkspaceInspectResult
@@ -565,7 +565,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "git.workspace.write" {
+	} else if envelope.Kind == protocol.OpGitWorkspaceWrite {
 		var command protocol.GitWorkspaceWriteCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitWorkspaceWriteResult
@@ -574,7 +574,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "git.workspace.lifecycle" {
+	} else if envelope.Kind == protocol.OpGitWorkspaceLifecycle {
 		var command protocol.GitWorkspaceLifecycleCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitWorkspaceLifecycleResult
@@ -596,7 +596,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "git.workspace.clone" {
+	} else if envelope.Kind == protocol.OpGitWorkspaceClone {
 		var command protocol.GitWorkspaceCloneCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			destination, destinationErr := projectCreateDestination(c.config.CloneRoot, command.Name, command.Destination)
@@ -610,7 +610,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 		}
-	} else if envelope.Kind == "claude.thread.fork" {
+	} else if envelope.Kind == protocol.OpClaudeThreadFork {
 		var command protocol.ClaudeForkCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			_, err = scanner.ResolveWorkspaceRoot(command.SourceWorkspace, c.inventoryRoots())
@@ -622,7 +622,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 		}
-	} else if envelope.Kind == "gemini.thread.fork" {
+	} else if envelope.Kind == protocol.OpGeminiThreadFork {
 		var command protocol.GeminiForkCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var root string
@@ -641,7 +641,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				}
 			}
 		}
-	} else if envelope.Kind == "git.worktree.create" {
+	} else if envelope.Kind == protocol.OpGitWorktreeCreate {
 		var command protocol.GitWorktreeCreateCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			var result protocol.GitWorktreeCreateResult
@@ -701,16 +701,16 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 				resultData, err = json.Marshal(result)
 			}
 		}
-	} else if envelope.Kind == "git.worktree.cleanup" {
+	} else if envelope.Kind == protocol.OpGitWorktreeCleanup {
 		var command protocol.GitWorktreeCleanupCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			err = gitworktree.Remove(ctx, command.SourcePath, command.TargetPath, command.Branch, c.inventoryRoots())
 		}
-	} else if envelope.Kind == "deploy.container" || strings.HasPrefix(envelope.Kind, "deploy.container.") {
+	} else if envelope.Kind == protocol.OpDeployContainer || strings.HasPrefix(envelope.Kind, protocol.OpDeployContainerPrefix) {
 		var command protocol.ContainerActionCommand
 		if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
 			if command.Action == "" {
-				command.Action = strings.TrimPrefix(envelope.Kind, "deploy.container.")
+				command.Action = strings.TrimPrefix(envelope.Kind, protocol.OpDeployContainerPrefix)
 			}
 			var actionResult protocol.ContainerActionResult
 			actionResult, err = c.runContainerAction(ctx, command)
@@ -730,7 +730,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if protocol.CanInterruptOperation(envelope.Kind) && errors.Is(ctx.Err(), context.Canceled) {
 			status = "cancelled"
 		}
-		if (envelope.Kind == "gemini.turn.start" || envelope.Kind == "gemini.turn.rewrite" || envelope.Kind == "claude.turn.start") && (errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
+		if (envelope.Kind == protocol.OpGeminiTurnStart || envelope.Kind == protocol.OpGeminiTurnRewrite || envelope.Kind == protocol.OpClaudeTurnStart) && (errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
 			status = "interrupted"
 		}
 		message = err.Error()
@@ -756,9 +756,9 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	var resultSent <-chan struct{}
 	var queueErr error
 	if restartPath != "" {
-		resultSent, queueErr = c.queueTracked("operation_result", result)
+		resultSent, queueErr = c.queueTracked(protocol.AgentKindOperationResult, result)
 	} else {
-		queueErr = c.queue("operation_result", result, true)
+		queueErr = c.queue(protocol.AgentKindOperationResult, result, true)
 	}
 	if queueErr != nil {
 		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
@@ -780,7 +780,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			c.seenMu.Lock()
 			execution.result = failure
 			c.seenMu.Unlock()
-			_ = c.queue("operation_result", failure, true)
+			_ = c.queue(protocol.AgentKindOperationResult, failure, true)
 		}
 	}
 }
@@ -997,9 +997,9 @@ func (c *Client) refreshInventory(parent context.Context) {
 
 func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	switch envelope.Kind {
-	case "inventory.scan":
+	case protocol.OpInventoryScan:
 		return c.enqueueInventory(ctx)
-	case "git.import":
+	case protocol.OpGitImport:
 		var command protocol.GitImportCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
@@ -1008,7 +1008,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.enqueueInventory(ctx)
-	case "gemini.turn.start", "gemini.turn.rewrite":
+	case protocol.OpGeminiTurnStart, protocol.OpGeminiTurnRewrite:
 		if c.agentUpdatePending() {
 			return errors.New("Agent update is in progress; retry the task after it reconnects")
 		}
@@ -1033,7 +1033,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			c.log.Warn("collaboration bridge unavailable", "engine", "gemini")
 		}
 		return c.gemini.RunInTrustedWorkspaceWithEnvironment(ctx, envelope.OperationID, command, environment)
-	case "claude.turn.start":
+	case protocol.OpClaudeTurnStart:
 		if c.agentUpdatePending() {
 			return errors.New("Agent update is in progress; retry the task after it reconnects")
 		}
@@ -1094,40 +1094,40 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			if event.EventID == "" {
 				event.EventID = uuid.NewString()
 			}
-			if event.Kind == "claude.init" {
+			if event.Kind == protocol.EventClaudeInit {
 				observedInit = true
 			}
-			return c.queue("claude_event", event, true)
+			return c.queue(protocol.AgentKindClaudeEvent, event, true)
 		}, environment...)
 		if err == nil && observedInit && forkSnapshotID != "" {
 			_ = claudeadapter.RemoveSnapshot(c.config.StateDir, forkSnapshotID)
 		}
 		return err
-	case "claude.question.answer":
+	case protocol.OpClaudeQuestionAnswer:
 		var command protocol.ClaudeAnswerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.claudeTurns.Answer(ctx, command)
-	case "gemini.question.answer":
+	case protocol.OpGeminiQuestionAnswer:
 		var command protocol.GeminiAnswerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.gemini.Answer(command)
-	case "gemini.turn.interrupt":
+	case protocol.OpGeminiTurnInterrupt:
 		var command protocol.GeminiInterruptCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.interruptGeminiAndWait(ctx, command.OperationID)
-	case "gemini.turn.steer":
+	case protocol.OpGeminiTurnSteer:
 		var command protocol.GeminiSteerCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.gemini.Steer(command)
-	case "codex.turn.start":
+	case protocol.OpCodexTurnStart:
 		if c.agentUpdatePending() {
 			return errors.New("Agent update is in progress; retry the task after it reconnects")
 		}
@@ -1137,7 +1137,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		}
 		command.OperationID = envelope.OperationID
 		return c.codex.StartTurn(ctx, command)
-	case "codex.turn.rewrite":
+	case protocol.OpCodexTurnRewrite:
 		if c.agentUpdatePending() {
 			return errors.New("Agent update is in progress; retry the task after it reconnects")
 		}
@@ -1147,46 +1147,47 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 		}
 		command.Start.OperationID = envelope.OperationID
 		return c.codex.RewriteTurn(ctx, command)
-	case "codex.turn.steer":
+	case protocol.OpCodexTurnSteer:
 		var command protocol.SteerTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.codex.SteerTurn(ctx, command)
-	case "codex.turn.interrupt":
+	case protocol.OpCodexTurnInterrupt:
 		var command protocol.InterruptTurnCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.codex.Interrupt(ctx, command)
-	case "codex.approval":
+	case protocol.OpCodexApproval:
 		var command protocol.ApprovalDecisionCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.codex.Decide(command)
-	case "gemini.credentials.configure":
+	case protocol.OpGeminiCredentialsConfigure:
 		var command protocol.ConfigureGeminiCredentialsCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.configureGeminiCredentials(command)
-	case "claude.credentials.configure":
+	case protocol.OpClaudeCredentialsConfigure:
 		var command protocol.ConfigureClaudeCredentialsCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.configureClaudeCredentials(command)
-	case "credentials.configure", "codex.credentials.configure", "git.credentials.configure":
+	case protocol.OpCredentialsConfigure, protocol.OpCodexCredentialsConfigure, protocol.OpGitCredentialsConfigure:
 		var command protocol.ConfigureCredentialsCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
-		if envelope.Kind != "credentials.configure" && envelope.Kind != command.Scope+".credentials.configure" {
+		scopedKind, _ := protocol.CredentialOperationKind(command.Scope)
+		if envelope.Kind != protocol.OpCredentialsConfigure && envelope.Kind != scopedKind {
 			return errors.New("credential update scope mismatch")
 		}
 		return c.configureCredentials(command)
-	case "codex.update":
+	case protocol.OpCodexUpdate:
 		if !c.cliInstallMu.TryLock() {
 			return errors.New("an AI CLI installation is already running")
 		}
@@ -1199,7 +1200,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.enqueueHeartbeat(ctx)
-	case "cli.install":
+	case protocol.OpCLIInstall:
 		if !c.cliInstallMu.TryLock() {
 			return errors.New("an AI CLI installation is already running")
 		}
@@ -1212,13 +1213,13 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 			return err
 		}
 		return c.enqueueHeartbeat(ctx)
-	case "deploy.start":
+	case protocol.OpDeployStart:
 		var command protocol.DeployCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
 		}
 		return c.runDeployment(ctx, command)
-	case "deploy.rollback":
+	case protocol.OpDeployRollback:
 		var command protocol.RollbackCommand
 		if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
 			return err
@@ -1234,7 +1235,7 @@ func (c *Client) runDeployment(ctx context.Context, command protocol.DeployComma
 		return errors.New("deployment workspace is outside configured inventory roots")
 	}
 	status := func(state, message, resolved, detectedPublicURL, content string) {
-		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentCommandText(message, command), ResolvedCommit: resolved, DetectedPublicURL: detectedPublicURL, Content: redactDeploymentCommandText(content, command)}, true)
+		_ = c.queue(protocol.AgentKindDeploymentStatus, protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentCommandText(message, command), ResolvedCommit: resolved, DetectedPublicURL: detectedPublicURL, Content: redactDeploymentCommandText(content, command)}, true)
 	}
 	err := c.deployer.Deploy(ctx, command, status)
 	if err != nil {
@@ -1265,7 +1266,7 @@ func pathWithinRoots(path string, roots []string) bool {
 
 func (c *Client) runRollback(ctx context.Context, command protocol.RollbackCommand) error {
 	status := func(state, message, resolved, _ string, content string) {
-		_ = c.queue("deployment_status", protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, ""), ResolvedCommit: resolved, Content: redactDeploymentText(content, command.Environment, "")}, true)
+		_ = c.queue(protocol.AgentKindDeploymentStatus, protocol.DeploymentStatus{DeploymentID: command.DeploymentID, Status: state, Message: redactDeploymentText(message, command.Environment, ""), ResolvedCommit: resolved, Content: redactDeploymentText(content, command.Environment, "")}, true)
 	}
 	err := c.deployer.Rollback(ctx, command, status)
 	if err != nil {
@@ -1323,7 +1324,7 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	claudePath := effectiveClaudePath(c.config.StateDir)
 	heartbeat.ClaudeVersion = c.currentClaudeVersion(ctx, claudePath)
 	heartbeat.ClaudeReady = commandAvailable(claudePath)
-	return c.queue("heartbeat", heartbeat, false)
+	return c.queue(protocol.AgentKindHeartbeat, heartbeat, false)
 }
 
 func (c *Client) currentCodexPath() string {
@@ -1365,7 +1366,7 @@ func (c *Client) enqueueMetrics(ctx context.Context) error {
 		metric.NetRxBytes = interfaces[0].BytesRecv
 		metric.NetTxBytes = interfaces[0].BytesSent
 	}
-	return c.queue("metrics", metric, false)
+	return c.queue(protocol.AgentKindMetrics, metric, false)
 }
 
 func (c *Client) enqueueInventory(ctx context.Context) error {
@@ -1376,7 +1377,7 @@ func (c *Client) enqueueInventory(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return c.queue("inventory", inventory, false)
+	return c.queue(protocol.AgentKindInventory, inventory, false)
 }
 
 func (c *Client) inventoryRoots() []string {

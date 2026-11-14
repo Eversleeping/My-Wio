@@ -44,7 +44,7 @@ func (s *Store) threadForkBoundary(ctx context.Context, db sqlx.QueryerContext, 
 		return "", 0, err
 	}
 	var selected forkEventPayload
-	if json.Unmarshal([]byte(target.Payload), &selected) != nil || target.Kind != "codex.item.completed" || selected.Item.Type != "agentMessage" || selected.Item.Phase == "commentary" || selected.TurnID == "" || selected.Item.ID == "" {
+	if json.Unmarshal([]byte(target.Payload), &selected) != nil || target.Kind != protocol.EventCodexItemCompleted || selected.Item.Type != "agentMessage" || selected.Item.Phase == "commentary" || selected.TurnID == "" || selected.Item.ID == "" {
 		return "", 0, ErrInvalidForkTarget
 	}
 	events, err := s.eventRowsQuery(ctx, db, s.Q("SELECT event_id,stream_id,sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND sequence>? AND kind IN ('codex.item.completed','codex.turn.completed') ORDER BY sequence"), threadID, target.Sequence)
@@ -57,10 +57,10 @@ func (s *Store) threadForkBoundary(ctx context.Context, db sqlx.QueryerContext, 
 		if err := json.Unmarshal(event.Payload, &value); err != nil {
 			return "", 0, err
 		}
-		if event.Kind == "codex.item.completed" && value.TurnID == selected.TurnID && value.Item.Type == "agentMessage" && value.Item.ID != selected.Item.ID {
+		if event.Kind == protocol.EventCodexItemCompleted && value.TurnID == selected.TurnID && value.Item.Type == "agentMessage" && value.Item.ID != selected.Item.ID {
 			return "", 0, ErrInvalidForkTarget
 		}
-		if event.Kind == "codex.turn.completed" && value.Turn.ID == selected.TurnID && (value.Turn.Status == "completed" || value.Turn.Status == "interrupted" || value.Turn.Status == "failed") {
+		if event.Kind == protocol.EventCodexTurnCompleted && value.Turn.ID == selected.TurnID && (value.Turn.Status == "completed" || value.Turn.Status == "interrupted" || value.Turn.Status == "failed") {
 			if cutoff == 0 {
 				cutoff = event.Sequence
 			}

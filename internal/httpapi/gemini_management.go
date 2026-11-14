@@ -23,7 +23,7 @@ func (a *API) archiveGeminiProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "gemini.project.archive", "project", id, map[string]any{"archived": n, "server_id": serverID}, clientIP(r))
-	a.publishGeminiChange(r, id, "gemini.thread.updated")
+	a.publishGeminiChange(r, id, protocol.EventGeminiThreadUpdated)
 	writeJSON(w, 200, map[string]int64{"archived": n})
 }
 
@@ -76,7 +76,7 @@ func (a *API) queueGeminiFork(w http.ResponseWriter, r *http.Request, worktree b
 	}
 	a.gateway.Wake(thread.ServerID)
 	a.auditGemini(r, "gemini.thread.fork", thread.ID)
-	a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
+	a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadUpdated)
 	result := map[string]string{"operation_id": op, "target_thread_id": target}
 	if command != nil {
 		result["workspace_id"] = command.TargetWorkspaceID

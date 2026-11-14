@@ -37,13 +37,13 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 		return nil
 	}
 	switch event.Kind {
-	case "claude.init":
+	case protocol.EventClaudeInit:
 		op, lookupErr := g.store.Operation(ctx, payload.OperationID)
 		if lookupErr != nil {
 			return lookupErr
 		}
 		var command protocol.ClaudeTurnCommand
-		if json.Unmarshal([]byte(op.Payload), &command) != nil || op.Kind != "claude.turn.start" || op.ServerID != serverID {
+		if json.Unmarshal([]byte(op.Payload), &command) != nil || op.Kind != protocol.OpClaudeTurnStart || op.ServerID != serverID {
 			return errors.New("invalid Claude init operation")
 		}
 		if command.Rewrite != nil {
@@ -69,23 +69,23 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 		if err := g.store.MarkScheduledTaskByOperation(ctx, payload.OperationID, "running", ""); err != nil {
 			return err
 		}
-	case "claude.steer.ready", "claude.steer.closed":
-	case "claude.steer.accepted", "claude.steer.applied", "claude.steer.unconfirmed":
+	case protocol.EventClaudeSteerReady, protocol.EventClaudeSteerClosed:
+	case protocol.EventClaudeSteerAccepted, protocol.EventClaudeSteerApplied, protocol.EventClaudeSteerUnconfirmed:
 		command, lookupErr := g.store.ClaudeSteerCommand(ctx, thread.ID, payload.RequestID)
 		if lookupErr != nil || command.ThreadID != thread.ID || command.OperationID != payload.OperationID {
 			return nil
 		}
 		event.EventID = "claude-steer:" + thread.ID + ":" + payload.RequestID + ":" + event.Kind
 		data := map[string]any{"operation_id": command.OperationID, "request_id": command.RequestID}
-		if event.Kind == "claude.steer.applied" {
+		if event.Kind == protocol.EventClaudeSteerApplied {
 			data["text"] = command.Prompt
 			data["images"] = command.Images
 		}
-		if event.Kind == "claude.steer.unconfirmed" {
+		if event.Kind == protocol.EventClaudeSteerUnconfirmed {
 			data["message"] = protocol.ClaudeSteerUnconfirmedMessage
 		}
 		event.Payload, _ = json.Marshal(data)
-	case "claude.compaction.started", "claude.compaction.completed", "claude.compaction.failed", "claude.question", "claude.question.answered", "claude.question.cancelled", "claude.message", "claude.tool_use", "claude.tool_result", "claude.notice", "claude.result":
+	case protocol.EventClaudeCompactionStarted, protocol.EventClaudeCompactionCompleted, protocol.EventClaudeCompactionFailed, protocol.EventClaudeQuestion, protocol.EventClaudeQuestionAnswered, protocol.EventClaudeQuestionCancelled, protocol.EventClaudeMessage, protocol.EventClaudeToolUse, protocol.EventClaudeToolResult, protocol.EventClaudeNotice, protocol.EventClaudeResult:
 	default:
 		return errors.New("unsupported Claude event")
 	}
@@ -97,10 +97,10 @@ func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw js
 }
 
 func (g *Gateway) completeClaudeOperation(ctx context.Context, op store.Operation, result protocol.OperationResult) error {
-	if op.Kind == "claude.question.answer" {
+	if op.Kind == protocol.OpClaudeQuestionAnswer {
 		return nil
 	}
-	if op.Kind == "claude.turn.steer" {
+	if op.Kind == protocol.OpClaudeTurnSteer {
 		if result.Status == "succeeded" {
 			return nil
 		}
@@ -108,15 +108,15 @@ func (g *Gateway) completeClaudeOperation(ctx context.Context, op store.Operatio
 		if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
 			return err
 		}
-		kind := "claude.steer.rejected"
+		kind := protocol.EventClaudeSteerRejected
 		if result.Message == protocol.ClaudeSteerUnconfirmedMessage {
-			kind = "claude.steer.unconfirmed"
+			kind = protocol.EventClaudeSteerUnconfirmed
 		}
 		raw, _ := json.Marshal(map[string]string{"operation_id": command.OperationID, "request_id": command.RequestID, "message": result.Message})
 		return g.publish(ctx, protocol.StreamEvent{EventID: "claude-steer:" + command.ThreadID + ":" + command.RequestID + ":" + kind, StreamID: command.ThreadID, Kind: kind, Payload: security.RedactJSON(raw)})
 	}
 
-	if op.Kind == "claude.turn.interrupt" {
+	if op.Kind == protocol.OpClaudeTurnInterrupt {
 		var command protocol.ClaudeInterruptCommand
 		if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
 			return err
@@ -155,7 +155,7 @@ func (g *Gateway) completeClaudeOperation(ctx context.Context, op store.Operatio
 			return err
 		}
 		payload, _ := json.Marshal(map[string]string{"operation_id": command.OperationID, "text": "Could not confirm Claude process termination; the task may still be running."})
-		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":interrupt-failed", StreamID: command.ThreadID, Kind: "claude.notice", Payload: payload})
+		return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":interrupt-failed", StreamID: command.ThreadID, Kind: protocol.EventClaudeNotice, Payload: payload})
 	}
 	var command protocol.ClaudeTurnCommand
 	if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
@@ -179,7 +179,7 @@ func (g *Gateway) completeClaudeOperation(ctx context.Context, op store.Operatio
 	if err := g.store.MarkScheduledTaskByOperation(ctx, op.ID, result.Status, result.Message); err != nil {
 		return err
 	}
-	return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":completed", StreamID: command.ThreadID, Kind: "claude.turn.completed", Payload: security.RedactJSON(raw)})
+	return g.publish(ctx, protocol.StreamEvent{EventID: op.ID + ":completed", StreamID: command.ThreadID, Kind: protocol.EventClaudeTurnCompleted, Payload: security.RedactJSON(raw)})
 }
 
 func (g *Gateway) updateClaudeOwnership(ctx context.Context, serverID, operationID string, active bool) error {
@@ -187,7 +187,7 @@ func (g *Gateway) updateClaudeOwnership(ctx context.Context, serverID, operation
 	if err != nil {
 		return err
 	}
-	if op.ServerID != serverID || op.Kind != "claude.turn.start" {
+	if op.ServerID != serverID || op.Kind != protocol.OpClaudeTurnStart {
 		return errors.New("Claude ownership check operation mismatch")
 	}
 	var command protocol.ClaudeTurnCommand
@@ -221,5 +221,5 @@ func (g *Gateway) updateClaudeOwnership(ctx context.Context, serverID, operation
 		return err
 	}
 	raw, _ := json.Marshal(map[string]any{"operation_id": operationID, "status": status, "recovery_pending": !active})
-	return g.publish(ctx, protocol.StreamEvent{StreamID: command.ThreadID, Kind: "claude.turn.ownership", Payload: raw})
+	return g.publish(ctx, protocol.StreamEvent{StreamID: command.ThreadID, Kind: protocol.EventClaudeTurnOwnership, Payload: raw})
 }

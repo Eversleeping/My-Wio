@@ -153,7 +153,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	emit := func(kind string, payload map[string]any) error {
 		payload["operation_id"] = op
 		raw, _ := json.Marshal(payload)
-		return a.emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: "gemini." + kind, Payload: raw})
+		return a.emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: protocol.EventGeminiPrefix + kind, Payload: raw})
 	}
 	replay := true
 	resuming := command.SessionID != ""

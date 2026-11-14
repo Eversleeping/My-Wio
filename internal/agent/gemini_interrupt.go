@@ -10,7 +10,7 @@ import (
 
 var geminiTurnOwner = turnOwner{
 	name:        "Gemini",
-	kinds:       []string{"gemini.turn.start", "gemini.turn.rewrite"},
+	kinds:       []string{protocol.OpGeminiTurnStart, protocol.OpGeminiTurnRewrite},
 	lostMessage: protocol.GeminiOwnershipLostMessage,
 	verifyError: func(err error) error { return fmt.Errorf("could not verify Gemini task completion: %w", err) },
 }
@@ -37,10 +37,10 @@ func (c *Client) reconcileGeminiOperations(raw json.RawMessage) {
 			case <-execution.done:
 				result := execution.result
 				c.seenMu.Unlock()
-				_ = c.queue("operation_result", result, true)
+				_ = c.queue(protocol.AgentKindOperationResult, result, true)
 			default:
 				c.seenMu.Unlock()
-				_ = c.queue("gemini_ownership_active", protocol.GeminiOwnership{OperationID: id}, true)
+				_ = c.queue(protocol.AgentKindGeminiOwnershipActive, protocol.GeminiOwnership{OperationID: id}, true)
 			}
 			continue
 		}
@@ -48,7 +48,7 @@ func (c *Client) reconcileGeminiOperations(raw json.RawMessage) {
 			// Only an interruption that beat this turn's start is known; it says
 			// nothing about a CLI that an earlier Agent process started.
 			c.seenMu.Unlock()
-			_ = c.queue("gemini_ownership_lost", protocol.GeminiOwnership{OperationID: id}, true)
+			_ = c.queue(protocol.AgentKindGeminiOwnershipLost, protocol.GeminiOwnership{OperationID: id}, true)
 			continue
 		}
 		result, found, err := c.loadOperationResult(id)
@@ -58,9 +58,9 @@ func (c *Client) reconcileGeminiOperations(raw json.RawMessage) {
 			continue
 		}
 		if found {
-			_ = c.queue("operation_result", result, true)
+			_ = c.queue(protocol.AgentKindOperationResult, result, true)
 		} else {
-			_ = c.queue("gemini_ownership_lost", protocol.GeminiOwnership{OperationID: id}, true)
+			_ = c.queue(protocol.AgentKindGeminiOwnershipLost, protocol.GeminiOwnership{OperationID: id}, true)
 		}
 	}
 }

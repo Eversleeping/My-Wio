@@ -236,7 +236,7 @@ func (p *Sessions) CodexOperation(ctx context.Context, kind string, payload json
 		return result, err
 	}
 	threadID := base.ThreadID
-	if kind == "codex.models.list" || kind == "codex.skills.list" || kind == "codex.status.snapshot" {
+	if kind == protocol.OpCodexModelsList || kind == protocol.OpCodexSkillsList || kind == protocol.OpCodexStatusSnapshot {
 		threadID = ""
 	}
 	err = p.withSession(threadID, func(a *Adapter) error {

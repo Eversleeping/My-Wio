@@ -107,7 +107,7 @@ func (s *Store) CommitClaudeRewrite(ctx context.Context, threadID, operationID, 
 		return protocol.StreamEvent{}, false, err
 	}
 	raw, _ := json.Marshal(map[string]any{"text": command.Prompt, "images": command.Images, "operation_id": operationID, "history_rewritten": true, "replaced_sequence": sequence})
-	event := protocol.StreamEvent{EventID: replacementID, StreamID: threadID, Sequence: last + 1, Kind: "claude.user.message", OccurredAt: time.Now().UTC(), Payload: raw}
+	event := protocol.StreamEvent{EventID: replacementID, StreamID: threadID, Sequence: last + 1, Kind: protocol.EventClaudeUserMessage, OccurredAt: time.Now().UTC(), Payload: raw}
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(raw)); err != nil {
 		return event, false, err
 	}

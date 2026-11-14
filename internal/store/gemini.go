@@ -237,14 +237,14 @@ func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 	}
 	command.Images = images
 	command.Steering = thread.SteerSupported
-	kind := "gemini.turn.start"
+	kind := protocol.OpGeminiTurnStart
 	if editEventID != "" {
 		target, err := geminiRewriteTarget(ctx, tx, s, thread.ID, editEventID)
 		if err != nil {
 			return protocol.StreamEvent{}, err
 		}
 		command.Rewrite = &target
-		kind = "gemini.turn.rewrite"
+		kind = protocol.OpGeminiTurnRewrite
 	}
 	if command.Steering {
 		cutoff := int64(0)
@@ -277,7 +277,7 @@ func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 		return protocol.StreamEvent{}, nil
 	}
 	message, _ := json.Marshal(map[string]any{"text": prompt, "operation_id": opID, "model": model, "thinking_level": level, "images": images})
-	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "gemini.user.message", OccurredAt: now, Payload: message}
+	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: protocol.EventGeminiUserMessage, OccurredAt: now, Payload: message}
 	event.Sequence, err = s.nextEventSequence(ctx, tx, thread.ID)
 	if err != nil {
 		return event, err
@@ -435,7 +435,7 @@ func (s *Store) ConfirmGeminiStopped(ctx context.Context, threadID, operationID 
 		return protocol.StreamEvent{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"status": "interrupted", "operation_id": operationID})
-	event := protocol.StreamEvent{EventID: operationID + ":completed", StreamID: threadID, Kind: "gemini.turn.completed", OccurredAt: now, Payload: payload}
+	event := protocol.StreamEvent{EventID: operationID + ":completed", StreamID: threadID, Kind: protocol.EventGeminiTurnCompleted, OccurredAt: now, Payload: payload}
 	event.Sequence, err = s.nextEventSequence(ctx, tx, threadID)
 	if err != nil {
 		return protocol.StreamEvent{}, err
@@ -545,13 +545,13 @@ func geminiRewriteTarget(ctx context.Context, tx *sqlx.Tx, s *Store, threadID, e
 			return target, err
 		}
 		if event.ID == eventID {
-			if event.Kind != "gemini.user.message" || p.OperationID == "" {
+			if event.Kind != protocol.EventGeminiUserMessage || p.OperationID == "" {
 				return target, ErrInvalidEditTarget
 			}
 			operationID = p.OperationID
 			found = true
 		}
-		if !found || event.Kind != "gemini.init" {
+		if !found || event.Kind != protocol.EventGeminiInit {
 			continue
 		}
 		if p.OperationID == operationID && target.StartedAt == "" {
@@ -625,7 +625,7 @@ func (s *Store) CommitGeminiRewrite(ctx context.Context, threadID, operationID, 
 		return protocol.StreamEvent{}, false, err
 	}
 	raw, _ := json.Marshal(map[string]any{"text": command.Prompt, "operation_id": operationID, "history_rewritten": true, "images": command.Images})
-	event := protocol.StreamEvent{EventID: replacementID, StreamID: threadID, Sequence: last + 1, Kind: "gemini.user.message", OccurredAt: time.Now().UTC(), Payload: raw}
+	event := protocol.StreamEvent{EventID: replacementID, StreamID: threadID, Sequence: last + 1, Kind: protocol.EventGeminiUserMessage, OccurredAt: time.Now().UTC(), Payload: raw}
 	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(raw)); err != nil {
 		return event, false, err
 	}

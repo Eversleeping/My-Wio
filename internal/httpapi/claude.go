@@ -68,7 +68,7 @@ func (a *API) createClaudeThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auditClaude(r, "claude.thread.create", thread.ID)
-	a.publishClaudeChange(r, thread.ID, "claude.thread.created")
+	a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadCreated)
 	writeJSON(w, 201, thread)
 }
 
@@ -199,7 +199,7 @@ func (a *API) startClaudeTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if editID != "" {
 		a.auditClaude(r, "claude.turn.rewrite", thread.ID)
-		a.publishClaudeChange(r, thread.ID, "claude.thread.updated")
+		a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadUpdated)
 	} else {
 		a.auditClaude(r, "claude.turn.start", thread.ID)
 	}
@@ -218,7 +218,7 @@ func (a *API) interruptClaudeTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	a.gateway.Wake(thread.ServerID)
 	a.auditClaude(r, "claude.turn.interrupt", thread.ID)
-	a.publishClaudeChange(r, thread.ID, "claude.thread.updated")
+	a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadUpdated)
 	writeJSON(w, 202, map[string]bool{"ok": true})
 }
 
@@ -243,7 +243,7 @@ func (a *API) confirmClaudeStopped(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auditClaude(r, "claude.turn.confirm_stopped", thread.ID)
-	a.publishClaudeChange(r, thread.ID, "claude.thread.updated")
+	a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadUpdated)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -284,7 +284,7 @@ func (a *API) updateClaudeThread(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.auditClaude(r, "claude.thread.update", thread.ID)
-	a.publishClaudeChange(r, thread.ID, "claude.thread.updated")
+	a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadUpdated)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -298,7 +298,7 @@ func (a *API) deleteClaudeThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auditClaude(r, "claude.thread.delete", thread.ID)
-	a.publishClaudeChange(r, thread.ID, "claude.thread.deleted")
+	a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadDeleted)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

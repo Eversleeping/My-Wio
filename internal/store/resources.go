@@ -413,7 +413,7 @@ func (s *Store) ResolveApprovalAndQueue(ctx context.Context, approvalID, serverI
 		return "", ErrApprovalResolved
 	}
 	operationID := NewID()
-	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,thread_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)"), operationID, serverID, command.ThreadID, "codex.approval", string(payload), "approval:"+approvalID, now); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,thread_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)"), operationID, serverID, command.ThreadID, protocol.OpCodexApproval, string(payload), "approval:"+approvalID, now); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -510,7 +510,7 @@ func (s *Store) QueueProjectImport(ctx context.Context, serverID, name, remoteUR
 	}
 	operationID := NewID()
 	idempotency := "git-import:" + project.ID + ":" + serverID + ":" + operationID
-	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`), operationID, serverID, project.ID, "git.import", string(payload), idempotency, time.Now().UTC()); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO agent_operations(id,server_id,project_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`), operationID, serverID, project.ID, protocol.OpGitImport, string(payload), idempotency, time.Now().UTC()); err != nil {
 		return Project{}, "", err
 	}
 	if err := tx.GetContext(ctx, &operationID, s.Q("SELECT id FROM agent_operations WHERE project_id=? AND server_id=? AND kind='git.import' AND status IN ('queued','delivered') ORDER BY created_at DESC LIMIT 1"), project.ID, serverID); err != nil {
@@ -1203,7 +1203,7 @@ func (s *Store) QueueDeploymentContainerOperation(ctx context.Context, targetID,
 		}
 		operationID = NewID()
 		now := time.Now().UTC()
-		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,NULLIF(?,''),?,?,?,?)"), operationID, serverID, targetResource.ProjectID, targetResource.WorkspaceID, "deploy.container", ciphertext, idempotency, now); err != nil {
+		if _, err := tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,project_id,workspace_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,NULLIF(?,''),?,?,?,?)"), operationID, serverID, targetResource.ProjectID, targetResource.WorkspaceID, protocol.OpDeployContainer, ciphertext, idempotency, now); err != nil {
 			if lookupErr := tx.GetContext(ctx, &existing, s.Q("SELECT id FROM agent_operations WHERE idempotency_key=?"), idempotency); lookupErr == nil {
 				operationID = existing
 				return nil

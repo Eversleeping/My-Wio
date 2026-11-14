@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 // SessionUsage reports only counters retained in the current transcript. Null
@@ -81,15 +83,15 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 			}
 			turn := getTurn(id)
 			switch kind {
-			case "gemini.init":
+			case protocol.EventGeminiInit:
 				if turn.start.IsZero() {
 					turn.start = at
 				}
-			case "gemini.result", "gemini.goal.usage":
-				if kind == "gemini.goal.usage" && turn.result {
+			case protocol.EventGeminiResult, protocol.EventGeminiGoalUsage:
+				if kind == protocol.EventGeminiGoalUsage && turn.result {
 					continue
 				}
-				if kind == "gemini.result" && turn.result {
+				if kind == protocol.EventGeminiResult && turn.result {
 					// Retried final events may omit counters. Preserve earlier valid
 					// values while still accepting a later valid correction.
 					if input := usageCount(p.Stats["input_tokens"], p.Stats["input"]); input != nil {
@@ -103,18 +105,18 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 				if !turn.result {
 					turn.end = at
 				}
-				if kind == "gemini.result" {
+				if kind == protocol.EventGeminiResult {
 					turn.result = true
 				}
 				turn.progress = true
 				turn.input = usageCount(p.Stats["input_tokens"], p.Stats["input"])
 				turn.output = usageCount(p.Stats["output_tokens"], p.Stats["output"])
-			case "gemini.turn.completed":
+			case protocol.EventGeminiTurnCompleted:
 				turn.completed = true
 			}
 			continue
 		}
-		if kind == "codex.thread.tokenUsage.updated" {
+		if kind == protocol.EventCodexThreadTokenUsageUpdated {
 			input, output := usageCount(p.Usage["input_tokens"]), usageCount(p.Usage["output_tokens"])
 			// Each update is the native session's cumulative total, not a delta.
 			if input != nil && output != nil {
@@ -126,7 +128,7 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 		if id == "" {
 			id = p.Turn.ID
 		}
-		if kind == "codex.turn.started" {
+		if kind == protocol.EventCodexTurnStarted {
 			if id == "" {
 				id = eventID
 			}

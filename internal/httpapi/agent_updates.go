@@ -13,6 +13,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/agentupdate"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -48,7 +49,7 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "Agent update packages are unavailable")
 		return
 	}
-	active, err := a.store.HasActiveOperation(r.Context(), server.ID, "agent.update")
+	active, err := a.store.HasActiveOperation(r.Context(), server.ID, protocol.OpAgentUpdate)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not check Agent update queue")
 		return

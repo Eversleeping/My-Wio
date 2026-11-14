@@ -13,7 +13,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
-const gitProjectCreateKind = "git.project.create"
+const gitProjectCreateKind = protocol.OpGitProjectCreate
 
 // BlankProjectProvision is the control-plane state created before an agent
 // starts initializing a repository. The workspace ID is reserved in the

@@ -108,7 +108,7 @@ func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 				return "", "", ErrInvalidForkTarget
 			}
 			if e.ID == eventID {
-				if e.Kind != "gemini.message" || p.Role != "assistant" || p.OperationID == "" {
+				if e.Kind != protocol.EventGeminiMessage || p.Role != "assistant" || p.OperationID == "" {
 					return "", "", ErrInvalidForkTarget
 				}
 				op = p.OperationID
@@ -118,15 +118,15 @@ func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 				continue
 			}
 			if p.OperationID == op {
-				if e.Kind == "gemini.message" && p.Role == "assistant" {
+				if e.Kind == protocol.EventGeminiMessage && p.Role == "assistant" {
 					finalAssistant = e.ID
 				}
-				if e.Kind == "gemini.result" && p.Status == "success" {
+				if e.Kind == protocol.EventGeminiResult && p.Status == "success" {
 					completed = true
 					command.CutoffSequence = e.Sequence
 				}
 			}
-			if completed && e.Kind == "gemini.user.message" && p.OperationID != op {
+			if completed && e.Kind == protocol.EventGeminiUserMessage && p.OperationID != op {
 				boundary, e2 := geminiRewriteTarget(ctx, tx, s, thread.ID, e.ID)
 				if e2 != nil {
 					return "", "", e2
@@ -148,7 +148,7 @@ func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 				found = true
 				continue
 			}
-			if found && e.Sequence <= command.CutoffSequence && (e.Kind == "gemini.tool_use" || e.Kind == "gemini.tool_result") {
+			if found && e.Sequence <= command.CutoffSequence && (e.Kind == protocol.EventGeminiToolUse || e.Kind == protocol.EventGeminiToolResult) {
 				toolAfter = true
 			}
 		}
@@ -157,14 +157,14 @@ func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 		}
 		command.Title = thread.Title + " (branch)"
 	}
-	kind := "gemini.thread.fork"
+	kind := protocol.OpGeminiThreadFork
 	var payload []byte
 	if worktree != nil {
 		command.WorkspaceID = worktree.TargetWorkspaceID
 		command.Workspace = worktree.TargetPath
 		worktree.GeminiFork = &command
 		payload, err = json.Marshal(worktree)
-		kind = "git.worktree.create"
+		kind = protocol.OpGitWorktreeCreate
 	} else {
 		payload, err = json.Marshal(command)
 	}

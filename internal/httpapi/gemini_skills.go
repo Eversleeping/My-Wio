@@ -85,7 +85,7 @@ func (a *API) refreshWorkspaceGeminiSkills(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusConflict, "Gemini skills require Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
 		return
 	}
-	op, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "gemini.skills.list", protocol.GeminiSkillsCommand{Workspace: workspace.Path}, "gemini-skills:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	op, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpGeminiSkillsList, protocol.GeminiSkillsCommand{Workspace: workspace.Path}, "gemini-skills:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue Gemini skill discovery")
 		return
@@ -96,7 +96,7 @@ func (a *API) refreshWorkspaceGeminiSkills(w http.ResponseWriter, r *http.Reques
 
 func (a *API) workspaceGeminiSkillsResult(w http.ResponseWriter, r *http.Request) {
 	op, err := a.store.Operation(r.Context(), chi.URLParam(r, "operationID"))
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && ((op.Kind != "gemini.skills.list" && op.Kind != "gemini.skills.manage") || op.WorkspaceID != chi.URLParam(r, "workspaceID"))) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && ((op.Kind != protocol.OpGeminiSkillsList && op.Kind != protocol.OpGeminiSkillsManage) || op.WorkspaceID != chi.URLParam(r, "workspaceID"))) {
 		writeError(w, http.StatusNotFound, "Gemini skill discovery not found")
 		return
 	}

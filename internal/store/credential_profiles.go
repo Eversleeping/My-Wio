@@ -144,12 +144,9 @@ func (s *Store) QueueCredentialUpdate(ctx context.Context, serverID, ciphertext,
 	if len(scopes) > 0 {
 		scope = scopes[0]
 	}
-	kind := "credentials.configure"
-	if scope != "" {
-		if scope != "codex" && scope != "git" {
-			return "", errors.New("invalid credential scope")
-		}
-		kind = scope + ".credentials.configure"
+	kind, validScope := protocol.CredentialOperationKind(scope)
+	if !validScope {
+		return "", errors.New("invalid credential scope")
 	}
 	if !strings.HasPrefix(ciphertext, "v1:") {
 		return "", errors.New("encrypted operation payload must use a supported Vault format")
@@ -220,10 +217,10 @@ func (s *Store) CompleteCredentialUpdate(ctx context.Context, result protocol.Op
 			return fmt.Errorf("decode Git credential profile IDs: %w", err)
 		}
 		scope := ""
-		if update.Kind == "codex.credentials.configure" {
+		if update.Kind == protocol.OpCodexCredentialsConfigure {
 			scope = "codex"
 		}
-		if update.Kind == "git.credentials.configure" {
+		if update.Kind == protocol.OpGitCredentialsConfigure {
 			scope = "git"
 		}
 		if err := s.setServerCredentialProfileIDs(ctx, tx, update.ServerID, update.CodexProfileID, gitProfileIDs, scope); err != nil {

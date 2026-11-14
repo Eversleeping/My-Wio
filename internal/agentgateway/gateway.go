@@ -148,7 +148,7 @@ func (g *Gateway) receiveWithTools(stream protocol.AgentServiceConnectServer, se
 			return status.Error(codes.PermissionDenied, "server id mismatch")
 		}
 		handle := func() error {
-			if msg.Kind == "session_tool_request" {
+			if msg.Kind == protocol.AgentKindSessionToolRequest {
 				g.receiveSessionTool(stream, serverID, msg, replies, limit)
 				return nil
 			}
@@ -169,13 +169,13 @@ func (g *Gateway) receiveWithTools(stream protocol.AgentServiceConnectServer, se
 
 func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.AgentEnvelope) error {
 	switch msg.Kind {
-	case "heartbeat":
+	case protocol.AgentKindHeartbeat:
 		var h protocol.Heartbeat
 		if err := json.Unmarshal(msg.PayloadJSON, &h); err != nil {
 			return err
 		}
 		return g.store.Heartbeat(ctx, serverID, h)
-	case "metrics":
+	case protocol.AgentKindMetrics:
 		var m protocol.Metrics
 		if err := json.Unmarshal(msg.PayloadJSON, &m); err != nil {
 			return err
@@ -185,7 +185,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		}
 		g.evaluateMetrics(ctx, serverID, m)
 		return nil
-	case "inventory":
+	case protocol.AgentKindInventory:
 		var inv protocol.Inventory
 		if err := json.Unmarshal(msg.PayloadJSON, &inv); err != nil {
 			return err
@@ -193,30 +193,30 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if err := g.store.UpsertInventory(ctx, serverID, inv); err != nil {
 			return err
 		}
-		return g.publish(ctx, protocol.StreamEvent{StreamID: "inventory", Kind: "inventory.updated", Payload: msg.PayloadJSON})
-	case "gemini_event":
+		return g.publish(ctx, protocol.StreamEvent{StreamID: "inventory", Kind: protocol.EventInventoryUpdated, Payload: msg.PayloadJSON})
+	case protocol.AgentKindGeminiEvent:
 		return g.handleGeminiEvent(ctx, serverID, msg.PayloadJSON)
-	case "claude_event":
+	case protocol.AgentKindClaudeEvent:
 		return g.handleClaudeEvent(ctx, serverID, msg.PayloadJSON)
-	case "claude_ownership_lost", "claude_ownership_active":
+	case protocol.AgentKindClaudeOwnershipLost, protocol.AgentKindClaudeOwnershipActive:
 		var ownership protocol.GeminiOwnership
 		if err := json.Unmarshal(msg.PayloadJSON, &ownership); err != nil {
 			return err
 		}
-		return g.updateClaudeOwnership(ctx, serverID, ownership.OperationID, msg.Kind == "claude_ownership_active")
-	case "gemini_ownership_lost":
+		return g.updateClaudeOwnership(ctx, serverID, ownership.OperationID, msg.Kind == protocol.AgentKindClaudeOwnershipActive)
+	case protocol.AgentKindGeminiOwnershipLost:
 		var lost protocol.GeminiOwnership
 		if err := json.Unmarshal(msg.PayloadJSON, &lost); err != nil {
 			return err
 		}
 		return g.markGeminiOwnershipLost(ctx, serverID, lost.OperationID)
-	case "gemini_ownership_active":
+	case protocol.AgentKindGeminiOwnershipActive:
 		var active protocol.GeminiOwnership
 		if err := json.Unmarshal(msg.PayloadJSON, &active); err != nil {
 			return err
 		}
 		return g.markGeminiOwnershipActive(ctx, serverID, active.OperationID)
-	case "event":
+	case protocol.AgentKindEvent:
 		var event protocol.StreamEvent
 		if err := json.Unmarshal(msg.PayloadJSON, &event); err != nil {
 			return err
@@ -228,11 +228,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 		if thread.ServerID != serverID {
 			return errors.New("Agent event server mismatch")
 		}
-		if event.Kind == "codex.thread.tokenUsage.updated" {
+		if event.Kind == protocol.EventCodexThreadTokenUsageUpdated {
 			event.Payload = codexUsagePayload(event.Payload)
 		}
 		event.Payload = security.RedactJSON(event.Payload)
-		if event.Kind != "user.message" {
+		if event.Kind != protocol.EventUserMessage {
 			cancelled, err := g.store.HasPendingTurnCancellation(ctx, event.StreamID)
 			if err != nil {
 				return err
@@ -244,15 +244,15 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return nil
 			}
 		}
-		if strings.Contains(event.Kind, "approval.requested") {
+		if strings.Contains(event.Kind, protocol.EventApprovalRequested) {
 			if err := g.upsertApproval(ctx, event); err != nil {
 				g.log.Error("could not persist approval request", "thread_id", event.StreamID, "error", err)
 			}
 		}
-		if event.Kind == "thread.bound" {
+		if event.Kind == protocol.EventThreadBound {
 			_ = g.bindCodexThread(ctx, event)
 		}
-		if event.Kind == "codex.serverRequest.resolved" {
+		if event.Kind == protocol.EventCodexServerRequestResolved {
 			var params struct {
 				RequestID json.RawMessage `json:"requestId"`
 			}
@@ -267,11 +267,11 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 				return err
 			}
 		}
-		if event.Kind == "codex.thread.name.updated" {
+		if event.Kind == protocol.EventCodexThreadNameUpdated {
 			_ = g.updateThreadTitle(ctx, event)
 		}
-		if event.Kind == "codex.turn.started" || event.Kind == "turn.accepted" {
-			if event.Kind == "turn.accepted" {
+		if event.Kind == protocol.EventCodexTurnStarted || event.Kind == protocol.EventTurnAccepted {
+			if event.Kind == protocol.EventTurnAccepted {
 				if err := g.acceptCodexTurn(ctx, event); err != nil {
 					return err
 				}
@@ -287,23 +287,23 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			g.hub.Publish(saved)
 			return nil
 		}
-		if event.Kind == "codex.turn.completed" || event.Kind == "codex.turn.cancelled" {
+		if event.Kind == protocol.EventCodexTurnCompleted || event.Kind == protocol.EventCodexTurnCancelled {
 			_ = g.setThreadTitleFromFirstResponse(ctx, event.StreamID)
 			status := completedTurnStatus(event.Payload)
-			if event.Kind == "codex.turn.cancelled" {
+			if event.Kind == protocol.EventCodexTurnCancelled {
 				status = "interrupted"
 			}
 			_ = g.store.SetThreadStatus(ctx, event.StreamID, status)
 			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, scheduledTurnStatus(status), scheduledTurnMessage(event.Payload))
 			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
-		if event.Kind == "codex.turn.failed" {
+		if event.Kind == protocol.EventCodexTurnFailed {
 			_ = g.store.SetThreadStatus(ctx, event.StreamID, "failed")
 			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, "failed", scheduledTurnMessage(event.Payload))
 			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
 		}
 		return g.publish(ctx, event)
-	case "operation_started":
+	case protocol.AgentKindOperationStarted:
 		var started protocol.OperationStarted
 		if err := json.Unmarshal(msg.PayloadJSON, &started); err != nil {
 			return err
@@ -319,7 +319,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			return nil
 		}
 		return g.store.MarkRunning(ctx, operation.ID)
-	case "operation_result":
+	case protocol.AgentKindOperationResult:
 		var result protocol.OperationResult
 		if err := json.Unmarshal(msg.PayloadJSON, &result); err != nil {
 			return err
@@ -331,9 +331,9 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			return err
 		}
 		return g.reconcileOperation(ctx, serverID, reconcile)
-	case "agent_update_status":
-		return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "agent.updated", Payload: security.RedactJSON(msg.PayloadJSON)})
-	case "deployment_status":
+	case protocol.AgentKindAgentUpdateStatus:
+		return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: protocol.EventAgentUpdated, Payload: security.RedactJSON(msg.PayloadJSON)})
+	case protocol.AgentKindDeploymentStatus:
 		var p protocol.DeploymentStatus
 		if err := json.Unmarshal(msg.PayloadJSON, &p); err != nil {
 			return err
@@ -361,7 +361,7 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			return err
 		}
 		payload := security.RedactJSON(msg.PayloadJSON)
-		return g.publish(ctx, protocol.StreamEvent{StreamID: p.DeploymentID, Kind: "deployment." + p.Status, Payload: payload})
+		return g.publish(ctx, protocol.StreamEvent{StreamID: p.DeploymentID, Kind: protocol.EventDeploymentPrefix + p.Status, Payload: payload})
 	default:
 		return errors.New("unsupported agent message kind")
 	}
@@ -391,7 +391,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 		}
 		return publishOperationResult(ctx, g, serverID, result)
 	}
-	geminiTurn := operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "claude.turn.start"
+	geminiTurn := operation.Kind == protocol.OpGeminiTurnStart || operation.Kind == protocol.OpGeminiTurnRewrite || operation.Kind == protocol.OpClaudeTurnStart
 	geminiInterrupted := geminiTurn && (result.Status == "interrupted" || result.Status == "cancelled" || (result.Status == "failed" && result.Message == context.Canceled.Error()))
 	if geminiInterrupted {
 		// Agent operations use the shared cancelled state for metrics and
@@ -410,7 +410,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	}
 	g.evaluateOperationLatency(ctx, serverID, operation)
 	g.log.Info("Agent operation result received", resultLogFields...)
-	if operation.Kind == "git.workspace.clone" {
+	if operation.Kind == protocol.OpGitWorkspaceClone {
 		var command protocol.GitWorkspaceCloneCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -443,7 +443,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 		}
 		return publishOperationResult(ctx, g, serverID, result)
 	}
-	if operation.Kind == "git.workspace.lifecycle" {
+	if operation.Kind == protocol.OpGitWorkspaceLifecycle {
 		var command protocol.GitWorkspaceLifecycleCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -480,7 +480,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	// workspace must be committed together only after the agent result has
 	// been checked. Do not let the generic completion path claim success
 	// before that transaction finishes.
-	if operation.Kind == "git.project.create" {
+	if operation.Kind == protocol.OpGitProjectCreate {
 		var command protocol.GitProjectCreateCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -529,7 +529,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 		}
 		return publishOperationResult(ctx, g, serverID, result)
 	}
-	if operation.Kind == "workspace.files" {
+	if operation.Kind == protocol.OpWorkspaceFiles {
 		var command protocol.WorkspaceFilesCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -539,7 +539,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 		}
 		return publishOperationResult(ctx, g, serverID, result)
 	}
-	if operation.Kind == "workspace.file.write" && result.Status == "succeeded" {
+	if operation.Kind == protocol.OpWorkspaceFileWrite && result.Status == "succeeded" {
 		var command protocol.WorkspaceFileWriteCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -547,18 +547,18 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 		if err := g.store.BeginWorkspaceFileScan(ctx, command.WorkspaceID); err != nil {
 			return err
 		}
-		if _, err := g.store.QueueResourceOperation(ctx, serverID, "workspace.files", protocol.WorkspaceFilesCommand{WorkspaceID: command.WorkspaceID, Path: command.Root}, operation.ID+":files", store.OperationResource{WorkspaceID: command.WorkspaceID}, false); err != nil {
+		if _, err := g.store.QueueResourceOperation(ctx, serverID, protocol.OpWorkspaceFiles, protocol.WorkspaceFilesCommand{WorkspaceID: command.WorkspaceID, Path: command.Root}, operation.ID+":files", store.OperationResource{WorkspaceID: command.WorkspaceID}, false); err != nil {
 			return err
 		}
 		if err := g.store.BeginWorkspaceChangeScan(ctx, command.WorkspaceID); err != nil {
 			return err
 		}
-		if _, err := g.store.QueueResourceOperation(ctx, serverID, "workspace.changes", protocol.WorkspaceChangesCommand{WorkspaceID: command.WorkspaceID, Path: command.Root}, operation.ID+":changes", store.OperationResource{WorkspaceID: command.WorkspaceID}, false); err != nil {
+		if _, err := g.store.QueueResourceOperation(ctx, serverID, protocol.OpWorkspaceChanges, protocol.WorkspaceChangesCommand{WorkspaceID: command.WorkspaceID, Path: command.Root}, operation.ID+":changes", store.OperationResource{WorkspaceID: command.WorkspaceID}, false); err != nil {
 			return err
 		}
 		g.Wake(serverID)
 	}
-	if operation.Kind == "workspace.file.preview" {
+	if operation.Kind == protocol.OpWorkspaceFilePreview {
 		var command protocol.WorkspaceFilePreviewCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -578,7 +578,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			return err
 		}
 	}
-	if operation.Kind == "workspace.changes" {
+	if operation.Kind == protocol.OpWorkspaceChanges {
 		var command protocol.WorkspaceChangesCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -595,7 +595,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			return err
 		}
 	}
-	if operation.Kind == "workspace.diff.preview" {
+	if operation.Kind == protocol.OpWorkspaceDiffPreview {
 		var command protocol.WorkspaceDiffCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -615,7 +615,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			return err
 		}
 	}
-	if operation.Kind == "git.workspace.inspect" {
+	if operation.Kind == protocol.OpGitWorkspaceInspect {
 		var command protocol.GitWorkspaceInspectCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -632,7 +632,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			return err
 		}
 	}
-	if operation.Kind == "git.workspace.write" {
+	if operation.Kind == protocol.OpGitWorkspaceWrite {
 		var command protocol.GitWorkspaceWriteCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -676,12 +676,12 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 		}
 		return publishOperationResult(ctx, g, serverID, result)
 	}
-	if strings.HasPrefix(operation.Kind, "codex.goal.") {
+	if strings.HasPrefix(operation.Kind, protocol.OpCodexGoalPrefix) {
 		var command protocol.CodexSnapshotCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
 		}
-		kind := strings.TrimPrefix(operation.Kind, "codex.")
+		kind := strings.TrimPrefix(operation.Kind, protocol.CodexKindPrefix)
 		if strings.HasPrefix(kind, "goal.") {
 			kind = "goal"
 		}
@@ -697,7 +697,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			return err
 		}
 	}
-	if operation.Kind == "codex.thread.fork" && result.Status == "succeeded" {
+	if operation.Kind == protocol.OpCodexThreadFork && result.Status == "succeeded" {
 		var command protocol.ForkThreadCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -712,7 +712,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			result.Status, result.Message = "failed", "could not persist fork: "+err.Error()
 		}
 	}
-	if operation.Kind == "claude.thread.fork" && result.Status == "succeeded" {
+	if operation.Kind == protocol.OpClaudeThreadFork && result.Status == "succeeded" {
 		var c protocol.ClaudeForkCommand
 		var fork protocol.ClaudeForkResult
 		if err = json.Unmarshal([]byte(operation.Payload), &c); err != nil {
@@ -726,7 +726,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			result.Message = "could not save Claude fork: " + e.Error()
 		}
 	}
-	if operation.Kind == "gemini.thread.fork" && result.Status == "succeeded" {
+	if operation.Kind == protocol.OpGeminiThreadFork && result.Status == "succeeded" {
 		var command protocol.GeminiForkCommand
 		var fork protocol.GeminiForkResult
 		if err = json.Unmarshal([]byte(operation.Payload), &command); err != nil {
@@ -740,7 +740,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			result.Message = "could not save Gemini branch: " + e.Error()
 		}
 	}
-	if operation.Kind == "git.worktree.create" && result.Status == "succeeded" {
+	if operation.Kind == protocol.OpGitWorktreeCreate && result.Status == "succeeded" {
 		var command protocol.GitWorktreeCreateCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -751,7 +751,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 		}
 		if commitErr := g.store.CommitGitWorktree(ctx, command, worktree); commitErr != nil {
 			cleanup := protocol.GitWorktreeCleanupCommand{SourcePath: command.SourcePath, TargetPath: worktree.Path, Branch: worktree.Branch}
-			if _, queueErr := g.store.QueueResourceOperation(ctx, serverID, "git.worktree.cleanup", cleanup, "git-worktree-cleanup:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: operation.ProjectID, WorkspaceID: operation.WorkspaceID}, false); queueErr != nil {
+			if _, queueErr := g.store.QueueResourceOperation(ctx, serverID, protocol.OpGitWorktreeCleanup, cleanup, "git-worktree-cleanup:"+command.TargetWorkspaceID, store.OperationResource{ProjectID: operation.ProjectID, WorkspaceID: operation.WorkspaceID}, false); queueErr != nil {
 				return fmt.Errorf("commit worktree: %v; queue cleanup: %w", commitErr, queueErr)
 			}
 			g.Wake(serverID)
@@ -759,19 +759,19 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			result.Message = "could not persist worktree; cleanup queued: " + commitErr.Error()
 		}
 	}
-	if operation.Kind == "deploy.container" || strings.HasPrefix(operation.Kind, "deploy.container.") {
+	if operation.Kind == protocol.OpDeployContainer || strings.HasPrefix(operation.Kind, protocol.OpDeployContainerPrefix) {
 		if err := g.store.CompleteDeploymentContainerOperation(ctx, operation.ID, result); err != nil {
 			return err
 		}
 	}
 	geminiCompletionClaimed := false
-	if operation.Kind == "gemini.credentials.configure" {
+	if operation.Kind == protocol.OpGeminiCredentialsConfigure {
 		err = g.store.CompleteGeminiCredentialUpdate(ctx, result)
-	} else if operation.Kind == "claude.credentials.configure" {
+	} else if operation.Kind == protocol.OpClaudeCredentialsConfigure {
 		err = g.store.CompleteClaudeCredentialUpdate(ctx, result)
-	} else if operation.Kind == "credentials.configure" || operation.Kind == "codex.credentials.configure" || operation.Kind == "git.credentials.configure" {
+	} else if operation.Kind == protocol.OpCredentialsConfigure || operation.Kind == protocol.OpCodexCredentialsConfigure || operation.Kind == protocol.OpGitCredentialsConfigure {
 		err = g.store.CompleteCredentialUpdate(ctx, result)
-	} else if geminiInterrupted || operation.Kind == "claude.turn.start" {
+	} else if geminiInterrupted || operation.Kind == protocol.OpClaudeTurnStart {
 		geminiCompletionClaimed, err = g.store.CompleteOperationIfActive(ctx, result)
 	} else {
 		err = g.store.CompleteOperation(ctx, result)
@@ -779,12 +779,12 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	if err != nil {
 		return err
 	}
-	if (geminiInterrupted || operation.Kind == "claude.turn.start") && !geminiCompletionClaimed {
+	if (geminiInterrupted || operation.Kind == protocol.OpClaudeTurnStart) && !geminiCompletionClaimed {
 		return nil
 	}
-	if operation.Kind == "claude.thread.fork" || operation.Kind == "git.worktree.create" {
+	if operation.Kind == protocol.OpClaudeThreadFork || operation.Kind == protocol.OpGitWorktreeCreate {
 		var c protocol.ClaudeForkCommand
-		if operation.Kind == "claude.thread.fork" {
+		if operation.Kind == protocol.OpClaudeThreadFork {
 			_ = json.Unmarshal([]byte(operation.Payload), &c)
 		} else {
 			var w protocol.GitWorktreeCreateCommand
@@ -797,12 +797,12 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			if _, err = g.store.DB.ExecContext(ctx, g.store.Q("UPDATE claude_threads SET status='idle',updated_at=? WHERE id=? AND operation_id=?"), time.Now().UTC(), c.SourceThreadID, operation.ID); err != nil {
 				return err
 			}
-			_ = g.publish(ctx, protocol.StreamEvent{StreamID: c.SourceThreadID, Kind: "claude.thread.updated", Payload: json.RawMessage(`{}`)})
+			_ = g.publish(ctx, protocol.StreamEvent{StreamID: c.SourceThreadID, Kind: protocol.EventClaudeThreadUpdated, Payload: json.RawMessage(`{}`)})
 		}
 	}
-	if operation.Kind == "gemini.thread.fork" || operation.Kind == "git.worktree.create" {
+	if operation.Kind == protocol.OpGeminiThreadFork || operation.Kind == protocol.OpGitWorktreeCreate {
 		var command protocol.GeminiForkCommand
-		if operation.Kind == "gemini.thread.fork" {
+		if operation.Kind == protocol.OpGeminiThreadFork {
 			_ = json.Unmarshal([]byte(operation.Payload), &command)
 		} else {
 			var w protocol.GitWorktreeCreateCommand
@@ -815,7 +815,7 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 			if err = g.store.CompleteGeminiTurn(ctx, command.SourceThreadID, operation.ID, "idle"); err != nil {
 				return err
 			}
-			_ = g.publish(ctx, protocol.StreamEvent{StreamID: command.SourceThreadID, Kind: "gemini.thread.updated", Payload: json.RawMessage(`{}`)})
+			_ = g.publish(ctx, protocol.StreamEvent{StreamID: command.SourceThreadID, Kind: protocol.EventGeminiThreadUpdated, Payload: json.RawMessage(`{}`)})
 		}
 	}
 	updatedOperation, statusErr := g.store.Operation(ctx, result.OperationID)
@@ -825,27 +825,27 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	if updatedOperation.Status == "cancelled" && !geminiCompletionClaimed {
 		return nil
 	}
-	if operation.Kind == "gemini.turn.start" || operation.Kind == "gemini.turn.rewrite" || operation.Kind == "gemini.turn.interrupt" || operation.Kind == "gemini.turn.steer" {
+	if operation.Kind == protocol.OpGeminiTurnStart || operation.Kind == protocol.OpGeminiTurnRewrite || operation.Kind == protocol.OpGeminiTurnInterrupt || operation.Kind == protocol.OpGeminiTurnSteer {
 		if err := g.completeGeminiOperation(ctx, operation, result); err != nil {
 			return err
 		}
 	}
-	if operation.Kind == "claude.turn.start" || operation.Kind == "claude.turn.interrupt" || operation.Kind == "claude.turn.steer" || operation.Kind == "claude.question.answer" {
+	if operation.Kind == protocol.OpClaudeTurnStart || operation.Kind == protocol.OpClaudeTurnInterrupt || operation.Kind == protocol.OpClaudeTurnSteer || operation.Kind == protocol.OpClaudeQuestionAnswer {
 		if err := g.completeClaudeOperation(ctx, operation, result); err != nil {
 			return err
 		}
 	}
-	if operation.Kind == "codex.turn.start" || operation.Kind == "codex.turn.rewrite" {
+	if operation.Kind == protocol.OpCodexTurnStart || operation.Kind == protocol.OpCodexTurnRewrite {
 		if result.Status == "succeeded" {
 			_ = g.store.MarkScheduledTaskByOperation(ctx, result.OperationID, "running", "")
 		}
 	}
-	if (operation.Kind == "codex.turn.start" || operation.Kind == "codex.turn.rewrite") && result.Status == "failed" {
+	if (operation.Kind == protocol.OpCodexTurnStart || operation.Kind == protocol.OpCodexTurnRewrite) && result.Status == "failed" {
 		if err := g.failCodexTurn(ctx, operation, result); err != nil {
 			return err
 		}
 	}
-	if (operation.Kind == "codex.turn.interrupt" || operation.Kind == "codex.turn.steer" || operation.Kind == "codex.approval" || operation.Kind == "codex.thread.compact") && result.Status == "failed" {
+	if (operation.Kind == protocol.OpCodexTurnInterrupt || operation.Kind == protocol.OpCodexTurnSteer || operation.Kind == protocol.OpCodexApproval || operation.Kind == protocol.OpCodexThreadCompact) && result.Status == "failed" {
 		if err := g.failCodexControlOperation(ctx, operation, result); err != nil {
 			return err
 		}
@@ -853,14 +853,14 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	// Image bytes are fetched through the authenticated preview APIs. Broadcasting
 	// them to every connected console duplicates multi-megabyte payloads.
 	eventResult := result
-	if operation.Kind == "workspace.image.preview" || operation.Kind == "workspace.file.preview" {
+	if operation.Kind == protocol.OpWorkspaceImagePreview || operation.Kind == protocol.OpWorkspaceFilePreview {
 		eventResult.Data = nil
 	}
 	payload, err := json.Marshal(eventResult)
 	if err != nil {
 		return err
 	}
-	return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "operation." + result.Status, Payload: security.RedactJSON(payload)})
+	return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: protocol.EventOperationPrefix + result.Status, Payload: security.RedactJSON(payload)})
 }
 
 // A completion can commit its operation before a later session update fails.
@@ -872,20 +872,20 @@ func (g *Gateway) reconcileCompletedTurn(ctx context.Context, operation store.Op
 	}
 	engine := ""
 	switch operation.Kind {
-	case "claude.turn.interrupt", "gemini.turn.interrupt":
+	case protocol.OpClaudeTurnInterrupt, protocol.OpGeminiTurnInterrupt:
 		if operation.Status != "succeeded" {
 			return nil
 		}
 		result := protocol.OperationResult{OperationID: operation.ID, Status: operation.Status, Message: operation.Result, Data: json.RawMessage(operation.ResultData)}
-		if operation.Kind == "claude.turn.interrupt" {
+		if operation.Kind == protocol.OpClaudeTurnInterrupt {
 			return g.completeClaudeOperation(ctx, operation, result)
 		}
 		return g.completeGeminiOperation(ctx, operation, result)
-	case "claude.turn.start":
+	case protocol.OpClaudeTurnStart:
 		engine = "claude"
-	case "gemini.turn.start", "gemini.turn.rewrite":
+	case protocol.OpGeminiTurnStart, protocol.OpGeminiTurnRewrite:
 		engine = "gemini"
-	case "codex.turn.start", "codex.turn.rewrite":
+	case protocol.OpCodexTurnStart, protocol.OpCodexTurnRewrite:
 		if operation.Status != "failed" {
 			return nil // A successful Codex start only acknowledges acceptance.
 		}
@@ -972,7 +972,7 @@ func (g *Gateway) failLostDeployment(ctx context.Context, operation store.Operat
 }
 
 func (g *Gateway) failDeploymentOperation(ctx context.Context, operation store.Operation, message string) error {
-	if operation.Kind != "deploy.start" && operation.Kind != "deploy.rollback" {
+	if operation.Kind != protocol.OpDeployStart && operation.Kind != protocol.OpDeployRollback {
 		return nil
 	}
 	var command struct {
@@ -1012,7 +1012,7 @@ func (g *Gateway) failDeploymentOperation(ctx context.Context, operation store.O
 	if err != nil {
 		return err
 	}
-	return g.publish(ctx, protocol.StreamEvent{StreamID: command.DeploymentID, Kind: "deployment.failed", Payload: event})
+	return g.publish(ctx, protocol.StreamEvent{StreamID: command.DeploymentID, Kind: protocol.EventDeploymentFailed, Payload: event})
 }
 
 func publishOperationResult(ctx context.Context, g *Gateway, serverID string, result protocol.OperationResult) error {
@@ -1020,40 +1020,40 @@ func publishOperationResult(ctx context.Context, g *Gateway, serverID string, re
 	if err != nil {
 		return err
 	}
-	return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: "operation." + result.Status, Payload: security.RedactJSON(payload)})
+	return g.publish(ctx, protocol.StreamEvent{StreamID: serverID, Kind: protocol.EventOperationPrefix + result.Status, Payload: security.RedactJSON(payload)})
 }
 
 func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store.Operation, result protocol.OperationResult) error {
 	var threadID, kind string
 	switch operation.Kind {
-	case "codex.turn.steer":
+	case protocol.OpCodexTurnSteer:
 		var command protocol.SteerTurnCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
 		}
 		threadID = command.ThreadID
-		kind = "codex.steer.failed"
-	case "codex.turn.interrupt":
+		kind = protocol.EventCodexSteerFailed
+	case protocol.OpCodexTurnInterrupt:
 		var command protocol.InterruptTurnCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
 		}
 		threadID = command.ThreadID
-		kind = "codex.interrupt.failed"
-	case "codex.approval":
+		kind = protocol.EventCodexInterruptFailed
+	case protocol.OpCodexApproval:
 		var command protocol.ApprovalDecisionCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
 		}
 		threadID = command.ThreadID
-		kind = "codex.approval.failed"
-	case "codex.thread.compact":
+		kind = protocol.EventCodexApprovalFailed
+	case protocol.OpCodexThreadCompact:
 		var command protocol.CodexSnapshotCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
 		}
 		threadID = command.ThreadID
-		kind = "codex.compact.failed"
+		kind = protocol.EventCodexCompactFailed
 	}
 	if threadID == "" {
 		return errors.New("failed Codex control operation has no thread id")
@@ -1062,7 +1062,7 @@ func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store
 	// subprocess reconnects. In that case an interrupt is already complete from
 	// the user's perspective: there is no live turn left to stop. Reconcile the
 	// persisted Wio session instead of leaving it stuck in "running" forever.
-	if operation.Kind == "codex.turn.interrupt" && noActiveCodexTurn(result.Message) {
+	if operation.Kind == protocol.OpCodexTurnInterrupt && noActiveCodexTurn(result.Message) {
 		if err := g.store.SetThreadStatus(ctx, threadID, "interrupted"); err != nil {
 			return err
 		}
@@ -1076,7 +1076,7 @@ func (g *Gateway) failCodexControlOperation(ctx context.Context, operation store
 		if err != nil {
 			return err
 		}
-		return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":turn-cancelled", StreamID: threadID, Kind: "codex.turn.cancelled", Payload: security.RedactJSON(payload)})
+		return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":turn-cancelled", StreamID: threadID, Kind: protocol.EventCodexTurnCancelled, Payload: security.RedactJSON(payload)})
 	}
 	payload, err := json.Marshal(map[string]string{"operation_id": result.OperationID, "text": result.Message})
 	if err != nil {
@@ -1146,7 +1146,7 @@ func completedTurnStatus(payload json.RawMessage) string {
 
 func (g *Gateway) failCodexTurn(ctx context.Context, operation store.Operation, result protocol.OperationResult) error {
 	var threadID string
-	if operation.Kind == "codex.turn.rewrite" {
+	if operation.Kind == protocol.OpCodexTurnRewrite {
 		var command protocol.RewriteTurnCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &command); err != nil {
 			return err
@@ -1178,7 +1178,7 @@ func (g *Gateway) failCodexTurn(ctx context.Context, operation store.Operation, 
 	if err != nil {
 		return err
 	}
-	return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":turn-failed", StreamID: threadID, Kind: "codex.turn.failed", Payload: security.RedactJSON(payload)})
+	return g.publish(ctx, protocol.StreamEvent{EventID: result.OperationID + ":turn-failed", StreamID: threadID, Kind: protocol.EventCodexTurnFailed, Payload: security.RedactJSON(payload)})
 }
 
 func scheduledTurnStatus(status string) string {
@@ -1226,7 +1226,7 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 		return err
 	}
 	for _, op := range ops {
-		geminiTurn := op.Kind == "gemini.turn.start" || op.Kind == "gemini.turn.rewrite" || op.Kind == "claude.turn.start"
+		geminiTurn := op.Kind == protocol.OpGeminiTurnStart || op.Kind == protocol.OpGeminiTurnRewrite || op.Kind == protocol.OpClaudeTurnStart
 		payload := json.RawMessage(op.Payload)
 		if strings.HasPrefix(op.Payload, "v1:") {
 			if err := g.vault.Decrypt(op.Payload, &payload); err != nil {
@@ -1282,14 +1282,14 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				}
 			}
 		}
-		if op.Kind == "gemini.turn.start" || op.Kind == "gemini.turn.rewrite" {
+		if op.Kind == protocol.OpGeminiTurnStart || op.Kind == protocol.OpGeminiTurnRewrite {
 			updated, statusErr := g.store.Operation(stream.Context(), op.ID)
 			if statusErr == nil && updated.Status == "cancelled" {
 				var command protocol.GeminiTurnCommand
 				if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
 					return err
 				}
-				_, err := g.store.QueueResourceOperation(stream.Context(), serverID, "gemini.turn.interrupt", protocol.GeminiInterruptCommand{ThreadID: command.ThreadID, OperationID: op.ID}, "gemini-cancel:"+op.ID, store.OperationResource{ProjectID: op.ProjectID, WorkspaceID: op.WorkspaceID}, false)
+				_, err := g.store.QueueResourceOperation(stream.Context(), serverID, protocol.OpGeminiTurnInterrupt, protocol.GeminiInterruptCommand{ThreadID: command.ThreadID, OperationID: op.ID}, "gemini-cancel:"+op.ID, store.OperationResource{ProjectID: op.ProjectID, WorkspaceID: op.WorkspaceID}, false)
 				if err != nil {
 					return err
 				}
@@ -1301,19 +1301,19 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 }
 
 func isCodexTurnOperation(kind string) bool {
-	return kind == "codex.turn.start" || kind == "codex.turn.rewrite"
+	return kind == protocol.OpCodexTurnStart || kind == protocol.OpCodexTurnRewrite
 }
 
 func (g *Gateway) queueBestEffortInterrupt(ctx context.Context, serverID string, operation store.Operation) error {
 	var command protocol.InterruptTurnCommand
 	switch operation.Kind {
-	case "codex.turn.start":
+	case protocol.OpCodexTurnStart:
 		var start protocol.StartTurnCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &start); err != nil {
 			return err
 		}
 		command = protocol.InterruptTurnCommand{ThreadID: start.ThreadID, CodexThread: start.CodexThread, BestEffort: true}
-	case "codex.turn.rewrite":
+	case protocol.OpCodexTurnRewrite:
 		var rewrite protocol.RewriteTurnCommand
 		if err := json.Unmarshal([]byte(operation.Payload), &rewrite); err != nil {
 			return err
@@ -1325,7 +1325,7 @@ func (g *Gateway) queueBestEffortInterrupt(ctx context.Context, serverID string,
 	if command.ThreadID == "" {
 		return errors.New("Codex turn operation has no thread id")
 	}
-	if _, err := g.store.QueueResourceOperation(ctx, serverID, "codex.turn.interrupt", command, "codex-cancel:"+operation.ID, store.OperationResource{ProjectID: operation.ProjectID, WorkspaceID: operation.WorkspaceID, ThreadID: operation.ThreadID}, false); err != nil {
+	if _, err := g.store.QueueResourceOperation(ctx, serverID, protocol.OpCodexTurnInterrupt, command, "codex-cancel:"+operation.ID, store.OperationResource{ProjectID: operation.ProjectID, WorkspaceID: operation.WorkspaceID, ThreadID: operation.ThreadID}, false); err != nil {
 		return err
 	}
 	g.Wake(serverID)

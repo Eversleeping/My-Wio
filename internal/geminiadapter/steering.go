@@ -195,7 +195,7 @@ func (a *Adapter) readSteeringImages(op, thread, requestID string) ([]any, error
 		}
 		if !hint.Applied {
 			raw, _ := json.Marshal(map[string]any{"operation_id": op, "request_id": hint.ID})
-			if err := a.emit(protocol.StreamEvent{EventID: hint.ID + ":applied", StreamID: thread, Kind: "gemini.steer.applied", Payload: raw}); err != nil {
+			if err := a.emit(protocol.StreamEvent{EventID: hint.ID + ":applied", StreamID: thread, Kind: protocol.EventGeminiSteerApplied, Payload: raw}); err != nil {
 				return nil, err
 			}
 			hint.Applied = true
@@ -241,7 +241,7 @@ func (a *Adapter) startSteering(ctx context.Context, op, thread string, env []st
 	emit := func(kind, id string, payload map[string]any) error {
 		payload["operation_id"] = op
 		raw, _ := json.Marshal(payload)
-		return a.emit(protocol.StreamEvent{EventID: id, StreamID: thread, Kind: "gemini.steer." + kind, Payload: raw})
+		return a.emit(protocol.StreamEvent{EventID: id, StreamID: thread, Kind: protocol.EventGeminiSteerPrefix + kind, Payload: raw})
 	}
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {

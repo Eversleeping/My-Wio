@@ -233,7 +233,7 @@ func (s *Store) QueueCrossServerWorkspaceClone(ctx context.Context, source Works
 // CompleteCrossServerWorkspaceClone returns ErrOperationNotActive without
 // recording the clone when the operation already finished.
 func (s *Store) CompleteCrossServerWorkspaceClone(ctx context.Context, operation Operation, command protocol.GitWorkspaceCloneCommand, result protocol.GitWorkspaceCloneResult, operationResult protocol.OperationResult) error {
-	if operation.Kind != "git.workspace.clone" || operation.ProjectID != command.ProjectID || operation.WorkspaceID == "" || operation.ServerID == "" {
+	if operation.Kind != protocol.OpGitWorkspaceClone || operation.ProjectID != command.ProjectID || operation.WorkspaceID == "" || operation.ServerID == "" {
 		return errors.New("workspace clone operation does not match command")
 	}
 	if result.WorkspaceID != command.WorkspaceID || result.ProjectID != command.ProjectID || cleanLifecyclePath(result.Path) != cleanLifecyclePath(command.Destination) || result.Branch != command.Branch || result.CommitSHA != command.ExpectedHead {
@@ -296,7 +296,7 @@ func (s *Store) FailCrossServerWorkspaceClone(ctx context.Context, operation Ope
 // CompleteWorkspaceLifecycle returns ErrOperationNotActive without changing
 // the workspace rows when the operation already finished.
 func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operation, command protocol.GitWorkspaceLifecycleCommand, result protocol.GitWorkspaceLifecycleResult, operationResult protocol.OperationResult) error {
-	if operation.Kind != "git.workspace.lifecycle" || operation.ProjectID != command.ProjectID || operation.WorkspaceID != command.WorkspaceID || operation.ServerID == "" {
+	if operation.Kind != protocol.OpGitWorkspaceLifecycle || operation.ProjectID != command.ProjectID || operation.WorkspaceID != command.WorkspaceID || operation.ServerID == "" {
 		return errors.New("workspace lifecycle operation does not match command")
 	}
 	if result.WorkspaceID != command.WorkspaceID || result.TargetWorkspaceID != command.TargetWorkspaceID || result.Action != command.Action || cleanLifecyclePath(result.SourcePath) != cleanLifecyclePath(command.SourcePath) {

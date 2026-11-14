@@ -7,13 +7,15 @@ import (
 	"errors"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 // A Codex start operation ends when app-server accepts the turn, while native
 // execution continues through events. Keep that acknowledgment separate from
 // the actual turn ending, including when selecting a historical operation.
 func (s *Store) collaborationTurnState(ctx context.Context, tx *sqlx.Tx, t CollaborationSession, op Operation) (string, bool, error) {
-	if t.Engine != "codex" || (op.Kind != "codex.turn.start" && op.Kind != "codex.turn.rewrite") {
+	if t.Engine != "codex" || (op.Kind != protocol.OpCodexTurnStart && op.Kind != protocol.OpCodexTurnRewrite) {
 		switch op.Status {
 		case "succeeded", "failed", "cancelled":
 			return op.Status, true, nil
@@ -38,10 +40,10 @@ func (s *Store) collaborationTurnState(ctx context.Context, tx *sqlx.Tx, t Colla
 		}
 		err = tx.GetContext(ctx, &event, s.Q("SELECT kind,payload FROM events WHERE stream_id=? AND sequence>=? AND (?=0 OR sequence<?) AND kind IN ('codex.turn.completed','codex.turn.failed','codex.turn.cancelled') ORDER BY sequence DESC LIMIT 1"), t.ID, start, end, end)
 		if err == nil {
-			if event.Kind == "codex.turn.failed" {
+			if event.Kind == protocol.EventCodexTurnFailed {
 				return "failed", true, nil
 			}
-			if event.Kind == "codex.turn.cancelled" {
+			if event.Kind == protocol.EventCodexTurnCancelled {
 				return "cancelled", true, nil
 			}
 			var payload struct {

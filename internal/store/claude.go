@@ -219,7 +219,7 @@ func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread Clau
 		return protocol.StreamEvent{}, nil
 	}
 	raw, _ := json.Marshal(map[string]any{"text": prompt, "images": images, "operation_id": opID})
-	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: "claude.user.message", OccurredAt: now, Payload: raw}
+	event := protocol.StreamEvent{EventID: NewID(), StreamID: thread.ID, Kind: protocol.EventClaudeUserMessage, OccurredAt: now, Payload: raw}
 	event.Sequence, err = s.nextEventSequence(ctx, tx, thread.ID)
 	if err != nil {
 		return event, err

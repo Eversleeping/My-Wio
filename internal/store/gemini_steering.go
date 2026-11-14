@@ -103,7 +103,7 @@ func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, e
 		return protocol.StreamEvent{}, "", err
 	}
 	message, _ := json.Marshal(map[string]any{"text": prompt, "images": images, "request_id": requestID, "operation_id": expected})
-	event := protocol.StreamEvent{EventID: NewID(), StreamID: threadID, Kind: "gemini.steer.queued", OccurredAt: now, Payload: message}
+	event := protocol.StreamEvent{EventID: NewID(), StreamID: threadID, Kind: protocol.EventGeminiSteerQueued, OccurredAt: now, Payload: message}
 	event.Sequence, err = s.nextEventSequence(ctx, tx, threadID)
 	if err != nil {
 		return event, "", err
@@ -137,7 +137,7 @@ func (s *Store) geminiSteeringContext(ctx context.Context, tx *sqlx.Tx, thread s
 		if json.Unmarshal([]byte(row.Payload), &p) != nil {
 			continue
 		}
-		if row.Kind == "gemini.steer.queued" {
+		if row.Kind == protocol.EventGeminiSteerQueued {
 			texts[p.RequestID] = p.Text
 			order = append(order, p.RequestID)
 		} else {

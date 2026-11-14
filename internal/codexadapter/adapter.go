@@ -190,7 +190,7 @@ func (a *Adapter) CodexOperation(ctx context.Context, kind string, payload json.
 	if err := json.Unmarshal(payload, &base); err != nil {
 		return protocol.CodexCapabilityResult{}, err
 	}
-	if base.ThreadID != "" && base.CodexThread != "" && (strings.HasPrefix(kind, "codex.goal.") || kind == "codex.mcp.list" || kind == "codex.thread.compact") {
+	if base.ThreadID != "" && base.CodexThread != "" && (strings.HasPrefix(kind, protocol.OpCodexGoalPrefix) || kind == protocol.OpCodexMCPList || kind == protocol.OpCodexThreadCompact) {
 		a.mu.Lock()
 		loaded := a.threads[base.CodexThread] != ""
 		a.mu.Unlock()
@@ -216,25 +216,25 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 		a.threads[base.CodexThread] = base.ThreadID
 		a.mu.Unlock()
 	}
-	if base.CodexThread == "" && base.ThreadID != "" && (strings.HasPrefix(kind, "codex.goal.") || kind == "codex.mcp.list" || kind == "codex.thread.compact") {
+	if base.CodexThread == "" && base.ThreadID != "" && (strings.HasPrefix(kind, protocol.OpCodexGoalPrefix) || kind == protocol.OpCodexMCPList || kind == protocol.OpCodexThreadCompact) {
 		base.CodexThread = a.waitForCodexThread(ctx, base.ThreadID)
 	}
-	if kind == "codex.status.snapshot" {
+	if kind == protocol.OpCodexStatusSnapshot {
 		return codexStatusOperation(ctx, base.CodexVersion, request)
 	}
-	if kind == "codex.models.list" {
+	if kind == protocol.OpCodexModelsList {
 		return codexModelsOperation(ctx, base.CodexVersion, request)
 	}
 	method := ""
 	var params any
 	switch kind {
-	case "codex.goal.get", "codex.goal.clear":
+	case protocol.OpCodexGoalGet, protocol.OpCodexGoalClear:
 		if base.CodexThread == "" {
 			return unsupported(base.CodexVersion, "Codex thread is not initialized"), nil
 		}
-		method = map[string]string{"codex.goal.get": "thread/goal/get", "codex.goal.clear": "thread/goal/clear"}[kind]
+		method = map[string]string{protocol.OpCodexGoalGet: "thread/goal/get", protocol.OpCodexGoalClear: "thread/goal/clear"}[kind]
 		params = map[string]string{"threadId": base.CodexThread}
-	case "codex.goal.set":
+	case protocol.OpCodexGoalSet:
 		var command protocol.CodexGoalSetCommand
 		if err := json.Unmarshal(payload, &command); err != nil {
 			return protocol.CodexCapabilityResult{}, err
@@ -245,11 +245,11 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 		}
 		method = "thread/goal/set"
 		params = map[string]any{"threadId": command.CodexThread, "objective": command.Objective, "status": command.Status, "tokenBudget": command.TokenBudget}
-	case "codex.skills.list":
+	case protocol.OpCodexSkillsList:
 		method, params = "skills/list", map[string]any{"cwds": []string{base.Workspace}, "forceReload": true}
-	case "codex.mcp.list":
+	case protocol.OpCodexMCPList:
 		method, params = "mcpServerStatus/list", map[string]any{"threadId": nullableString(base.CodexThread), "limit": 100, "detail": "toolsAndAuthOnly"}
-	case "codex.thread.compact":
+	case protocol.OpCodexThreadCompact:
 		if base.CodexThread == "" {
 			return unsupported(base.CodexVersion, "Codex thread is not initialized"), nil
 		}
@@ -364,32 +364,32 @@ func sanitizeCodexResult(kind string, raw json.RawMessage) (json.RawMessage, err
 		return nil, err
 	}
 	switch kind {
-	case "codex.goal.get", "codex.goal.set", "codex.goal.clear":
+	case protocol.OpCodexGoalGet, protocol.OpCodexGoalSet, protocol.OpCodexGoalClear:
 		return sanitizeGoalResult(value)
-	case "codex.skills.list":
+	case protocol.OpCodexSkillsList:
 		return sanitizeSkillsResult(value)
-	case "codex.mcp.list":
+	case protocol.OpCodexMCPList:
 		return sanitizeMCPResult(value)
-	case "codex.status.snapshot":
+	case protocol.OpCodexStatusSnapshot:
 		return sanitizeStatusResult(value)
-	case "codex.thread.compact":
+	case protocol.OpCodexThreadCompact:
 		return json.RawMessage(`{}`), nil
 	}
 	allowed := map[string]bool{}
 	switch kind {
-	case "codex.goal.get", "codex.goal.set", "codex.goal.clear":
+	case protocol.OpCodexGoalGet, protocol.OpCodexGoalSet, protocol.OpCodexGoalClear:
 		for _, k := range []string{"goal", "threadId", "objective", "status", "tokenBudget", "tokensUsed", "timeUsedSeconds", "createdAt", "updatedAt"} {
 			allowed[k] = true
 		}
-	case "codex.skills.list":
+	case protocol.OpCodexSkillsList:
 		for _, k := range []string{"data", "cwd", "errors", "skills", "name", "description", "path", "scope", "enabled", "interface", "displayName", "shortDescription"} {
 			allowed[k] = true
 		}
-	case "codex.mcp.list":
+	case protocol.OpCodexMCPList:
 		for _, k := range []string{"data", "nextCursor", "name", "authStatus", "auth_status", "serverInfo", "server_info", "version", "tools", "resourceCount", "resource_count", "resourceTemplateCount", "resource_template_count"} {
 			allowed[k] = true
 		}
-	case "codex.status.snapshot":
+	case protocol.OpCodexStatusSnapshot:
 		for _, k := range []string{"rateLimits", "rate_limits", "rateLimitResetCredits", "primary", "secondary", "credits", "individualLimit", "limitId", "limit_id", "limitName", "limit_name", "planType", "plan_type", "rateLimitReachedType", "usedPercent", "used_percent", "windowDurationMins", "window_duration_mins", "resetsAt", "resets_at", "hasCredits", "has_credits", "unlimited", "balance", "availableCount", "limit", "remainingPercent", "used"} {
 			allowed[k] = true
 		}
@@ -737,7 +737,7 @@ func (a *Adapter) startPreparedTurn(ctx context.Context, command protocol.StartT
 		return errors.New("turn/start returned no turn id")
 	}
 	accepted["turn_id"] = response.Turn.ID
-	event, eventErr := newEvent(command.ThreadID, "turn.accepted", accepted)
+	event, eventErr := newEvent(command.ThreadID, protocol.EventTurnAccepted, accepted)
 	a.mu.Lock()
 	state, exists := a.turns[command.ThreadID]
 	if !exists || !state.Starting {
@@ -1346,7 +1346,7 @@ func (a *Adapter) handleServerRequest(message rpcMessage) {
 	}
 	requestID := idKey(message.ID)
 	codexThread := findString(message.Params, "threadId", "conversationId")
-	event, err := newEvent("", "approval.requested", map[string]any{"request_id": requestID, "kind": message.Method, "detail": json.RawMessage(message.Params)})
+	event, err := newEvent("", protocol.EventApprovalRequested, map[string]any{"request_id": requestID, "kind": message.Method, "detail": json.RawMessage(message.Params)})
 	a.mu.Lock()
 	wioThread := a.threads[codexThread]
 	if wioThread != "" && err == nil {
@@ -1446,7 +1446,7 @@ type preparedNotification struct {
 }
 
 func prepareNotification(message rpcMessage, turnID string) preparedNotification {
-	prepared := preparedNotification{kind: "codex." + strings.ReplaceAll(message.Method, "/", "."), params: append(json.RawMessage(nil), message.Params...)}
+	prepared := preparedNotification{kind: protocol.CodexKindPrefix + strings.ReplaceAll(message.Method, "/", "."), params: append(json.RawMessage(nil), message.Params...)}
 	if message.Method == "item/completed" && turnID != "" {
 		var params struct {
 			Item struct {
@@ -1531,7 +1531,7 @@ func (a *Adapter) resetLocked(reason error) {
 		return
 	}
 	for threadID, state := range failed {
-		event, err := newEvent(threadID, "codex.turn.failed", map[string]any{
+		event, err := newEvent(threadID, protocol.EventCodexTurnFailed, map[string]any{
 			"threadId": state.CodexThread,
 			"turnId":   state.TurnID,
 			"error":    map[string]string{"message": reason.Error()},

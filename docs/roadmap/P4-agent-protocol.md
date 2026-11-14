@@ -173,6 +173,8 @@ type Heartbeat struct {
 
 可以按包分成多个提交。每个提交都保持可编译、测试通过。
 
+2026-11-15 执行基线修正：本步骤以当前提交 `67275e2` 为替换前基线，包含基线之后的退出流程和工作区修复；文件及符号以当前源码为准。执行前 `buildinfo.Version` 为 0.3.15。未经用户授权不创建提交，先在工作区按“清单、常量、等价替换、验收”的顺序完成。适配器内部传递的事件后缀同时用于事件 ID 和本地回调，保留其取值及回调语义，仅将拼接前缀常量化；静态完整事件名及适配器发布的事件名纳入基准清单。补充盘点：`operationContext` 还匹配 `deploy.` 前缀，协作工具还按引擎派生轮次和问题事件类型；这些前缀、后缀也纳入常量及清单，保留原有拼接和比较语义，不新增可执行操作或改变未知类型的处理。
+
 **做法**
 
 1. 先生成基准清单：从基线代码里取出“现状”一节列出的全部操作类型、信封类型，以及代码里会比较或发布的事件类型，写进 `internal/protocol/testdata/kinds.golden`。这个提交只加清单文件和读取它的测试骨架。
@@ -374,4 +376,62 @@ grep -rnoE '"[a-z_]+(\.[a-zA-Z_]+)+"' internal cmd --include=*.go --exclude=*_te
 
 按时间顺序追加，每条包含日期、步骤编号、会话标识、做了什么、验收结果、遗留事项。
 
-（暂无）
+### 2026-11-15 P4-01
+
+- 会话与验收：`11-15 Codex`；`GPT-6（Codex，本会话自验）`。替换前基线为 `67275e2`，工作区开始时干净。
+- 实现：新增 `internal/protocol/kinds.go`，集中定义 56 种操作、16 种上行信封、2 种下行非操作信封、78 种静态或已发布事件，以及 9 个前缀、5 个引擎派生后缀，共 166 个互不重复的无类型字符串常量。清单先从替换前源码盘点生成，再逐包替换五百余处引用；原有 `ControlKindKeepalive`、`AgentKindOperationReconcile` 保持名字，Store 的两个操作别名继续保留并引用协议常量。
+- 凭据作用域：共用 `CredentialOperationKind` 显式映射空作用域、`codex`、`git`。队列仍先校验作用域再校验密文；Agent 的通用 `credentials.configure` 仍按原路径校验载荷，限定作用域的命令仍拒绝作用域不符的载荷，错误文案不变。
+- 兼容边界：SQL 文本、局部索引条件、审计动作名、Git 子动作、已有测试期望、前端字符串及信封字段均未改变。Codex CLI 通知是开放集合，继续由方法名生成事件。Claude/Gemini 的内部回调后缀还用于事件 ID，保留其取值；协作工具按引擎派生类型，保留原有比较范围，不因常量化新增可执行操作。
+- Agent 依赖边界：实际运行 `go list -deps ./cmd/agent`，改动涉及 `agent`、`protocol`、`buildinfo` 和三个适配器；版本由 0.3.15 升为 **0.3.16**。
+- 等价性核对：对 63 个既有 Go 文件反向解引用常量后比较 token；排除 import、迁出的两个常量声明并还原两处凭据映射重写后，全部一致。版本号单独核对。另用替换前后的 AST 清单核对，所有审计调用的字符串参数，以及 Store/网关包含类型标识的 SQL 字符串均逐字一致。
+- 新增三个协议测试：常量集合与替换前 `testdata/kinds.golden` 完全一致、无重复且均为无类型字符串；SQL 中单引号类型标识全部已注册；凭据作用域到线上类型的映射及非法作用域边界保持固定。SQL 检查覆盖 Store/网关的非测试 Go 字符串及生产 `.sql` 文件；白名单限制到具体文件，并说明四种 Codex 快照键和 `compose.yaml` 的用途，过期白名单也会失败。
+- 反向验证：在只包含源码和依赖清单的临时副本中，分别改错 `claude.turn.start` 常量取值、添加相同取值的常量、给 Store SQL 加入未知的 `codex.models.typo`。三个探测均退出 1，分别命中基准清单、重复取值和 SQL 未注册类型检查；还原后退出 0。最终前缀/后缀补齐后又对最终源码重复验证，结果相同；主工作区未留下探测文件。
+
+通用验收及必要补充（最终源码）：
+
+| 命令或检查 | 实际结果 |
+| --- | --- |
+| `npm --prefix web run build` | 退出码 0；1914 个模块，类型检查、前端构建和 bundle 限额检查通过；本步骤未改前端源码 |
+| `go test ./internal/protocol` | 退出码 0；包括新增的基准、SQL 和作用域测试 |
+| `go vet ./...` | 退出码 0，无诊断 |
+| `go test ./...` | 退出码 0；包含三引擎跨进程验收，未修改既有测试期望 |
+| `make test-postgres` | 退出码 0，迁移与存储集成用例通过 |
+| `npm --prefix web test` | 退出码 0；61 个文件、449 项测试全部通过 |
+| `npm --prefix web run typecheck` | 退出码 0，无诊断 |
+| `go build ./cmd/controlplane ./cmd/agent` | 退出码 0，两个命令包编译通过 |
+| `make fmt-check`、`git diff --check` | 退出码 0，无格式或空白错误 |
+
+本步骤未修改页面交互，因此未运行浏览器 E2E。首次完整 Go 测试墙钟 239.47 秒、PostgreSQL 25.70 秒、Vitest 59.21 秒；补齐按引擎派生的类型后缀后，另对最终源码重新完成上述验收：Go 全量测试 19.22 秒、PostgreSQL 25.85 秒、Vitest 60.93 秒。部分 Go 测试命中缓存；最终协议测试和反向探测明确运行新清单。未发现需要另行登记的产品缺陷。
+
+按本步骤规定的字面量扫描命令（排除 `kinds.go`）剩余 164 处，分类如下。另核对 `kinds.go` 有 134 处匹配该正则的完整类型定义；18 种不含点号的信封及 14 个带首尾点号的前后缀不匹配该正则，但都受基准清单覆盖。
+
+| 分类 | 数量 | 取值或解释 |
+| --- | --- | --- |
+| 审计动作 | 79 处、78 种 | 见下方清单，全部保留在审计命名空间 |
+| Git 子动作 | 10 处、5 种 | `branch.create`、`branch.delete`、`branch.rename`、`remote.add`、`remote.remove` |
+| 常量定义 | 134 处、134 种 | 全在 `internal/protocol/kinds.go`，已从上述扫描结果排除 |
+| 其他：适配器内部事件后缀 | 19 处、13 种 | `compaction.completed`、`compaction.failed`、`compaction.started`、`goal.diagnostic`、`goal.progress`、`goal.usage`、`question.answered`、`question.cancelled`、`steer.accepted`、`steer.applied`、`steer.closed`、`steer.ready`、`steer.unconfirmed`。它们是内部回调/CLI 子类型及事件 ID 的组成部分；完整线上类型在常量清单中，拼接前缀已常量化 |
+| 其他：Codex 快照键 | 6 处、4 种 | `mcp.list`、`models.list`、`skills.list`、`status.snapshot`，是缓存种类而非线上操作类型 |
+| 其他：Git 配置键 | 8 处、3 种 | `user.name`、`user.email`、`wio.projectId` |
+| 其他：域名及镜像仓库 | 4 处、4 种 | `anthropic.com`、`api.github.com`、`github.com`、`docker.io` |
+| 其他：SQL 列引用 | 3 处、2 种 | `t.codex_thread_id`、`st.thinking_level`，用于拼接定时任务读模型 |
+| 其他：Docker 标签 | 1 处、1 种 | `com.docker.compose.service`，是镜像查询模板里的标签名 |
+| 其他：文件名 | 34 处、14 种 | `api.json`、`bootstrap.mjs`、`codex.key`、`compose.yaml`、`config.toml`、`current.json`、`index.html`、`loader.mjs`、`manifest.webmanifest`、`nginx.generated.conf`、`package.json`、`settings.json`、`steering.json`、`sw.js` |
+
+审计动作的 78 种取值：
+
+- `agent.update`, `ai.cli.install`, `auth.login`, `claude.cli.release.check`, `claude.cli.release.select`, `claude.project.archive`
+- `claude.thread.create`, `claude.thread.delete`, `claude.thread.fork`, `claude.thread.update`, `claude.turn.confirm_stopped`, `claude.turn.interrupt`
+- `claude.turn.rewrite`, `claude.turn.start`, `claude.turn.steer`, `codex.approval.decide`, `codex.cli.release.check`, `codex.cli.release.select`
+- `codex.cli.update`, `codex.thread.archive_project`, `codex.thread.compact`, `codex.thread.create`, `codex.thread.delete`, `codex.thread.fork`
+- `codex.thread.fork_worktree`, `codex.thread.update`, `codex.turn.rewrite`, `codex.turn.start`, `codex.turn.steer`, `deployment.delete`
+- `deployment.rollback`, `deployment.start`, `deployment.target.create`, `deployment.target.delete`, `deployment.target.update`, `gemini.cli.release.check`
+- `gemini.cli.release.select`, `gemini.project.archive`, `gemini.thread.create`, `gemini.thread.delete`, `gemini.thread.fork`, `gemini.thread.update`
+- `gemini.turn.confirm_stopped`, `gemini.turn.interrupt`, `gemini.turn.rewrite`, `gemini.turn.start`, `gemini.turn.steer`, `git.workspace.refresh`
+- `git.worktree.create`, `operation.interrupt`, `project.create`, `project.create.retry`, `project.delete`, `project.import`
+- `project.import.retry`, `project.inventory.scan`, `project.update`, `schedule.delete`, `server.claude.credentials.update`, `server.credentials.update`
+- `server.enrollment.create`, `server.gemini.credentials.update`, `server.metadata.update`, `server.revoke`, `server.ssh.bootstrap`, `server.ssh.uninstall`
+- `session.collaboration.grant`, `setup.complete`, `vault.credential_profile.delete`, `vault.credential_profile.write`, `vault.secret_set.write`, `workspace.changes.scan`
+- `workspace.copy.cross_server`, `workspace.diff.preview`, `workspace.file.write`, `workspace.files.scan`, `workspace.remove_record`, `workspace.update`
+
+- 交接：P4-01 的实现与本地验收完成，用户随后授权按步骤自动提交，本步骤在当前 `main` 提交；未授权推送。代码集中在上述协议类型引用及新增的 `internal/protocol/{kinds.go,credential_kinds.go,kinds_test.go,testdata/kinds.golden}`；路线图两份文件同步更新。没有剩余实现项；提交号在下一步骤的路线图更新中回填。

@@ -28,7 +28,7 @@ func (a *API) workspaceCodexModels(w http.ResponseWriter, r *http.Request) {
 	a.writeCodexSnapshot(w, r, "workspace", chi.URLParam(r, "workspaceID"), "models.list", false)
 }
 func (a *API) refreshWorkspaceCodexModels(w http.ResponseWriter, r *http.Request) {
-	a.queueWorkspaceCodex(w, r, "codex.models.list")
+	a.queueWorkspaceCodex(w, r, protocol.OpCodexModelsList)
 }
 
 func (a *API) writeCodexSnapshot(w http.ResponseWriter, r *http.Request, scopeType, scopeID, kind string, thread bool) {
@@ -71,16 +71,16 @@ func (a *API) codexScopeExists(r *http.Request, scopeType, scopeID string) bool 
 }
 
 func (a *API) refreshThreadCodexStatus(w http.ResponseWriter, r *http.Request) {
-	a.queueThreadCodex(w, r, "codex.status.snapshot", nil)
+	a.queueThreadCodex(w, r, protocol.OpCodexStatusSnapshot, nil)
 }
 func (a *API) refreshThreadGoal(w http.ResponseWriter, r *http.Request) {
-	a.queueThreadCodex(w, r, "codex.goal.get", nil)
+	a.queueThreadCodex(w, r, protocol.OpCodexGoalGet, nil)
 }
 func (a *API) refreshWorkspaceCodexMCP(w http.ResponseWriter, r *http.Request) {
-	a.queueWorkspaceCodex(w, r, "codex.mcp.list")
+	a.queueWorkspaceCodex(w, r, protocol.OpCodexMCPList)
 }
 func (a *API) refreshWorkspaceCodexSkills(w http.ResponseWriter, r *http.Request) {
-	a.queueWorkspaceCodex(w, r, "codex.skills.list")
+	a.queueWorkspaceCodex(w, r, protocol.OpCodexSkillsList)
 }
 
 func (a *API) setThreadGoal(w http.ResponseWriter, r *http.Request) {
@@ -113,11 +113,11 @@ func (a *API) setThreadGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a.queueThreadCodex(w, r, "codex.goal.set", input)
+	a.queueThreadCodex(w, r, protocol.OpCodexGoalSet, input)
 }
 
 func (a *API) clearThreadGoal(w http.ResponseWriter, r *http.Request) {
-	a.queueThreadCodex(w, r, "codex.goal.clear", nil)
+	a.queueThreadCodex(w, r, protocol.OpCodexGoalClear, nil)
 }
 
 func (a *API) compactThread(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +152,7 @@ func (a *API) compactThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.CodexSnapshotCommand{ScopeType: "thread", ScopeID: thread.ID, ThreadID: thread.ID, CodexThread: thread.CodexThreadID, Workspace: thread.Path, CodexVersion: server.CodexVersion}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, "codex.thread.compact", command, "codex-compact:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), thread.ServerID, protocol.OpCodexThreadCompact, command, "codex-compact:"+store.NewID(), store.OperationResource{ThreadID: thread.ID}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue context compaction")
 		return
@@ -172,7 +172,7 @@ func (a *API) queueThreadCodex(w http.ResponseWriter, r *http.Request, kind stri
 		writeError(w, 500, "could not load thread")
 		return
 	}
-	if thread.ArchivedAt != nil && (kind == "codex.goal.set" || kind == "codex.goal.clear") {
+	if thread.ArchivedAt != nil && (kind == protocol.OpCodexGoalSet || kind == protocol.OpCodexGoalClear) {
 		writeError(w, http.StatusConflict, "archived Codex session is read-only")
 		return
 	}
@@ -187,7 +187,7 @@ func (a *API) queueThreadCodex(w http.ResponseWriter, r *http.Request, kind stri
 	}
 	base := protocol.CodexSnapshotCommand{ScopeType: "thread", ScopeID: thread.ID, ThreadID: thread.ID, CodexThread: thread.CodexThreadID, Workspace: thread.Path, CodexVersion: server.CodexVersion}
 	var command any = base
-	if kind == "codex.goal.set" {
+	if kind == protocol.OpCodexGoalSet {
 		raw, _ := json.Marshal(extra)
 		var fields struct {
 			Objective   *string `json:"objective"`
@@ -197,7 +197,7 @@ func (a *API) queueThreadCodex(w http.ResponseWriter, r *http.Request, kind stri
 		_ = json.Unmarshal(raw, &fields)
 		command = protocol.CodexGoalSetCommand{CodexSnapshotCommand: base, Objective: fields.Objective, Status: fields.Status, TokenBudget: fields.TokenBudget}
 	}
-	snapshotKind := strings.TrimPrefix(kind, "codex.")
+	snapshotKind := strings.TrimPrefix(kind, protocol.CodexKindPrefix)
 	if strings.HasPrefix(snapshotKind, "goal.") {
 		snapshotKind = "goal"
 	}
@@ -224,7 +224,7 @@ func (a *API) queueWorkspaceCodex(w http.ResponseWriter, r *http.Request, kind s
 		return
 	}
 	command := protocol.CodexSnapshotCommand{ScopeType: "workspace", ScopeID: workspace.ID, Workspace: workspace.Path, CodexVersion: server.CodexVersion}
-	a.queueCodex(w, r, workspace.ServerID, kind, command, "workspace", workspace.ID, strings.TrimPrefix(kind, "codex."))
+	a.queueCodex(w, r, workspace.ServerID, kind, command, "workspace", workspace.ID, strings.TrimPrefix(kind, protocol.CodexKindPrefix))
 }
 
 func (a *API) queueCodex(w http.ResponseWriter, r *http.Request, serverID, kind string, command any, scopeType, scopeID, snapshotKind string) {

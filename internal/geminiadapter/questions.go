@@ -67,7 +67,7 @@ func (a *Adapter) ask(ctx context.Context, op, thread string, questions []protoc
 	a.questions[id] = p
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); delete(a.questions, id); a.mu.Unlock() }()
-	if err := a.emit(protocol.StreamEvent{EventID: id, StreamID: thread, Kind: "gemini.question", Payload: detail}); err != nil {
+	if err := a.emit(protocol.StreamEvent{EventID: id, StreamID: thread, Kind: protocol.EventGeminiQuestion, Payload: detail}); err != nil {
 		return nil, err
 	}
 	select {
@@ -97,7 +97,7 @@ func (a *Adapter) Answer(command protocol.GeminiAnswerCommand) error {
 	p.claimed = true
 	a.mu.Unlock()
 	raw, _ := json.Marshal(map[string]any{"operation_id": command.OperationID, "request_id": command.RequestID, "answers": command.Answers})
-	if err := a.emit(protocol.StreamEvent{EventID: command.RequestID + ":answered", StreamID: command.ThreadID, Kind: "gemini.question.answered", Payload: raw}); err != nil {
+	if err := a.emit(protocol.StreamEvent{EventID: command.RequestID + ":answered", StreamID: command.ThreadID, Kind: protocol.EventGeminiQuestionAnswered, Payload: raw}); err != nil {
 		a.mu.Lock()
 		p.claimed = false
 		a.mu.Unlock()

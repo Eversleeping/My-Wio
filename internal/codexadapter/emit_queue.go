@@ -44,7 +44,7 @@ type emitQueue struct {
 // and retried until delivered.
 func mustDeliver(kind string) bool {
 	switch kind {
-	case "turn.accepted", "approval.requested", "codex.serverRequest.resolved", "codex.turn.completed", "codex.turn.failed", "codex.turn.cancelled":
+	case protocol.EventTurnAccepted, protocol.EventApprovalRequested, protocol.EventCodexServerRequestResolved, protocol.EventCodexTurnCompleted, protocol.EventCodexTurnFailed, protocol.EventCodexTurnCancelled:
 		return true
 	default:
 		return false

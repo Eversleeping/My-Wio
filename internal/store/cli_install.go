@@ -103,10 +103,10 @@ func (s *Store) LatestCLIInstall(ctx context.Context, serverID, kind string) (*O
 	}
 	for _, op := range operations {
 		var command protocol.CLIInstallCommand
-		if op.Kind == "codex.update" && kind == "codex" {
+		if op.Kind == protocol.OpCodexUpdate && kind == "codex" {
 			return &op, nil
 		}
-		if op.Kind == "cli.install" && json.Unmarshal([]byte(op.Payload), &command) == nil && command.Kind == kind {
+		if op.Kind == protocol.OpCLIInstall && json.Unmarshal([]byte(op.Payload), &command) == nil && command.Kind == kind {
 			return &op, nil
 		}
 	}

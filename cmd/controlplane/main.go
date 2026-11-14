@@ -252,7 +252,7 @@ func queueDefaultControlPlaneCredentials(ctx context.Context, database *store.St
 	if err != nil || !initialize {
 		return err
 	}
-	active, err := database.HasActiveOperation(ctx, store.ControlPlaneServerID, "credentials.configure")
+	active, err := database.HasActiveOperation(ctx, store.ControlPlaneServerID, protocol.OpCredentialsConfigure)
 	if err != nil || active {
 		return err
 	}

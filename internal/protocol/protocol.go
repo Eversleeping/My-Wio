@@ -10,9 +10,8 @@ import (
 )
 
 const (
-	ServiceName          = "wio.agent.v1.AgentService"
-	MethodConnect        = "/" + ServiceName + "/Connect"
-	ControlKindKeepalive = "keepalive"
+	ServiceName   = "wio.agent.v1.AgentService"
+	MethodConnect = "/" + ServiceName + "/Connect"
 )
 
 type AgentEnvelope struct {

@@ -91,7 +91,7 @@ func (a *API) writeWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := protocol.WorkspaceFileWriteCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path, Content: content, Create: create, ExpectedHash: strings.ToLower(input.ExpectedHash)}
-	operationID, err := a.store.QueueResourceOperation(r.Context(), server.ID, "workspace.file.write", command, "workspace-file-write:"+store.NewID(), store.OperationResource{WorkspaceID: workspace.ID}, true)
+	operationID, err := a.store.QueueResourceOperation(r.Context(), server.ID, protocol.OpWorkspaceFileWrite, command, "workspace-file-write:"+store.NewID(), store.OperationResource{WorkspaceID: workspace.ID}, true)
 	if errors.Is(err, store.ErrWorkspaceWriteActive) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -117,7 +117,7 @@ func (a *API) operationStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := map[string]string{"id": operation.ID, "status": operation.Status, "result": operation.Result}
-	if operation.Kind == "workspace.image.preview" && operation.Status == "succeeded" {
+	if operation.Kind == protocol.OpWorkspaceImagePreview && operation.Status == "succeeded" {
 		response["result_data"] = operation.ResultData
 	}
 	writeJSON(w, http.StatusOK, response)

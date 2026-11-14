@@ -41,7 +41,7 @@ func (a *API) refreshWorkspaceClaudeSkills(w http.ResponseWriter, r *http.Reques
 		writeError(w, 409, "Claude Code is not installed or ready")
 		return
 	}
-	op, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, "claude.skills.list", protocol.ClaudeSkillsCommand{Workspace: workspace.Path}, "claude-skills:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
+	op, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpClaudeSkillsList, protocol.ClaudeSkillsCommand{Workspace: workspace.Path}, "claude-skills:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		writeError(w, 500, "could not queue Claude skill discovery")
 		return
@@ -53,7 +53,7 @@ func (a *API) refreshWorkspaceClaudeSkills(w http.ResponseWriter, r *http.Reques
 func (a *API) workspaceClaudeSkillsResult(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	op, err := a.store.Operation(r.Context(), chi.URLParam(r, "operationID"))
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.Kind != "claude.skills.list" || op.WorkspaceID != chi.URLParam(r, "workspaceID")) {
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.Kind != protocol.OpClaudeSkillsList || op.WorkspaceID != chi.URLParam(r, "workspaceID")) {
 		writeError(w, 404, "Claude skill discovery not found")
 		return
 	}
