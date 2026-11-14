@@ -91,6 +91,8 @@ type migration struct {
 
 ### P1-02 迁移运行器与 `schema_migrations`
 
+2026-11-15 执行前盘点（基线 `68bea9d`）：21 个原迁移函数及调用顺序仍适用。`purgeRevokedServers` 是启动维护，必须在后续启动继续执行；首次执行基线仍保留原位置，后续跳过基线时单独执行，避免首次重复清理。PostgreSQL advisory lock 必须固定在一条连接上，而旧基线函数使用连接池，因此迁移期间临时为锁增加一个连接名额，释放锁后恢复配置上限；这也要覆盖池上限为 1 的测试。旧迁移函数不修改，所有新迁移使用事务。 原测试中有先用当前 Store 建库、再插入旧数据或旧索引、最后重开以触发回填的夹具；版本化后这些夹具需要在注入旧状态时清除版本表，以明确模拟尚未升级的旧库。真实重启与维护测试保留版本历史。
+
 **做法**
 
 1. 新增 `internal/store/migrate.go`，实现上面“设计”一节的版本表、清单和运行器。
@@ -274,3 +276,26 @@ index audit_time_idx definition:
 另观察到现有 PostgreSQL 测试不能通过更细的 `-run` 过滤器独立运行任意子用例：父测试调用的 `assertCodexSnapshotTimeoutAndRetry` 会在若干 `t.Run` 中准备后续父测试代码依赖的缓存；过滤掉这些子测试后，后续断言会报 `unexpected snapshot`。完整入口没有出现该失败，未据此认定产品缺陷，也未修改原用例。
 
 发现的结构分叉：没有。遗留事项：本步骤未更改产品行为；CI 上的前端测试与类型检查仍由统一工作流执行。
+
+
+### 2026-11-15 P1-02
+
+会话：`11-15 Codex`，分支 `main`。新增版本表、递增迁移清单和事务运行器；基线原样保留 schema 与 21 个迁移函数、两段内联逻辑的顺序。后续启动跳过基线，保留撤销服务器的启动清理。PostgreSQL 使用固定连接的 advisory lock，覆盖池上限 1、并发等待、取消后重新获取与连接上限恢复。新迁移和版本记录同事务提交，失败保留编号、名称和错误链；测试证明结构与数据回滚且重试仅执行一次。
+
+旧状态注入测试在注入时移除版本表，以明确模拟未版本化的数据库；没有修改历史迁移函数。三份旧库夹具在 SQLite 和 PostgreSQL 上升级后仍与新库一致；重复打开不重复基线，启动维护继续执行。
+
+验收（退出码均为 0）：
+
+| 命令 | 耗时 |
+| --- | --- |
+| `npm --prefix web run build` | 20.16 秒 |
+| `go vet ./...` | 4.12 秒 |
+| `go test ./...` | 219.17 秒 |
+| `make test-postgres` | 26.39 秒 |
+| `npm --prefix web test` | 59.22 秒 |
+| `npm --prefix web run typecheck` | 12.82 秒 |
+| `go build ./cmd/controlplane ./cmd/agent` | 3.46 秒 |
+| `make fmt-check` | 0.67 秒 |
+| `git diff --check` | 0.02 秒 |
+
+另通过 `make staticcheck`、`scripts/check-agent-version.sh HEAD`、新文件逐项空白检查与基线调用顺序比对。Store 不在 Agent 依赖图内，版本号不变。未取得生产 dump 副本或访问授权，因此未做真实生产数据副本升级；本次仅验证隔离测试数据。

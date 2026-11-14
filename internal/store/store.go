@@ -97,104 +97,16 @@ func OpenWithOptions(databaseURL string, options OpenOptions) (*Store, error) {
 	if err := db.PingContext(ctx); err != nil {
 		return nil, err
 	}
-	if _, err := db.ExecContext(ctx, schema); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate database: %w", err)
-	}
-	if err := migrateUserAuthMode(ctx, db, driver); err != nil {
+	baselineApplied, err := runMigrations(ctx, db, driver, schemaMigrations)
+	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := migrateUserTOTPCounter(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateImportedProjectRemotes(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateCredentialProfileIdentity(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateGeminiModelConfig(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateClaudeModelConfig(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateGeminiThinking(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateProjectThreadPreferences(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateWorkspaceMetadata(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateWorkspaceFilePreviewMedia(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateProjectWorkspaceOperations(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateSecretSetVersions(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateManagedWorkspacePaths(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateDeploymentSources(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateDeploymentPublicURL(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateRepairEnrollments(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateServerControlPlane(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateServerGemini(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := (&Store{DB: db, driver: driver}).purgeRevokedServers(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("purge revoked servers: %w", err)
-	}
-	if err := migrateServerGitCredentialProfiles(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if driver == "pgx" {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE metric_rollups
-			ALTER COLUMN net_rx_bytes TYPE BIGINT USING net_rx_bytes::BIGINT,
-			ALTER COLUMN net_tx_bytes TYPE BIGINT USING net_tx_bytes::BIGINT`); err != nil {
-			return nil, fmt.Errorf("migrate metric counters: %w", err)
+	if !baselineApplied {
+		if err := (&Store{DB: db, driver: driver}).purgeRevokedServers(ctx); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("purge revoked servers: %w", err)
 		}
-	}
-	if err := migrateMetricCapacity(ctx, db, driver); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateRetentionAndCodexRequests(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, err
 	}
 	return &Store{DB: db, driver: driver}, nil
 }

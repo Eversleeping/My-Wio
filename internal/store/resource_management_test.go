@@ -145,6 +145,10 @@ func TestOpenNormalizesLegacyWorkspaceLifecycleStatuses(t *testing.T) {
 	if _, err := database.DB.Exec(database.Q("UPDATE workspaces SET status='moveing' WHERE id=?"), workspaceID); err != nil {
 		t.Fatal(err)
 	}
+	// Simulate an unversioned legacy database after injecting historical state.
+	if _, err := database.DB.Exec("DROP TABLE IF EXISTS schema_migrations"); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +164,9 @@ func TestOpenNormalizesLegacyWorkspaceLifecycleStatuses(t *testing.T) {
 		}
 		if status.expected == "moving" {
 			if _, err := database.DB.Exec(database.Q("UPDATE workspaces SET status='deleteing' WHERE id=?"), workspaceID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.DB.Exec("DROP TABLE schema_migrations"); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -194,6 +201,10 @@ func TestOpenRestoresManagedModeForHistoricalWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := database.DB.ExecContext(ctx, database.Q("INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind) VALUES(?,?,?,?,?,'worktree')"), "unowned", project.ID, server.ID, "/srv/external/unowned-worktree", "observed"); err != nil {
+		t.Fatal(err)
+	}
+	// These injected rows represent a database from before versioned migrations.
+	if _, err := database.DB.Exec("DROP TABLE schema_migrations"); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Close(); err != nil {

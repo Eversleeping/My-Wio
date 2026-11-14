@@ -183,12 +183,12 @@ npm --prefix web run typecheck
 | P0-02 | GitHub Actions：前端、Go、PostgreSQL 三个作业 | S | P0-01 | 已完成 | 11-13 Codex | claude-fable-5-2 | c238aff |
 | P0-03 | E2E 作业 | S | P0-02 | 进行中 | 11-15 Codex；本地通过，待远端验收 | GPT-6（Codex，自验） | 0465e74 |
 | P0-04 | 格式与静态检查门槛 | S | P0-02 | 进行中 | 11-15 Codex；本地通过，待远端验收 | GPT-6（Codex，自验） | 40ed80a |
-| P0-05 | 版本号护栏脚本 | S | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（随后回填） |
+| P0-05 | 版本号护栏脚本 | S | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 68bea9d |
 | P0-06 | 本地统一入口 `make verify` | S | P0-01 | 已完成 | 11-13 Gemini 实现，11-14 Codex 接手完成 | claude-fable-5-2 | 445b556 |
 | P0-07 | 跨进程验收测试 | M | P0-02 | 已完成 | 11-13 Codex；11-15 Codex 验收通过，见 P0 的“执行记录” | claude-fable-5-2 | 7ece208、65b5753 |
 | P0-08 | 浏览器冒烟测试接入真实链路 | S | P0-03、P0-07 | 待开始 | |  | |
 | P1-01 | 旧库夹具与结构一致性测试 | M | P0-02 | 已完成 | 11-13 Codex | claude-fable-5-2 | 5ad7b3e |
-| P1-02 | 迁移运行器与 `schema_migrations` | M | P1-01 | 待开始 | |  | |
+| P1-02 | 迁移运行器与 `schema_migrations` | M | P1-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（随后回填） |
 | P1-03 | 降级保护 | S | P1-02 | 待开始 | |  | |
 | P1-04 | 迁移编写规范与升级文档 | S | P1-02 | 待开始 | |  | |
 | P2-01 | 引擎行为盘点与契约测试 | M | P0-02 | 待开始 | |  | |

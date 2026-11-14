@@ -214,6 +214,10 @@ func TestSessionConcurrencyMigratesLegacyIndex(t *testing.T) {
 	if _, err := db.DB.ExecContext(ctx, "CREATE UNIQUE INDEX operations_workspace_active_write_unique ON agent_operations(workspace_id) WHERE workspace_id IS NOT NULL AND workspace_write=1 AND status IN ('queued','delivered','running')"); err != nil {
 		t.Fatal(err)
 	}
+	// The legacy index belongs to a database without migration history.
+	if _, err := db.DB.ExecContext(ctx, "DROP TABLE schema_migrations"); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
