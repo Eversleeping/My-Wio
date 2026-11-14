@@ -1,6 +1,6 @@
 # Wio 架构调整路线图
 
-更新时间：2026-11-13
+更新时间：2026-11-14
 基线：提交 `0247c1c`，版本 0.3.12
 
 本目录是一份跨会话、跨 Agent 的执行计划。任何会话（Codex、Claude、Gemini 或人工）都从本文件进入：先读“执行规则”，再在“进度总表”里领取步骤，最后到对应阶段文件里读步骤细节。
@@ -28,7 +28,7 @@ Wio 的功能面已经足够宽，当前的主要成本来自结构，而不是�
 | `internal/agent/client.go` | 1428 行 |
 | `web/src/App.tsx` | 2133 行，约 148 KB |
 | `web/src/styles.css` / `web/src/i18n.tsx` | 2604 行 / 2821 行 |
-| 数据表 | 55 张，其中线程表 3 张、定时任务表 3 张 |
+| 数据表 | 55 张，其中线程表 3 张、定时任务表 3 张。这是 `schema.sql` 里的静态表数；启动时的迁移另外创建 `codex_requests`，实际建出 56 张，见 P1 的“执行记录” |
 | 启动时执行的 `migrate*` 函数 | 21 个，无版本表 |
 | `internal/httpapi/api.go` 路由 | 191 条，其中路径含 `/claude` 的 23 条、含 `/gemini` 的 26 条 |
 | `httpapi/claude_updates.go` 与 `gemini_updates.go` | 各 141 行，替换引擎名后只差 2 行 |
@@ -89,7 +89,7 @@ P0 至 P5 做的是结构调整，新入口本身在 [P6](P6-unified-session-ent
 1. **P2 从“降低维护成本”变成“新入口的前提”。** 跨引擎的混合列表需要统一的读模型（P2-04）和 `/api/sessions` 路由（P2-05），合并后的页面需要会话外壳（P2-06）。在三套各自独立的实现上直接做新入口，等于再叠一层按引擎分支的代码。
 2. **M1 至 M4 的顺序不变，之后的优先级有调整。** 原有顺序本来就通向 P2-06。调整的是：M4 里先做 P2-06，再做合表（P2-07、P2-08）和前端数据层（P3-08、P3-09）；新增的 M5（统一入口）排在协议和隔离之前；M6、M7 和 P3-10 不是新入口的前置，排期冲突时让路。需要压缩时间时，P1、P3-03、P3-04 也不是 P2-06 的前置，可以挪到 P2-06 之后、各自的后继步骤之前。
 3. **P2 的设计不能把“一个页面只有一种引擎”写死。** P2-05 的列表路由在省略 `engine` 时返回三种引擎的混合列表；P2-06 的外壳用（引擎，会话 ID）标识会话，引擎差异只通过引擎模块表达。P2-06 本身仍然不改用户可见的行为，三个导航入口保留；合并入口是它之后的单独步骤，这样两者可以分别回滚。
-4. **新入口的步骤在 P6。** 交互方案的六个事项用户已在 2026-11-13 确认（见 P6 的“已确认事项”），P6-01 只剩差异盘点；P6-02 起依赖 P2-06。两条约束贯穿始终：`/?view=<engine>&thread=<id>` 形式的旧链接继续可用；引擎独有的能力如实呈现，不为了统一而隐藏。
+4. **新入口的步骤在 P6。** 交互方案的十一个事项用户已在 2026-11-13 确认（见 P6 的“已确认事项”），差异盘点也已完成（P6-01）；P6-02 起依赖 P2-06。两条约束贯穿始终：`/?view=<engine>&thread=<id>` 形式的旧链接继续可用；引擎独有的能力如实呈现，不为了统一而隐藏。
 
 这个方向与 D7 的默认方案一致：新投入集中在会话编排上。是否在会话之上再引入“任务”对象，见待决策事项 D10。
 
@@ -161,10 +161,10 @@ npm --prefix web run typecheck
 | P0-03 | E2E 作业 | S | P0-02 | 待开始 | | |
 | P0-04 | 格式与静态检查门槛 | S | P0-02 | 待开始 | | |
 | P0-05 | 版本号护栏脚本 | S | P0-02 | 待开始 | | |
-| P0-06 | 本地统一入口 `make verify` | S | P0-01 | 进行中 | 11-13 Gemini 完成实现后会话失败；11-14 Codex 接手，交接见 P0 的“执行记录” | |
-| P0-07 | 跨进程验收测试 | M | P0-02 | 进行中 | 11-13 Codex；已交回，审阅后有返工项，交接见 P0 的“执行记录” | |
+| P0-06 | 本地统一入口 `make verify` | S | P0-01 | 已完成 | 11-13 Gemini 实现，11-14 Codex 接手完成 | 445b556 |
+| P0-07 | 跨进程验收测试 | M | P0-02 | 进行中 | 11-13 Codex；第二轮交回后复验发现断线重连用例偶发失败，第三轮返工中，交接见 P0 的“执行记录” | |
 | P0-08 | 浏览器冒烟测试接入真实链路 | S | P0-03、P0-07 | 待开始 | | |
-| P1-01 | 旧库夹具与结构一致性测试 | M | P0-02 | 进行中 | 11-13 Codex；会话中断后已恢复并交回，待审阅，交接见 P1 的“执行记录” | |
+| P1-01 | 旧库夹具与结构一致性测试 | M | P0-02 | 已完成 | 11-13 Codex | 5ad7b3e |
 | P1-02 | 迁移运行器与 `schema_migrations` | M | P1-01 | 待开始 | | |
 | P1-03 | 降级保护 | S | P1-02 | 待开始 | | |
 | P1-04 | 迁移编写规范与升级文档 | S | P1-02 | 待开始 | | |
@@ -198,7 +198,7 @@ npm --prefix web run typecheck
 | P5-03 | 隔离技术可行性验证 | M | P5-01、决策 D4 | 待开始 | | |
 | P5-04 | 可选的会话隔离模式 | L | P5-03、P2-09 | 待开始 | | |
 | P5-05 | 界面呈现与文档 | S | P5-04 | 待开始 | | |
-| P6-01 | 交互方案确认与差异盘点 | S | 无 | 进行中 | 11-13 Codex；盘点已提交，用户已在会话里答复 T1–T5，写入的结果待审阅合入 | 07bec2c |
+| P6-01 | 交互方案确认与差异盘点 | S | 无 | 已完成 | 11-13 Codex | 07bec2c、ae9f4fc |
 | P6-02 | 统一会话页面（与旧入口并存） | L | P2-06、P6-01 | 待开始 | | |
 | P6-03 | 新建会话时选择引擎 | M | P6-02 | 待开始 | | |
 | P6-04 | 导航切换与旧链接兼容 | M | P6-03、用户确认 | 待开始 | | |
@@ -240,7 +240,7 @@ npm --prefix web run typecheck
 | 2026-11-13 | 制定路线图 | 协作用的回环 MCP 令牌出现在 Claude 和 Codex 的进程参数里，同账号的其他进程可以读到 | P5-02 评估能否改用其他传递方式 |
 | 2026-11-13 | 制定路线图 | 网关 `flush` 的“未下发即失败”路径只有部署和凭据类操作的测试（`agentgateway/decryption_failure_test.go`），没有覆盖会话轮次、Git 和工作区操作 | P4-03 第 2 步补测试 |
 | 2026-11-13 | P0-01 | Git 相关测试会继承运行环境里的 Git 配置变量。环境里有 `GIT_CONFIG_PARAMETERS`（Wio Agent 会给 Claude、Gemini 会话注入）时，`internal/gitrepository` 有 3 个测试失败；另有 `GIT_CONFIG_COUNT` 一组变量（Gemini CLI 的 shell 会注入）时，`internal/gitrepository` 再有 2 个、`internal/scanner` 有 1 个测试失败。清掉全部 `GIT_CONFIG*` 后全部通过，用例名见 P0 的“执行记录”。所以在 Wio 的 Claude、Gemini 会话里直接运行 `go test ./...` 会误报失败 | 建议在这些测试的辅助函数里隔离 Git 配置环境，只改测试代码；处理之前，在这类会话里跑验收命令要先清掉 `GIT_CONFIG*`。何时处理由用户决定 |
-| 2026-11-13 | P0-01 审阅 | `make test-postgres` 用 `-run TestPostgresMigrationAndStorage` 只运行一个测试。同样带 `postgresintegration` 标签的 `TestPostgresAuthConsumptionIsAtomic`（`internal/store/postgres_auth_integration_test.go`）不在任何文档列出的验收命令里；手动运行时两个测试都通过 | 建议把 `-run` 改成 `^TestPostgres`。P1-01 要往 PostgreSQL 集成测试里加用例，最迟在那一步一起改。由用户决定 |
+| 2026-11-13 | P0-01 审阅 | `make test-postgres` 用 `-run TestPostgresMigrationAndStorage` 只运行一个测试。同样带 `postgresintegration` 标签的 `TestPostgresAuthConsumptionIsAtomic`（`internal/store/postgres_auth_integration_test.go`）不在任何文档列出的验收命令里；手动运行时两个测试都通过 | 建议把 `-run` 改成 `^TestPostgres`。P1-01 把新用例挂在 `TestPostgresMigrationAndStorage` 下面，没有改 `-run`，所以 `TestPostgresAuthConsumptionIsAtomic` 仍然不在任何验收命令里。由用户决定 |
 | 2026-11-13 | P6-01 | Gemini 和 Claude 的新建对话框里切换工作区时，模型和思考程度会重置，审批模式、权限模式却保留原值，可能把为另一个工作区选的高权限模式带过去（P6 清单 D15） | P6-03 的统一对话框在切换工作区时重算全部默认值；在那之前是否单独修由用户决定 |
 | 2026-11-13 | P6-01 | Claude 的会话列表在 Store 里只按会话置顶和更新时间排序后取前 200 条，项目置顶是前端拿到结果后才排的；会话超过 200 条时，置顶项目的会话可能整个不在结果里。Gemini 的查询先按项目置顶排序，没有这个问题（P6 清单 D22） | P2-05 统一列表排序时消除；在那之前是否单独修由用户决定 |
 | 2026-11-13 | P6-01 | Gemini 和 Claude 的会话列表固定截断在 200 条，没有“加载更多”，侧栏搜索也只覆盖这 200 条（P6 清单 D04、D21） | P2-05 的游标分页和分页前搜索、P6-02 的侧栏解决 |
@@ -248,6 +248,11 @@ npm --prefix web run typecheck
 | 2026-11-13 | P0-02、P0-06 | 本机负载高时，Vitest 有用例超过默认的 5 秒超时而失败。两个会话各自遇到过：同一台 4 核机器上另有 Go 全量测试或另一组 Vitest 在跑时，`web/src/GeminiPage.test.tsx` 的“exports all pages of a conversation rather than only the visible recent history”和 `web/src/DeploymentsPage.test.tsx` 的“creates and edits public access settings, manages containers, and exposes deployment links”超时。没有并发负载时两个文件都通过，GitHub 托管运行器上的运行也都通过 | 暂不处理，本机验收时不要让几组重任务同时运行。如果 CI 上也出现，再给这两个用例单独放宽超时。由用户决定 |
 | 2026-11-13 | P0-07 审阅 | `internal/geminiadapter` 的 `TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation`（`adapter_test.go`）没有隔离用户主目录。测试配置了自定义接口地址和默认模型，适配器因此调用 `ensureLoopAliases`，在运行账号的 `~/.gemini/settings.json` 里写入 `modelConfigs.customAliases` 下的 `loop-detection` 和 `loop-detection-double-check`。把 `HOME` 指到空目录后逐个运行该包的 52 个测试，只有这一个留下文件；`internal/agent`、`internal/claudeadapter`、`internal/codexadapter` 整包运行后主目录里没有新增文件。写入的值与产品写入的相同，所以在已经运行 Wio Agent 的账号下没有实际变化；在没有用过 Wio 的开发机上，跑一次 `go test ./...` 会改动个人的 Gemini CLI 配置 | 建议在这个测试里把 `HOME` 指到临时目录，只改测试代码。由用户决定 |
 | 2026-11-13 | P0-06 执行期间 | Wio 里的 Gemini 子会话第一轮正常结束后，再追加消息会立即失败，报错“Gemini CLI cannot synchronize restored history; update Wio's Gemini compatibility adapter before retrying”。报错出自 `internal/geminiadapter/acp.go`：`session/load` 的返回里没有 `_meta.wioHistoryReplayed` 标记，而这个标记由 `internal/geminiadapter/history-loader.mjs` 注入。出现问题的服务器上受管的 Gemini CLI 是 0.68.0。原因没有查明，可能是这个版本与注入方式不兼容 | 没有处理。在修好之前，Gemini 会话交回后的返工只能另开会话。由用户决定何时排查 |
+| 2026-11-14 | P0-07 审阅 | 使用 SQLite 时，一次被取消的请求可以让数据库在控制面重启之前无法写入。触发条件是某个事务的 context 在查询已经取到首行之后被取消，例如 Agent 断线时网关正在用流的 context 追加事件（`SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?`）。原因有三层：`modernc.org/sqlite` v1.31.1 的 `stmt.query` 在 context 取消时丢弃已经打开的结果集，没有关闭它；驱动没有实现 `ResetSession` 和 `IsValid`，`database/sql` 因此丢弃事务被取消的连接；`sqlite3_close_v2` 遇到未结束的语句只把连接留作僵尸，读锁不释放。之后连接池新开的连接每次写入都等满 5 秒 `busy_timeout` 再失败，接口返回 500。证据：P0-07 的断线重连用例在 `-race` 下三轮共 110 次迭代失败 15 次；给驱动加日志的那一轮 40 次里 6 次失败，每次失败前都有一次被丢弃的结果集，没有失败的迭代里没有；用 `go test -overlay` 让驱动关闭这个结果集后，40 次全部通过，期间这种情况出现了 3 次。另有 1 次失败是断线后的请求立即返回 401，原因没有查明 | 没有处理。可以考虑的修法：升级驱动（先确认哪个版本修了这两处），或者不把可取消的 context 传给 SQLite 上的事务。修复之前 P0-07 的断线重连用例需要绕开它。由用户决定 |
+| 2026-11-14 | P0-07 审阅 | 控制面收到 SIGINT 或 SIGTERM 时，如果还有 Agent 连着，会 panic 而不是正常退出。`cmd/controlplane/main.go` 的 `run` 在收尾时调用 `grpcServer.GracefulStop()`，而 Agent 的流是经 `grpcServer.ServeHTTP` 接入的；grpc-go v1.65.0 对这种流的 `Drain` 实现是 `panic("Drain() is not implemented")` | 没有处理。P0-07 的测试收尾时用的是 `Stop()`。由用户决定 |
+| 2026-11-14 | P0-07 审阅 | 控制面收尾时不等待网关的处理函数。`Gateway.Connect` 退出时的 `removeConnection`（`internal/agentgateway/connections.go`）用后台 context 更新 `servers.status`，`receiveWithTools` 启动后也没有被等待；`http.Server.Shutdown` 不等待经 h2c 接管的连接，`grpc.Server.Stop` 不等待处理函数。所以 `Store.Close()` 返回之后仍可能有写入落到数据库 | 没有处理。P0-07 的测试在清理时重试删除临时目录来规避。由用户决定 |
+| 2026-11-14 | P0-07 审阅 | Agent 的 `Client.Run` 返回时不等待仍在执行的操作。操作在各自的 goroutine 里运行（`internal/agent/client.go` 的 `go c.handleOperation`），连接取消后仍可能通过 `saveOperationResult` 往状态目录的 `operation-results/` 写回执 | 没有处理。P0-07 的测试用同样的重试规避。由用户决定 |
+| 2026-11-14 | P1-01 审阅 | `TestPostgresMigrationAndStorage` 不能用 `-run` 只跑其中一个子测试：`assertCodexSnapshotTimeoutAndRetry` 用 `t.Run` 组织步骤，父测试后面的断言依赖这些子测试的副作用，子测试被筛掉后父测试失败 | 暂不处理，运行时不要筛选子测试。P1-02 改这个测试时可以顺手理顺。由用户决定 |
 
 ## 变更记录
 
@@ -263,3 +268,4 @@ npm --prefix web run typecheck
 | 2026-11-13 | 按用户提高并行度的要求，在“并行”一节放宽领取规则（先开工、按依赖顺序合入）；P0-07 与 P0-02 并行开工 |
 | 2026-11-13 | P0-02 完成：CI 工作流合入，三个作业在 GitHub 托管运行器上通过，临时分支上故意失败的测试让 CI 变红，记录见 P0 的“执行记录”。P0-07 已交回，审阅后有返工项；P1-01 已派发，会话因 Codex 账号用量上限中断。两步的交接记录分别写在 P0、P1 的“执行记录”。登记三条问题：高负载下 Vitest 用例超时、`internal/geminiadapter` 有测试改写主目录下的配置、Gemini 子会话追加消息失败 |
 | 2026-11-14 | P0-02 合入后 `main` 上的第一次 CI 运行三个作业通过，三个临时验收分支已删除。按用户要求，P0-06 改由 Codex 会话接手，原 Gemini 会话归档，交接记录写在 P0 的“执行记录”。P1-01 的会话恢复后交回了完整实现，待审阅；用户在 P6-01 的会话里答复了 T1–T5，写入的结果待审阅合入 |
+| 2026-11-14 | P0-06、P1-01、P6-01 完成并合入，三行状态和提交号已更新；“产品方向”第 4 点和“基线数字”里的数据表一行按 P6-01、P1-01 的结果修正。P0-07 第二轮交回后，协调者复验发现断线重连用例在 `-race` 下偶发失败，原因是一个既有的 SQLite 缺陷，已交回做第三轮返工，交接记录在 P0 的“执行记录”。登记五条问题：SQLite 在请求被取消后无法写入、控制面收尾时 `GracefulStop` panic、控制面和 Agent 各一处收尾后仍在写入、`TestPostgresMigrationAndStorage` 不能筛选子测试；更新 `make test-postgres` 一条的处理意见 |
