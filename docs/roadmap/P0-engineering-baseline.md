@@ -395,3 +395,12 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
 会话与验收：`11-15 Codex`；`GPT-6（Codex，自验）`。临时分支 `ci/m1-format-probe-20261115` 的提交 `36b9153cb2f18a46322655aa222c509afada7ea9` 只额外加入一个未格式化测试文件。GitHub [运行 43650011041](https://github.com/Eversleeping/My-Wio/actions/runs/43650011041) 的 Go 作业精确在 `Check Go formatting` 失败，日志列出 `internal/protocol/m1_ci_format_probe_test.go`，其后的 staticcheck、版本护栏、vet、测试和构建全部跳过；Web、PostgreSQL、Browser E2E 均通过。
 
 作为正向证据，浏览器失败探测分支的 [运行 43650012476](https://github.com/Eversleeping/My-Wio/actions/runs/43650012476) 中，Go 作业完整通过，包括格式、staticcheck、版本护栏、vet、全量测试与构建。该运行的失败仅来自故意注入的浏览器用例。当前本地 `make verify` 再次完整通过，123.34 秒。P0-04 验收项已全部满足，总表标记完成；探测提交未进入 `main`，临时分支将在本轮验收结束时统一删除。
+
+
+### 2026-11-15 P0-03 远端验收完成
+
+会话与验收：`11-15 Codex`；`GPT-6（Codex，自验）`。GitHub [正向运行 43650059756](https://github.com/Eversleeping/My-Wio/actions/runs/43650059756) 的 Web、Go、PostgreSQL、Browser E2E 四个作业全部通过。另在格式探测 [运行 43650011041](https://github.com/Eversleeping/My-Wio/actions/runs/43650011041) 中确认 Browser E2E 单独通过：模拟 API 组 33 通过 / 11 既有跳过，48.6 秒，真实链路组通过，10.9 秒。
+
+浏览器反向分支 `ci/m1-browser-probe-20261115`、提交 `f7d84374c13c3a7942540395655696d9cec6a854` 的 [运行 43650012476](https://github.com/Eversleeping/My-Wio/actions/runs/43650012476) 仅在 `Test browser interactions` 失败：注入的用例在桌面和移动端都按预期失败，既有用例仍为 33 通过 / 11 跳过，真实组因前一步失败而跳过。`Upload failed browser diagnostics` 成功；实际下载制品 `playwright-diagnostics`（ID `14135394057`，ZIP 为 7,299,900 字节），校验包含主 HTML 报告、trace viewer、6 个 trace 归档，以及 PNG 和视频。包内有 10 个 PNG 条目（含报告引用副本），读取 PNG 签名和 IHDR，样本分辨率 1440×900，确认截图有效。
+
+P0-03 的正向作业及失败制品验收均满足，总表标记完成。本轮本地 `make verify` 也全部通过；探测提交只存在于临时分支，不进入 `main`。临时分支在三次连续正向运行完成后统一删除。
