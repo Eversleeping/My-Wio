@@ -174,6 +174,9 @@ func (live *liveTurn) acknowledge(id string, applied bool) error {
 	}
 	if !input.received {
 		input.received = true
+		// Delivery starts the wait for this instruction's result. The previous
+		// result cannot finish it, even before the CLI reports it as applied.
+		live.progressLocked()
 		close(input.done)
 		if err := live.emit("steer.accepted", map[string]any{"request_id": id}); err != nil {
 			return err
@@ -181,6 +184,12 @@ func (live *liveTurn) acknowledge(id string, applied bool) error {
 	}
 	if applied && !input.applied {
 		input.applied = true
+		// The CLI has taken the instruction into a new round, so the turn is
+		// running again and its previous result is no longer the outcome. The
+		// idle timer only covers an instruction that may have been dropped; left
+		// running, it would stop a CLI that is still waiting for the model's
+		// first output and report the turn finished without an answer.
+		live.progressLocked()
 		return live.emit("steer.applied", map[string]any{"request_id": id, "text": input.command.Prompt, "images": input.command.Images})
 	}
 	return nil
@@ -189,6 +198,10 @@ func (live *liveTurn) acknowledge(id string, applied bool) error {
 func (live *liveTurn) progress() {
 	live.mu.Lock()
 	defer live.mu.Unlock()
+	live.progressLocked()
+}
+
+func (live *liveTurn) progressLocked() {
 	live.lastResult = false
 	if live.idle != nil {
 		live.idle.Stop()
@@ -204,19 +217,25 @@ func (live *liveTurn) result(queued int) error {
 	}
 	live.lastResult = true
 	live.queued = queued
+	pending := false
+	for _, input := range live.inputs {
+		if !input.applied {
+			pending = true
+			if input.received && input.err == nil {
+				// The prior generation's result can arrive after the receipt.
+				// Wait for the delivered instruction rather than restarting its
+				// delivery watchdog or accepting that prior result as final.
+				live.progressLocked()
+				return nil
+			}
+		}
+	}
 	if live.background > 0 {
 		return nil
 	}
 	for _, question := range live.questions {
 		if question.answers == nil && !question.cancelled {
 			return nil
-		}
-	}
-	pending := false
-	for _, input := range live.inputs {
-		if !input.applied {
-			pending = true
-			break
 		}
 	}
 	if !pending && queued == 0 {
@@ -237,7 +256,8 @@ func (live *liveTurn) result(queued int) error {
 }
 
 // steerIdleTimeout is how long a CLI may stay open after a result while an
-// injected instruction remains unconfirmed.
+// injected instruction remains unconfirmed. It stops counting once the CLI
+// receives the instruction or produces model output.
 var steerIdleTimeout = 45 * time.Second
 
 // expireIdle stops a CLI that stayed idle after its last result. The turn
@@ -262,6 +282,12 @@ func (live *liveTurn) finishedByIdleTimeout() bool {
 	live.mu.Lock()
 	defer live.mu.Unlock()
 	return live.idleExpired && live.lastResult
+}
+
+func (live *liveTurn) hasFinalResult() bool {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	return live.lastResult
 }
 
 func (live *liveTurn) finish() {

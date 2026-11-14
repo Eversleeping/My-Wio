@@ -457,31 +457,33 @@ func TestCollaborationUnreadAndRootContinuationLimit(t *testing.T) {
 			t.Fatal(reply.Error)
 		}
 		children = append(children, reply)
-		if err := f.db.CompleteOperation(ctx, protocol.OperationResult{OperationID: reply.OperationID, Status: "succeeded"}); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.db.SetThreadStatus(ctx, reply.Session.ID, "idle"); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if _, err := f.db.DB.ExecContext(ctx, f.db.Q("UPDATE session_subscriptions SET continuation_count=9 WHERE target_key=?"), children[0].Session.Key()); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.db.SetThreadStatus(ctx, f.source.ID, "idle"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.db.notifyCollaborationPair(ctx, f.source.Key(), children[0].Session.Key()); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.db.SetThreadStatus(ctx, f.source.ID, "idle"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.db.notifyCollaborationPair(ctx, f.source.Key(), children[1].Session.Key()); err != nil {
-		t.Fatal(err)
-	}
+	// The first child's result uses the root's last continuation. The second
+	// child finishes after that and is not announced.
 	var count int
-	if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT SUM(continuation_count) FROM session_subscriptions WHERE source_key=?"), f.source.Key()); err != nil || count != 10 {
-		t.Fatalf("root continuation count=%d: %v", count, err)
+	for _, child := range children {
+		if err := f.db.CompleteOperation(ctx, protocol.OperationResult{OperationID: child.OperationID, Status: "succeeded"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.SetThreadStatus(ctx, child.Session.ID, "idle"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.SetThreadStatus(ctx, f.source.ID, "idle"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT SUM(continuation_count) FROM session_subscriptions WHERE source_key=?"), f.source.Key()); err != nil || count != 10 {
+			t.Fatalf("root continuation count=%d: %v", count, err)
+		}
+	}
+	var announced string
+	if err := f.db.DB.GetContext(ctx, &announced, f.db.Q("SELECT last_continuation_id FROM session_subscriptions WHERE target_key=?"), children[1].Session.Key()); err != nil || announced != "" {
+		t.Fatalf("continuation beyond the root limit: %q %v", announced, err)
 	}
 	state, err := f.db.ReadCollaborationState(ctx, f.source)
 	if err != nil {
@@ -576,12 +578,13 @@ func assertCollaborationCodexTurnCompletion(t *testing.T, db *Store) {
 			if err = f.db.SetThreadStatus(ctx, child.Session.ID, outcome.session); err != nil {
 				t.Fatal(err)
 			}
-			assertState(outcome.request, true)
+			// The parent's turn ends before it has looked at the result, so the
+			// result is announced, exactly once.
 			if err = f.db.SetThreadStatus(ctx, f.source.ID, "idle"); err != nil {
 				t.Fatal(err)
 			}
 			for i := 0; i < 2; i++ {
-				if err = f.db.notifyCollaborationPair(ctx, f.source.Key(), child.Session.Key()); err != nil {
+				if err = f.db.ReconcileAllCollaboration(ctx); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -589,6 +592,15 @@ func assertCollaborationCodexTurnCompletion(t *testing.T, db *Store) {
 			if err = f.db.DB.GetContext(ctx, &count, f.db.Q("SELECT continuation_count FROM session_subscriptions WHERE target_key=?"), child.Session.Key()); err != nil || count != 1 {
 				t.Fatalf("continuation count=%d: %v", count, err)
 			}
+			// The announcement started a new turn in the parent. Read the final
+			// state from that turn.
+			if err = f.db.DB.GetContext(ctx, &f.operation, f.db.Q("SELECT id FROM agent_operations WHERE thread_id=? AND kind='codex.turn.start' ORDER BY created_at DESC LIMIT 1"), f.source.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err = f.db.SetThreadStatus(ctx, f.source.ID, "running"); err != nil {
+				t.Fatal(err)
+			}
+			assertState(outcome.request, true)
 		})
 	}
 }
@@ -1537,12 +1549,30 @@ END`); err != nil {
 		t.Fatal(err)
 	}
 
-	needs, err := f.db.needsCollaborationNotification(ctx, f.source.Key(), childKey)
-	if err != nil {
-		t.Fatalf("needsCollaborationNotification: %v", err)
+	// The pending continuation is reported only while the parent can take it.
+	for _, state := range []struct {
+		status string
+		want   bool
+	}{{"running", false}, {"interrupted", false}, {"failed", false}, {"idle", true}} {
+		if err := f.db.SetThreadStatus(ctx, f.source.ID, state.status); err != nil {
+			t.Fatal(err)
+		}
+		event, continuation, err := f.db.needsCollaborationNotification(ctx, f.source.Key(), childKey)
+		if err != nil {
+			t.Fatalf("needsCollaborationNotification: %v", err)
+		}
+		if event || continuation != state.want {
+			t.Fatalf("parent %s: event=%v continuation=%v, want continuation=%v", state.status, event, continuation, state.want)
+		}
 	}
-	if !needs {
-		t.Fatal("expected needs=true when auto_continue is pending on terminal subscription")
+	// This session's grant does not allow automatic continuation. Finding that
+	// out must not take the write locks either.
+	testReconcileCounter.Store(0)
+	if err := f.db.ReconcileAllCollaboration(ctx); err != nil {
+		t.Fatalf("reconcile with a blocked continuation: %v", err)
+	}
+	if writes := testReconcileCounter.Load(); writes != 0 {
+		t.Fatalf("expected 0 writes while automatic continuation is not granted, got %d", writes)
 	}
 }
 

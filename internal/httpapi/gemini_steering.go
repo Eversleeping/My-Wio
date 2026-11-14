@@ -41,6 +41,7 @@ func (a *API) steerGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not queue request")
 		return
 	}
+	a.userMessaged(r, "gemini", thread.ID)
 	if event.EventID != "" {
 		a.hub.Publish(event)
 		a.auditGemini(r, "gemini.turn.steer", thread.ID)

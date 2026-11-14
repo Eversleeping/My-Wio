@@ -129,6 +129,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertCollaborationEngineMatrixAndReplay(t, scans)
 	assertCollaborationWorktreeEngineMatrix(t, scans)
 	assertCollaborationCodexTurnCompletion(t, scans)
+	t.Run("collaboration continuation rules", func(t *testing.T) { assertCollaborationContinuationRules(t, scans) })
 	assertCollaborationSteerRejectsHigherPermissions(t, scans)
 	assertCollaborationMessagePaginationPreservesByteLimitedPages(t, scans)
 	assertCollaborationPaginationExactLimitAndOversizedEvent(t, scans)

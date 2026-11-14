@@ -242,6 +242,7 @@ func (a *API) startGeminiTurn(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not queue Gemini turn; check active workspace operations")
 		return
 	}
+	a.userMessaged(r, "gemini", thread.ID)
 	if editEventID != "" {
 		a.publishGeminiChange(r, thread.ID, "gemini.thread.updated")
 		a.auditGemini(r, "gemini.turn.rewrite", thread.ID)

@@ -31,6 +31,7 @@ func (a *API) steerClaudeTurn(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not queue request")
 		return
 	}
+	a.userMessaged(r, "claude", thread.ID)
 	if event.EventID != "" {
 		a.hub.Publish(event)
 		a.auditClaude(r, "claude.turn.steer", thread.ID)

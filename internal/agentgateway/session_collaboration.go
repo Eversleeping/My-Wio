@@ -53,12 +53,14 @@ func (g *Gateway) receiveSessionTool(stream protocol.AgentServiceConnectServer, 
 	case limit <- struct{}{}:
 	default:
 		// Never block the Recv loop on a full replies channel.
-		go respond(sessiontools.Reply{Status: "failed", Error: &sessiontools.Error{Code: "RATE_LIMITED", Message: "too many outstanding collaboration calls"}})
+		g.runHandler(func() {
+			respond(sessiontools.Reply{Status: "failed", Error: &sessiontools.Error{Code: "RATE_LIMITED", Message: "too many outstanding collaboration calls"}})
+		})
 		return
 	}
-	go func() {
+	g.runHandler(func() {
 		defer func() { <-limit }()
 		reply := g.sessions.Execute(stream.Context(), serverID, call)
 		respond(reply)
-	}()
+	})
 }

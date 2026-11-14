@@ -190,6 +190,7 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 - 更新前核对远端工作树干净、Git remote 与预期仓库一致，并记录旧 HEAD；不要在存在未知改动时直接拉取或切换版本。
 - 备份至少应包含 `.env`、PostgreSQL 自定义格式 dump 和旧 HEAD 的 Git bundle，并将备份目录和各文件大小写入部署记录。
 - 使用与首次部署完全相同的 Compose 项目名和文件组合执行 `up -d --build`，避免创建重复的网络、卷或容器。
+- 升级前等待活动任务完成。控制面收到 `SIGTERM` / `SIGINT` 后关闭请求入口和实时连接，取消维护任务及内置 Agent，并等待操作回执和数据库写入收尾；内置 Agent 的活动 CLI 可能因此中断。退出等待上限为 15 秒，超时会报告错误并以失败状态退出，不将超时报成正常退出。仓库 Compose 给控制面留出 30 秒停止宽限期，自定义服务配置也应留足时间。
 - 使用宿主机代理时，只重建 `postgres` 与 `controlplane`；不要启动基础 Compose 中的仓库 Caddy，也不要修改正在工作的宿主 Caddy 配置。
 - 发布失败时先保留容器日志和当前镜像摘要，再选择已验证的上一版制品恢复；不要在未备份的情况下删除 PostgreSQL 数据卷。
 - 丢失 `WIO_MASTER_KEY` 将使 Vault 中加密的 TOTP 密钥、凭据预设和部分 Agent 状态无法恢复，不能用新的随机值无损替换。

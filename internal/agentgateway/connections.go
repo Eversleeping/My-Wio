@@ -13,6 +13,19 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
+// Wait joins connection cleanup, receivers and collaboration tools after the
+// transport has stopped and all Connect handlers have returned. No new Connect
+// calls may start while waiting.
+func (g *Gateway) Wait() { g.handlers.Wait() }
+
+func (g *Gateway) runHandler(work func()) {
+	g.handlers.Add(1)
+	go func() {
+		defer g.handlers.Done()
+		work()
+	}()
+}
+
 // A slot survives reconnects. Its mutex serializes delivery, incoming writes,
 // replacement and offline cleanup for a single server.
 type serverConnections struct {

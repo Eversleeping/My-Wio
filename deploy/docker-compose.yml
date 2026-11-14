@@ -19,6 +19,8 @@ services:
       context: ..
       dockerfile: deploy/controlplane.Dockerfile
     restart: unless-stopped
+    # Let the control plane's 15-second shutdown finish before Docker kills it.
+    stop_grace_period: 30s
     depends_on:
       postgres:
         condition: service_healthy

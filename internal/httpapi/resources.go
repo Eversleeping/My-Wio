@@ -2090,6 +2090,7 @@ func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not queue Codex steering")
 		return
 	}
+	a.userMessaged(r, "codex", thread.ID)
 	if event.EventID != "" {
 		a.hub.Publish(event)
 	}
@@ -2181,6 +2182,7 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 			writeStoreError(w, err, "could not rewrite Codex session")
 			return
 		}
+		a.userMessaged(r, "codex", thread.ID)
 		a.gateway.Wake(thread.ServerID)
 		session := currentSession(r)
 		_ = a.store.Audit(r.Context(), session.UserID, "codex.turn.rewrite", "thread", thread.ID, map[string]string{"operation_id": operationID, "edit_event_id": input.EditEventID}, clientIP(r))
@@ -2196,6 +2198,7 @@ func (a *API) handleTurn(w http.ResponseWriter, r *http.Request, routeEditEventI
 		writeStoreError(w, err, "could not queue Codex turn")
 		return
 	}
+	a.userMessaged(r, "codex", thread.ID)
 	if event.EventID != "" {
 		a.hub.Publish(event)
 	}

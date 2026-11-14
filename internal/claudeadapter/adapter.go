@@ -403,7 +403,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 	if waitErr != nil {
 		return fmt.Errorf("Claude Code failed; check authentication, model access and tool results: %w", waitErr)
 	}
-	if !gotInit || !gotResult {
+	if !gotInit || !gotResult || live != nil && !live.hasFinalResult() {
 		return errors.New("Claude Code ended without a complete session result")
 	}
 	if !success {

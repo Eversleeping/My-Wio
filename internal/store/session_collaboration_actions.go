@@ -553,6 +553,11 @@ func (s *Store) mutateCollaboration(ctx context.Context, tx *sqlx.Tx, source Col
 		if e != nil {
 			return reply, e
 		}
+		// A follow-up supersedes the previous result notification even if the
+		// message must wait for the shared workspace before it can be sent.
+		if _, err = s.observeCollaborationResult(ctx, tx, source, target); err != nil {
+			return reply, err
+		}
 		if (target.Busy() || (target.Engine != "codex" && workspaceBusy)) && p.Busy == "queue" {
 			r.Phase = "send"
 			reply.Status = "accepted"

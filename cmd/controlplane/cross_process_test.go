@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -64,15 +66,7 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the Agent and subprocess lifecycle under test are supported only on Linux")
 	}
-	root, err := os.MkdirTemp("", "wio-p0-07-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Client.Run can return before operation goroutines finish writing receipts.
-	// Control-plane shutdown also does not join the gateway receive/handler
-	// goroutines, whose connection cleanup and in-flight SQLite updates can finish
-	// after Store.Close returns. Retry removal until both kinds of writes stop.
-	t.Cleanup(func() { removeAcceptanceRoot(t, root) })
+	root := t.TempDir()
 	fakeDir := filepath.Join(root, "fake-bin")
 	if err := os.MkdirAll(fakeDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -134,7 +128,7 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grpcServer, handler := controlPlaneHandler(database, hub, gateway, vault, log, frontend, "http://127.0.0.1", true, httpapi.TrustedProxies{})
+	grpcServer, handler, lifecycle := controlPlaneHandler(database, hub, gateway, vault, log, frontend, "http://127.0.0.1", true, httpapi.TrustedProxies{})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -145,8 +139,9 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	t.Cleanup(func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpServer.Shutdown(shutdownContext)
-		grpcServer.Stop()
+		if joined, err := lifecycle.Shutdown(shutdownContext, httpServer, grpcServer, gateway); err != nil || !joined {
+			t.Errorf("control-plane shutdown: joined=%v error=%v", joined, err)
+		}
 		select {
 		case <-serverDone:
 		case <-shutdownContext.Done():
@@ -255,6 +250,51 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	// both that race and the usual queued-on-reconnect path without changing
 	// either production interval.
 	refreshWorkspaceFilesResult(t, api, workspace.ID, "reconnected.txt", 40*time.Second)
+
+	// Shutdown must join an active CLI and persist its terminal receipt before
+	// Client.Run returns, even though the disconnected stream cannot deliver it.
+	claude := engines[1]
+	marker := filepath.Join(root, "claude-shutdown")
+	claude.start(t, api, "P0-07-HANG="+base64.RawURLEncoding.EncodeToString([]byte(marker)))
+	var pid int
+	var operationID string
+	eventually(t, 10*time.Second, "Claude running before Agent shutdown", func() (bool, string) {
+		response, err := api.request(http.MethodGet, claude.collection+"/"+claude.threadID, nil)
+		if err != nil || response.status != http.StatusOK {
+			return false, responseDetail(response, err)
+		}
+		var state struct {
+			Status      string `json:"status"`
+			OperationID string `json:"operation_id"`
+		}
+		_ = json.Unmarshal(response.body, &state)
+		raw, readErr := os.ReadFile(marker)
+		if readErr == nil {
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
+		}
+		operationID = state.OperationID
+		return state.Status == "running" && pid > 0 && operationID != "", string(response.body)
+	})
+	stopAcceptanceAgent(t, runningAgent)
+	runningAgent = nil
+	if processExists(pid) {
+		t.Fatalf("Agent returned before its CLI exited: pid=%d", pid)
+	}
+	digest := sha256.Sum256([]byte(operationID))
+	receipt, err := os.Open(filepath.Join(config.StateDir, "operation-results", fmt.Sprintf("%x.json.gz", digest)))
+	if err != nil {
+		t.Fatalf("Agent returned before persisting its final receipt: %v", err)
+	}
+	defer receipt.Close()
+	reader, err := gzip.NewReader(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var result protocol.OperationResult
+	if err := json.NewDecoder(reader).Decode(&result); err != nil || result.OperationID != operationID || result.Status != "interrupted" {
+		t.Fatalf("shutdown receipt: %+v %v", result, err)
+	}
 }
 
 func isolateAcceptanceUserDirectories(t *testing.T, root string) {
@@ -281,53 +321,6 @@ func isolateAcceptanceUserDirectories(t *testing.T, root string) {
 	}
 	t.Setenv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", filepath.Join(root, "user", "gemini-system-settings.json"))
 	t.Setenv("GEMINI_CLI_SYSTEM_DEFAULTS_PATH", filepath.Join(root, "user", "gemini-system-defaults.json"))
-}
-
-func removeAcceptanceRoot(t *testing.T, root string) {
-	t.Helper()
-	deadline := time.NewTimer(15 * time.Second)
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer deadline.Stop()
-	defer ticker.Stop()
-	var absentSince time.Time
-	var lastRemoveErr error
-	var lastInspectErr error
-	for {
-		_, err := os.Stat(root)
-		switch {
-		case os.IsNotExist(err):
-			lastInspectErr = nil
-			if absentSince.IsZero() {
-				absentSince = time.Now()
-			} else if time.Since(absentSince) >= 500*time.Millisecond {
-				return
-			}
-		case err == nil:
-			absentSince = time.Time{}
-			lastInspectErr = nil
-			if err := os.RemoveAll(root); err != nil {
-				lastRemoveErr = err
-			}
-		default:
-			absentSince = time.Time{}
-			lastInspectErr = err
-		}
-		select {
-		case <-ticker.C:
-		case <-deadline.C:
-			switch {
-			case lastRemoveErr != nil && lastInspectErr != nil:
-				t.Errorf("acceptance root cleanup did not stabilize: last remove error: %v; last inspect error: %v", lastRemoveErr, lastInspectErr)
-			case lastRemoveErr != nil:
-				t.Errorf("acceptance root cleanup did not stabilize: last remove error: %v", lastRemoveErr)
-			case lastInspectErr != nil:
-				t.Errorf("acceptance root cleanup did not stabilize: last inspect error: %v", lastInspectErr)
-			default:
-				t.Errorf("acceptance root cleanup did not stabilize")
-			}
-			return
-		}
-	}
 }
 
 func buildFakeEngine(t *testing.T, output string) {

@@ -14,6 +14,16 @@ func collaborationRef(r *http.Request) sessiontools.Ref {
 	return sessiontools.Ref{Engine: chi.URLParam(r, "engine"), ID: chi.URLParam(r, "threadID")}
 }
 
+// userMessaged is called after the signed-in user sends a session a new
+// message, an edited message or a correction to a running turn. It gives the
+// session's collaboration group a fresh allowance of automatic continuations.
+// The message is already queued, so a failure here is only logged.
+func (a *API) userMessaged(r *http.Request, engine, id string) {
+	if err := a.store.ResetCollaborationContinuations(r.Context(), sessiontools.Ref{Engine: engine, ID: id}); err != nil {
+		a.log.Warn("could not reset the automatic continuation allowance", "engine", engine, "session_id", id, "error", err)
+	}
+}
+
 func (a *API) markSessionCollaborationRead(w http.ResponseWriter, r *http.Request) {
 	ref := collaborationRef(r)
 	var input struct {

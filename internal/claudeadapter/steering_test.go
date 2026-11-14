@@ -37,7 +37,12 @@ func runSteeringTestChild(mode string) {
 	_ = os.WriteFile(os.Getenv("WIO_CLAUDE_TEST_RECORD"), line, 0600)
 	// A result from the interrupted generation can arrive before the new
 	// instruction's receipt. It must not close the live input stream.
-	fmt.Printf("{\"type\":\"result\",\"subtype\":\"success\",\"queued_turn_count\":1,\"user_message_uuid\":%q}\n", first.UUID)
+	previousResult := func() {
+		fmt.Printf("{\"type\":\"result\",\"subtype\":\"success\",\"queued_turn_count\":1,\"user_message_uuid\":%q}\n", first.UUID)
+	}
+	if mode != "steer-received-before-result-slow-reply" {
+		previousResult()
+	}
 	if mode == "steer-no-receipt" {
 		return
 	}
@@ -48,6 +53,25 @@ func runSteeringTestChild(mode string) {
 		return
 	}
 	fmt.Printf("{\"type\":\"user\",\"isReplay\":true,\"uuid\":%q,\"message\":{\"content\":\"correction\"}}\n", input.UUID)
+	if mode == "steer-received-before-result-slow-reply" {
+		previousResult()
+	}
+	if mode == "steer-received-exit" {
+		return
+	}
+	if strings.HasPrefix(mode, "steer-applied-") {
+		// The CLI starts a round for the instruction, then waits for the model
+		// longer than the idle timeout, as it does while an API request is being
+		// retried. The round's first frame already names the instruction.
+		fmt.Printf("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":%q,\"user_message_uuids\":[%q]}\n", nativeSession, input.UUID)
+	}
+	if mode == "steer-applied-exit" {
+		return
+	}
+	if strings.HasSuffix(mode, "-slow-reply") {
+		pause, _ := time.ParseDuration(os.Getenv("WIO_CLAUDE_TEST_PAUSE"))
+		time.Sleep(pause)
+	}
 	fmt.Printf("{\"type\":\"stream_event\",\"user_message_uuids\":[%q,%q],\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Adjusted\"}}}\n", first.UUID, input.UUID)
 	fmt.Printf("{\"type\":\"result\",\"subtype\":\"success\",\"queued_turn_count\":0,\"user_message_uuids\":[%q,%q]}\n", first.UUID, input.UUID)
 	_, _ = io.ReadAll(r) // Exit only after the adapter closes stdin at the final result.
@@ -287,6 +311,85 @@ func TestClaudeLiveSteeringIdleTimeoutKeepsSuccessfulResult(t *testing.T) {
 	mu.Unlock()
 	if strings.Count(joined, "claude.steer.unconfirmed") != 1 || strings.Contains(joined, "claude.steer.applied") {
 		t.Fatal("incorrect delivery claim", joined)
+	}
+}
+
+// Once the CLI has applied an instruction it is working on the answer. A slow
+// first response must not let the idle timer stop it and report the earlier
+// result as the turn's outcome, which would drop the instruction unanswered.
+func TestClaudeLiveSteeringAcknowledgedInstruction(t *testing.T) {
+	for _, mode := range []string{"steer-applied-slow-reply", "steer-received-slow-reply", "steer-received-before-result-slow-reply", "steer-received-exit", "steer-applied-exit"} {
+		t.Run(mode, func(t *testing.T) { assertAcknowledgedInstruction(t, mode) })
+	}
+}
+
+func assertAcknowledgedInstruction(t *testing.T, mode string) {
+	t.Helper()
+	previous := steerIdleTimeout
+	steerIdleTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { steerIdleTimeout = previous })
+	t.Setenv("WIO_CLAUDE_TEST_CHILD", mode)
+	t.Setenv("WIO_CLAUDE_TEST_PAUSE", "1s")
+	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
+	binary, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var sessions Sessions
+	ready := make(chan struct{})
+	var once sync.Once
+	done := make(chan error, 1)
+	var mu sync.Mutex
+	var kinds []string
+	var reply string
+	go func() {
+		done <- sessions.Run(ctx, binary, "operation", protocol.ClaudeTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), Prompt: "initial", PermissionMode: "default", Steer: true}, func(e protocol.StreamEvent) error {
+			mu.Lock()
+			kinds = append(kinds, e.Kind)
+			if e.Kind == "claude.message" {
+				var payload struct {
+					Text string `json:"text"`
+				}
+				_ = json.Unmarshal(e.Payload, &payload)
+				reply += payload.Text
+			}
+			mu.Unlock()
+			if e.Kind == "claude.steer.ready" {
+				once.Do(func() { close(ready) })
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("input never became ready")
+	}
+	if err := sessions.Steer(ctx, protocol.ClaudeSteerCommand{ThreadID: "thread", OperationID: "operation", RequestID: uuid.NewString(), Prompt: "correction"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if strings.HasSuffix(mode, "-exit") {
+			if err == nil || !strings.Contains(err.Error(), "without a complete session result") {
+				t.Fatalf("an acknowledged instruction without a result was reported as %v", err)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("turn reported %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("turn never finished")
+	}
+	mu.Lock()
+	joined := strings.Join(kinds, ",")
+	answered := reply
+	mu.Unlock()
+	if answered != "Adjusted" {
+		t.Fatalf("the CLI was stopped before it answered the applied instruction: reply %q, events %s", answered, joined)
+	}
+	if strings.Count(joined, "claude.steer.applied") != 1 || strings.Count(joined, "claude.steer.closed") != 1 || strings.Contains(joined, "claude.steer.unconfirmed") {
+		t.Fatal("wrong receipt sequence", joined)
 	}
 }
 

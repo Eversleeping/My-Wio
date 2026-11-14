@@ -193,6 +193,7 @@ func (a *API) startClaudeTurn(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	a.userMessaged(r, "claude", thread.ID)
 	if event.EventID != "" {
 		a.hub.Publish(event)
 	}

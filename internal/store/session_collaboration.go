@@ -473,9 +473,16 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration in this session's settings first"))
 	}
 	if !sessiontools.Mutating(call.Name) {
-		reply, e := s.readCollaboration(ctx, tx, source, grant, call.Name, p)
+		reply, observed, e := s.readCollaboration(ctx, tx, source, grant, call.Name, p)
 		if e != nil {
 			return collaborationError(p.RequestID, e)
+		}
+		// Reads write nothing, except to record that the caller has now seen a
+		// child's turn end; see observeCollaborationResult.
+		if observed {
+			if e = tx.Commit(); e != nil {
+				return collaborationError(p.RequestID, e)
+			}
 		}
 		return reply
 	}
@@ -598,7 +605,10 @@ func (s *Store) MarkCollaborationRead(ctx context.Context, ref sessiontools.Ref,
 	return err
 }
 
-func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source CollaborationSession, grant sessiontools.Grant, name string, p sessiontools.Params) (sessiontools.Reply, error) {
+// readCollaboration serves the read-only tools. The boolean result reports
+// that the reply told the caller a child's latest turn has ended and that this
+// was recorded in the transaction, which the caller must then commit.
+func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source CollaborationSession, grant sessiontools.Grant, name string, p sessiontools.Params) (sessiontools.Reply, bool, error) {
 	reply := sessiontools.Reply{RequestID: p.RequestID, Status: "succeeded"}
 	limit := p.Limit
 	if limit == 0 {
@@ -608,14 +618,14 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 	case "wio_get_request":
 		var r CollaborationRequest
 		if err := tx.GetContext(ctx, &r, s.Q("SELECT * FROM session_tool_requests WHERE source_key=? AND request_key=?"), source.Ref().Key(), p.RequestID); err != nil {
-			return reply, err
+			return reply, false, err
 		}
 		err := json.Unmarshal([]byte(r.Result), &reply)
-		return reply, err
+		return reply, false, err
 	case "wio_list_workspaces":
 		var workspaces []Workspace
 		if err := tx.SelectContext(ctx, &workspaces, s.Q("SELECT * FROM workspaces WHERE project_id=? AND status='ready' ORDER BY id"), source.ProjectID); err != nil {
-			return reply, err
+			return reply, false, err
 		}
 		items := []Workspace{}
 		for _, w := range workspaces {
@@ -624,7 +634,7 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 			}
 		}
 		reply.Data = items
-		return reply, nil
+		return reply, false, nil
 	case "wio_list_sessions":
 		// Non-nil so an empty page encodes as [] rather than null.
 		sessions := []CollaborationSession{}
@@ -666,7 +676,7 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 		query += " ORDER BY updated_at DESC,id DESC LIMIT ? OFFSET ?"
 		args = append(args, limit+1, p.Offset)
 		if err := tx.SelectContext(ctx, &sessions, s.Q(query), args...); err != nil {
-			return reply, err
+			return reply, false, err
 		}
 		more := len(sessions) > limit
 		if more {
@@ -679,22 +689,22 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 			sessions[i].Path = ""
 		}
 		reply.Data = map[string]any{"sessions": sessions, "has_more": more, "next_offset": p.Offset + len(sessions)}
-		return reply, nil
+		return reply, false, nil
 	case "wio_wait_sessions":
 		if len(p.Sessions) == 0 {
-			return reply, sessiontools.Fail("INVALID_ARGUMENT", "sessions must not be empty")
+			return reply, false, sessiontools.Fail("INVALID_ARGUMENT", "sessions must not be empty")
 		}
 		items := []CollaborationSession{}
 		for _, ref := range p.Sessions {
 			if ref == source.Ref() {
-				return reply, sessiontools.Fail("WAIT_DEPENDENCY", "cannot wait on the calling session")
+				return reply, false, sessiontools.Fail("WAIT_DEPENDENCY", "cannot wait on the calling session")
 			}
 			t, err := s.authorizeCollaboration(ctx, tx, source, grant, ref)
 			if err != nil {
-				return reply, err
+				return reply, false, err
 			}
 			if err = s.decorateCollaborationSession(ctx, tx, &t); err != nil {
-				return reply, err
+				return reply, false, err
 			}
 			if t.PreparationPhase == "await_source" {
 				var args string
@@ -702,19 +712,19 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 					var deferred sessiontools.Params
 					_ = json.Unmarshal([]byte(args), &deferred)
 					if deferred.Session == source.Ref() {
-						return reply, sessiontools.Fail("WAIT_DEPENDENCY", "this fork requires the calling turn to end first")
+						return reply, false, sessiontools.Fail("WAIT_DEPENDENCY", "this fork requires the calling turn to end first")
 					}
 				} else if !errors.Is(err, sql.ErrNoRows) {
-					return reply, err
+					return reply, false, err
 				}
 			}
 			if t.WorkspaceID == source.WorkspaceID && t.PreparationPhase != "" {
 				var locks int
 				if err = tx.GetContext(ctx, &locks, s.Q("SELECT COUNT(*) FROM agent_operations WHERE id=? AND workspace_write=1 AND status IN ('queued','delivered','running')"), source.OperationID); err != nil {
-					return reply, err
+					return reply, false, err
 				}
 				if locks > 0 {
-					return reply, sessiontools.Fail("WAIT_DEPENDENCY", "the calling turn holds the shared workspace; end this turn before waiting, or use directory_mode=worktree to run the child in parallel")
+					return reply, false, sessiontools.Fail("WAIT_DEPENDENCY", "the calling turn holds the shared workspace; end this turn before waiting, or use directory_mode=worktree to run the child in parallel")
 				}
 			}
 			items = append(items, t)
@@ -728,26 +738,42 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 			}
 			waiting, err := s.collaborationWaitingUser(ctx, tx, t)
 			if err != nil {
-				return reply, err
+				return reply, false, err
 			}
 			if waiting {
 				reply.Status = "waiting_user"
 				break
 			}
 		}
-		return reply, nil
+		observed := false
+		for _, t := range items {
+			seen, err := s.observeCollaborationResult(ctx, tx, source, t)
+			if err != nil {
+				return reply, false, err
+			}
+			observed = observed || seen
+		}
+		return reply, observed, nil
 	case "wio_get_session", "wio_read_messages", "wio_get_result":
 		t, err := s.authorizeCollaboration(ctx, tx, source, grant, p.Session)
 		if err != nil {
-			return reply, err
+			return reply, false, err
 		}
 		if err = s.decorateCollaborationSession(ctx, tx, &t); err != nil {
-			return reply, err
+			return reply, false, err
 		}
 		reply.Session = &p.Session
+		// Every reply below reports the session's state. Looking at an older
+		// turn says nothing about the latest one, so that does not count.
+		observed := false
+		if name != "wio_get_result" || p.OperationID == "" || p.OperationID == t.OperationID {
+			if observed, err = s.observeCollaborationResult(ctx, tx, source, t); err != nil {
+				return reply, false, err
+			}
+		}
 		if name == "wio_get_session" {
 			reply.Data = t
-			return reply, nil
+			return reply, observed, nil
 		}
 		rows := []protocol.StreamEvent{}
 		hasMore, turnSpecific := false, false
@@ -760,10 +786,10 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 			var op Operation
 			if opID != "" {
 				if err = tx.GetContext(ctx, &op, s.Q(operationSelect+" WHERE id=? AND server_id=?"), opID, t.ServerID); err != nil {
-					return reply, err
+					return reply, false, err
 				}
 				if op.Kind != t.Engine+".turn.start" && op.Kind != t.Engine+".turn.rewrite" {
-					return reply, sessiontools.Fail("INVALID_ARGUMENT", "operation must identify a model turn")
+					return reply, false, sessiontools.Fail("INVALID_ARGUMENT", "operation must identify a model turn")
 				}
 				var command struct {
 					ThreadID string `json:"thread_id"`
@@ -773,17 +799,17 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 				}
 				_ = json.Unmarshal([]byte(op.Payload), &command)
 				if command.ThreadID != t.ID && command.Start.ThreadID != t.ID {
-					return reply, sessiontools.Fail("OUT_OF_SCOPE", "operation does not belong to this session")
+					return reply, false, sessiontools.Fail("OUT_OF_SCOPE", "operation does not belong to this session")
 				}
 				data["operation"] = map[string]any{"id": op.ID, "status": op.Status, "message": op.Result, "result": json.RawMessage(op.ResultData), "completed_at": op.CompletedAt}
 				turnStatus, ended, stateErr := s.collaborationTurnState(ctx, tx, t, op)
 				if stateErr != nil {
-					return reply, stateErr
+					return reply, false, stateErr
 				}
 				data["turn_status"], data["turn_ended"] = turnStatus, ended
 				rows, hasMore, err = s.collaborationTurnMessages(ctx, tx, t.ID, op.ID, p.After, limit)
 				if err != nil {
-					return reply, err
+					return reply, false, err
 				}
 				turnSpecific = true
 			}
@@ -796,7 +822,7 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 		if !turnSpecific {
 			rows, hasMore, err = s.collaborationMessages(ctx, tx, t.ID, p.After, limit)
 			if err != nil {
-				return reply, err
+				return reply, false, err
 			}
 		}
 		data["messages"], data["has_more"] = rows, hasMore
@@ -804,9 +830,9 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 			data["next_after"] = rows[len(rows)-1].Sequence
 		}
 		reply.Data = data
-		return reply, nil
+		return reply, observed, nil
 	}
-	return reply, sessiontools.Fail("CAPABILITY_UNSUPPORTED", "unsupported tool")
+	return reply, false, sessiontools.Fail("CAPABILITY_UNSUPPORTED", "unsupported tool")
 }
 
 // collaborationWorkspaceAllowed reports whether workspace id, which belongs to

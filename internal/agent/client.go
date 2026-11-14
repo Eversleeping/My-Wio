@@ -78,6 +78,7 @@ type Client struct {
 	sentMu      sync.Mutex
 	retry       *protocol.AgentEnvelope
 	sentWaiters map[string]chan struct{}
+	workers     sync.WaitGroup
 }
 
 type operationExecution struct {
@@ -131,7 +132,14 @@ func codexEnvironment(config Config, log *slog.Logger) []string {
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	defer c.codex.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		_ = c.codex.Close()
+		// Operations persist their final receipts after cancellation. Do not
+		// return while they or a reconnect's maintenance tasks still use state.
+		c.workers.Wait()
+	}()
 	backoff := initialReconnectBackoff
 	for {
 		if ctx.Err() != nil {
@@ -153,6 +161,14 @@ func (c *Client) Run(ctx context.Context) error {
 			backoff *= 2
 		}
 	}
+}
+
+func (c *Client) startWorker(work func()) {
+	c.workers.Add(1)
+	go func() {
+		defer c.workers.Done()
+		work()
+	}()
 }
 
 func reconnectBackoffAfterResult(current time.Duration, connected bool) time.Duration {
@@ -185,18 +201,18 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	traffic := make(chan struct{}, 1)
-	go watchControlTraffic(streamContext, cancel, traffic, time.Minute)
+	c.startWorker(func() { watchControlTraffic(streamContext, cancel, traffic, time.Minute) })
 	c.pruneOperationReceipts(time.Now())
 	// Start the app-server while the Agent connection is becoming ready. The
 	// first user turn can then reuse the initialized process instead of paying
 	// the process startup and handshake cost on its critical path.
 	warmContext, warmCancel := context.WithTimeout(streamContext, 20*time.Second)
-	go func() {
+	c.startWorker(func() {
 		defer warmCancel()
 		if err := c.codex.Warm(warmContext); err != nil && warmContext.Err() == nil {
 			c.log.Warn("could not warm Codex app-server", "error", err)
 		}
-	}()
+	})
 	_ = c.enqueueHeartbeat(ctx)
 	_ = c.enqueueMetrics(ctx)
 	_ = c.enqueueInventory(ctx)
@@ -213,7 +229,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		cancel()
 		<-sendDone
 	}()
-	go c.periodic(streamContext)
+	c.startWorker(func() { c.periodic(streamContext) })
 	connected := false
 	for {
 		command, err := stream.Recv()
@@ -246,12 +262,12 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			continue
 		}
 		if command.Kind == protocol.ControlKindKeepalive && command.OperationID == "" {
-			go c.reconcileGeminiOperations(command.PayloadJSON)
-			go c.reconcileClaudeOperations(command.PayloadJSON)
-			go c.reconcileOperations(command.PayloadJSON)
+			c.startWorker(func() { c.reconcileGeminiOperations(command.PayloadJSON) })
+			c.startWorker(func() { c.reconcileClaudeOperations(command.PayloadJSON) })
+			c.startWorker(func() { c.reconcileOperations(command.PayloadJSON) })
 			continue
 		}
-		go c.handleOperation(ctx, command)
+		c.startWorker(func() { c.handleOperation(ctx, command) })
 	}
 }
 
@@ -748,7 +764,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		c.log.Warn("could not queue operation result", "operation_id", envelope.OperationID, "error", queueErr)
 	}
 	if refreshInventory {
-		go c.refreshInventory()
+		c.startWorker(func() { c.refreshInventory(parent) })
 	}
 	if err == nil && restartPath != "" {
 		// The receipt is already persisted, so a result lost here is replayed by
@@ -971,8 +987,8 @@ func safeProjectName(value string) string {
 	return name
 }
 
-func (c *Client) refreshInventory() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func (c *Client) refreshInventory(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	if err := c.enqueueInventory(ctx); err != nil {
 		c.log.Warn("could not refresh inventory after project creation", "error", err)

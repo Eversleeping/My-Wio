@@ -38,6 +38,7 @@ type Gateway struct {
 	connections    map[string]*serverConnections
 	metricMu       sync.Mutex
 	metricBreaches map[string]map[string]int
+	handlers       sync.WaitGroup
 }
 
 func New(s *store.Store, hub *realtime.Hub, vault *security.Vault, log *slog.Logger) *Gateway {
@@ -57,6 +58,8 @@ func (g *Gateway) Wake(serverID string) {
 }
 
 func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
+	g.handlers.Add(1)
+	defer g.handlers.Done()
 	md, ok := metadata.FromIncomingContext(stream.Context())
 	if !ok {
 		return status.Error(codes.Unauthenticated, "missing metadata")
@@ -76,7 +79,7 @@ func (g *Gateway) Connect(stream protocol.AgentServiceConnectServer) error {
 
 	errCh := make(chan error, 1)
 	replies := make(chan *protocol.ControlEnvelope, 32)
-	go func() { errCh <- g.receiveWithTools(stream, serverID, replies) }()
+	g.runHandler(func() { errCh <- g.receiveWithTools(stream, serverID, replies) })
 	if err := connection.run(func() error { return g.sendKeepalive(stream, serverID, time.Now()) }); err != nil {
 		return err
 	}

@@ -83,6 +83,8 @@ func (a *API) controlGeminiGoal(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, err, "Gemini goal cannot be resumed while the session or workspace is active")
 			return
 		}
+		// Resuming starts a turn on the user's behalf, like a message.
+		a.userMessaged(r, "gemini", thread.ID)
 		a.hub.Publish(event)
 	default:
 		writeError(w, 404, "unknown Gemini goal action")

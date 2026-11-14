@@ -60,7 +60,12 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	databaseSafeToClose := true
+	defer func() {
+		if databaseSafeToClose {
+			_ = database.Close()
+		}
+	}()
 
 	var vault *security.Vault
 	masterKey := strings.TrimSpace(os.Getenv("WIO_MASTER_KEY"))
@@ -103,7 +108,8 @@ func run(log *slog.Logger) error {
 	} else {
 		log.Info("trusting X-Forwarded-For from reverse proxies", "trusted_proxies", trustedProxies.String())
 	}
-	grpcServer, handler := controlPlaneHandler(database, hub, gateway, vault, log, frontend, os.Getenv("WIO_PUBLIC_URL"), devInsecure, trustedProxies)
+	grpcServer, handler, lifecycle := controlPlaneHandler(database, hub, gateway, vault, log, frontend, os.Getenv("WIO_PUBLIC_URL"), devInsecure, trustedProxies)
+	defer lifecycle.cancel()
 	server := &http.Server{
 		Addr:              address,
 		Handler:           handler,
@@ -117,52 +123,51 @@ func run(log *slog.Logger) error {
 	}
 	listenerAddress := listener.Addr().String()
 
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(stop)
 	errCh := make(chan error, 1)
-	agentContext, stopAgent := context.WithCancel(context.Background())
-	defer stopAgent()
-	go gateway.RunSessionCollaboration(agentContext)
-	go runWorkspaceFileScanMaintenance(agentContext, database, log)
-	go runDataRetention(agentContext, database, retentionPolicy, log)
-	go func() {
+	lifecycle.Go(gateway.RunSessionCollaboration)
+	lifecycle.Go(func(ctx context.Context) { runWorkspaceFileScanMaintenance(ctx, database, log) })
+	lifecycle.Go(func(ctx context.Context) { runDataRetention(ctx, database, retentionPolicy, log) })
+	lifecycle.Go(func(context.Context) {
 		log.Info("Wio control plane listening", "address", listenerAddress, "version", buildinfo.Version)
 		errCh <- server.Serve(listener)
-	}()
-	go func() {
-		if runErr := scheduler.New(database, gateway, log).Run(agentContext); runErr != nil && !errors.Is(runErr, context.Canceled) {
+	})
+	lifecycle.Go(func(ctx context.Context) {
+		if runErr := scheduler.New(database, gateway, log).Run(ctx); runErr != nil && !errors.Is(runErr, context.Canceled) {
 			log.Warn("scheduled Codex task runner stopped", "error", runErr)
 		}
-	}()
+	})
 	if runtime.GOOS == "linux" && envBoolDefault("WIO_CONTROL_AGENT_ENABLED", true) {
 		if config, configErr := controlPlaneAgentConfig(listenerAddress, controlAgentToken); configErr != nil {
 			log.Warn("control-plane Agent is disabled", "error", configErr)
 		} else {
-			go func() {
-				if runErr := agent.NewClient(config, log).Run(agentContext); runErr != nil && !errors.Is(runErr, context.Canceled) {
+			lifecycle.Go(func(ctx context.Context) {
+				if runErr := agent.NewClient(config, log).Run(ctx); runErr != nil && !errors.Is(runErr, context.Canceled) {
 					log.Warn("control-plane Agent stopped", "error", runErr)
 				}
-			}()
+			})
 		}
 	}
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	var serveErr error
 	select {
 	case signal := <-stop:
 		log.Info("shutting down", "signal", signal.String())
-		stopAgent()
 	case err := <-errCh:
-		stopAgent()
 		if !errors.Is(err, http.ErrServerClosed) {
-			return err
+			serveErr = err
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	grpcServer.GracefulStop()
-	return server.Shutdown(ctx)
+	databaseSafeToClose, err = lifecycle.Shutdown(ctx, server, grpcServer, gateway)
+	return errors.Join(serveErr, err)
 }
 
-func controlPlaneHandler(database *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool, trustedProxies httpapi.TrustedProxies) (*grpc.Server, http.Handler) {
+func controlPlaneHandler(database *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool, trustedProxies httpapi.TrustedProxies) (*grpc.Server, http.Handler, *controlPlaneLifecycle) {
 	grpcServer := grpc.NewServer(
+		grpc.WaitForHandlers(true),
 		grpc.ForceServerCodec(protocol.Codec()),
 		grpc.MaxRecvMsgSize(8<<20),
 		grpc.MaxSendMsgSize(8<<20),
@@ -170,14 +175,17 @@ func controlPlaneHandler(database *store.Store, hub *realtime.Hub, gateway *agen
 	)
 	protocol.RegisterAgentServiceServer(grpcServer, gateway)
 	httpHandler := httpapi.New(database, hub, gateway, vault, log, frontend, publicURL, devInsecure, httpapi.WithTrustedProxies(trustedProxies))
-	handler := h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	lifecycle := newControlPlaneLifecycle()
+	// Track each HTTP/2 stream inside h2c, not the outer HTTP/1 upgrade:
+	// an idle hijacked TCP connection can outlive all of its finished streams.
+	handler := h2c.NewHandler(lifecycle.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 			grpcServer.ServeHTTP(w, r)
 			return
 		}
 		httpHandler.ServeHTTP(w, r)
-	}), &http2.Server{})
-	return grpcServer, handler
+	})), &http2.Server{})
+	return grpcServer, handler, lifecycle
 }
 
 func ensureControlPlaneAgentToken(ctx context.Context, database *store.Store, vault *security.Vault, log *slog.Logger) (string, error) {
