@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/wio-platform/wio/internal/buildinfo"
 )
 
 type migration struct {
@@ -48,6 +50,9 @@ func runMigrations(ctx context.Context, db *sqlx.DB, driver string, migrations [
 		var versions []int
 		if err := db.SelectContext(ctx, &versions, "SELECT version FROM schema_migrations ORDER BY version"); err != nil {
 			return fmt.Errorf("read migration history: %w", err)
+		}
+		if len(versions) > 0 && versions[len(versions)-1] > last {
+			return fmt.Errorf("database schema version %d is newer than supported schema version %d (control plane %s); use a control plane supporting schema version %d or later", versions[len(versions)-1], last, buildinfo.Version, versions[len(versions)-1])
 		}
 		applied := make(map[int]bool, len(versions))
 		for _, version := range versions {

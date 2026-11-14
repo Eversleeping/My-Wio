@@ -3,12 +3,15 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/wio-platform/wio/internal/buildinfo"
 )
 
 func TestMigrationRunner(t *testing.T) {
@@ -156,4 +159,79 @@ func TestMigrationRegistryValidation(t *testing.T) {
 			t.Fatalf("invalid registry accepted: %+v", steps)
 		}
 	}
+}
+
+func TestOpenRejectsFutureSchema(t *testing.T) {
+	assertOpenRejectsFutureSchema(t, filepath.Join(t.TempDir(), "future.db"))
+}
+
+// Exercise the public startup path on both engines. Missing baseline history
+// and a revoked server distinguish early refusal from migration or maintenance.
+func assertOpenRejectsFutureSchema(t *testing.T, dsn string) {
+	t.Helper()
+	database, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var history []struct {
+		Version   int
+		Name      string
+		AppliedAt time.Time `db:"applied_at"`
+	}
+	if err := database.DB.Select(&history, "SELECT version,name,applied_at FROM schema_migrations ORDER BY version"); err != nil {
+		t.Fatal(err)
+	}
+	supported := schemaMigrations[len(schemaMigrations)-1].version
+	future := supported + 100
+	server := createOperationTestServer(t, database, "future-schema", "future-schema-token")
+	for _, statement := range []string{"DELETE FROM schema_migrations", "DROP INDEX events_stream_idx"} {
+		if _, err := database.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.DB.Exec(database.Q("INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,?)"), future, "future", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.Exec(database.Q("UPDATE servers SET revoked_at=? WHERE id=?"), time.Now().UTC(), server.ID); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := Open(dsn)
+	if rejected != nil {
+		rejected.Close()
+		t.Fatal("future database unexpectedly opened")
+	}
+	expected := fmt.Sprintf("database schema version %d is newer than supported schema version %d (control plane %s); use a control plane supporting schema version %d or later", future, supported, buildinfo.Version, future)
+	if err == nil || err.Error() != expected {
+		t.Fatalf("downgrade error: got %v, want %q", err, expected)
+	}
+	var records int
+	if err := database.DB.Get(&records, "SELECT COUNT(*) FROM schema_migrations"); err != nil || records != 1 {
+		t.Fatalf("refusal changed migration history: %d %v", records, err)
+	}
+	if err := database.DB.Get(&records, database.Q("SELECT COUNT(*) FROM servers WHERE id=?"), server.ID); err != nil || records != 1 {
+		t.Fatalf("refusal ran startup maintenance: %d %v", records, err)
+	}
+	query := "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='events_stream_idx'"
+	if database.driver == "pgx" {
+		query = "SELECT COUNT(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='events_stream_idx'"
+	}
+	if err := database.DB.Get(&records, query); err != nil || records != 0 {
+		t.Fatalf("refusal ran baseline: %d %v", records, err)
+	}
+	if _, err := database.DB.Exec("DELETE FROM schema_migrations"); err != nil {
+		t.Fatal(err)
+	}
+	// Restore the actual supported history, including future additions to the
+	// registry; recreating a baseline-only history would rerun later migrations.
+	for _, record := range history {
+		if _, err := database.DB.Exec(database.Q("INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,?)"), record.Version, record.Name, record.AppliedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopened, err := Open(dsn)
+	if err != nil {
+		t.Fatalf("supported database cannot reopen after refusal: %v", err)
+	}
+	defer reopened.Close()
 }

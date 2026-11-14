@@ -21,6 +21,12 @@ func assertPostgresMigrationRunner(t *testing.T, databaseURL string) {
 		t.Fatal(err)
 	}
 	defer admin.Close()
+	t.Run("future schema refusal", func(t *testing.T) {
+		if _, err := admin.Exec("CREATE SCHEMA future_schema"); err != nil {
+			t.Fatal(err)
+		}
+		assertOpenRejectsFutureSchema(t, postgresSchemaURL(t, databaseURL, "future_schema"))
+	})
 	if _, err := admin.Exec("CREATE SCHEMA migration_runner"); err != nil {
 		t.Fatal(err)
 	}
