@@ -1,4 +1,4 @@
-.PHONY: dev web build agent-linux test test-postgres fmt-check staticcheck verify
+.PHONY: dev web build agent-linux test test-postgres fmt-check staticcheck version-check verify
 
 dev:
 	go run ./cmd/controlplane
@@ -32,9 +32,14 @@ fmt-check:
 staticcheck:
 	go run honnef.co/go/tools/cmd/staticcheck@2024.1.1 ./...
 
+version-check:
+	scripts/check-agent-version.sh
+
 verify: fmt-check
 	npm --prefix web ci
 	npm --prefix web run build
+	$(MAKE) version-check
+	scripts/test-check-agent-version.sh
 	npm --prefix web test
 	npm --prefix web run typecheck
 	$(MAKE) staticcheck

@@ -360,3 +360,12 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
 - `make staticcheck` 退出 0；完整 `make verify` 退出 0，包含 npm ci、前端构建、61 文件/449 项 Vitest、类型检查、staticcheck、vet、Go 全量测试和两个命令编译。
 - 本地反向探测：临时未格式化 Go 文件使 `make fmt-check` 与 `make verify` 均退出 2，后者在 npm ci 前停止。临时独立模块沿用本仓库配置，常量非法正则使 staticcheck 报 SA1000 并失败。探测文件全部清理。
 - 尚待远端：临时分支上的格式失败 CI 验收；总表保留 `进行中`，本地代码独立提交，待推送授权后补齐 GitHub 证据。
+
+### 2026-11-15 P0-05
+
+- 会话与验收：`11-15 Codex`；`GPT-6（Codex，自验）`。新增 `scripts/check-agent-version.sh`，用 `go list -deps` 动态发现本仓库 Agent 依赖包，仅检查非测试 Go 文件；包含共享协议、入口、删除和未忽略的新文件。拒绝未递增及降低的版本，依赖发现失败也失败。只改 HTTP、测试或文档不触发。
+- CI 的 Go 作业完整检出历史，以 PR 目标提交或 push 的 before 为基准，当前检出为 HEAD；新分支的全零 before 使用空树。脚本 `BASE HEAD` 模式检查提交范围；本地 `make version-check` 从上游共同祖先（无上游时父提交）检查待推送及工作区改动。已接入 `make verify`，执行顺序在前端构建之后。
+- 明确豁免为单个干净提交中的 `[skip-agent-version]: 原因`；只允许版本不变，不接受降低版本，不隐藏额外工作区改动或多提交范围。不得用这个标记跳过需要更新 Agent 的行为改动。
+- 新增 `scripts/test-check-agent-version.sh`，在隔离临时 Git 仓库验证 20 种情况，包含要求的 HTTP-only 通过、Agent 无版本失败、Agent 升版本通过，以及协议、入口、未跟踪文件（含空格路径）、删除、测试/文档、忽略文件、错误依赖、无效基准、首次分支、提交与工作区版本、豁免边界。全部通过，临时仓库全部清理。
+- 完整 `make verify` 退出 0：npm ci、前端构建、护栏及用例、61 个文件/449 项前端测试、类型检查、staticcheck、vet、Go 全量测试及编译通过。最后收紧“豁免不能降低版本”后重新运行全部 20 个脚本用例通过。`bash -n`、actionlint 1.7.3（不调用可选 shellcheck）、`git diff --check` 通过。
+- 改动为脚本/CI/开发入口，不在 Agent 的 Go 依赖包中，无需追加版本号。已按用户授权独立提交；未推送。

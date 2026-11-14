@@ -63,6 +63,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -81,6 +83,15 @@ jobs:
 
       - name: Run staticcheck
         run: make staticcheck
+
+      - name: Test Agent version guard
+        run: scripts/test-check-agent-version.sh
+
+      - name: Check Agent version
+        env:
+          BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REVISION: ${{ github.sha }}
+        run: scripts/check-agent-version.sh "$BASE_REVISION" "$HEAD_REVISION"
 
       - name: Vet Go packages
         run: go vet ./...
