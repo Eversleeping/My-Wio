@@ -90,13 +90,6 @@ func run(log *slog.Logger) error {
 	if err := queueDefaultControlPlaneCredentials(context.Background(), database, vault, gateway, log); err != nil {
 		log.Warn("could not configure default control-plane Agent credentials", "error", err)
 	}
-	grpcServer := grpc.NewServer(
-		grpc.ForceServerCodec(protocol.Codec()),
-		grpc.MaxRecvMsgSize(8<<20),
-		grpc.MaxSendMsgSize(8<<20),
-		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
-	)
-	protocol.RegisterAgentServiceServer(grpcServer, gateway)
 	frontend, err := fs.Sub(webassets.Dist, "dist")
 	if err != nil {
 		return err
@@ -110,14 +103,7 @@ func run(log *slog.Logger) error {
 	} else {
 		log.Info("trusting X-Forwarded-For from reverse proxies", "trusted_proxies", trustedProxies.String())
 	}
-	httpHandler := httpapi.New(database, hub, gateway, vault, log, frontend, os.Getenv("WIO_PUBLIC_URL"), devInsecure, httpapi.WithTrustedProxies(trustedProxies))
-	handler := h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
-			grpcServer.ServeHTTP(w, r)
-			return
-		}
-		httpHandler.ServeHTTP(w, r)
-	}), &http2.Server{})
+	grpcServer, handler := controlPlaneHandler(database, hub, gateway, vault, log, frontend, os.Getenv("WIO_PUBLIC_URL"), devInsecure, trustedProxies)
 	server := &http.Server{
 		Addr:              address,
 		Handler:           handler,
@@ -173,6 +159,25 @@ func run(log *slog.Logger) error {
 	defer cancel()
 	grpcServer.GracefulStop()
 	return server.Shutdown(ctx)
+}
+
+func controlPlaneHandler(database *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool, trustedProxies httpapi.TrustedProxies) (*grpc.Server, http.Handler) {
+	grpcServer := grpc.NewServer(
+		grpc.ForceServerCodec(protocol.Codec()),
+		grpc.MaxRecvMsgSize(8<<20),
+		grpc.MaxSendMsgSize(8<<20),
+		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+	)
+	protocol.RegisterAgentServiceServer(grpcServer, gateway)
+	httpHandler := httpapi.New(database, hub, gateway, vault, log, frontend, publicURL, devInsecure, httpapi.WithTrustedProxies(trustedProxies))
+	handler := h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcServer.ServeHTTP(w, r)
+			return
+		}
+		httpHandler.ServeHTTP(w, r)
+	}), &http2.Server{})
+	return grpcServer, handler
 }
 
 func ensureControlPlaneAgentToken(ctx context.Context, database *store.Store, vault *security.Vault, log *slog.Logger) (string, error) {
