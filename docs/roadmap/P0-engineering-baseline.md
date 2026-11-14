@@ -147,12 +147,12 @@ E2E 使用模拟 API，不连接真实服务器或模型。如果耗时明显长
 2. 写一个假引擎程序，三种引擎共用一个可执行文件，按被调用时的程序名决定扮演哪一种。它只实现最小的协议：Claude 的 stream-json 一轮对话，Gemini 适配器当前使用的模式，Codex 的 app-server。先看 Claude 和 Gemini 适配器测试里已有的假 CLI 能复用多少；Codex 没有找到可以直接复用的假 app-server，这是这一步里工作量最大的部分。
    - 假引擎做成独立的小程序，由测试在开始时编译，不要做成“测试程序自身”的模式。原因有两个：P0-08 要让控制面的可执行文件也能用它；P5-02 之后子进程不再继承 `WIO_` 开头的变量，靠环境变量切换模式的假 CLI 会失效。
    - 假引擎的行为由提示词里的约定关键字决定，例如“正常回复”“挂起等待中断”“记录自己的环境变量名到指定文件”。
-3. 新增测试（建议放在 `cmd/controlplane`，可以直接调用第 1 步的函数）。每个测试在临时目录里启动：SQLite 数据库、第 1 步的处理器（监听 `127.0.0.1:0`）、一个真实的 `agent.NewClient(...).Run`（接入方式与内置控制机 Agent 相同：`EnsureControlPlaneServer` 加 `controlPlaneAgentConfig` 的做法），以及一个临时 Git 仓库作为工作区。Agent 的状态目录、克隆目录、扫描目录全部指向临时目录。
+3. 新增测试（建议放在 `cmd/controlplane`，可以直接调用第 1 步的函数）。每个测试在临时目录里启动：SQLite 数据库、第 1 步的处理器（监听 `127.0.0.1:0`）、一个真实的 `agent.NewClient(...).Run`（接入方式与内置控制机 Agent 相同：`EnsureControlPlaneServer` 加 `controlPlaneAgentConfig` 的做法），以及一个临时 Git 仓库作为工作区。Agent 的状态目录、克隆目录、扫描目录和三种引擎会使用的用户级配置目录全部指向临时目录。
 4. 让 Agent 找到假引擎：Codex 通过 `Config.CodexPath`；Claude 和 Gemini 在没有受管版本时按名字从 `PATH` 查找，把假引擎所在目录放到 `PATH` 最前面。动手前确认这一点，如果查找顺序与此不同，以代码为准。
 5. 用例全部只通过 HTTP 接口操作和断言，不直接读写数据库：
    - 完成首次设置和登录，内置服务器显示在线。
    - 三种引擎各一次：创建会话、发起一轮、从事件接口读到假引擎的回复、会话回到空闲。
-   - 三种引擎各一次：假引擎挂起时中断，轮次以中断状态结束，假引擎进程已退出。
+   - 三种引擎各一次：假引擎挂起时中断，轮次以中断状态结束。Claude、Gemini 的单轮 CLI 进程已退出；Codex 的长驻 app-server 保持运行并可继续处理下一轮，但其中不再有活动 turn。
    - 一个非会话操作：读取工作区文件列表或 Git 状态。
    - 断线重连：停掉 Agent 再启动一个新的，断线期间排队的操作在重连后执行并返回结果。
 6. 测试只在 Linux 上运行，其他平台跳过并写明原因。不访问网络，不使用任何真实凭据或模型。
@@ -280,27 +280,36 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
 
 合入后 `main` 上的第一次运行是 43458889003（提交 `8508e27`），三个作业通过：`web` 121 秒，`go` 102 秒，`postgres` 56 秒。
 
-### 2026-11-14 P0-07（交接：第三轮返工中）
+### 2026-11-14 P0-07
 
-- 会话：`11-13 Codex` 做了两轮返工并交回，协调者 `11-14 Claude` 复验后交回做第三轮，还没有合入。这一条是交接记录，步骤完成时由正式的执行记录替换。
-- 改动没有提交，在分支 `roadmap/p0-07` 对应的 worktree 里，基于 `0e427dc`。它落后于 `main`，合入时本文件需要手工合并：
-  - `cmd/controlplane/main.go`：把 gRPC 服务、`httpapi.New` 和 h2c 分流提取成 `controlPlaneHandler`，`run` 改为调用它。
-  - 新增 `cmd/controlplane/cross_process_test.go`（`TestCrossProcessAcceptance`）和 `cmd/controlplane/testdata/fakeengine/`（三种引擎共用的假引擎）。
-  - 本文件：P0-07 做法第 3、5 条的修正，以及一份执行记录草稿。
-- 协调者已经核实的部分：
-  - `main.go` 的改动是纯移动；用例只通过 HTTP 接口操作和断言；没有改 `cmd/agent` 依赖的包，不需要升版本号。
-  - 第一轮返工改了用户主目录的隔离、收尾顺序、断线重连最后一次等待的时长（放宽到 40 秒），并删除了假引擎里没有用到的 Gemini 非 ACP 分支。交回后独立运行的结果：`gofmt`、`go vet ./...`、`go test ./cmd/controlplane` 通过；`-count=20` 连续通过，单次 3.1 到 3.5 秒；在空的 `HOME` 和专用临时目录下运行后两个目录都是空的，运行账号真实的 Gemini 设置没有被改动。
-  - 反向验证：用 `go test -overlay` 把 Agent 一侧的 `"claude.turn.interrupt"` 改错，新测试失败，`internal/agent` 原有测试不失败。
-  - 第二轮返工改的是失败路径上临时目录的清理和 HTTP 客户端超时。清理部分只读过代码，做法符合要求，还没有独立验证；超时部分见下一条。
-- 第三轮返工的原因：第二轮把测试的 HTTP 客户端超时从 3 秒放宽到 10 秒，没有消除偶发失败。
-  - 复现方法：`go test -race -run '^TestCrossProcessAcceptance$' -count=40 ./cmd/controlplane`。三轮共 110 次迭代失败 15 次，失败点都是断线之后排队的那次 `POST /api/workspaces/{id}/files/refresh`：14 次在约 9 秒后返回 500，1 次立即返回 401。不带 `-race` 的 `-count=20` 没有失败过，但原因与竞态检测无关，只是时间窗口更窄。
-  - 500 的原因是一个既有的 SQLite 缺陷，已经登记在总览的“发现的问题”（2026-11-14，“使用 SQLite 时，一次被取消的请求可以让数据库在控制面重启之前无法写入”）。测试停掉 Agent 时，网关可能正在用流的 context 追加事件，这次取消会触发它。锁在进程存活期间不释放，重试请求和加大超时都没有用。
-  - 401 的原因没有查明。
-- 第三轮的要求：断线重连用例在 `-race` 下也稳定；除 `controlPlaneHandler` 的提取外不改产品代码，不升级依赖；不用重试或更长的超时掩盖；在执行记录里写清楚所选做法为什么是确定的。如果做不到确定，写明替代方案和代价，由协调者决定：例如测试库改用不会被读锁挡住写入的日志模式，或者在缺陷修复前跳过断线重连用例并把步骤改为 `受阻`。
-- 交回之后还要做：
-  1. 协调者独立验收：`gofmt`、`go vet ./...`、`go test ./cmd/controlplane`、`-count=20`、空 `HOME` 下运行、反向验证，再加 `-race -count=40` 连续两次全部通过。
-  2. 分两个提交合入，先是 `main.go` 的提取，再是测试和假引擎。
-  3. 推送后确认 CI 的 `go` 作业通过，再把状态改为 `已完成`。
+- 会话：`11-13 Codex`。
+- 把 `cmd/controlplane/main.go` 中 gRPC 服务配置与注册、`httpapi.New` 和 h2c 分流原样移入 `controlPlaneHandler`，`run` 改为调用它。新增独立编译的三引擎假程序和 `TestCrossProcessAcceptance`；测试从 HTTP 完成首次设置、登录和全部业务操作，真实穿过 h2c/gRPC、`agent.Client`、网关与子进程。
+- 假引擎只实现用例所需的最小协议：Claude stream-json 的 init、消息和 result；Gemini ACP 的 initialize、session new/load、历史回放栅栏、prompt、消息更新和结果；Codex app-server 的 initialize、thread start/resume、turn start/interrupt、消息和完成通知。三者都支持挂起后中断；Gemini 未被用例覆盖的非 ACP 分支已删除。
+- 用例覆盖三种引擎的创建会话、正常回复、事件读取、回到空闲和挂起后中断；Claude、Gemini 验证单轮进程退出，Codex 验证当前 turn 清除、长驻 app-server 存活且可继续完成下一轮。另覆盖工作区文件列表操作和 Agent 断线期间排队后的重连执行。
+- 假引擎编译完成后，测试把 `HOME`、三种引擎的用户配置位置、XDG 配置/缓存/数据/状态/运行时目录和临时目录全部指向测试目录。清理顺序是 Agent、HTTP/gRPC、数据库、环境恢复、测试根目录。Agent 操作 goroutine 可能迟到写入回执，网关连接清理和未 join 的接收/处理 goroutine 也可能迟到写入 SQLite；根目录清理因此会在 15 秒截止前重试 `Stat` 和 `RemoveAll`，中间错误只记录，直到目录连续 500 毫秒不存在才成功，仅在截止时报告最后一次错误。
+- 断线重连的最后一次结果等待放宽为 40 秒：排队操作通常在新连接上立即执行；如果它竞态地在旧连接上被标记为已下发，`PendingOperations` 在 30 秒后才会使其可重发，网关轮询最多再等约 2 秒。`/api/servers` 的 90 秒心跳宽限不能作为旧连接已移除的信号。
+- 第二轮曾把测试 HTTP 客户端超时从 3 秒放宽为 10 秒，但这只是对锁等待的误判，没有解决根因，本轮已恢复为 3 秒。实际原因是 modernc.org/sqlite v1.31.1 在查询取得首行后遇到 context 取消时可以丢弃结果集而不关闭，遗留的读事务在 rollback-journal 模式下会永久阻塞后续写入。HTTP 没有暴露 Agent 出站队列或网关接收序号，而心跳和指标可在任意 15 秒边界再入队，因此不存在只靠 HTTP 就能确定消息已静默的栅栏。
+- 测试库改用 WAL 模式隔离上述已登记缺陷。WAL 读者读取快照，写者追加 WAL，因此即使驱动遗留了读事务，也不会阻塞断线后的写入；这是锁模型上的确定性隔离，不依赖时序概率、POST 重试或更长超时。代价是这条跨进程用例不再覆盖生产默认 rollback-journal 模式下的取消行为；该行为属于另行跟踪的驱动缺陷，P0-07 仍专注 HTTP、gRPC、Agent 和子进程链路。
+- 计划修正：P0-07 做法补充了用户级配置目录隔离；Codex `app-server` 是会话池持有的长驻进程，中断只结束当前 turn，因此原来“三种引擎进程都退出”的表述已改为 Claude、Gemini 进程退出，Codex app-server 无活动 turn 且可复用。
+
+| 验收项 | 结果 | 墙钟耗时 |
+| --- | --- | --- |
+| `gofmt -l cmd/controlplane` 与 `git diff --check` | 退出码 0，均无输出；两个未跟踪 Go 文件的 `git diff --no-index --check` 亦无空白错误输出 | 小于 1 秒 |
+| `go vet ./...` | 退出码 0，无输出 | 2 秒 |
+| `go test ./cmd/controlplane -count=1` | 退出码 0；包内 4.257 秒 | 6 秒 |
+| `go test -v ./cmd/controlplane -run '^TestCrossProcessAcceptance$' -count=20` | 退出码 0；20 次单次 2.11–2.42 秒 | 47 秒 |
+| 外部空 `HOME` 下运行新测试 | 退出码 0；外部主目录仍为空，真实 Gemini 设置文件修改时间未变 | 5 秒 |
+| 注入无害 Git 配置变量后运行新测试 | 退出码 0；包内 3.487 秒 | 5 秒 |
+| `go test ./...` | 退出码 0；`cmd/controlplane` 4.475 秒，其余部分包显示缓存命中 | 9 秒 |
+| 独立空临时目录下第一轮 `go test -race -v ./cmd/controlplane -run '^TestCrossProcessAcceptance$' -count=40` | 退出码 0，无 data race；40 次单次 4.87–5.92 秒，断线排队失败和 401 均为 0，结束后临时目录为空 | 212 秒 |
+| 独立空临时目录下第二轮同上命令 | 退出码 0，无 data race；40 次单次 4.79–5.56 秒，断线排队失败和 401 均为 0，结束后临时目录为空 | 206 秒 |
+| overlay 反向验证 | 退出码 1，只在 Claude 中断状态断言处失败；无根目录清理错误，结束后临时目录为空、假引擎进程数为 0 | 墙钟 358 秒（含等锁），测试自身 11.750 秒 |
+| 网关已下发操作重连定向测试 | 退出码 0；用回拨 31 秒的已下发时间确定性覆盖重发 | 2 秒 |
+
+- 反向验证：用 `go test -overlay` 临时把 Agent 分发侧的 `"claude.turn.interrupt"` 改成错误值。新测试只在 Claude 中断状态断言处按预期失败，没有 `remove acceptance root` 或截止超时错误；结束后专用临时目录为空，没有假引擎残留进程，overlay 文件已清理。
+- Agent 依赖边界：没有修改 `go list -deps ./cmd/agent` 中的包，因此没有升级 `internal/buildinfo/version.go`。
+- 遗留事项：一是 Agent 连接循环以 goroutine 执行操作，`Client.Run` 返回时不等待仍在执行的操作 goroutine，连接取消后仍可能在 `saveOperationResult` 中写入 `StateDir/operation-results`。二是控制面收尾不等待网关处理函数和接收 goroutine：`Gateway.Connect` 启动 `receiveWithTools` 后不 join，`removeConnection` 又用后台 context 写离线状态，因而 `Store.Close()` 返回后仍可能有 SQLite 写入落盘。三是 modernc.org/sqlite v1.31.1 在已取得首行时遇到 context 取消，可能不关闭结果集就丢弃它，导致 rollback-journal 模式的读锁在进程生命期内不释放。测试用可重试的根目录清理和 WAL 模式隔离这些已登记缺陷，本步骤不改 Agent、控制面或 SQLite 驱动行为。
+- 协调者复验（`11-14 Claude`，在 `main` 加本步骤改动的独立副本上运行）：`gofmt`、`go vet ./...` 和两个命令包的编译通过；`go test ./... -count=1` 30 个包通过，其中 `cmd/controlplane` 5.5 秒；`-count=20` 全部通过，单次 2.09 到 2.30 秒；在空的 `HOME` 和专用临时目录下运行后两个目录都是空的，运行账号真实的 Gemini 设置没有被改动；反向验证只在 Claude 中断状态断言处失败，`internal/agent` 原有测试不失败；`-race -count=40` 全部通过，没有 data race，临时目录为空。改用 WAL 之前，同一条命令三轮共 110 次迭代失败 15 次。
 
 ### 2026-11-14 P0-06
 
