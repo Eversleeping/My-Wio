@@ -388,3 +388,10 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
 ### 2026-11-15 M1 远端验收启动（P0-03 / P0-04 / P0-08）
 
 用户答复上一轮临时 CI 分支推送授权询问“继续”，因此在 `main` 的本地实现基础上推送临时 `ci/m1-*` 分支。先以独立分支分别注入未格式化 Go 文件与浏览器失败用例，确认格式步骤失败及报告/截图制品可下载；然后用最终代码完成三次连续的正向真实推送，与本地 `make verify` 比较。故意失败的探测提交不进入 `main`，远端临时分支验收后删除。最终记录需填写运行号、提交号、各作业结论和制品检查结果；生产阶段验收继续保留未验证状态。
+
+
+### 2026-11-15 P0-04 远端验收完成
+
+会话与验收：`11-15 Codex`；`GPT-6（Codex，自验）`。临时分支 `ci/m1-format-probe-20261115` 的提交 `36b9153cb2f18a46322655aa222c509afada7ea9` 只额外加入一个未格式化测试文件。GitHub [运行 43650011041](https://github.com/Eversleeping/My-Wio/actions/runs/43650011041) 的 Go 作业精确在 `Check Go formatting` 失败，日志列出 `internal/protocol/m1_ci_format_probe_test.go`，其后的 staticcheck、版本护栏、vet、测试和构建全部跳过；Web、PostgreSQL、Browser E2E 均通过。
+
+作为正向证据，浏览器失败探测分支的 [运行 43650012476](https://github.com/Eversleeping/My-Wio/actions/runs/43650012476) 中，Go 作业完整通过，包括格式、staticcheck、版本护栏、vet、全量测试与构建。该运行的失败仅来自故意注入的浏览器用例。当前本地 `make verify` 再次完整通过，123.34 秒。P0-04 验收项已全部满足，总表标记完成；探测提交未进入 `main`，临时分支将在本轮验收结束时统一删除。
