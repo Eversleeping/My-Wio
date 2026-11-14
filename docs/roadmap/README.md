@@ -189,8 +189,8 @@ npm --prefix web run typecheck
 | P0-08 | 浏览器冒烟测试接入真实链路 | S | P0-03、P0-07 | 进行中 | 11-15 Codex；实现与本地验证先行，远端随 P0-03 验收 |  | |
 | P1-01 | 旧库夹具与结构一致性测试 | M | P0-02 | 已完成 | 11-13 Codex | claude-fable-5-2 | 5ad7b3e |
 | P1-02 | 迁移运行器与 `schema_migrations` | M | P1-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 962262e |
-| P1-03 | 降级保护 | S | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（随后回填） |
-| P1-04 | 迁移编写规范与升级文档 | S | P1-02 | 进行中 | 11-15 Codex |  | |
+| P1-03 | 降级保护 | S | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 24cd12c |
+| P1-04 | 迁移编写规范与升级文档 | S | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（随后回填） |
 | P2-01 | 引擎行为盘点与契约测试 | M | P0-02 | 待开始 | |  | |
 | P2-02 | `internal/session` 包与统一能力解析 | M | P2-01 | 待开始 | |  | |
 | P2-03 | 合并近乎相同的处理器 | S | P2-02、P3-02 | 待开始 | |  | |
@@ -289,6 +289,8 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-14 | P0-07 审阅 | 控制面收尾时不等待网关的处理函数。`Gateway.Connect` 退出时的 `removeConnection`（`internal/agentgateway/connections.go`）用后台 context 更新 `servers.status`，`receiveWithTools` 启动后也没有被等待；`http.Server.Shutdown` 不等待经 h2c 接管的连接，`grpc.Server.Stop` 不等待处理函数。所以 `Store.Close()` 返回之后仍可能有写入落到数据库 | 已修复（当前工作区，0.3.14）：关闭请求入口并取消请求与后台任务，等待 HTTP/WebSocket、RPC、网关接收与协作工具、维护任务及内置 Agent 收尾后再关闭数据库；退出超时则报告错误，不在存活任务下关闭数据库 |
 | 2026-11-14 | P0-07 审阅 | Agent 的 `Client.Run` 返回时不等待仍在执行的操作。操作在各自的 goroutine 里运行（`internal/agent/client.go` 的 `go c.handleOperation`），连接取消后仍可能通过 `saveOperationResult` 往状态目录的 `operation-results/` 写回执 | 已修复（当前工作区，0.3.14）：Client.Run 等待操作、探测和维护任务及最终回执写入；跨进程验收增加活动 Claude 在 Agent 退出时的进程回收与中断回执断言，移除临时目录清理重试绕过 |
 | 2026-11-14 | P1-01 审阅 | `TestPostgresMigrationAndStorage` 不能用 `-run` 只跑其中一个子测试：`assertCodexSnapshotTimeoutAndRetry` 用 `t.Run` 组织步骤，父测试后面的断言依赖这些子测试的副作用，子测试被筛掉后父测试失败 | 暂不处理，运行时不要筛选子测试。P1-02 改这个测试时可以顺手理顺。由用户决定 |
+
+| 2026-11-15 | P0-03、P1-04 / P0-08 本地验收 | `web/src/AppSession.test.tsx` 的“returns to sign-in when the session expires while the console is open”间歇性失败：登录页已出现，立即断言 `FakeWebSocket.instances[0].closed` 时仍为 false。P0-03 首次并发编译时遇到一次，本轮串行全量 Vitest 又出现一次；未改源码的定向复验 6 项通过。疑似断言早于 effect 清理完成，尚未认定产品缺陷 | 记录待单独排查，不夹带进重构；本轮完整复验结果见执行记录 |
 
 ## 变更记录
 

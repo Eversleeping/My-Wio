@@ -193,6 +193,8 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 - 升级前等待活动任务完成。控制面收到 `SIGTERM` / `SIGINT` 后关闭请求入口和实时连接，取消维护任务及内置 Agent，并等待操作回执和数据库写入收尾；内置 Agent 的活动 CLI 可能因此中断。退出等待上限为 15 秒，超时会报告错误并以失败状态退出，不将超时报成正常退出。仓库 Compose 给控制面留出 30 秒停止宽限期，自定义服务配置也应留足时间。
 - 使用宿主机代理时，只重建 `postgres` 与 `controlplane`；不要启动基础 Compose 中的仓库 Caddy，也不要修改正在工作的宿主 Caddy 配置。
 - 发布失败时先保留容器日志和当前镜像摘要，再选择已验证的上一版制品恢复；不要在未备份的情况下删除 PostgreSQL 数据卷。
+- 控制面启动时自动执行未记录的数据库迁移，成功后记录在 `schema_migrations`。升级前确认数据库备份可以恢复到隔离实例；迁移没有自动降级脚本，恢复升级前状态只能使用升级前备份，回滚镜像不会撤销已提交的迁移。基线迁移不包在一个事务里，失败可能留下部分变更；后续迁移逐项事务回滚。保留日志后先判断是否能按原制品重试，需回滚时同时恢复数据库与匹配制品。
+- 库结构比程序更新时，启动报错形如 `database schema version 2 is newer than supported schema version 1 (control plane <版本>); use a control plane supporting schema version 2 or later`。按升级说明选择支持该结构的控制面，不要删除或修改版本记录绕过检查。此保护仅存在于包含 P1-03 的新制品，早期旧制品无法识别新库；破坏性迁移必须在升级说明标出最低可回滚版本，并与扩展迁移至少间隔一个发布版本。编写与验证规则见[数据库迁移](OPERATIONS.md#数据库迁移)。
 - 丢失 `WIO_MASTER_KEY` 将使 Vault 中加密的 TOTP 密钥、凭据预设和部分 Agent 状态无法恢复，不能用新的随机值无损替换。
 
 ## 常见失败

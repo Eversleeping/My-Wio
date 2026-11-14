@@ -76,8 +76,8 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 			if _, err := database.DB.ExecContext(context.Background(), database.Q(`INSERT INTO workspaces(id,project_id,server_id,path,management_mode,kind,branch,commit_sha) VALUES(?,?,?,?,?,'primary',?,?)`), "legacy-managed-path", "legacy-project", "legacy-server", "/srv/managed/project", "observed", "main", "abc123"); err != nil {
 				t.Fatal(err)
 			}
-			// Injected historical rows represent an unversioned pre-upgrade database.
-			if _, err := database.DB.ExecContext(context.Background(), "DROP TABLE schema_migrations"); err != nil {
+			// Reapply the baseline to injected historical rows, preserving later migrations.
+			if _, err := database.DB.ExecContext(context.Background(), "DELETE FROM schema_migrations WHERE version=1"); err != nil {
 				t.Fatal(err)
 			}
 		} else {
