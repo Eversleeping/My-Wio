@@ -327,3 +327,19 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
   - 删除探测文件后，`make fmt-check` 退出码 0，耗时 0.20 秒。另在未格式化探测文件存在时运行 `make verify`，它打印 `internal/buildinfo/zz_gofmt_verify_stop_probe.go` 并在首个目标以退出码 2 结束，耗时 0.18 秒；没有执行 npm 或后续 Go 命令，也没有生成 `web/node_modules` 或 `web/dist`。所有探测文件均已删除。
 - 其他检查：`git diff --check` 和 `make -n verify` 均以退出码 0 在不足 0.01 秒内完成；展开的命令顺序符合上述定义。`git ls-files '*.go'` 中不在 `cmd/`、`internal/` 下的文件只有 `web/embed.go`，因此范围覆盖全部被跟踪的 Go 文件，又不会扫描 `web/node_modules`。
 - 遗留事项：P0-05 实现版本号护栏后仍需接入 `make verify`；P0-04 在 CI 中调用 `fmt-check`。高负载下 Vitest 用例可能超时的问题已经登记在路线图总览的“发现的问题”中。
+
+### 2026-11-15 P0-07 最终验收
+
+- 会话：`11-15 Codex`，续验用户指定的 Codex 会话 `01a1d50b-3a21-7482-80c3-0b136bb342e5`。会话查询返回资源不存在，因此依据仓库执行记录、实现提交和实际 CI 结果续验。
+- 验收对象：已在 `main` 的 `7ece208`（装配函数纯移动）和 `65b5753`（跨进程测试、假引擎及记录）；独立副本基于当前 HEAD `42c16ad`，从实现提交到该 HEAD 只有文档变化。未把主工作区其他未提交的产品改动带入副本。
+- 代码审阅：装配函数与生产共用，三种引擎的正常回复和中断、工作区文件操作、断线排队后重连均经过真实 HTTP、h2c/gRPC、Agent 与假引擎进程。未发现新的阻塞项；原有 WAL 隔离与退出清理限制仍按上一条 P0-07 记录和总览“发现的问题”跟踪。
+
+| 验收项 | 实际结果 |
+| --- | --- |
+| 独立副本 `npm --prefix web run build` | 退出码 0，25.02 秒；类型检查、构建和 bundle 检查通过 |
+| 独立副本 `go test -race -v ./cmd/controlplane -run '^TestCrossProcessAcceptance$' -count=20` | 退出码 0，20 次全部通过，无 data race；单次 4.89–5.71 秒，包内总耗时 108.418 秒，含初次编译的墙钟时间 171.65 秒；结束后专用临时目录为空 |
+| 实现提交 `65b5753` 的 [CI 43572018275](https://github.com/Eversleeping/My-Wio/actions/runs/43572018275) | Web、Go、PostgreSQL 三个作业全部成功；Go 作业中的 vet、全量测试和两个命令的编译逐项通过 |
+| 当前 HEAD `42c16ad` 的 [CI 43601149009](https://github.com/Eversleeping/My-Wio/actions/runs/43601149009) | Web、Go、PostgreSQL 三个作业全部成功；覆盖通用验收的前端构建、Vitest、类型检查、`go vet ./...`、`go test ./...`，以及 `make test-postgres` 和两个命令的编译 |
+
+- 反向验证沿用上一条 P0-07 记录中已经完成的 overlay 实测：改错 Agent 的 Claude 中断操作类型，新测试失败而原有 Agent 测试通过，临时目录和假引擎均清理完毕。实现代码此后未变，本轮未重复该项，也未重复 CI 已验证的全量检查。
+- 结论：P0-07 的验收项全部满足，总表改为 `已完成` 并填入已有实现提交号。本轮只更新路线图文档，无需升级 Agent 版本。
