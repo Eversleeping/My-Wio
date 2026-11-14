@@ -413,3 +413,24 @@ P0-03 的正向作业及失败制品验收均满足，总表标记完成。本�
 正向结果与本地复验一致：从浏览器完成设置、登录、内置服务器在线、三个引擎的会话创建和回复；没有任何引擎缺口。保留此前关闭事件保存/发布后的本地反向失败证据。本轮仅补齐托管运行证据，未改动页面或测试实现，无须重复已经通过的通用构建测试；已再次检查 Markdown 引用、步骤依赖和 `git diff --check`。
 
 P0-08 的本地与 CI 验收项均满足，总表标记完成。P0 八个步骤现已全部完成；连续三次真实正向推送的阶段验收仍在进行，第二、第三条分支继续使用相同提交，结果将在阶段关闭记录汇总。生产库记录与真实 CLI / 付费模型未在本轮验证。
+
+
+### 2026-11-15 M1 连续推送验收与临时分支清理
+
+会话与验收：`11-15 Codex`；`GPT-6（Codex，自验）`。以下运行均由真实 `push` 事件触发。三个正向分支连续创建，全部指向同一原始提交 `0541452255f9c2d71592d6caf8fbfd9256eb7b69`，远端提交哈希、父提交与文件树和本地一致。表内耗时是各作业的实际墙钟时间，包含检出和安装；两条故意失败的探测先于三次连续正向推送。
+
+| 运行 | 分支 | Web | Go | PostgreSQL | Browser E2E | 结论 |
+| --- | --- | --- | --- | --- | --- | --- |
+| [43650011041](https://github.com/Eversleeping/My-Wio/actions/runs/43650011041) | `ci/m1-format-probe-20261115` | success，97 秒 | failure，21 秒 | success，32 秒 | success，104 秒 | failure |
+| [43650012476](https://github.com/Eversleeping/My-Wio/actions/runs/43650012476) | `ci/m1-browser-probe-20261115` | success，76 秒 | success，123 秒 | success，42 秒 | failure，105 秒 | failure |
+| [43650059756](https://github.com/Eversleeping/My-Wio/actions/runs/43650059756) | `ci/m1-pass-1-20261115` | success，97 秒 | success，134 秒 | success，41 秒 | success，101 秒 | success |
+| [43650511780](https://github.com/Eversleeping/My-Wio/actions/runs/43650511780) | `ci/m1-pass-2-20261115` | success，62 秒 | success，82 秒 | success，42 秒 | success，77 秒 | success |
+| [43650513628](https://github.com/Eversleeping/My-Wio/actions/runs/43650513628) | `ci/m1-pass-3-20261115` | success，96 秒 | success，90 秒 | success，40 秒 | success，101 秒 | success |
+
+三个正向运行的原浏览器组均为 33 通过、11 个既有分工跳过，真实组均为 1 条三引擎冒烟通过。真实组 Playwright 总耗时依次 8.1、7.5、10.9 秒，浏览器用例自身依次 2.5、2.4、5.0 秒。Web 的构建、测试与类型检查，Go 的格式、staticcheck、版本护栏与 20 个护栏用例、vet、全量测试和构建，以及完整 PostgreSQL 入口全部通过。结果与本轮本地完整 `make verify`（退出 0，123.34 秒）一致。此前的 SQLite / PostgreSQL 迁移演练与本地浏览器正反验证见 P1-04、P0-08 记录，不重复执行。
+
+已删除全部五条远端临时分支并逐一确认引用不存在，同时删除两条本地探测引用；探测文件和提交均未进入 `main`。再次确认远端 `main` 仍为 `67275e2373be55ffc32f15973da9269190a55666`，没有推送默认分支、发布或部署。失败制品已实际下载校验，运行记录和制品仍保留在 Actions。
+
+P0 八个步骤及“连续三次真实推送”阶段标准全部满足。M1 的 13 个研发任务（P0 全部、P1 全部、P4-01）均已完成，并按任务分别提交实现与验收记录。P1 的生产环境版本表记录属于尚未执行的线上阶段验收，本轮没有取得生产数据或部署授权，不能据测试夹具宣称已验证生产升级。到此停止在 M1 范围，不领取 M2。
+
+本轮后续提交只有验收文档，与被验证的源码相比仅 `docs/roadmap/README.md` 和本阶段文件变化。已检查本地 Markdown 引用、提交引用、M1 全部步骤状态、探测文件未入主分支以及 `git diff --check`；无代码、依赖、配置或交互变化，关闭记录不再重复构建测试。
