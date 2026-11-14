@@ -1,4 +1,4 @@
-.PHONY: dev web build agent-linux test test-postgres fmt-check verify
+.PHONY: dev web build agent-linux test test-postgres fmt-check staticcheck verify
 
 dev:
 	go run ./cmd/controlplane
@@ -29,11 +29,15 @@ fmt-check:
 	@files="$$(gofmt -l cmd internal web/embed.go)" || exit $$?; \
 		test -z "$$files" || { printf '%s\n' "$$files"; exit 1; }
 
+staticcheck:
+	go run honnef.co/go/tools/cmd/staticcheck@2024.1.1 ./...
+
 verify: fmt-check
 	npm --prefix web ci
 	npm --prefix web run build
 	npm --prefix web test
 	npm --prefix web run typecheck
+	$(MAKE) staticcheck
 	go vet ./...
 	go test ./...
 	go build ./cmd/controlplane ./cmd/agent

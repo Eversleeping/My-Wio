@@ -351,3 +351,12 @@ GitHub 托管运行器上的验收由协调者推送三个 `ci/` 临时分支完
 - 本地短暂加入一个必定失败的浏览器用例，退出码 1，确认 HTML 报告和 PNG 截图均生成；探测源码已经删除，生成物在被忽略的输出目录。
 - 通用验收：前端构建、Go vet、Go 全量测试、两个命令编译、前端类型检查、格式及差异检查通过；Vitest 最终完整复验 61 个文件、449 项通过。首次复验与 staticcheck 的首次编译重叠，`AppSession.test.tsx` 的过期会话用例有一次 WebSocket 清理时序断言失败；重任务结束后无源码改动的完整复验通过，未顺手修改既有测试或产品逻辑。
 - 尚待远端：GitHub 作业及失败诊断制品实测。用户当前只授权本地自动提交，仓库规则要求推送另获明确授权，因此总表暂保留 `进行中`；代码先独立提交，拿到推送授权后用临时 `ci/**` 分支完成剩余验收并回填结果。
+
+### 2026-11-15 P0-04 本地实现与验收
+
+- 会话：`11-15 Codex`；验收 `GPT-6（Codex，自验）`。Go CI 复用 `make fmt-check`，固定运行 staticcheck 2024.1.1；本地新增 `make staticcheck` 并接入 `make verify`，README 同步命令。检查安排在前端构建之后，保持干净检出的嵌入文件要求。
+- 未配置 staticcheck 的完整基线共 193 条：ST1005 179、ST1013 7、U1000 4、SA4006 2、S1038 1。按本步骤允许的渐进方式，`staticcheck.conf` 先启用 `SA*` 安全检查，暂排除有两条既存告警的 SA4006，不夹带旧代码清理。两条 SA4006 位于 `internal/store/codex_snapshots_test.go` 的 `older` 和 `internal/store/session_collaboration.go` 的 `version` 赋值；保留待后续清理。
+- 评估两个 TypeScript 未使用项开关：共 49 条诊断，43 条在 `App.tsx`，其余在 `ServersPage.test.tsx`、`WorkspacePreviewPolling.test.tsx`、`ServerCredentialDialog.tsx`、`CodexPage.tsx`、`SettingsPage.tsx`；按计划留到 P3-07 后处理，当前不开启，也不引入 ESLint/Prettier。
+- `make staticcheck` 退出 0；完整 `make verify` 退出 0，包含 npm ci、前端构建、61 文件/449 项 Vitest、类型检查、staticcheck、vet、Go 全量测试和两个命令编译。
+- 本地反向探测：临时未格式化 Go 文件使 `make fmt-check` 与 `make verify` 均退出 2，后者在 npm ci 前停止。临时独立模块沿用本仓库配置，常量非法正则使 staticcheck 报 SA1000 并失败。探测文件全部清理。
+- 尚待远端：临时分支上的格式失败 CI 验收；总表保留 `进行中`，本地代码独立提交，待推送授权后补齐 GitHub 证据。

@@ -176,7 +176,8 @@ npm --prefix web run dev
 | `make build` | 构建前端，生成当前平台的 `bin/wio-controlplane` 和 `bin/wio-agent` |
 | `make agent-linux` | 额外构建 Linux amd64 Agent |
 | `make test` | PostgreSQL 迁移/存储集成测试、前端构建、Go 测试、Vitest 和类型检查 |
-| `make verify` | 推送前的本地门槛，对应 CI 的 `web`、`go` 两个作业：先做 `gofmt` 格式检查，再用 `npm ci` 重装前端依赖后构建、运行 Vitest 和类型检查，最后运行 `go vet`、`go test ./...` 并编译控制面和 Agent；不含 PostgreSQL 集成测试和 E2E |
+| `make verify` | 推送前的本地门槛，对应 CI 的 `web`、`go` 两个作业：先做 `gofmt` 格式检查，再用 `npm ci` 重装前端依赖后构建、运行 Vitest 和类型检查，再运行固定版本的 staticcheck 安全检查、`go vet`、`go test ./...` 并编译控制面和 Agent；不含 PostgreSQL 集成测试和 E2E |
+| `make staticcheck` | 固定版本的 Go 安全静态检查；现有告警的暂缓范围见 `staticcheck.conf`，须已有 `web/dist` |
 | `go vet ./...` | Go 静态检查，须已有 `web/dist` |
 | `npm --prefix web run e2e` | Playwright 桌面/移动端隔离测试 |
 

@@ -76,6 +76,12 @@ jobs:
           name: web-dist
           path: web/dist
 
+      - name: Check Go formatting
+        run: make fmt-check
+
+      - name: Run staticcheck
+        run: make staticcheck
+
       - name: Vet Go packages
         run: go vet ./...
 
