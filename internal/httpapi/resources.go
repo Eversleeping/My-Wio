@@ -1313,7 +1313,7 @@ func (a *API) discoverProjects(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	operationID, err := a.store.QueueOperation(r.Context(), server.ID, "inventory.scan", map[string]any{}, "inventory-scan:"+server.ID+":"+store.NewID())
+	operationID, err := a.store.QueueProjectDiscovery(r.Context(), server.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not queue project discovery")
 		return

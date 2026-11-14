@@ -88,6 +88,18 @@ func TestNormalizeServerMetadataRejectsOversizedFields(t *testing.T) {
 func TestDiscoverProjectsQueuesInventoryScan(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "discover-token")
+	ctx := context.Background()
+	inventory := protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/removed", Name: "removed"}}}
+	if err := database.UpsertInventory(ctx, server.ID, inventory); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("unexpected initial workspaces: %+v %v", workspaces, err)
+	}
+	if err := database.RemoveWorkspaceRecord(ctx, workspaces[0].ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.1.0"}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +111,13 @@ func TestDiscoverProjectsQueuesInventoryScan(t *testing.T) {
 	operations, err := database.PendingOperations(context.Background(), server.ID)
 	if err != nil || len(operations) != 1 || operations[0].Kind != "inventory.scan" {
 		t.Fatalf("unexpected operations: %#v %v", operations, err)
+	}
+	if err := database.UpsertInventory(ctx, server.ID, inventory); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err = database.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("explicit discovery did not restore the removed workspace: %+v %v", workspaces, err)
 	}
 }
 

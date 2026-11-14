@@ -1112,17 +1112,28 @@ func migrateImportedProjectRemotes(ctx context.Context, db *sqlx.DB) error {
 }
 
 func (s *Store) UpsertInventory(ctx context.Context, serverID string, inv protocol.Inventory) error {
-	var managedRootsJSON string
-	if err := s.DB.GetContext(ctx, &managedRootsJSON, s.Q("SELECT managed_roots FROM servers WHERE id=?"), serverID); err != nil {
-		return err
-	}
-	managedRoots := decodeManagedRoots(managedRootsJSON)
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.lockWorkspaceInventory(ctx, tx, serverID); err != nil {
+		return err
+	}
+	var managedRootsJSON string
+	if err := tx.GetContext(ctx, &managedRootsJSON, s.Q("SELECT managed_roots FROM servers WHERE id=?"), serverID); err != nil {
+		return err
+	}
+	managedRoots := decodeManagedRoots(managedRootsJSON)
 	for _, repo := range inv.Repositories {
+		var excluded int
+		if err := tx.GetContext(ctx, &excluded, s.Q(`SELECT COUNT(*) FROM workspace_inventory_exclusions e WHERE e.server_id=? AND e.path=?
+			AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.server_id=e.server_id AND w.path=e.path)`), serverID, repo.Path); err != nil {
+			return err
+		}
+		if excluded != 0 {
+			continue
+		}
 		normalized := normalizeRemote(repo.RemoteURL)
 		var remoteProjectID string
 		if normalized != "" {

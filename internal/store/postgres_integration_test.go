@@ -139,6 +139,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 
 	assertProjectServerPreferencesIsolation(t, scans)
 	assertHiddenServerProjectsRecovery(t, scans)
+	t.Run("workspace inventory removal", func(t *testing.T) { assertRemovedWorkspaceStaysRemovedAfterInventory(t, scans) })
 	assertGeminiRecoveryOnPostgres(t, scans)
 	assertGeminiGoalOnPostgres(t, scans)
 	assertGeminiModelConfigRevision(t, scans)

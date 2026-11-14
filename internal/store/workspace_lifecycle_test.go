@@ -123,6 +123,75 @@ func TestWorkspaceDeletionPlanAndMetadataRemoval(t *testing.T) {
 	}
 }
 
+func TestRemovedWorkspaceStaysRemovedAfterInventory(t *testing.T) {
+	assertRemovedWorkspaceStaysRemovedAfterInventory(t, testStore(t))
+}
+
+func assertRemovedWorkspaceStaysRemovedAfterInventory(t *testing.T, database *Store) {
+	t.Helper()
+	ctx := context.Background()
+	server := createOperationTestServer(t, database, "removed-workspace", "removed-workspace-token")
+	otherServer := createOperationTestServer(t, database, "other-workspace", "other-workspace-token")
+	repo := protocol.Repository{Path: "/srv/removed-workspace", Name: "removed-workspace", RemoteURL: "https://example.com/removed-workspace.git", Branch: "main"}
+	inventory := protocol.Inventory{Repositories: []protocol.Repository{repo}}
+	if err := database.UpsertInventory(ctx, server.ID, inventory); err != nil {
+		t.Fatal(err)
+	}
+	var workspace Workspace
+	if err := database.DB.GetContext(ctx, &workspace, database.Q("SELECT id,project_id FROM workspaces WHERE server_id=? AND path=?"), server.ID, repo.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RemoveWorkspaceRecord(ctx, workspace.ID); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := database.DeleteProjectMetadata(ctx, workspace.ProjectID); err != nil || !removed {
+		t.Fatalf("delete empty project: removed=%v err=%v", removed, err)
+	}
+	// Empty, partial and repeated scans must not forget a user's removal.
+	for _, inv := range []protocol.Inventory{{}, inventory, inventory} {
+		if err := database.UpsertInventory(ctx, server.ID, inv); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		if err := database.DB.GetContext(ctx, &count, database.Q("SELECT COUNT(*) FROM workspaces WHERE server_id=? AND path=?"), server.ID, repo.Path); err != nil || count != 0 {
+			t.Fatalf("inventory restored a removed workspace: count=%d err=%v", count, err)
+		}
+	}
+	// An identical path on another server is a different workspace.
+	if err := database.UpsertInventory(ctx, otherServer.ID, inventory); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := database.DB.GetContext(ctx, &count, database.Q("SELECT COUNT(*) FROM workspaces WHERE server_id=? AND path=?"), otherServer.ID, repo.Path); err != nil || count != 1 {
+		t.Fatalf("removal affected another server: count=%d err=%v", count, err)
+	}
+	if err := database.DB.GetContext(ctx, &workspace, database.Q("SELECT id FROM workspaces WHERE server_id=? AND path=?"), otherServer.ID, repo.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RemoveWorkspaceRecord(ctx, workspace.ID); err != nil {
+		t.Fatal(err)
+	}
+	operationID, err := database.QueueProjectDiscovery(ctx, server.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := database.Operation(ctx, operationID)
+	if err != nil || operation.Kind != "inventory.scan" || operation.ServerID != server.ID {
+		t.Fatalf("unexpected discovery operation: %+v %v", operation, err)
+	}
+	for _, target := range []struct {
+		serverID string
+		want     int
+	}{{server.ID, 1}, {otherServer.ID, 0}} {
+		if err := database.UpsertInventory(ctx, target.serverID, inventory); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.DB.GetContext(ctx, &count, database.Q("SELECT COUNT(*) FROM workspaces WHERE server_id=? AND path=?"), target.serverID, repo.Path); err != nil || count != target.want {
+			t.Fatalf("explicit discovery scope: count=%d want=%d err=%v", count, target.want, err)
+		}
+	}
+}
+
 func TestWorkspaceDeletionPlanBlocksDependenciesAndDirtyFiles(t *testing.T) {
 	ctx := context.Background()
 	database := testStore(t)

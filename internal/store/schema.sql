@@ -136,6 +136,13 @@ CREATE TABLE IF NOT EXISTS workspaces (
   UNIQUE(server_id, path)
 );
 
+-- Retain removals independently of project/workspace rows.
+CREATE TABLE IF NOT EXISTS workspace_inventory_exclusions (
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  PRIMARY KEY(server_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS workspace_git_snapshots (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   data TEXT NOT NULL DEFAULT '{}',

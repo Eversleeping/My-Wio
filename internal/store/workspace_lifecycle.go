@@ -92,7 +92,23 @@ func (s *Store) RemoveWorkspaceRecord(ctx context.Context, workspaceID string) e
 	if !plan.CanRemoveRecord {
 		return stateConflict("workspace metadata cannot be removed while dependencies exist")
 	}
-	result, err := s.DB.ExecContext(ctx, s.Q(`DELETE FROM workspaces WHERE id=?
+	workspace, err := s.Workspace(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := s.lockWorkspaceInventory(ctx, tx, workspace.ServerID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO workspace_inventory_exclusions(server_id,path)
+		SELECT server_id,path FROM workspaces WHERE id=? ON CONFLICT(server_id,path) DO NOTHING`), workspaceID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, s.Q(`DELETE FROM workspaces WHERE id=?
 		AND NOT EXISTS (SELECT 1 FROM agent_operations WHERE workspace_id=? AND status IN ('queued','delivered','running'))
 		AND NOT EXISTS (SELECT 1 FROM codex_threads WHERE workspace_id=?)
 		AND NOT EXISTS (SELECT 1 FROM gemini_threads WHERE workspace_id=?)
@@ -108,7 +124,7 @@ func (s *Store) RemoveWorkspaceRecord(ctx context.Context, workspaceID string) e
 	if rows != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) QueueWorkspaceLifecycle(ctx context.Context, workspace Workspace, command protocol.GitWorkspaceLifecycleCommand) (string, error) {
