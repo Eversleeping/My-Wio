@@ -26,6 +26,8 @@ Wio 是面向小规模 Linux 服务器集群的个人自托管控制平台。通
 
 本文与用户手册按当前仓库实现维护；当前 Wio 版本见 [internal/buildinfo/version.go](internal/buildinfo/version.go)。功能是否开放还取决于目标 Agent 和实际 CLI 的版本，不能仅根据控制面版本判断。
 
+规划方向（2026-11-14 已确认）：以 Wio 为主，参考 OpenTeams 的设计，在现有 Go/React 技术栈中补齐任务、依赖调度、团队协作、版本化成果和审查返工。具体步骤见 [P7 任务编排与团队协作](docs/roadmap/P7-task-orchestration.md)。这是待实现计划，不代表当前版本已提供任务 DAG、动态改计划或自动验收；现有会话协作的能力与边界见下文及协作协议。
+
 ## 主要能力
 
 - **服务器管理**：SSH 指纹确认、一次性令牌注册、依赖安装、修复注册、Agent 自更新、三种 AI CLI 版本管理、凭据独立下发及服务器下线。
