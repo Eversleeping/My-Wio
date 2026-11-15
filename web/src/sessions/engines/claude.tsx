@@ -1,3 +1,4 @@
+import { useComposerDraft } from "../composerDrafts";
 import { Archive, ArrowUp, Bot, CalendarClock, Copy, Gauge, GitFork, ListChecks, LoaderCircle, MessageSquare, MoreHorizontal, Pencil, Plus, Settings2, Square, UserRound, Workflow, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ContextMenu } from "../../ContextMenu";
@@ -45,11 +46,10 @@ export function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchi
   const availableModels = useClaudeModels(thread.workspace_id, thread.id);
   const skillDiscovery = useClaudeSkills(thread.workspace_id, thread.id, Boolean(thread.skills_supported) && thread.server_status === "online");
   const [requestCustomModel, setRequestCustomModel] = useState(0);
-  const [prompt, setPrompt] = useState(""); const [model, updateModel] = useState(thread.model); const [mode, setMode] = useState(thread.permission_mode); const [effort, setEffort] = useState(thread.effort ?? "");
+  const { prompt, setPrompt, images, setImages, editingEventID, setEditingEventID } = useComposerDraft("claude", thread.id); const [model, updateModel] = useState(thread.model); const [mode, setMode] = useState(thread.permission_mode); const [effort, setEffort] = useState(thread.effort ?? "");
   const modelSelected = useRef(false);
   const handledModelRevision = useRef("");
   const setModel = useCallback((value: string) => { modelSelected.current = true; updateModel(value); }, []);
-  const [editingEventID, setEditingEventID] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [confirming, setConfirming] = useState(false);
   const [allEvents, setAllEvents] = useState<StreamEvent[]>([]); const [historyBusy, setHistoryBusy] = useState(false);
   const allEventsRef = useRef<StreamEvent[]>([]);
@@ -106,7 +106,6 @@ export function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchi
     if (!modelSelected.current && thread.model_credential_revision !== revision) updateModel(data.default_model);
   }, [availableModels.data, running, blocked, busy, thread.model_credential_revision]);
   const steeringRequest = useRef<{operation:string;prompt:string;images:string;id:string}>();
-  const [images,setImages]=useState<{id:string;dataURL:string}[]>([]);
   const [imageBusy,setImageBusy]=useState(false);
   const imageWork=useRef<AbortController|null>(null);
   const promptRef=useRef<HTMLTextAreaElement>(null);

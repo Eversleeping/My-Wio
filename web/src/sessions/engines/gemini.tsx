@@ -1,3 +1,4 @@
+import { useComposerDraft } from "../composerDrafts";
 import { useVisibleClock } from "../../hooks/useVisibleInterval";
 import { ArrowUp, Bot, Boxes, CalendarClock, Copy, Download, GitFork, Globe, Lightbulb, ListChecks, LoaderCircle, MessageSquare, MoreHorizontal, Pause, Pencil, Play, Plus, RefreshCw, Sparkles, Square, Target, UserRound, Users, Workflow, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -89,9 +90,7 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
   const [historyBusy, setHistoryBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [editingEventID, setEditingEventID] = useState("");
-  const [images, setImages] = useState<{id:string;dataURL:string}[]>([]);
+  const { prompt, setPrompt, images, setImages, editingEventID, setEditingEventID } = useComposerDraft("gemini", thread.id);
   const [imageBusy, setImageBusy] = useState(false);
   const imageWork = useRef<AbortController | null>(null);
   useEffect(() => () => imageWork.current?.abort(), [thread.id]);

@@ -28,7 +28,8 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
   await page.goto("/?view=sessions");
   await expect(page.locator(".thread-project")).toHaveCount(1);
   await expect(page.locator(".session-engine")).toHaveText(["Gemini", "Codex", "Claude"]);
-  for (const engine of ["codex", "gemini", "claude"]) {
+  const visited = new Set<string>();
+  for (const engine of ["codex", "gemini", "claude", "codex", "gemini", "claude"]) {
     if (testInfo.project.name === "mobile-chromium") {
       const tabs = page.locator(".codex-mobile-tabs:visible, .gemini-mobile-tabs:visible");
       await tabs.getByRole("button", { name: "Sessions", exact: true }).or(tabs.getByRole("tab", { name: "Sessions", exact: true })).click();
@@ -38,6 +39,10 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
     await expect(page).toHaveURL(new RegExp(`view=sessions&engine=${engine}&thread=shared-id`));
     await expect(page.locator(".thread.active")).toHaveCount(1);
     await expect(page.locator(".conversation-stream")).toBeVisible();
+    const input = page.locator("form.composer textarea");
+    const draft = `Unsent ${engine} draft`;
+    if (visited.has(engine)) await expect(input).toHaveValue(draft);
+    else { await expect(input).toHaveValue(""); await input.fill(draft); visited.add(engine); }
   }
   // A persisted collaboration result and its unread notification retain old URLs.
   await page.goto("/?view=codex&thread=shared-id");

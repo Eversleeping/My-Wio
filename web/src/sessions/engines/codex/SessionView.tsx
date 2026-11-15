@@ -1,3 +1,4 @@
+import { useComposerDraft } from "../../composerDrafts";
 import {
 Activity,
 AlertTriangle,
@@ -91,7 +92,6 @@ import { codexScrollPositions,isNearCodexStreamBottom,latestScrollTop,setScrollT
 import { useThreadEvents } from "./useThreadEvents";
 import { waitForBackoff,waitForGoalSnapshot } from "./waiters";
 
-type ComposerMode = "message" | "goal";
 
 type ComposerImage = { id: string; dataURL: string };
 
@@ -107,14 +107,12 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const { t } = useI18n();
   const [rawEvents, setRawEvents] = useState(false);
   const events = useThreadEvents(thread.id, rawEvents, realtime, globalStreamRevision, streamRevision, invalidationSequence);
-  const [prompt, setPrompt] = useState("");
-  const [images, setImages] = useState<ComposerImage[]>([]);
+  const { prompt, setPrompt, images, setImages, editingEventID, setEditingEventID, composerMode, setComposerMode } = useComposerDraft("codex", thread.id);
   const [imageBusy, setImageBusy] = useState(false);
   const imageCompressionRef = useRef<AbortController | null>(null);
   const [sending, setSending] = useState(false);
   const codexRequests = useRef(new CodexRequests());
   const [interrupting, setInterrupting] = useState(false);
-  const [editingEventID, setEditingEventID] = useState("");
   const [composerPreferences, setComposerPreferences] = useState(() => loadCodexComposerPreferences(thread.id));
   const { approvalMode, model, reasoningEffort } = composerPreferences;
   const updateComposerPreferences = (changes: Partial<CodexComposerPreferences>) => {
@@ -130,7 +128,6 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const [customModelSignal, setCustomModelSignal] = useState(0);
   const [slashMode, setSlashMode] = useState<"commands" | "model" | "reasoning">("commands");
   const [slashDismissedValue, setSlashDismissedValue] = useState("");
-  const [composerMode, setComposerMode] = useState<ComposerMode>("message");
   const [statusVisible, setStatusVisible] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -357,7 +354,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   useEffect(() => {
     const controller = new AbortController();
     nativeRequestsRef.current = controller;
-    ++goalRequestRef.current; setRawEvents(false); setPrompt(""); setImages([]); setEditingEventID(""); setComposerMode("message"); setStatusVisible(false); setGoal(null); setStatusSnapshot(null); setMcpSnapshot(null); setSkillsSnapshot(null); setSubagentsOpen(false); setNativeBusy(""); void loadGoal();
+    ++goalRequestRef.current; setRawEvents(false); setStatusVisible(false); setGoal(null); setStatusSnapshot(null); setMcpSnapshot(null); setSkillsSnapshot(null); setSubagentsOpen(false); setNativeBusy(""); void loadGoal();
     return () => { controller.abort(); if (nativeRequestsRef.current === controller) nativeRequestsRef.current = null; };
   }, [thread.id]);
   useEffect(() => { if (slashOpen && slashMode === "commands" && !skillsSnapshot && nativeBusy !== "skills") void loadSnapshot<CodexSkill[]>("skills"); }, [slashOpen, slashMode, thread.workspace_id]);
