@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Network, Settings2, ExternalLink, Trash2 } from "lucide-react";
 import { put, post, remove } from "../api";
 import { useData } from "../useData";
@@ -27,7 +27,6 @@ const emptyGrant: Grant = { enabled: false, workspace_ids: [], session_refs: [],
 export function SessionCollaboration({ engine, id, workspaceID, projectID, revision }: { engine: Engine; id: string; workspaceID: string; projectID: string; revision: unknown }) {
   const { language, t } = useI18n();
   const text = (zh: string, en: string) => language === "zh-CN" ? zh : en;
-  const [tick, setTick] = useState(0);
   const [settings, setSettings] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [grant, setGrant] = useState<Grant>(emptyGrant);
@@ -35,13 +34,8 @@ export function SessionCollaboration({ engine, id, workspaceID, projectID, revis
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState<RelatedSession | null>(null);
   const path = `/sessions/${engine}/${encodeURIComponent(id)}/collaboration`;
-  const state = useData<State>(path, `${revision}:${tick}`);
+  const state = useData<State>(path, revision);
   const workspaces = useData<Workspace[]>(settings ? "/workspaces" : null, settings);
-  useEffect(() => {
-    if (!state.data?.grant?.enabled && !state.data?.links?.length && !expanded) return;
-    const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") setTick(value => value + 1); }, 3000);
-    return () => window.clearInterval(timer);
-  }, [state.data?.grant?.enabled, state.data?.links?.length, expanded]);
   // Older controllers can omit this optional surface without breaking chat.
   if (!state.data && !state.error) return null;
   const openSettings = () => { setGrant({ ...emptyGrant, ...state.data?.grant }); setError(""); setSettings(true); };
