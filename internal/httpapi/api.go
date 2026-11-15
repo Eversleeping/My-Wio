@@ -7,22 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io/fs"
-	"log/slog"
-	"mime"
-	"net/http"
-	"net/url"
-	"os"
-	"path"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
-
+	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"github.com/pquerna/otp/totp"
-
 	"github.com/wio-platform/wio/internal/agentgateway"
 	"github.com/wio-platform/wio/internal/agentupdate"
 	"github.com/wio-platform/wio/internal/buildinfo"
@@ -33,6 +21,18 @@ import (
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
 	"github.com/wio-platform/wio/internal/store"
+	"io/fs"
+	"log/slog"
+	"mime"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 const sessionCookie = "wio_session"
@@ -654,3 +654,79 @@ func eventPayload(value any) json.RawMessage {
 }
 
 var _ = protocol.StreamEvent{}
+
+const (
+	serverAddressLimit       = 255
+	serverConfigurationLimit = 4096
+	serverNotesLimit         = 4096
+	projectNameLimit         = 200
+	projectDestinationLimit  = 1024
+	gitBranchNameLimit       = 240
+	threadTitleLimit         = 200
+	defaultThreadsPageLimit  = 50
+	maxThreadsPageLimit      = 100
+	defaultAuditPageLimit    = 50
+	maxAuditPageLimit        = 100
+)
+
+// errGitRemoteCredentials explains why a remote URL with embedded secrets is
+// refused: remotes are stored and shown in plaintext, unlike vault entries.
+var errGitRemoteCredentials = errors.New("Git remote URL must not contain credentials; remove the user:token@ part and save the token as a Git credential profile in the credentials vault (Settings > Credentials)")
+
+// gitRemoteCredentialError rejects a password in any URL and any userinfo in an
+// HTTP(S) URL, where a bare username is usually a token. SSH users such as
+// ssh://git@host carry no secret and scp-style remotes have no password syntax.
+// The authority is inspected by hand so URLs that url.Parse refuses (and that
+// lenient callers may still accept) cannot smuggle credentials through.
+func gitRemoteCredentialError(remote string) error {
+	scheme, rest, ok := strings.Cut(strings.TrimSpace(remote), "://")
+	if !ok {
+		return nil
+	}
+	authority := rest
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return nil
+	}
+	scheme = strings.ToLower(scheme)
+	if strings.Contains(authority[:at], ":") || scheme == "http" || scheme == "https" {
+		return errGitRemoteCredentials
+	}
+	return nil
+}
+
+func validGitRemote(remote string) bool {
+	if gitRemoteCredentialError(remote) != nil {
+		return false
+	}
+	if strings.HasPrefix(remote, "git@") || strings.HasPrefix(remote, "ssh://") {
+		return true
+	}
+	parsed, err := url.Parse(remote)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
+}
+
+func repositoryName(remote string) string {
+	cleaned := strings.TrimSuffix(strings.TrimSpace(remote), ".git")
+	cleaned = strings.TrimSuffix(cleaned, "/")
+	name := filepath.Base(strings.ReplaceAll(cleaned, ":", "/"))
+	if name == "." || name == "" {
+		return "Imported project"
+	}
+	return name
+}
+
+func mapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+var _ = sql.ErrNoRows
+
+var _ = fmt.Sprintf
