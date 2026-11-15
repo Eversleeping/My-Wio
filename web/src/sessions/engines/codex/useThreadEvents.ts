@@ -98,7 +98,7 @@ export function useThreadEvents(threadID: string, rawEvents: boolean, realtime: 
   const appliedReloadNonceRef = useRef(0);
   const loadingEarlierRef = useRef(false);
   const reload = useCallback(() => setReloadNonce(value => value + 1), []);
-  useFallbackRefresh(reload);
+  useFallbackRefresh(() => { invalidateThreadEvents(threadID, null); reload(); });
 
   useEffect(() => {
     const cached = threadEventsCache.get(path);
