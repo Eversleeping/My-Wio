@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -35,7 +36,7 @@ function setup(failRestore = false) {
     return new Response(JSON.stringify(body));
   }));
   const notify = vi.fn();
-  render(<I18nProvider><ProjectsPage realtime={0} notify={notify} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{projects: 0}}><ProjectsPage  notify={notify} /></DataProvider></I18nProvider>);
   return { requests, notify };
 }
 

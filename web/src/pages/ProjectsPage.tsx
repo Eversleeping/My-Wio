@@ -1,33 +1,33 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { Boxes, GitBranch, LoaderCircle, Pencil, Plus, RefreshCw, RotateCcw, Settings, Trash2 } from "lucide-react";
-import { api, patch, post, remove } from "../api";
-import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
-import { DataTable, Section, Status } from "../components/PageUI";
-import { relative, shortSHA } from "../format";
+import { Boxes,GitBranch,LoaderCircle,Pencil,Plus,RefreshCw,RotateCcw,Settings,Trash2 } from "lucide-react";
+import { useEffect,useState,type ReactNode } from "react";
+import { Dialog as AccessibleDialog,DialogActions,type DialogProps } from "../components/Dialog";
+import { DataTable,Section,Status } from "../components/PageUI";
+import { projects as projectEndpoints } from "../data/projects";
+import { useResource } from "../data/resources";
+import { servers as serverEndpoints } from "../data/servers";
+import { relative,shortSHA } from "../format";
 import { useI18n } from "../i18n";
+import type { Project,ProjectDeletionPlan,Workspace,WorkspaceDeletionPlan } from "../types";
 import {
-  CreateProjectDialog,
-  ProjectDeletionDialog,
-  ProjectDetailsDialog,
-  ProjectTable,
-  WorkspaceGitDialog,
-  WorkspaceManagerDialog,
-  WorkspaceTable,
-  newCreateProjectFormValue,
-  type CreateProjectDialogLabels,
-  type CreateProjectRequest,
-  type ProjectEditValue,
-  type ProjectLifecycleState,
-  type ProjectListRecord,
-  type ProjectDeletionMode,
-  type WorkspaceDeletionMode,
-  type WorkspaceGitAction
+CreateProjectDialog,
+ProjectDeletionDialog,
+ProjectDetailsDialog,
+ProjectTable,
+WorkspaceGitDialog,
+WorkspaceManagerDialog,
+WorkspaceTable,
+newCreateProjectFormValue,
+type CreateProjectDialogLabels,
+type CreateProjectRequest,
+type ProjectDeletionMode,
+type ProjectEditValue,
+type ProjectLifecycleState,
+type ProjectListRecord,
+type WorkspaceDeletionMode,
+type WorkspaceGitAction
 } from "./projects";
-import type { Project, ProjectDeletionPlan, ProjectDetail, Server, Workspace, WorkspaceDeletionPlan, WorkspaceGitSnapshot } from "../types";
-import { useData } from "../useData";
 
 export interface ProjectsPageProps {
-  realtime: number;
   notify: (text: string) => void;
 }
 
@@ -36,14 +36,7 @@ function readResourceFilters() {
   return { projectName: params.get("project_name") ?? "", projectServerID: params.get("project_server_id") ?? "", projectStatus: params.get("project_status") ?? "", workspacePath: params.get("workspace_path") ?? "", workspaceServerID: params.get("workspace_server_id") ?? "", workspaceGitStatus: params.get("workspace_git_status") ?? "" };
 }
 
-function resourcePath(path: string, values: Record<string, string>) {
-  const params = new URLSearchParams();
-  Object.entries(values).forEach(([key, value]) => { if (value) params.set(key, value); });
-  const query = params.toString();
-  return query ? `${path}?${query}` : path;
-}
-
-export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
+export function ProjectsPage({ notify }: ProjectsPageProps) {
   const { t } = useI18n();
   const initialFilters = readResourceFilters();
   const [projectName, setProjectName] = useState(initialFilters.projectName);
@@ -52,10 +45,10 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const [workspacePath, setWorkspacePath] = useState(initialFilters.workspacePath);
   const [workspaceServerID, setWorkspaceServerID] = useState(initialFilters.workspaceServerID);
   const [workspaceGitStatus, setWorkspaceGitStatus] = useState(initialFilters.workspaceGitStatus);
-  const projects = useData<Project[]>(resourcePath("/projects", { name: projectName, server_id: projectServerID, status: projectStatus }), realtime);
-  const workspaces = useData<Workspace[]>(resourcePath("/workspaces", { path: workspacePath, server_id: workspaceServerID, git_status: workspaceGitStatus }), realtime);
-  const hiddenProjects = useData<Pick<Workspace, "project_id" | "server_id">[]>("/projects/hidden", realtime);
-  const servers = useData<Server[]>("/servers", realtime);
+  const projects = useResource(projectEndpoints.list({name: projectName, server_id: projectServerID, status: projectStatus}));
+  const workspaces = useResource(projectEndpoints.workspaces({path: workspacePath, server_id: workspaceServerID, git_status: workspaceGitStatus}));
+  const hiddenProjects = useResource(projectEndpoints.hidden());
+  const servers = useResource(serverEndpoints.list());
   const [dialog, setDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [createError, setCreateError] = useState("");
@@ -65,7 +58,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const [detailProjectID, setDetailProjectID] = useState<string | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const detail = useData<ProjectDetail>(detailProjectID ? `/projects/${detailProjectID}` : null, realtime);
+  const detail = useResource(detailProjectID ? projectEndpoints.detail(detailProjectID) : null);
   const [deleteProjectID, setDeleteProjectID] = useState<string | null>(null);
   const [projectDeletionPlan, setProjectDeletionPlan] = useState<ProjectDeletionPlan | null>(null);
   const [projectDeletionBusy, setProjectDeletionBusy] = useState(false);
@@ -100,10 +93,10 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
     setCreateError("");
     try {
       if (request.mode === "blank") {
-        await post("/projects", request);
+        await projectEndpoints.create(request);
         notify(t("project.createQueued"));
       } else if (request.mode === "clone") {
-        await post("/projects/import", {
+        await projectEndpoints.import({
           remote_url: request.remote_url,
           name: request.name ?? "",
           server_id: request.server_id,
@@ -111,11 +104,9 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
         });
         notify(t("project.queued"));
       } else {
-        await post("/projects/discover", { server_id: request.server_id });
+        await projectEndpoints.discover(request.server_id);
         notify(t("project.scanQueued"));
       }
-      projects.reload();
-      workspaces.reload();
       setDialog(false);
     } catch (err) {
       const error = message(err);
@@ -127,8 +118,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
     setProjectAction({ id: project.id, kind: "retry" });
     try {
       const blank = project.status === "failed" || project.status === "partial";
-      await post(`/projects/${project.id}/${blank ? "retry-create" : "retry-import"}`, {});
-      projects.reload();
+      await projectEndpoints.retry(project.id, blank);
       notify(t(blank ? "project.createRetryQueued" : "project.retryQueued"));
     } catch (err) { notify(message(err)); } finally { setProjectAction(null); }
   };
@@ -137,7 +127,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
     setProjectDeletionPlan(null);
     setProjectDeletionError("");
     setProjectDeletionBusy(true);
-    try { setProjectDeletionPlan(await post<ProjectDeletionPlan>(`/projects/${project.id}/deletion-plan`, {})); }
+    try { setProjectDeletionPlan(await projectEndpoints.deletionPlan(project.id)); }
     catch (err) { setProjectDeletionError(message(err)); }
     finally { setProjectDeletionBusy(false); }
   };
@@ -146,11 +136,9 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
     setProjectDeletionBusy(true);
     setProjectDeletionError("");
     try {
-      await api(`/projects/${deleteProjectID}`, { method: "DELETE", body: JSON.stringify({ mode }) });
+      await projectEndpoints.remove(deleteProjectID, mode);
       setDeleteProjectID(null);
       setProjectDeletionPlan(null);
-      projects.reload();
-      workspaces.reload();
       notify(t(mode === "managed-files" ? "project.deleteFilesQueued" : "project.deleted"));
     } catch (err) { setProjectDeletionError(message(err)); }
     finally { setProjectDeletionBusy(false); }
@@ -158,9 +146,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const restoreWorkspaceProject = async (workspace: Workspace) => {
     setRestoringWorkspaceID(workspace.id);
     try {
-      await patch<Project>(`/projects/${workspace.project_id}`, { server_id: workspace.server_id, hidden: false });
-      projects.reload();
-      hiddenProjects.reload();
+      await projectEndpoints.restore(workspace.project_id, workspace.server_id);
       notify(t("project.restored"));
     } catch (err) { notify(message(err)); } finally { setRestoringWorkspaceID(null); }
   };
@@ -169,10 +155,7 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
     setDetailBusy(true);
     setDetailError("");
     try {
-      await patch(`/projects/${detailProjectID}`, { name: value.name.trim(), description: value.description.trim(), default_branch: value.defaultBranch.trim(), pinned: value.pinned, hidden: value.hidden, archived: value.archived });
-      projects.reload();
-      hiddenProjects.reload();
-      detail.reload();
+      await projectEndpoints.update(detailProjectID, { name: value.name.trim(), description: value.description.trim(), default_branch: value.defaultBranch.trim(), pinned: value.pinned, hidden: value.hidden, archived: value.archived });
       setDetailProjectID(null);
       notify(t("project.saved"));
     } catch (err) { setDetailError(message(err)); } finally { setDetailBusy(false); }
@@ -197,12 +180,12 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const [gitWorkspaceID, setGitWorkspaceID] = useState<string | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
   const [gitError, setGitError] = useState("");
-  const gitSnapshot = useData<WorkspaceGitSnapshot>(gitWorkspaceID ? `/workspaces/${gitWorkspaceID}/git` : null, realtime);
+  const gitSnapshot = useResource(gitWorkspaceID ? projectEndpoints.git(gitWorkspaceID) : null);
   const refreshWorkspaceGit = async (workspaceID = gitWorkspaceID, announce = true) => {
     if (!workspaceID) return;
     setGitBusy(true);
     setGitError("");
-    try { await post(`/workspaces/${workspaceID}/git/refresh`, {}); gitSnapshot.reload(); if (announce) notify(t("project.gitRefreshQueued")); } catch (err) { setGitError(message(err)); } finally { setGitBusy(false); }
+    try { await projectEndpoints.refreshGit(workspaceID); if (announce) notify(t("project.gitRefreshQueued")); } catch (err) { setGitError(message(err)); } finally { setGitBusy(false); }
   };
   const openWorkspaceGit = (workspaceID: string) => {
     setGitError("");
@@ -211,29 +194,11 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   };
   const runGitAction = async (action: WorkspaceGitAction) => {
     if (!gitWorkspaceID) return;
-    const base = `/workspaces/${gitWorkspaceID}/git`;
-    const segment = (value: string) => encodeURIComponent(value);
     setGitBusy(true);
     setGitError("");
     try {
-      switch (action.type) {
-        case "branch.create": await post(`${base}/branches`, { name: action.name, start_point: action.startPoint }); break;
-        case "branch.rename": await patch(`${base}/branches/${segment(action.branch)}`, { name: action.name }); break;
-        case "branch.delete": await remove(`${base}/branches/${segment(action.branch)}?force=${action.force}`); break;
-        case "checkout": await post(`${base}/checkout`, { ref: action.ref, detach: action.detach }); break;
-        case "remote.add": await post(`${base}/remotes`, { name: action.name, url: action.url }); break;
-        case "remote.update": await patch(`${base}/remotes/${segment(action.remote)}`, { url: action.url }); break;
-        case "remote.delete": await remove(`${base}/remotes/${segment(action.remote)}`); break;
-        case "fetch": await post(`${base}/fetch`, { remote: action.remote }); break;
-        case "pull": await post(`${base}/pull`, { remote: action.remote, branch: action.branch }); break;
-        case "push": await post(`${base}/push`, { remote: action.remote, ref: action.ref, set_upstream: action.setUpstream }); break;
-        case "stage": await post(`${base}/stage`, { paths: action.paths, all: action.all }); break;
-        case "unstage": await post(`${base}/unstage`, { paths: action.paths, all: action.all }); break;
-        case "discard": await post(`${base}/discard`, { paths: action.paths, all: action.all }); break;
-        case "commit": await post(`${base}/commit`, { message: action.message }); break;
-      }
+      await projectEndpoints.gitAction(gitWorkspaceID, action);
       notify(t("project.gitActionQueued"));
-      gitSnapshot.reload();
     } catch (err) {
       const detail = message(err);
       setGitError(detail);
@@ -248,31 +213,31 @@ export function ProjectsPage({ realtime, notify }: ProjectsPageProps) {
   const renameWorkspace = async (name: string) => {
     if (!manageWorkspaceID) return;
     setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await patch(`/workspaces/${manageWorkspaceID}`, { display_name: name }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceSaved")); }
+    try { await projectEndpoints.renameWorkspace(manageWorkspaceID, name); setManageWorkspaceID(null); notify(t("project.workspaceSaved")); }
     catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
   };
   const moveWorkspace = async (path: string) => {
     if (!manageWorkspaceID) return;
     setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await post(`/workspaces/${manageWorkspaceID}/move`, { path }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceMoveQueued")); }
+    try { await projectEndpoints.moveWorkspace(manageWorkspaceID, path); setManageWorkspaceID(null); notify(t("project.workspaceMoveQueued")); }
     catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
   };
   const copyWorkspace = async (serverID: string, path: string) => {
     if (!manageWorkspaceID) return;
     setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await post(`/workspaces/${manageWorkspaceID}/copy`, { server_id: serverID, path }); workspaces.reload(); setManageWorkspaceID(null); notify(t("project.workspaceCopyQueued")); }
+    try { await projectEndpoints.copyWorkspace(manageWorkspaceID, serverID, path); setManageWorkspaceID(null); notify(t("project.workspaceCopyQueued")); }
     catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
   };
   const loadWorkspaceDeletionPlan = async (force: boolean) => {
     if (!manageWorkspaceID) return;
     setWorkspacePlanLoading(true); setWorkspaceManagerError("");
-    try { setWorkspaceDeletionPlan(await post<WorkspaceDeletionPlan>(`/workspaces/${manageWorkspaceID}/deletion-plan?force=${force}`, {})); }
+    try { setWorkspaceDeletionPlan(await projectEndpoints.workspaceDeletionPlan(manageWorkspaceID, force)); }
     catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspacePlanLoading(false); }
   };
   const deleteWorkspace = async (mode: WorkspaceDeletionMode, force: boolean) => {
     if (!manageWorkspaceID) return;
     setWorkspaceManagerBusy(true); setWorkspaceManagerError("");
-    try { await remove(`/workspaces/${manageWorkspaceID}?mode=${mode}&force=${force}`); workspaces.reload(); projects.reload(); setManageWorkspaceID(null); notify(t(mode === "files" ? "project.workspaceDeleteQueued" : "project.workspaceRemoved")); }
+    try { await projectEndpoints.removeWorkspace(manageWorkspaceID, mode, force); setManageWorkspaceID(null); notify(t(mode === "files" ? "project.workspaceDeleteQueued" : "project.workspaceRemoved")); }
     catch (err) { setWorkspaceManagerError(message(err)); } finally { setWorkspaceManagerBusy(false); }
   };
   const gitLabels = { title: t("project.gitTitle"), status: t("project.gitStatus"), branches: t("project.gitBranches"), remotes: t("project.gitRemotes"), commits: t("project.gitCommits"), refresh: t("project.gitRefresh"), refreshing: t("project.gitRefreshing"), branch: t("column.branch"), head: t("project.gitHead"), upstream: t("project.gitUpstream"), ahead: t("project.gitAhead"), behind: t("project.gitBehind"), staged: t("project.gitStaged"), unstaged: t("project.gitUnstaged"), untracked: t("project.gitUntracked"), clean: t("project.gitClean"), dirty: t("project.gitDirty"), noBranches: t("project.gitNoBranches"), noRemotes: t("project.gitNoRemotes"), noCommits: t("project.gitNoCommits"), close: t("common.close"), sync: t("project.gitSync"), remote: t("project.gitRemote"), ref: t("project.gitRef"), fetch: t("project.gitFetch"), pull: t("project.gitPull"), push: t("project.gitPush"), setUpstream: t("project.gitSetUpstream"), createBranch: t("project.gitCreateBranch"), branchName: t("project.gitBranchName"), startPoint: t("project.gitStartPoint"), checkout: t("project.gitCheckout"), detach: t("project.gitDetach"), rename: t("common.rename"), edit: t("common.edit"), delete: t("common.delete"), forceDelete: t("project.gitForceDelete"), addRemote: t("project.gitAddRemote"), remoteName: t("project.gitRemoteName"), remoteURL: t("project.remoteURL"), save: t("common.save"), cancel: t("common.cancel"), current: t("project.gitCurrent"), local: t("project.gitLocal"), remoteBranch: t("project.gitRemoteBranch"), actionQueued: t("project.gitActionQueued"), stagedChanges: t("project.gitStagedChanges"), unstagedChanges: t("project.gitUnstagedChanges"), noStagedChanges: t("project.gitNoStagedChanges"), noChanges: t("codex.noChanges"), stage: t("project.gitStage"), stageAll: t("project.gitStageAll"), unstage: t("project.gitUnstage"), unstageAll: t("project.gitUnstageAll"), discard: t("project.gitDiscard"), discardConfirm: t("project.gitDiscardConfirm"), commitMessage: t("project.gitCommitMessage"), commitPlaceholder: t("project.gitCommitPlaceholder"), commitAction: t("project.gitCommitAction"), readOnly: t("project.gitReadOnly"), modified: t("codex.changeModified"), added: t("codex.changeAdded"), deleted: t("codex.changeDeleted"), renamed: t("codex.changeRenamed"), copied: t("codex.changeCopied"), untrackedFile: t("project.gitUntracked"), conflicted: t("codex.changeConflicted") };

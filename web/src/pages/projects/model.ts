@@ -1,8 +1,8 @@
-import type { Project, Server, Workspace } from "../../types";
+import type { BlankProjectRemoteRequest,CreateProjectRequest,RemoteRepositoryVisibility } from "../../data/projectTypes";
+import type { Project,Server,Workspace } from "../../types";
 
 export type CreateProjectMode = "blank" | "clone" | "discover";
 export type BlankProjectRemoteMode = "none" | "existing" | "create";
-export type RemoteRepositoryVisibility = "private" | "internal" | "public";
 export type ProjectLifecycleState = "provisioning" | "importing" | "failed" | "partial" | "ready" | "syncing" | "pending" | "archived" | "deleting" | "deletion-failed";
 
 export type ProjectListRecord = Project;
@@ -37,38 +37,7 @@ export type CreateProjectField =
 
 export type CreateProjectValidationErrors = Partial<Record<CreateProjectField, string>>;
 
-export type BlankProjectRemoteRequest =
-  | { mode: "none" }
-  | { mode: "existing"; url: string }
-  | {
-    mode: "create";
-    provider: string;
-    namespace?: string;
-    repository: string;
-    visibility: RemoteRepositoryVisibility;
-  };
-
-export type CreateProjectRequest =
-  | {
-    mode: "blank";
-    name: string;
-    server_id: string;
-    destination?: string;
-    initial_branch: string;
-    initialize_readme: boolean;
-    remote: BlankProjectRemoteRequest;
-  }
-  | {
-    mode: "clone";
-    remote_url: string;
-    name?: string;
-    server_id: string;
-    destination?: string;
-  }
-  | {
-    mode: "discover";
-    server_id: string;
-  };
+export type { BlankProjectRemoteRequest,CreateProjectRequest,RemoteRepositoryVisibility } from "../../data/projectTypes";
 
 export interface CreateProjectValidationLabels {
   nameRequired: string;

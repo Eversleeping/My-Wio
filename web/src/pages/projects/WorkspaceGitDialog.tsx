@@ -1,24 +1,11 @@
-import { ArrowDownToLine, ArrowRightLeft, ArrowUpFromLine, GitBranch, GitCommit, Globe2, LoaderCircle, Pencil, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type FormEvent } from "react";
+import { ArrowDownToLine,ArrowRightLeft,ArrowUpFromLine,GitBranch,GitCommit,Globe2,LoaderCircle,Pencil,Plus,RefreshCw,Save,Trash2,X } from "lucide-react";
+import { useEffect,useLayoutEffect,useRef,useState,type ComponentType,type FormEvent } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import type { WorkspaceChange, WorkspaceGitSnapshot } from "../../types";
+import type { WorkspaceChange,WorkspaceGitSnapshot } from "../../types";
 import type { DialogSlotProps } from "./slots";
 
-export type WorkspaceGitAction =
-  | { type: "branch.create"; name: string; startPoint: string }
-  | { type: "branch.rename"; branch: string; name: string }
-  | { type: "branch.delete"; branch: string; force: boolean }
-  | { type: "checkout"; ref: string; detach: boolean }
-  | { type: "remote.add"; name: string; url: string }
-  | { type: "remote.update"; remote: string; url: string }
-  | { type: "remote.delete"; remote: string }
-  | { type: "fetch"; remote: string }
-  | { type: "pull"; remote: string; branch: string }
-  | { type: "push"; remote: string; ref: string; setUpstream: boolean }
-  | { type: "stage"; paths: string[]; all: boolean }
-  | { type: "unstage"; paths: string[]; all: boolean }
-  | { type: "discard"; paths: string[]; all: boolean }
-  | { type: "commit"; message: string };
+import type { WorkspaceGitAction } from "../../data/projectTypes";
+export type { WorkspaceGitAction } from "../../data/projectTypes";
 
 export interface GitDialogLabels {
   title: string; status: string; branches: string; remotes: string; commits: string; refresh: string; refreshing: string; branch: string; head: string; upstream: string; ahead: string; behind: string; staged: string; unstaged: string; untracked: string; clean: string; dirty: string; noBranches: string; noRemotes: string; noCommits: string; close: string;
