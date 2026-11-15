@@ -1,3 +1,4 @@
+import { DataProvider, clearResourceMemory } from "./data/resources";
 import { lazy, useMemo, useState, useCallback, useEffect, Suspense } from "react";
 import { useI18n } from "./i18n";
 import { readLocationState, type View, navigateToLocation, navigation } from "./navigation";
@@ -46,7 +47,7 @@ export default function App() {
   const approvals = useData<Approval[]>(auth === "authenticated" ? "/approvals" : null, realtimeRevisions.approvals);
 
   const authenticate = useCallback((value: Session | null) => {
-    if (!value) clearSessionMemory();
+    if (!value) { clearSessionMemory(); clearResourceMemory(); }
     setSession(value);
     setCurrentSession(value);
     setAuth(value ? "authenticated" : "login");
@@ -159,7 +160,7 @@ export default function App() {
           <div><p className="eyebrow">{t("app.controlPlane")}</p><h1>{t(navigation.find(item => item.id === view)?.labelKey ?? "nav.overview")}</h1></div>
           <div className="topbar-actions"><ThemeSwitch /><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`} role="status" aria-live="polite">{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
         </header>
-        <div className="page-content">{page}</div>
+        <div className="page-content"><DataProvider revisions={realtimeRevisions}>{page}</DataProvider></div>
       </main>
       {toast && <div className="toast" role="status" aria-live="polite"><Check size={17} />{toast}</div>}
     </div>

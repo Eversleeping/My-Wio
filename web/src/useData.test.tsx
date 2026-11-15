@@ -78,3 +78,29 @@ test("keeps the latest cache revision and allows a forced reload", async () => {
   await act(async () => pending[2].resolve(["manual"]));
   expect(cached.result.current.data).toEqual(["manual"]);
 });
+
+test("deduplicates simultaneous readers and keeps the remaining reader alive after navigation", async () => {
+  const pending = requests();
+  const first = renderHook(() => useData<string[]>("/shared", 0));
+  const second = renderHook(() => useData<string[]>("/shared", 0));
+  expect(pending).toHaveLength(1);
+  first.unmount();
+  expect(pending[0].signal.aborted).toBe(false);
+  await act(async () => pending[0].resolve(["shared value"]));
+  expect(second.result.current.data).toEqual(["shared value"]);
+  second.unmount();
+  expect(pending[0].signal.aborted).toBe(true);
+});
+
+test("cancels a shared request only after its last reader leaves and does not reuse an aborted request", async () => {
+  const pending = requests();
+  const first = renderHook(() => useData("/shared-cancel", 0));
+  const second = renderHook(() => useData("/shared-cancel", 0));
+  first.unmount(); second.unmount();
+  expect(pending[0].signal.aborted).toBe(true);
+  const replacement = renderHook(() => useData("/shared-cancel", 0));
+  expect(pending).toHaveLength(2);
+  await act(async () => pending[0].resolve(["abandoned"]));
+  await act(async () => pending[1].resolve(["fresh"]));
+  expect(replacement.result.current.data).toEqual(["fresh"]);
+});
