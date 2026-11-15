@@ -27,6 +27,7 @@ function setup(options: { defaultModel?: string; modelCredentialRevision?: strin
       if (options.modelsError) return new Response(JSON.stringify({error:"Upstream unavailable"}), {status:502});
       body = { configured: true, credential_revision: options.credentialRevision, default_model: options.defaultModel, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
     }
+    else if (url.endsWith("/session-engines")) body = {"engines": [{"engine":"codex","available":true},{"engine":"gemini","available":true},{"engine":"claude","available":true}]};
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
     else if (url === "/api/workspaces") body = [{ id: "workspace-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
     else if (url.startsWith("/api/sessions?engine=claude")) body = {items: options.selected && (!new URL(url, "http://localhost").searchParams.get("q") || `${thread.title} ${thread.path} ${thread.project_name}`.toLowerCase().includes(new URL(url, "http://localhost").searchParams.get("q")!.toLowerCase())) ? [thread] : [], next_cursor: null, groups: []};

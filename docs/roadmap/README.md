@@ -236,8 +236,8 @@ npm --prefix web run typecheck
 | P5-04 | 可选的会话隔离模式 | L | P5-03、P2-09 | 待开始 | |  | |
 | P5-05 | 界面呈现与文档 | S | P5-04 | 待开始 | |  | |
 | P6-01 | 交互方案确认与差异盘点 | S | 无 | 已完成 | 11-13 Codex | claude-fable-5-2 | 07bec2c、ae9f4fc |
-| P6-02 | 统一会话页面（与旧入口并存） | L | P2-06、P6-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本提交 |
-| P6-03 | 新建会话时选择引擎 | M | P6-02 | 待开始 | |  | |
+| P6-02 | 统一会话页面（与旧入口并存） | L | P2-06、P6-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 84f516b |
+| P6-03 | 新建会话时选择引擎 | M | P6-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本提交 |
 | P6-04 | 导航切换与旧链接兼容 | M | P6-03、用户确认 | 待开始 | |  | |
 | P6-05 | 项目页与首页衔接 | S | P6-04 | 待开始 | |  | |
 | P6-06 | 定时任务的跨引擎入口 | M | P6-04、P2-07 | 待开始 | |  | |
@@ -292,10 +292,10 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-13 | 制定路线图 | 网关 `flush` 的“未下发即失败”路径只有部署和凭据类操作的测试（`agentgateway/decryption_failure_test.go`），没有覆盖会话轮次、Git 和工作区操作 | P4-03 第 2 步补测试 |
 | 2026-11-13 | P0-01 | Git 相关测试会继承运行环境里的 Git 配置变量。环境里有 `GIT_CONFIG_PARAMETERS`（Wio Agent 会给 Claude、Gemini 会话注入）时，`internal/gitrepository` 有 3 个测试失败；另有 `GIT_CONFIG_COUNT` 一组变量（Gemini CLI 的 shell 会注入）时，`internal/gitrepository` 再有 2 个、`internal/scanner` 有 1 个测试失败。清掉全部 `GIT_CONFIG*` 后全部通过，用例名见 P0 的“执行记录”。所以在 Wio 的 Claude、Gemini 会话里直接运行 `go test ./...` 会误报失败 | 建议在这些测试的辅助函数里隔离 Git 配置环境，只改测试代码；处理之前，在这类会话里跑验收命令要先清掉 `GIT_CONFIG*`。何时处理由用户决定 |
 | 2026-11-13 | P0-01 审阅 | `make test-postgres` 用 `-run TestPostgresMigrationAndStorage` 只运行一个测试。同样带 `postgresintegration` 标签的 `TestPostgresAuthConsumptionIsAtomic`（`internal/store/postgres_auth_integration_test.go`）不在任何文档列出的验收命令里；手动运行时两个测试都通过 | 建议把 `-run` 改成 `^TestPostgres`。P1-01 把新用例挂在 `TestPostgresMigrationAndStorage` 下面，没有改 `-run`，所以 `TestPostgresAuthConsumptionIsAtomic` 仍然不在任何验收命令里。由用户决定 |
-| 2026-11-13 | P6-01 | Gemini 和 Claude 的新建对话框里切换工作区时，模型和思考程度会重置，审批模式、权限模式却保留原值，可能把为另一个工作区选的高权限模式带过去（P6 清单 D15） | P6-03 的统一对话框在切换工作区时重算全部默认值；在那之前是否单独修由用户决定 |
+| 2026-11-13 | P6-01 | Gemini 和 Claude 的新建对话框里切换工作区时，模型和思考程度会重置，审批模式、权限模式却保留原值，可能把为另一个工作区选的高权限模式带过去（P6 清单 D15） | P6-03 已在统一对话框中按工作区与引擎重建全部字段，并验证未保存的高权限选择不会跨工作区带入；三个旧入口保留原有行为，待 P6-04 切换 |
 | 2026-11-13 | P6-01 | Claude 的会话列表在 Store 里只按会话置顶和更新时间排序后取前 200 条，项目置顶是前端拿到结果后才排的；会话超过 200 条时，置顶项目的会话可能整个不在结果里。Gemini 的查询先按项目置顶排序，没有这个问题（P6 清单 D22） | P2-05 统一列表排序时消除；在那之前是否单独修由用户决定 |
 | 2026-11-13 | P6-01 | Gemini 和 Claude 的会话列表固定截断在 200 条，没有“加载更多”，侧栏搜索也只覆盖这 200 条（P6 清单 D04、D21） | P2-05 的游标分页和分页前搜索、P6-02 的侧栏解决 |
-| 2026-11-13 | P6-01 | 协作任务对话框（`web/src/components/CollaborationTaskDialog.tsx`）始终列出三种目标引擎，只检查源会话是否支持协作、授权和目标权限映射；`ReadCollaborationState`（`internal/store/session_collaboration.go`）也不返回目标引擎的 CLI、凭据和版本是否可用。这与 P6 新建对话框“不可用的引擎禁用并写明原因”不是同一套判断 | P6-03 第 5 步对齐 |
+| 2026-11-13 | P6-01 | 协作任务对话框（`web/src/components/CollaborationTaskDialog.tsx`）始终列出三种目标引擎，只检查源会话是否支持协作、授权和目标权限映射；`ReadCollaborationState`（`internal/store/session_collaboration.go`）也不返回目标引擎的 CLI、凭据和版本是否可用。这与 P6 新建对话框“不可用的引擎禁用并写明原因”不是同一套判断 | P6-03 已让协作与新建共用后端工作区引擎可用性，保留原有协作授权与目标权限检查 |
 | 2026-11-13 | P0-02、P0-06 | 本机负载高时，Vitest 有用例超过默认的 5 秒超时而失败。两个会话各自遇到过：同一台 4 核机器上另有 Go 全量测试或另一组 Vitest 在跑时，`web/src/GeminiPage.test.tsx` 的“exports all pages of a conversation rather than only the visible recent history”和 `web/src/DeploymentsPage.test.tsx` 的“creates and edits public access settings, manages containers, and exposes deployment links”超时。没有并发负载时两个文件都通过，GitHub 托管运行器上的运行也都通过 | 暂不处理，本机验收时不要让几组重任务同时运行。如果 CI 上也出现，再给这两个用例单独放宽超时。由用户决定 |
 | 2026-11-13 | P0-07 审阅 | `internal/geminiadapter` 的 `TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation`（`adapter_test.go`）没有隔离用户主目录。测试配置了自定义接口地址和默认模型，适配器因此调用 `ensureLoopAliases`，在运行账号的 `~/.gemini/settings.json` 里写入 `modelConfigs.customAliases` 下的 `loop-detection` 和 `loop-detection-double-check`。把 `HOME` 指到空目录后逐个运行该包的 52 个测试，只有这一个留下文件；`internal/agent`、`internal/claudeadapter`、`internal/codexadapter` 整包运行后主目录里没有新增文件。写入的值与产品写入的相同，所以在已经运行 Wio Agent 的账号下没有实际变化；在没有用过 Wio 的开发机上，跑一次 `go test ./...` 会改动个人的 Gemini CLI 配置 | 建议在这个测试里把 `HOME` 指到临时目录，只改测试代码。由用户决定 |
 | 2026-11-13 | P0-06 执行期间 | Wio 里的 Gemini 子会话第一轮正常结束后，再追加消息会立即失败，报错“Gemini CLI cannot synchronize restored history; update Wio's Gemini compatibility adapter before retrying”。报错出自 `internal/geminiadapter/acp.go`：`session/load` 的返回里没有 `_meta.wioHistoryReplayed` 标记，而这个标记由 `internal/geminiadapter/history-loader.mjs` 注入。出现问题的服务器上受管的 Gemini CLI 是 0.68.0。原因没有查明，可能是这个版本与注入方式不兼容 | 没有处理。在修好之前，Gemini 会话交回后的返工只能另开会话。由用户决定何时排查 |

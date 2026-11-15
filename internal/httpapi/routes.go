@@ -142,6 +142,7 @@ func (api *API) registerProjectRoutes(private chi.Router) {
 
 func (api *API) registerWorkspaceRoutes(private chi.Router) {
 	private.Get("/workspaces", api.workspaces)
+	private.Get("/workspaces/{workspaceID}/session-engines", api.workspaceSessionEngines)
 	private.Patch("/workspaces/{workspaceID}", api.updateWorkspace)
 	private.Post("/workspaces/{workspaceID}/move", api.moveWorkspace)
 	private.Post("/workspaces/{workspaceID}/copy", api.copyWorkspace)

@@ -1,3 +1,4 @@
+import { EngineUnavailable, useWorkspaceEngines } from "../sessions/availability";
 import { type FormEvent, type RefObject, useEffect, useState } from "react";
 import { Network } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -59,9 +60,12 @@ export function CollaborationTaskDialog({ open, engine, sessionID, workspaceID, 
   const [content, setContent] = useState("");
   useEffect(() => { if (open) { setTarget(engine); setModel(""); setEffort(""); setDirectoryMode("shared"); setTitle(""); setContent(""); } }, [open, engine, sessionID]);
   const state = useData<State>(open ? `/sessions/${engine}/${encodeURIComponent(sessionID)}/collaboration` : null, open);
-  const codex = useCodexModels(open && target === "codex" ? workspaceID : undefined);
-  const claude = useClaudeModels(open && target === "claude" ? workspaceID : "", sessionID);
-  const gemini = useGeminiModels(open && target === "gemini" ? workspaceID : "");
+  const availability = useWorkspaceEngines(open ? workspaceID : "");
+  const targetStatus = availability.data?.engines?.find(item => item.engine === target);
+  const targetReady = Boolean(targetStatus?.available) && !availability.error;
+  const codex = useCodexModels(open && targetReady && target === "codex" ? workspaceID : undefined);
+  const claude = useClaudeModels(open && targetReady && target === "claude" ? workspaceID : "", sessionID);
+  const gemini = useGeminiModels(open && targetReady && target === "gemini" ? workspaceID : "");
 
   const sameEngine = target === engine;
   // Omitting the model inherits the caller's model only within the same engine.
@@ -79,7 +83,7 @@ export function CollaborationTaskDialog({ open, engine, sessionID, workspaceID, 
   useEffect(() => { if (effort && !effortSignature.split(",").includes(effort)) setEffort(""); }, [effort, effortSignature]);
 
   const grant = state.data?.grant;
-  const blocker = state.error ? state.error
+  const blocker = availability.error ? availability.error : state.error ? state.error
     : !state.data ? ""
     : !state.data.supported ? text("请升级此服务器的 Agent 后使用协作工具。", "Update this server's Agent to use collaboration tools.")
     : !grant?.enabled ? text("当前会话未开启会话协作，请先在会话协作设置中允许模型创建和管理子会话。", "Collaboration is off for this session. Enable it in the collaboration settings first.")
@@ -87,7 +91,7 @@ export function CollaborationTaskDialog({ open, engine, sessionID, workspaceID, 
     : "";
   const worktreeAllowed = Boolean(grant?.worktree);
   useEffect(() => { if (!worktreeAllowed && directoryMode === "worktree") setDirectoryMode("shared"); }, [worktreeAllowed, directoryMode]);
-  const ready = Boolean(state.data) && !blocker && Boolean(content.trim());
+  const ready = Boolean(state.data) && targetReady && !blocker && Boolean(content.trim());
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!ready) return;
@@ -98,7 +102,7 @@ export function CollaborationTaskDialog({ open, engine, sessionID, workspaceID, 
       <p>{text("选择的参数会原样交给当前会话的模型，由它调用协作工具创建新会话。", "These choices are passed verbatim to this session's model, which creates the new session with the collaboration tools.")}</p>
       <div className="form-grid">
         <label className="field"><span>{text("Agent 类型", "Agent")}</span><select aria-label={text("Agent 类型", "Agent")} value={target} onChange={event => { setTarget(event.target.value as CollaborationEngine); setModel(""); setEffort(""); }}>
-          {(["codex", "claude", "gemini"] as const).map(value => <option key={value} value={value}>{engineNames[value]}{value === engine ? text("（当前）", " (current)") : ""}</option>)}
+          {(["codex", "claude", "gemini"] as const).map(value => <option key={value} value={value} disabled={!availability.data?.engines?.find(item => item.engine === value)?.available}>{engineNames[value]}{value === engine ? text("（当前）", " (current)") : ""}</option>)}
         </select></label>
         <label className="field"><span>{text("工作目录", "Working directory")}</span><select aria-label={text("工作目录", "Working directory")} value={directoryMode} onChange={event => setDirectoryMode(event.target.value as "shared" | "worktree")}>
           <option value="shared">{text("共享当前工作目录", "Share this working directory")}</option>
@@ -118,6 +122,8 @@ export function CollaborationTaskDialog({ open, engine, sessionID, workspaceID, 
       <label className="field"><span>{text("会话标题（可选）", "Session title (optional)")}</span><input aria-label={text("会话标题", "Session title")} value={title} maxLength={180} onChange={event => setTitle(event.target.value)} /></label>
       <label className="field"><span>{text("协作内容", "Task")}</span><textarea aria-label={text("协作内容", "Task")} rows={6} required maxLength={20000} value={content} placeholder={text("描述需要新会话处理的问题和要求", "Describe what the new session should handle")} onChange={event => setContent(event.target.value)} /></label>
       {state.loading && !state.data && <p className="muted" role="status">{t("common.loading")}</p>}
+      {targetStatus && !targetStatus.available && <EngineUnavailable reason={targetStatus.reason} />}
+      {availability.loading && <p className="muted" role="status">{t("common.loading")}</p>}
       {blocker && <p className="error-banner" role="alert">{blocker}</p>}
       <DialogActions><button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={!ready}><Network size={16} />{text("交给模型创建", "Send to model")}</button></DialogActions>
     </form>

@@ -11,6 +11,7 @@ export type ConversationProps = Pick<CodexPageProps, "approvals" | "approvalSign
   onArchive: () => void; busy: boolean;
 };
 export type NativeCreateProps = {
+  onBusyChange?: (busy: boolean) => void; fixedWorkspace?: boolean; disabled?: boolean; defaults?: import("./availability").CreateDefaults;
   workspaceID: string; workspaces: Workspace[]; history: AISession[];
   onCreated: (thread: AISession) => void;
 };

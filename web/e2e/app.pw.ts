@@ -922,6 +922,7 @@ test("the /collab command creates a collaboration session through the current mo
     onAPIRequest: request => {
       if (request.path === "/sessions" && request.search === "?engine=codex&archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
       if (request.path === "/sessions" && request.search === "?engine=codex&archived=false&limit=50" && request.method === "GET") return { body: { items: [codexThread], next_cursor: null, groups: [] } };
+      if (request.path.endsWith("/session-engines")) return { body: {"engines": [{"engine":"codex","available":true},{"engine":"gemini","available":true},{"engine":"claude","available":true}]} };
       if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
       if (request.path === `/sessions/codex/${codexThread.id}/events` && request.method === "GET") return { body: [] };
       if (request.path === `/sessions/codex/${codexThread.id}/goal` && request.method === "GET") return { body: codexGoalSnapshot };

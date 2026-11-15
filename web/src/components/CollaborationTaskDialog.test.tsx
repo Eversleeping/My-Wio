@@ -9,11 +9,12 @@ afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
 
 const grant = (extra: object = {}) => ({ supported: true, grant: { enabled: true, worktree: true, target_modes: { claude: "default" }, ...extra }, links: [], requests: [] });
 
-function stubAPI(state: object) {
+function stubAPI(state: object, unavailable = "") {
   const calls: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     calls.push(url);
+    if (url.endsWith("/session-engines")) return new Response(JSON.stringify({engines: ["codex", "claude", "gemini"].map(engine => ({engine, available: engine !== unavailable, reason: engine === unavailable ? "cli_missing" : ""}))}));
     if (url.includes("/collaboration")) return new Response(JSON.stringify(state));
     if (url.endsWith("/claude/models")) return new Response(JSON.stringify({ configured: true, models: [{ id: "claude-opus-5-5", name: "Claude Opus 5.5" }] }));
     if (url.endsWith("/codex/models/refresh")) return new Response("{}");
@@ -87,4 +88,15 @@ test("submits the composer once the generated prompt is rendered", async () => {
   render(<Composer />);
   await user.click(screen.getByRole("button", { name: "go" }));
   await waitFor(() => expect(sent).toEqual(["generated"]));
+});
+
+test("uses the shared engine availability response even when collaboration is granted", async () => {
+  localStorage.setItem("wio_language", "en");
+  stubAPI(grant(), "codex");
+  const user = userEvent.setup();
+  render(<I18nProvider><CollaborationTaskDialog open engine="codex" sessionID="source" workspaceID="workspace" onClose={() => undefined} onSubmit={() => undefined} /></I18nProvider>);
+  await user.type(screen.getByRole("textbox", {name: "Task"}), "Do it");
+  expect(await screen.findByRole("alert")).toHaveTextContent("CLI is not installed or unavailable");
+  expect(screen.getByRole("button", {name: "Send to model"})).toBeDisabled();
+  expect(screen.getByRole("option", {name: "Codex (current)"})).toBeDisabled();
 });

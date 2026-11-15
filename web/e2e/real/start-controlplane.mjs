@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,15 @@ export default async function startControlplane() {
   mkdirSync(output, { recursive: true });
   const logPath = join(output, "real-controlplane.log");
   writeFileSync(logPath, "");
+  // The external catalog is synthetic; every browser API still reaches Go.
+  const catalog = createServer((request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify(request.url.startsWith("/gemini")
+      ? { models: [{ name: "models/flash", displayName: "Flash", supportedGenerationMethods: ["generateContent"] }] }
+      : { data: [{ id: "sonnet", display_name: "Sonnet", type: "model" }], has_more: false }));
+  });
+  await new Promise((resolve, reject) => { catalog.once("error", reject); catalog.listen(0, "127.0.0.1", resolve); });
+  process.env.WIO_E2E_MODEL_URL = `http://127.0.0.1:${catalog.address().port}`;
   let child;
   let exited;
   const stop = async () => {
@@ -35,6 +45,7 @@ export default async function startControlplane() {
         if (result.code !== 0) throw new Error(`Control plane exited with ${JSON.stringify(result)}; see ${logPath}`);
       }
     } finally {
+      await new Promise(resolve => catalog.close(resolve));
       rmSync(root, { recursive: true, force: true });
     }
   };

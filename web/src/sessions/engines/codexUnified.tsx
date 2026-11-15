@@ -19,7 +19,7 @@ import { clearCodexSessionMemory } from "./codex/useThreadEvents";
 export function afterFork(sourceID: string, targetID: string) { saveCodexComposerPreferences(targetID, loadCodexComposerPreferences(sourceID)); }
 export function afterDelete(id: string) { clearCodexComposerPreferences(id); clearCodexSessionMemory(id); }
 export function Create(props: NativeCreateProps) {
-  return <CreateThread initialWorkspaceID={props.workspaceID} workspaces={props.workspaces} onCreated={thread => props.onCreated({ ...thread, engine: "codex" } as AISession)} />;
+  return <CreateThread onBusyChange={props.onBusyChange} fixedWorkspace={props.fixedWorkspace} disabled={props.disabled} initialWorkspaceID={props.workspaceID} workspaces={props.workspaces} onCreated={thread => props.onCreated({ ...thread, engine: "codex" } as AISession)} />;
 }
 export function Conversation(props: ConversationProps) {
   const { t } = useI18n();

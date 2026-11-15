@@ -82,6 +82,7 @@ GET /api/workspaces/{workspaceID}/gemini/skills/{operationID} middleware=5
 GET /api/workspaces/{workspaceID}/git middleware=5
 GET /api/workspaces/{workspaceID}/git/commits middleware=5
 GET /api/workspaces/{workspaceID}/git/commits/{sha} middleware=5
+GET /api/workspaces/{workspaceID}/session-engines middleware=5
 GET /api/ws middleware=5
 PATCH /api/claude/threads/{threadID} middleware=5
 PATCH /api/gemini/threads/{threadID} middleware=5
