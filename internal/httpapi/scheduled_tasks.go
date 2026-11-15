@@ -3,18 +3,15 @@ package httpapi
 import (
 	"database/sql"
 	"errors"
+	"github.com/go-chi/chi/v5"
+	"github.com/wio-platform/wio/internal/schedule"
+	"github.com/wio-platform/wio/internal/session"
+	"github.com/wio-platform/wio/internal/sessionservice"
+	"github.com/wio-platform/wio/internal/store"
 	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/wio-platform/wio/internal/buildinfo"
-	"github.com/wio-platform/wio/internal/geminiapi"
-	"github.com/wio-platform/wio/internal/protocol"
-	"github.com/wio-platform/wio/internal/schedule"
-	"github.com/wio-platform/wio/internal/store"
 )
 
 type scheduledTaskRequest struct {
@@ -131,7 +128,7 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	if existing != nil && request.ThinkingLevel == nil {
 		level = existing.ThinkingLevel
 	}
-	kind := value(request.AgentKind, "codex")
+	kind := value(request.AgentKind, session.Codex)
 	if existing != nil {
 		if request.AgentKind == nil {
 			kind = existing.AgentKind
@@ -139,7 +136,7 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 			return store.ScheduledTaskInput{}, errors.New("scheduled Agent kind cannot be changed")
 		}
 	}
-	if kind != "codex" && kind != "gemini" && kind != "claude" {
+	if !session.ValidEngine(kind) {
 		return store.ScheduledTaskInput{}, errors.New("invalid Agent kind")
 	}
 	threadID := value(request.ThreadID, "")
@@ -176,8 +173,9 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 			approval = existing.ApprovalMode
 		}
 	}
-	if (kind == "gemini" || kind == "claude") && existing == nil && request.ApprovalMode == nil {
-		approval = "default"
+	if existing == nil && request.ApprovalMode == nil {
+		driver, _ := sessionservice.NewDrivers(a.store, nil, nil).Driver(kind)
+		approval = driver.DefaultScheduleMode()
 	}
 	if timezone == "" {
 		timezone = "UTC"
@@ -204,62 +202,17 @@ func (a *API) normalizeScheduledTaskRequest(r *http.Request, request scheduledTa
 	if utf8.RuneCountInString(model) > 128 {
 		return store.ScheduledTaskInput{}, errors.New("model is too long")
 	}
-	if kind != "gemini" && level != "" {
-		return store.ScheduledTaskInput{}, errors.New("thinking_level is only supported for Gemini")
+	input := store.ScheduledTaskInput{ThinkingLevel: level, AgentKind: kind, ThreadID: threadID, Name: name, Prompt: prompt, Schedule: expression, Timezone: timezone, Enabled: enabled, Model: model, ReasoningEffort: reasoning, ApprovalMode: approval}
+	driver, err := sessionservice.NewDrivers(a.store, nil, nil).Driver(kind)
+	if err != nil {
+		return store.ScheduledTaskInput{}, errors.New("invalid Agent kind")
 	}
-	if kind == "gemini" && reasoning != "" {
-		return store.ScheduledTaskInput{}, errors.New("Gemini does not support Codex reasoning_effort")
+	if err = driver.ValidateSchedule(r.Context(), input); err != nil {
+		var lookup session.LookupError
+		if errors.As(err, &lookup) {
+			return store.ScheduledTaskInput{}, inputStoreFailure{lookup.Err}
+		}
+		return store.ScheduledTaskInput{}, err
 	}
-	if reasoning != "" && ((kind == "claude" && !protocol.ValidClaudeEffort(reasoning)) || (kind != "claude" && !validReasoningEffort(reasoning))) {
-		return store.ScheduledTaskInput{}, errors.New("invalid reasoning_effort")
-	}
-	if (kind == "codex" && approval != "on-request" && approval != "untrusted" && approval != "never") || (kind == "gemini" && approval != "default" && approval != "auto_edit" && approval != "yolo") {
-		return store.ScheduledTaskInput{}, errors.New("invalid approval_mode")
-	}
-	if kind == "gemini" {
-		thread, err := a.store.GeminiThread(r.Context(), threadID)
-		if err != nil {
-			return store.ScheduledTaskInput{}, inputStoreFailure{err}
-		}
-		if approval == "yolo" && !buildinfo.SupportsGeminiYolo(thread.AgentVersion) {
-			return store.ScheduledTaskInput{}, errors.New("update Gemini Agent to " + buildinfo.MinimumGeminiYoloVersion + " or newer to use Gemini without approvals")
-		}
-		selectedModel := model
-		if selectedModel == "" {
-			selectedModel = thread.Model
-		}
-		if !geminiapi.ValidThinkingLevel(selectedModel, level) {
-			return store.ScheduledTaskInput{}, errors.New("invalid Gemini thinking level for this model")
-		}
-		if level != "" {
-			server, e := a.store.Server(r.Context(), thread.ServerID)
-			if e != nil {
-				return store.ScheduledTaskInput{}, inputStoreFailure{e}
-			}
-			if !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
-				return store.ScheduledTaskInput{}, errors.New("update Gemini Agent to configure thinking")
-			}
-		}
-		if model != "" && !credentialModelPattern.MatchString(model) {
-			return store.ScheduledTaskInput{}, errors.New("invalid Gemini model")
-		}
-	} else if kind == "claude" {
-		thread, err := a.store.ClaudeThread(r.Context(), threadID)
-		if err != nil {
-			return store.ScheduledTaskInput{}, inputStoreFailure{err}
-		}
-		if !buildinfo.SupportsClaudeInput(thread.AgentVersion) {
-			return store.ScheduledTaskInput{}, errors.New("update Claude Agent to " + buildinfo.MinimumClaudeInputVersion + " or newer")
-		}
-		selectedModel := model
-		if selectedModel == "" {
-			selectedModel = thread.Model
-		}
-		if !validClaudeOptions(selectedModel, approval) || !protocol.ValidClaudeEffort(reasoning) {
-			return store.ScheduledTaskInput{}, errors.New("invalid Claude model, effort or permission mode")
-		}
-	} else if _, err := a.store.Thread(r.Context(), threadID); err != nil {
-		return store.ScheduledTaskInput{}, inputStoreFailure{err}
-	}
-	return store.ScheduledTaskInput{ThinkingLevel: level, AgentKind: kind, ThreadID: threadID, Name: name, Prompt: prompt, Schedule: expression, Timezone: timezone, Enabled: enabled, Model: model, ReasoningEffort: reasoning, ApprovalMode: approval}, nil
+	return input, nil
 }

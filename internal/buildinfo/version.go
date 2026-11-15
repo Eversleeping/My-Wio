@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.3.19"
+var Version = "0.3.20"
 
 const MinimumSessionCollaborationVersion = "0.3.06"
 
