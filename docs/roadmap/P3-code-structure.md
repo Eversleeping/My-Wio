@@ -492,3 +492,9 @@ web/src/
 - 声明内容比对：123 个原有顶层声明均保持一致（忽略 export 和相对 import 的调整），并审阅移动差异。入口块现为 308,875 字节（308.88 kB），bundle 检查通过且不预加载 Markdown。
 - `pages/` / `components/` 剩余从 `App` 导入的文件：`ClaudePage.tsx`、`GeminiPage.tsx` 只取 `WorkspaceFilesPanel`；`claudeManagement.tsx`、`geminiManagement.tsx` 只取 `locationFor`；`CodexPage.tsx` 取会话、线程列表、缓存、等待、分组和文件面板等后续拆分符号。公共组件、文本函数、`PageProps` 与预览选择类型均已改指向新模块或原定义。
 - 验收：通用五项、Go 构建、格式与空白检查全部通过；Vitest 449 / 449；桌面和移动端 Playwright 33 通过、11 按现有配置跳过、0 失败。P3-05 完成。
+
+### 2026-11-15 · P3-06 · Codex
+
+- 既有 `AppSession` 覆盖连接、抖动退避、稳定后重置、失效退出及切换线程期间的缓存失效；补充刷新范围修订号的集成断言和浏览器前进/后退的视图、线程同步测试，先锁定当前行为再提取。
+- 通用实时钩子维护修订号和连接状态、提供流失效订阅；外壳通过订阅接入 Codex 缓存，钩子不导入引擎模块。地址栏写入也归导航模块，保留原 URL 及 history 行为。
+- 新旧特性测试在提取前通过：`RealtimeChannel`、`RealtimeRefresh`、`AppSession`、`AppStartup` 共 13 / 13；类型检查通过。先独立提交测试基线。
