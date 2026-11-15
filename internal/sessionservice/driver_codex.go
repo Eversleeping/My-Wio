@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
+	"time"
+
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
-	"strings"
-	"time"
 )
 
 type codexDriver struct{ *driverBase }
@@ -103,7 +104,7 @@ func (r *codexDriver) ValidateSchedule(ctx context.Context, input session.Schedu
 		return errors.New("invalid approval_mode")
 	}
 	if _, err := r.store.Thread(ctx, threadID); err != nil {
-		return session.LookupError{err}
+		return session.LookupError{Err: err}
 	}
 	return nil
 }

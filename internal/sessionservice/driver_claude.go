@@ -3,12 +3,13 @@ package sessionservice
 import (
 	"context"
 	"errors"
+	"strings"
+	"time"
+
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
-	"strings"
-	"time"
 )
 
 type claudeDriver struct{ *driverBase }
@@ -64,7 +65,7 @@ func (r *claudeDriver) ValidateSchedule(ctx context.Context, input session.Sched
 	}
 	thread, err := r.store.ClaudeThread(ctx, threadID)
 	if err != nil {
-		return session.LookupError{err}
+		return session.LookupError{Err: err}
 	}
 	if !buildinfo.SupportsClaudeInput(thread.AgentVersion) {
 		return errors.New("update Claude Agent to " + buildinfo.MinimumClaudeInputVersion + " or newer")

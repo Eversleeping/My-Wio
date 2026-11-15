@@ -471,3 +471,49 @@ CREATE TABLE ai_sessions (
 - 2026-11-15，P2-04 提交一，Codex：新增 AISession/AISessions 统一读模型（现有 Session 是登录会话，故避免同名）；公共字段、版本能力、Codex 执行配置、字面量子串搜索、归档/引擎过滤和项目/会话置顶排序集中在同一查询。协作投影、定时任务列表与用量读取复用该来源；保留定时任务的任务服务器/项目原名和 revoked 历史，以及 Codex 用量对 revoked 行的旧读取语义。新增三引擎读模型、搜索转义/分页前过滤和撤销历史测试。Store/HTTP 的读模型、定时任务、用量、旧路由契约和协作矩阵定向测试通过（20.26秒/5.53秒）；完整验收在步骤结束前执行。P2-04 继续进行。
 
 - 2026-11-15，P2-04 提交二，Codex：在 Store 无关的 session 包定义 Driver/Registry、统一记录和调度输入，Store 原结构保留类型别名；sessionservice 装配三种原生驱动，迁移调度入队及 HTTP 定时任务的引擎参数校验。默认模式、错误分类/文本、版本门槛、Codex 先 claim 再 queue 的事务边界及另两引擎的原子 run 回写保持不变；唤醒与日志通过驱动构造参数注入。定时任务/旧路由契约/调度定向检查通过（scheduler13.997秒，httpapi4.353秒）。session 是 Agent 依赖，版本同步0.3.20；继续协作事务驱动和编排迁移，完整验收仍待步骤结束。
+
+- 2026-11-15，P2-04 驱动审计，Codex：公共协作动作与准备阶段移至 `sessionservice/core`（不依赖 Store），Store 事务端口绑定原 `*sqlx.Tx`，未增加 begin/commit 或改变 savepoint。三种事务驱动分别实现 Create/Send/Steer/Interrupt/Fork/Pin/SetExecution；公共调度和 sessionservice/core 不再按引擎分支。保留 Store 入口及类型别名，旧协作测试直接穿过新编排。定向 Store46.794秒、scheduler16.767秒、httpapi6.289秒均通过。
+  - 字面量检查命令：`rg -n '"(claude|gemini|codex)"' internal/store internal/scheduler internal/sessionservice --glob '*.go' --glob '!**/*_test.go'`。下列38处是实际结果；scheduler/sessionservice 无匹配。`session_driver_collaboration.go` 是驱动实现；`session_usage.go` / `session_collaboration_result.go` 解释引擎原生事件；线程创建/问题回答是原生持久化适配；`scheduled_tasks.go` 是旧物理表/原生 lookup 适配（P2-07 合表再收缩）；CLI/凭据/Agent 更新是服务器引擎持久化配置。没有把这些边界改写为公共生命周期编排，亦未修改迁移/协议取值。SQL 引擎列和本来就有的测试不纳入业务分支数。
+
+```text
+internal/store/session_usage.go:39:	if provider == "claude" {
+internal/store/session_usage.go:44:	if provider == "codex" {
+internal/store/session_usage.go:80:		if provider == "gemini" {
+internal/store/session_usage.go:161:		if provider == "gemini" {
+internal/store/session_questions.go:32:	return s.queueSessionAnswer(ctx, threadID, requestID, answers, questionSpec{"claude", "Claude", "claude_threads", claudeThreadSelect, "claude_version", true})
+internal/store/session_questions.go:35:	return s.queueSessionAnswer(ctx, threadID, requestID, answers, questionSpec{"gemini", "Gemini", "gemini_threads", geminiThreadSelect, "gemini_version", false})
+internal/store/claude.go:97:	if err := s.createCollaborationSessionTx(ctx, tx, sessiontools.Ref{Engine: "claude", ID: id}, workspaceID, "Claude", model, mode, effort); err != nil {
+internal/store/gemini.go:134:	if err := s.createCollaborationSessionTx(ctx, tx, sessiontools.Ref{Engine: "gemini", ID: id}, workspaceID, "Gemini", model, mode, level); err != nil {
+internal/store/credential_profiles.go:41:	codex, err := s.preferredCredentialProfile(ctx, "codex")
+internal/store/credential_profiles.go:104:	if scope == "codex" {
+internal/store/credential_profiles.go:113:	if scope == "codex" {
+internal/store/credential_profiles.go:221:			scope = "codex"
+internal/store/codex_threads.go:343:	if err := s.createCollaborationSessionTx(ctx, tx, sessiontools.Ref{Engine: "codex", ID: id}, workspaceID, title, "", "on-request", ""); err != nil {
+internal/store/cli_install.go:43:	if kind == "gemini" {
+internal/store/cli_install.go:45:	} else if kind == "claude" {
+internal/store/cli_install.go:47:	} else if kind != "codex" {
+internal/store/cli_install.go:54:	if kind == "claude" {
+internal/store/cli_install.go:65:	if command.Kind != "codex" && command.Kind != "gemini" && command.Kind != "claude" {
+internal/store/cli_install.go:106:		if op.Kind == protocol.OpCodexUpdate && kind == "codex" {
+internal/store/session_collaboration_result.go:18:	if t.Engine != "codex" || (op.Kind != protocol.OpCodexTurnStart && op.Kind != protocol.OpCodexTurnRewrite) {
+internal/store/agent_update.go:69:	for _, kind := range []string{"codex", "gemini", "claude"} {
+internal/store/scheduled_tasks.go:40:	if kind == "claude" {
+internal/store/scheduled_tasks.go:43:	if kind == "gemini" {
+internal/store/scheduled_tasks.go:55:	if kind == "claude" {
+internal/store/scheduled_tasks.go:59:	if kind == "gemini" {
+internal/store/scheduled_tasks.go:63:	if kind != "" && kind != "codex" {
+internal/store/session_driver_collaboration.go:139:		if !collaborationModelPattern.MatchString(strings.TrimSuffix(p.Model, "[1m]")) || len(p.Model) > 128 || engine != "claude" && strings.HasSuffix(p.Model, "[1m]") {
+internal/store/session_driver_collaboration.go:151:	case "codex":
+internal/store/session_driver_collaboration.go:157:	case "claude":
+internal/store/session_driver_collaboration.go:159:	case "gemini":
+internal/store/session_driver_collaboration.go:187:	case "claude":
+internal/store/session_driver_collaboration.go:197:	case "gemini":
+internal/store/session_driver_collaboration.go:263:	if t.Engine == "codex" && t.OperationID == "" {
+internal/store/session_driver_collaboration.go:287:		if t.Engine == "codex" {
+internal/store/session_driver_collaboration.go:307:	case "codex":
+internal/store/session_driver_collaboration.go:309:	case "claude":
+internal/store/session_driver_collaboration.go:311:	case "gemini":
+internal/store/session_driver_collaboration.go:319:	if t.Engine == "codex" {
+```
+
+- 2026-11-15，P2-04 完成，Codex：统一读模型、公共驱动/注册表、三种事务驱动、协作动作/延迟准备编排及调度调用方迁移均完成；保留旧 Store/HTTP API、数据库表和线上字符串。完整验收通过：前端构建19.83秒、go vet、全部 Go 测试267.28秒、PostgreSQL59.03秒、451项 Vitest、typecheck、双入口构建、fmt/diff、staticcheck/version-check，真实进程三引擎冒烟9.63秒通过。第一次 vet 检出跨包 LookupError 的未命名结构体字段，补齐字段名后重跑通过；未出现产品行为回归。未改页面交互，无需页面 E2E。前两个提交为506115b、e376acf，本次提交完成步骤；继续P2-05。

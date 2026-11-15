@@ -3,11 +3,12 @@ package sessionservice
 import (
 	"context"
 	"errors"
-	"github.com/wio-platform/wio/internal/session"
-	"github.com/wio-platform/wio/internal/store"
 	"log/slog"
 	"regexp"
 	"time"
+
+	"github.com/wio-platform/wio/internal/session"
+	"github.com/wio-platform/wio/internal/store"
 )
 
 type driverBase struct {

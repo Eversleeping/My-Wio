@@ -3,11 +3,12 @@ package sessionservice
 import (
 	"context"
 	"errors"
+	"time"
+
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/geminiapi"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
-	"time"
 )
 
 type geminiDriver struct{ *driverBase }
@@ -82,7 +83,7 @@ func (r *geminiDriver) ValidateSchedule(ctx context.Context, input session.Sched
 	}
 	thread, err := r.store.GeminiThread(ctx, threadID)
 	if err != nil {
-		return session.LookupError{err}
+		return session.LookupError{Err: err}
 	}
 	if approval == "yolo" && !buildinfo.SupportsGeminiYolo(thread.AgentVersion) {
 		return errors.New("update Gemini Agent to " + buildinfo.MinimumGeminiYoloVersion + " or newer to use Gemini without approvals")
@@ -97,7 +98,7 @@ func (r *geminiDriver) ValidateSchedule(ctx context.Context, input session.Sched
 	if level != "" {
 		server, e := r.store.Server(ctx, thread.ServerID)
 		if e != nil {
-			return session.LookupError{e}
+			return session.LookupError{Err: e}
 		}
 		if !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
 			return errors.New("update Gemini Agent to configure thinking")

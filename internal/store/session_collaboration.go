@@ -10,94 +10,17 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
+	"github.com/wio-platform/wio/internal/sessionservice/core"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
-type CollaborationSession struct {
-	Engine           string     `db:"engine" json:"engine"`
-	ID               string     `db:"id" json:"id"`
-	Title            string     `db:"title" json:"title"`
-	Status           string     `db:"status" json:"status"`
-	WorkspaceID      string     `db:"workspace_id" json:"workspace_id"`
-	ProjectID        string     `db:"project_id" json:"project_id"`
-	ServerID         string     `db:"server_id" json:"server_id"`
-	Path             string     `db:"path" json:"path"`
-	Model            string     `db:"model" json:"model"`
-	Mode             string     `db:"mode" json:"permission_mode"`
-	Effort           string     `db:"effort" json:"effort"`
-	NativeID         string     `db:"native_id" json:"-"`
-	OperationID      string     `db:"operation_id" json:"operation_id"`
-	AgentVersion     string     `db:"agent_version" json:"-"`
-	ArchivedAt       *time.Time `db:"archived_at" json:"archived_at"`
-	UpdatedAt        time.Time  `db:"updated_at" json:"updated_at"`
-	URL              string     `db:"-" json:"url"`
-	RecoveryPending  bool       `db:"-" json:"recovery_pending"`
-	PreparationPhase string     `db:"-" json:"preparation_phase,omitempty"`
-	WaitingUser      bool       `db:"-" json:"waiting_user"`
-}
-
-func (t CollaborationSession) Ref() sessiontools.Ref {
-	return sessiontools.Ref{Engine: t.Engine, ID: t.ID}
-}
-func (t CollaborationSession) Busy() bool {
-	return t.Status == "queued" || t.Status == "running" || t.Status == "interrupting" || t.Status == "preparing" || t.RecoveryPending
-}
+type CollaborationSession = core.CollaborationSession
 
 var collaborationSessions = "SELECT engine,id,title,status,workspace_id,project_id,server_id,path,model,mode,effort,native_id,operation_id,agent_version,archived_at,updated_at FROM (" + aiSessionRows + ") session_rows WHERE server_revoked_at IS NULL"
-
-func (s *Store) collaborationSession(ctx context.Context, db sqlx.QueryerContext, ref sessiontools.Ref) (CollaborationSession, error) {
-	var t CollaborationSession
-	if !ref.Valid() {
-		return t, sessiontools.Fail("INVALID_ARGUMENT", "engine and Wio session id are required")
-	}
-	err := sqlx.GetContext(ctx, db, &t, s.Q("SELECT * FROM ("+collaborationSessions+") sessions WHERE engine=? AND id=?"), ref.Engine, ref.ID)
-	if err != nil {
-		return t, err
-	}
-	t.URL = "/?view=" + t.Engine + "&thread=" + t.ID
-	if t.Engine == "codex" && t.OperationID == "" {
-		var execution string
-		if e := sqlx.GetContext(ctx, db, &execution, s.Q("SELECT execution_json FROM session_tool_requests WHERE target_engine='codex' AND target_id=? AND tool IN ('wio_create_session','wio_fork_session') ORDER BY created_at LIMIT 1"), t.ID); e == nil {
-			var options struct {
-				Model  string `json:"model"`
-				Mode   string `json:"mode"`
-				Effort string `json:"effort"`
-			}
-			if json.Unmarshal([]byte(execution), &options) == nil && options.Mode != "" {
-				t.Model, t.Mode, t.Effort = options.Model, options.Mode, options.Effort
-			}
-		} else if !errors.Is(e, sql.ErrNoRows) {
-			return t, e
-		}
-	}
-	if t.OperationID != "" {
-		var op struct {
-			Status  string `db:"status"`
-			Payload string `db:"payload"`
-		}
-		if err = sqlx.GetContext(ctx, db, &op, s.Q("SELECT status,payload FROM agent_operations WHERE id=?"), t.OperationID); err != nil {
-			return t, err
-		}
-		t.RecoveryPending = t.Status == "interrupted" && (op.Status == "queued" || op.Status == "delivered" || op.Status == "running")
-		if t.Engine == "codex" {
-			var p protocol.StartTurnCommand
-			var rewrite protocol.RewriteTurnCommand
-			_ = json.Unmarshal([]byte(op.Payload), &p)
-			if p.ThreadID == "" {
-				_ = json.Unmarshal([]byte(op.Payload), &rewrite)
-				p = rewrite.Start
-			}
-			t.Model = p.Model
-			t.Effort = p.ReasoningEffort
-			if p.ApprovalMode != "" {
-				t.Mode = p.ApprovalMode
-			}
-		}
-	}
-	return t, nil
-}
 
 func (s *Store) CollaborationSession(ctx context.Context, ref sessiontools.Ref) (CollaborationSession, error) {
 	t, err := s.collaborationSession(ctx, s.DB, ref)
@@ -156,18 +79,6 @@ func (s *Store) collaborationGrant(ctx context.Context, db sqlx.QueryerContext, 
 func (s *Store) CollaborationGrant(ctx context.Context, ref sessiontools.Ref) (sessiontools.Grant, error) {
 	g, _, err := s.collaborationGrant(ctx, s.DB, ref.Key())
 	return g, err
-}
-
-func validCollaborationMode(engine, mode string) bool {
-	switch engine {
-	case "codex":
-		return mode == "on-request" || mode == "untrusted" || mode == "never"
-	case "claude":
-		return mode == "default" || mode == "acceptEdits" || mode == "plan" || mode == "bypassPermissions"
-	case "gemini":
-		return mode == "default" || mode == "auto_edit" || mode == "plan" || mode == "yolo"
-	}
-	return false
 }
 
 // SetCollaborationGrant is only exposed through the authenticated browser API.
@@ -242,25 +153,7 @@ func collaborationScope(g sessiontools.Grant) string {
 	return string(raw)
 }
 
-type CollaborationRequest struct {
-	ID           string              `db:"id" json:"id"`
-	SourceKey    string              `db:"source_key" json:"source_key"`
-	RequestKey   string              `db:"request_key" json:"request_id"`
-	Tool         string              `db:"tool" json:"tool"`
-	Arguments    string              `db:"arguments" json:"-"`
-	Execution    string              `db:"execution_json" json:"-"`
-	GrantVersion int                 `db:"grant_version" json:"-"`
-	Status       string              `db:"status" json:"status"`
-	Phase        string              `db:"phase" json:"phase"`
-	TargetEngine string              `db:"target_engine" json:"target_engine"`
-	TargetID     string              `db:"target_id" json:"target_id"`
-	WorkspaceID  string              `db:"workspace_id" json:"workspace_id"`
-	OperationID  string              `db:"operation_id" json:"operation_id"`
-	Result       string              `db:"result" json:"-"`
-	CreatedAt    time.Time           `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time           `db:"updated_at" json:"updated_at"`
-	Error        *sessiontools.Error `db:"-" json:"error,omitempty"`
-}
+type CollaborationRequest = core.CollaborationRequest
 
 func decodeCollaborationParams(call sessiontools.Call) (sessiontools.Params, error) {
 	var p sessiontools.Params
@@ -312,7 +205,7 @@ func decodeCollaborationParams(call sessiontools.Call) (sessiontools.Params, err
 	if p.DirectoryMode != "" && p.DirectoryMode != "shared" && p.DirectoryMode != "worktree" || p.Busy != "" && p.Busy != "reject" && p.Busy != "queue" || p.ForkMode != "" && p.ForkMode != "native" && p.ForkMode != "handoff" && p.ForkMode != "after_turn" {
 		return p, sessiontools.Fail("INVALID_ARGUMENT", "invalid execution mode")
 	}
-	if p.Engine != "" && p.Engine != "codex" && p.Engine != "claude" && p.Engine != "gemini" {
+	if p.Engine != "" && !session.ValidEngine(p.Engine) {
 		return p, sessiontools.Fail("INVALID_ARGUMENT", "invalid engine")
 	}
 	if p.Title != nil && (len(strings.TrimSpace(*p.Title)) == 0 || len([]rune(*p.Title)) > 200) {
@@ -465,7 +358,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 		return collaborationError(p.RequestID, err)
 	}
 	if call.Name == "wio_get_context" {
-		return sessiontools.Reply{Status: "succeeded", Data: map[string]any{"session": source, "grant": grant, "engines": []string{"codex", "claude", "gemini"}, "limits": map[string]any{"active_children": 2, "total_sessions": nil, "delegation_depth": 2, "wait_ms": 30000}, "shared_directory": true}}
+		return sessiontools.Reply{Status: "succeeded", Data: map[string]any{"session": source, "grant": grant, "engines": []string{session.Codex, session.Claude, session.Gemini}, "limits": map[string]any{"active_children": 2, "total_sessions": nil, "delegation_depth": 2, "wait_ms": 30000}, "shared_directory": true}}
 	}
 	if !grant.Enabled {
 		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration in this session's settings first"))
@@ -833,22 +726,8 @@ func (s *Store) readCollaboration(ctx context.Context, tx *sqlx.Tx, source Colla
 	return reply, false, sessiontools.Fail("CAPABILITY_UNSUPPORTED", "unsupported tool")
 }
 
-// collaborationWorkspaceAllowed reports whether workspace id, which belongs to
-// projectID, is in the grant's scope. Allowing other agents' sessions in the
-// project grants every workspace of that project, including worktrees.
 func collaborationWorkspaceAllowed(source CollaborationSession, g sessiontools.Grant, id, projectID string) bool {
-	if id == source.WorkspaceID {
-		return true
-	}
-	if g.AllProjectSessions && projectID != "" && projectID == source.ProjectID {
-		return true
-	}
-	for _, allowed := range g.WorkspaceIDs {
-		if allowed == id {
-			return true
-		}
-	}
-	return false
+	return core.WorkspaceAllowed(source, g, id, projectID)
 }
 
 // collaborationWorkspaceGranted resolves the workspace's project before
@@ -945,41 +824,4 @@ func (s *Store) collaborationMessageRange(ctx context.Context, tx *sqlx.Tx, id s
 		result = append(result, protocol.StreamEvent{EventID: row.ID, StreamID: id, Sequence: row.Sequence, Kind: row.Kind, Payload: json.RawMessage(row.Payload), OccurredAt: row.At})
 	}
 	return result, hasMore, nil
-}
-
-func (s *Store) collaborationWaitingUser(ctx context.Context, tx sqlx.QueryerContext, t CollaborationSession) (bool, error) {
-	var count int
-	if t.Engine == "codex" {
-		err := sqlx.GetContext(ctx, tx, &count, s.Q("SELECT COUNT(*) FROM approvals WHERE thread_id=? AND status='pending'"), t.ID)
-		return count > 0, err
-	}
-	var events []struct {
-		ID      string `db:"event_id"`
-		Kind    string `db:"kind"`
-		Payload string `db:"payload"`
-	}
-	err := sqlx.SelectContext(ctx, tx, &events, s.Q("SELECT event_id,kind,payload FROM events WHERE stream_id=? AND kind IN (?,?,?) ORDER BY sequence"), t.ID, t.Engine+protocol.EventQuestionSuffix, t.Engine+protocol.EventQuestionAnsweredSuffix, t.Engine+protocol.EventQuestionCancelledSuffix)
-	if err != nil {
-		return false, err
-	}
-	pending := map[string]bool{}
-	for _, event := range events {
-		var p struct {
-			RequestID   string `json:"request_id"`
-			OperationID string `json:"operation_id"`
-		}
-		_ = json.Unmarshal([]byte(event.Payload), &p)
-		id := p.RequestID
-		if id == "" {
-			id = event.ID
-		}
-		if event.Kind == t.Engine+protocol.EventQuestionSuffix {
-			if p.OperationID == t.OperationID {
-				pending[id] = true
-			}
-		} else {
-			delete(pending, id)
-		}
-	}
-	return t.Status == "running" && len(pending) > 0, nil
 }
