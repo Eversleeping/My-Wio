@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessiontools"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -52,4 +53,8 @@ func (s *Service) Execute(ctx context.Context, serverID string, call sessiontool
 			}
 		}
 	}
+}
+
+func (s *Service) List(ctx context.Context, filter session.Filter) (session.Page, error) {
+	return s.Store.AISessionPage(ctx, filter)
 }

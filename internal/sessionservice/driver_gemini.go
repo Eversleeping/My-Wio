@@ -7,6 +7,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/geminiapi"
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -108,4 +109,12 @@ func (r *geminiDriver) ValidateSchedule(ctx context.Context, input session.Sched
 		return errors.New("invalid Gemini model")
 	}
 	return nil
+}
+
+func (r *geminiDriver) Native(ctx context.Context, id string) (any, error) {
+	return r.store.GeminiThread(ctx, id)
+}
+
+func (r *geminiDriver) Events(ctx context.Context, id string, q session.EventQuery) ([]protocol.StreamEvent, error) {
+	return r.driverBase.Events(ctx, id, q)
 }

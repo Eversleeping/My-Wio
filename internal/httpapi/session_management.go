@@ -5,8 +5,9 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wio-platform/wio/internal/buildinfo"
+
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 type sessionForkSource struct {
@@ -20,63 +21,14 @@ func (a *API) publishSessionChange(r *http.Request, id, kind string) {
 		a.hub.Publish(event)
 	}
 }
+
 func (a *API) archiveGeminiProject(w http.ResponseWriter, r *http.Request) {
 	a.archiveEngineProject(w, r, "gemini", "Gemini", protocol.EventGeminiThreadUpdated, a.store.ArchiveGeminiProject)
 }
+
 func (a *API) archiveClaudeProject(w http.ResponseWriter, r *http.Request) {
 	a.archiveEngineProject(w, r, "claude", "Claude", protocol.EventClaudeThreadUpdated, func(ctx context.Context, id string, server ...string) (int64, error) {
 		return a.store.ArchiveClaudeProject(ctx, id, server[0])
-	})
-}
-func (a *API) forkGeminiThread(w http.ResponseWriter, r *http.Request) {
-	a.queueGeminiFork(w, r, false)
-}
-func (a *API) forkGeminiWorktree(w http.ResponseWriter, r *http.Request) {
-	a.queueGeminiFork(w, r, true)
-}
-func (a *API) forkClaudeThread(w http.ResponseWriter, r *http.Request) {
-	a.queueClaudeFork(w, r, false)
-}
-func (a *API) forkClaudeWorktree(w http.ResponseWriter, r *http.Request) {
-	a.queueClaudeFork(w, r, true)
-}
-
-func (a *API) queueGeminiFork(w http.ResponseWriter, r *http.Request, worktree bool) {
-	t, ok := a.loadGeminiThread(w, r)
-	if !ok {
-		return
-	}
-	if t.ServerStatus != "online" || t.SessionID == "" || t.ArchivedAt != nil {
-		writeError(w, 409, "Gemini session must be initialized, online and unarchived")
-		return
-	}
-	if !buildinfo.SupportsGeminiFork(t.AgentVersion) {
-		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiForkVersion+" or newer")
-		return
-	}
-	a.queueEngineFork(w, r, worktree, sessionForkSource{
-		id: t.ID, workspaceID: t.WorkspaceID, serverID: t.ServerID, kind: "gemini", eventKind: protocol.EventGeminiThreadUpdated, includeWorkspace: true,
-		failure: "could not branch Gemini conversation; finish the current turn and select a completed final reply",
-		queue: func(ctx context.Context, event string, c *protocol.GitWorktreeCreateCommand) (string, string, error) {
-			return a.store.QueueGeminiFork(ctx, t, event, c)
-		},
-	})
-}
-func (a *API) queueClaudeFork(w http.ResponseWriter, r *http.Request, worktree bool) {
-	t, ok := a.loadClaudeThread(w, r)
-	if !ok {
-		return
-	}
-	if t.ServerStatus != "online" || t.SessionID == "" || t.ArchivedAt != nil || !buildinfo.SupportsClaudeInput(t.AgentVersion) {
-		writeError(w, 409, "Claude fork requires an initialized online session and Agent "+buildinfo.MinimumClaudeInputVersion+" or newer")
-		return
-	}
-	a.queueEngineFork(w, r, worktree, sessionForkSource{
-		id: t.ID, workspaceID: t.WorkspaceID, serverID: t.ServerID, kind: "claude", eventKind: protocol.EventClaudeThreadUpdated,
-		failure: "finish the current turn and other workspace operations before continuing",
-		queue: func(ctx context.Context, event string, c *protocol.GitWorktreeCreateCommand) (string, string, error) {
-			return a.store.QueueClaudeFork(ctx, t, c, event)
-		},
 	})
 }
 
@@ -137,4 +89,16 @@ func (a *API) queueEngineFork(w http.ResponseWriter, r *http.Request, worktree b
 		result["workspace_id"] = command.TargetWorkspaceID
 	}
 	writeJSON(w, 202, result)
+}
+func (a *API) forkGeminiThread(w http.ResponseWriter, r *http.Request) {
+	a.legacySession(w, r, session.Gemini, "fork")
+}
+func (a *API) forkGeminiWorktree(w http.ResponseWriter, r *http.Request) {
+	a.legacySession(w, r, session.Gemini, "fork-worktree")
+}
+func (a *API) forkClaudeThread(w http.ResponseWriter, r *http.Request) {
+	a.legacySession(w, r, session.Claude, "fork")
+}
+func (a *API) forkClaudeWorktree(w http.ResponseWriter, r *http.Request) {
+	a.legacySession(w, r, session.Claude, "fork-worktree")
 }

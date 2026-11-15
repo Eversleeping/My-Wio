@@ -4,23 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/jmoiron/sqlx"
-	"github.com/wio-platform/wio/internal/protocol"
-	"github.com/wio-platform/wio/internal/session"
 	"strings"
 	"time"
+
+	"github.com/jmoiron/sqlx"
+
+	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 // AISession is a read model, independent of the engine's physical thread table.
 // Login sessions continue to use Session. Native writes stay in their drivers.
 type AISession = session.Record
 
-type AISessionFilter struct {
-	Engine   string
-	Archived *bool // nil selects both views; HTTP chooses its own active default.
-	Query    string
-	Limit    int // zero leaves internal callers unbounded
-}
+type AISessionFilter = session.Filter
 
 // The source includes revoked servers because scheduled-task history retains
 // those rows as offline. Public session/collaboration reads filter them out.

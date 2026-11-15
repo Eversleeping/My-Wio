@@ -132,6 +132,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertClaudeQuestionsStorage(t, scans)
 	assertClaudeRewriteStorage(t, scans)
 	assertCollaborationEngineMatrixAndReplay(t, scans)
+	t.Run("AI session keyset pagination", func(t *testing.T) { assertAISessionPagination(t, scans) })
 	assertCollaborationWorktreeEngineMatrix(t, scans)
 	assertCollaborationCodexTurnCompletion(t, scans)
 	t.Run("collaboration continuation rules", func(t *testing.T) { assertCollaborationContinuationRules(t, scans) })

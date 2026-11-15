@@ -3,21 +3,14 @@ package httpapi
 import (
 	"database/sql"
 	"errors"
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
+
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
-	"net/http"
 )
 
-func (a *API) geminiUsage(w http.ResponseWriter, r *http.Request) {
-	a.sessionUsage(w, r, session.Gemini, "Gemini ")
-}
-func (a *API) claudeUsage(w http.ResponseWriter, r *http.Request) {
-	a.sessionUsage(w, r, session.Claude, "Claude ")
-}
-func (a *API) threadUsage(w http.ResponseWriter, r *http.Request) {
-	a.sessionUsage(w, r, session.Codex, "")
-}
 func (a *API) sessionUsage(w http.ResponseWriter, r *http.Request, engine, prefix string) {
 	usage, err := a.store.SessionUsageForRef(r.Context(), session.Ref{Engine: engine, ID: chi.URLParam(r, "threadID")})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -34,4 +27,13 @@ func (a *API) sessionUsage(w http.ResponseWriter, r *http.Request, engine, prefi
 		return
 	}
 	writeJSON(w, 200, usage)
+}
+func (a *API) threadUsage(w http.ResponseWriter, r *http.Request) {
+	a.legacySession(w, r, session.Codex, "usage")
+}
+func (a *API) geminiUsage(w http.ResponseWriter, r *http.Request) {
+	a.legacySession(w, r, session.Gemini, "usage")
+}
+func (a *API) claudeUsage(w http.ResponseWriter, r *http.Request) {
+	a.legacySession(w, r, session.Claude, "usage")
 }

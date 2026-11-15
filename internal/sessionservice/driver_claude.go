@@ -81,3 +81,11 @@ func (r *claudeDriver) ValidateSchedule(ctx context.Context, input session.Sched
 	}
 	return nil
 }
+
+func (r *claudeDriver) Native(ctx context.Context, id string) (any, error) {
+	return r.store.ClaudeThread(ctx, id)
+}
+
+func (r *claudeDriver) Events(ctx context.Context, id string, q session.EventQuery) ([]protocol.StreamEvent, error) {
+	return r.driverBase.Events(ctx, id, q)
+}

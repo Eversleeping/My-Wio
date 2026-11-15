@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -65,3 +66,13 @@ func validScheduleEffort(value string) bool {
 }
 
 var scheduleModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+func (r *driverBase) Events(ctx context.Context, id string, q session.EventQuery) ([]protocol.StreamEvent, error) {
+	if q.After != nil {
+		return r.store.Events(ctx, id, *q.After, q.Limit)
+	}
+	if q.Before != nil {
+		return r.store.EventsBefore(ctx, id, *q.Before, q.Limit)
+	}
+	return r.store.RecentEvents(ctx, id, q.Limit)
+}

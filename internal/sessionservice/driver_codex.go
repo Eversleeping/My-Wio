@@ -108,3 +108,20 @@ func (r *codexDriver) ValidateSchedule(ctx context.Context, input session.Schedu
 	}
 	return nil
 }
+
+func (r *codexDriver) Native(ctx context.Context, id string) (any, error) {
+	return r.store.Thread(ctx, id)
+}
+
+func (r *codexDriver) Events(ctx context.Context, id string, q session.EventQuery) ([]protocol.StreamEvent, error) {
+	if q.Raw {
+		return r.driverBase.Events(ctx, id, q)
+	}
+	if q.After != nil {
+		return r.store.ConversationEvents(ctx, id, *q.After, q.Limit)
+	}
+	if q.Before != nil {
+		return r.store.ConversationEventsBefore(ctx, id, *q.Before, q.Limit)
+	}
+	return r.store.RecentConversationEvents(ctx, id, q.Limit)
+}

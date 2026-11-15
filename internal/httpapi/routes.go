@@ -10,6 +10,7 @@ func (api *API) registerRoutes(router chi.Router) {
 			api.registerSessionRoutes(private)
 			api.registerSummaryRoutes(private)
 			api.registerCollaborationRoutes(private)
+			api.registerUnifiedSessionRoutes(private)
 			api.registerClaudeRoutes(private)
 			api.registerGeminiRoutes(private)
 			api.registerServerRoutes(private)

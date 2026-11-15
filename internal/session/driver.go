@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 // Driver adapts native persistence and scheduling to the shared control plane.
@@ -11,6 +13,8 @@ import (
 type Driver interface {
 	Engine() Engine
 	Session(context.Context, string) (Record, error)
+	Native(context.Context, string) (any, error)
+	Events(context.Context, string, EventQuery) ([]protocol.StreamEvent, error)
 	DefaultScheduleMode() string
 	ValidateSchedule(context.Context, ScheduledTaskInput) error
 	EnqueueScheduled(context.Context, ScheduledTask, time.Time)
