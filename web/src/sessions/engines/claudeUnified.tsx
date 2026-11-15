@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { post } from "../../api";
 import { useClaudeModels } from "../../claudeModels";
 import { DialogActions } from "../../components/Dialog";
@@ -9,7 +9,7 @@ import type { ClaudeThread, Server } from "../../types";
 import { useData } from "../../useData";
 import type { ConversationProps, NativeCreateProps } from "../engineModules";
 import type { AISession } from "../types";
-import { ClaudeSession, ClaudeOptions } from "./claude";
+import { ClaudeSession } from "./claude";
 export function Create(props: NativeCreateProps) {
   const { t } = useI18n();
   const [workspaceID, setWorkspaceID] = useState(props.workspaceID);
@@ -18,20 +18,18 @@ export function Create(props: NativeCreateProps) {
   const models = useClaudeModels(workspaceID, "create");
   const previous = props.history.find(item => item.workspace_id === workspaceID && item.engine === "claude") as AISession<"claude"> | undefined;
   const [model, setModel] = useState(server?.claude_profile_model || "sonnet");
-  const modelSelected = useRef(false);
-  const [effort, setEffort] = useState(props.defaults?.effort ?? previous?.effort ?? "");
-  const [mode, setMode] = useState(props.defaults?.mode || previous?.permission_mode || "default");
+  const [effort] = useState(props.defaults?.effort ?? previous?.effort ?? "");
+  const [mode] = useState(props.defaults?.mode || previous?.permission_mode || "default");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { if (!modelSelected.current) setModel(models.data?.default_model || server?.claude_profile_model || "sonnet"); }, [models.data, server?.claude_profile_model]);
+  useEffect(() => { setModel(models.data?.default_model || server?.claude_profile_model || "sonnet"); }, [models.data, server?.claude_profile_model]);
   return <form onSubmit={async event => {
     event.preventDefault(); if (busy || props.disabled || models.loading || !workspaceID || !model.trim()) return; setBusy(true); props.onBusyChange?.(true); setError("");
     try { props.onCreated({ ...await post<ClaudeThread>("/sessions/claude", { workspace_id: workspaceID, model: model.trim(), permission_mode: mode, effort }), engine: "claude" } as AISession); }
     catch (error) { setError(message(error)); } finally { setBusy(false); props.onBusyChange?.(false); }
   }}>
-    {!props.fixedWorkspace && <Field label={t("gemini.workspace")}><select required value={workspaceID} disabled={busy || Boolean(props.disabled)} onChange={event => { setWorkspaceID(event.target.value); modelSelected.current = false; setModel("sonnet"); setEffort(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{props.workspaces.filter(w => w.status === "ready").map(w => <option key={w.id} value={w.id}>{w.project_name} · {w.server_name} · {w.path}</option>)}</select></Field>}
-    <ClaudeOptions availableModels={models.models} model={model} mode={mode} effort={effort} setModel={value => { modelSelected.current = true; setModel(value); }} setMode={setMode} setEffort={setEffort} disabled={busy || Boolean(props.disabled)} effortSupported={Boolean(server?.claude_effort_supported)} />
-    <p className="gemini-hint">{t("claude.permissionsHelp")}</p>{error && <ErrorBanner text={error} />}
+    {!props.fixedWorkspace && <Field label={t("gemini.workspace")}><select required value={workspaceID} disabled={busy || Boolean(props.disabled)} onChange={event => { setWorkspaceID(event.target.value); setModel("sonnet"); }}><option value="">{t("gemini.selectWorkspace")}</option>{props.workspaces.filter(w => w.status === "ready").map(w => <option key={w.id} value={w.id}>{w.project_name} · {w.server_name} · {w.path}</option>)}</select></Field>}
+    {error && <ErrorBanner text={error} />}
     <DialogActions><button className="primary-button" disabled={busy || props.disabled || models.loading || !workspaceID || !model.trim()}>{t("claude.newSession")}</button></DialogActions>
   </form>;
 }

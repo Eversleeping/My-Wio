@@ -63,7 +63,13 @@ export function CreateGeminiSession({ initialWorkspaceID, initialModel, initialT
   const models = useGeminiModels(workspaceID);
   const [model, setModel] = useState(initialModel);
   const [thinking, setThinking]=useState(initialThinking);
-  const [mode, setMode] = useState(initialMode);
+  const [mode] = useState(initialMode);
+  useEffect(() => {
+    if (!model && models.data?.configured) {
+      const upstream = models.data.models;
+      setModel(upstream.find(item => item.id === models.data?.default_model)?.id ?? upstream[0]?.id ?? "");
+    }
+  }, [model, models.data]);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
   const submit = async (event: FormEvent) => {
@@ -71,7 +77,7 @@ export function CreateGeminiSession({ initialWorkspaceID, initialModel, initialT
     try { onCreated(await post<GeminiThread>("/sessions/gemini", { workspace_id: workspaceID, model: model.trim(), approval_mode: mode, thinking_level: thinking })); }
     catch (error) { setFailure(message(error)); } finally { setBusy(false); onBusyChange?.(false); }
   };
-  return <form onSubmit={submit}>{error && <ErrorState error={error} reload={onRetry} />}{!fixedWorkspace && <Field label={t("gemini.workspace")}><select required disabled={busy || disabled} value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); setModel(""); setThinking(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{workspaces.filter(workspace => workspace.status === "ready").map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field>}<ModelOptions key={workspaceID} autoSelect models={models} model={model} mode={mode} thinking={thinking} setThinking={setThinking} setModel={setModel} setMode={setMode} disabled={busy || disabled} /><p className="gemini-hint">{t("gemini.permissionsHelp")}</p>{failure && <ErrorBanner text={failure} />}<DialogActions><button className="primary-button" disabled={busy || disabled || !workspaceID || !model.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("gemini.newSession")}</button></DialogActions></form>;
+  return <form onSubmit={submit}>{error && <ErrorState error={error} reload={onRetry} />}{!fixedWorkspace && <Field label={t("gemini.workspace")}><select required disabled={busy || disabled} value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); setModel(""); setThinking(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{workspaces.filter(workspace => workspace.status === "ready").map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field>}{failure && <ErrorBanner text={failure} />}<DialogActions><button className="primary-button" disabled={busy || disabled || !workspaceID || !model.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("gemini.newSession")}</button></DialogActions></form>;
 }
 
 export function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOpenFile, onFork, onSchedule }: { thread: GeminiThread; realtime: string; notify: (text: string) => void; onChanged: () => void; onNewSession: () => void; onOpenFile: (value: FilePreviewSelection) => void; onFork: (eventID?: string) => void; onSchedule: () => void }) {

@@ -288,32 +288,15 @@ test("renders separate collapsed command groups around Gemini replies", async ()
   expect(first.querySelectorAll("time")[1]).toHaveTextContent(formatTime(events[2].occurred_at));
 });
 
-test("shows only fetched models and creates a session with a selected model",async () => {
+test("creates a session using workspace defaults without creation options",async () => {
   const {user,requests} = setup();
   await user.click((await screen.findAllByRole("button",{name:/^New session$/}))[0]);
   const dialog = screen.getByRole("dialog");
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
-  await within(dialog).findByRole("combobox",{name:"Gemini model"});
-  const models = await within(dialog).findByRole("combobox",{name:"Gemini model"});
-  await within(models).findByRole("option",{name:"Upstream · gemini-upstream-current"});
-  expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a model","Upstream · gemini-upstream-current","Custom model"]);
-  await user.selectOptions(models,"gemini-upstream-current");
+  await waitFor(() => expect(within(dialog).getByRole("button",{name:"New Gemini session"})).toBeEnabled());
+  expect(within(dialog).getAllByRole("combobox")).toHaveLength(2);
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
-});
-
-test("creates a session with never approve selected",async () => {
-  const {user,requests} = setup();
-  await user.click((await screen.findAllByRole("button",{name:/^New session$/}))[0]);
-  const dialog = screen.getByRole("dialog");
-  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
-  await within(dialog).findByRole("combobox",{name:"Gemini model"});
-  await within(dialog).findByRole("option",{name:"Upstream · gemini-upstream-current"});
-  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Gemini model"}),"gemini-upstream-current");
-  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Tool permissions"}),"yolo");
-  expect(within(dialog).getByRole("option",{name:"Never approve"})).toBeInTheDocument();
-  await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"auto",approval_mode:"default",thinking_level:""}}));
 });
 
 test("switches an existing session model for the next turn",async () => {
@@ -425,8 +408,8 @@ test("loads upstream models after selecting a workspace for a new session",async
   const dialog = screen.getByRole("dialog");
   expect(modelRequests).toEqual([]);
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
-  await within(dialog).findByRole("combobox",{name:"Gemini model"});
-  await within(dialog).findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  await waitFor(() => expect(within(dialog).getByRole("button",{name:"New Gemini session"})).toBeEnabled());
+  expect(within(dialog).queryByRole("combobox",{name:"Gemini model"})).not.toBeInTheDocument();
   expect(modelRequests).toEqual(["/api/workspaces/workspace-1/gemini/models"]);
 });
 

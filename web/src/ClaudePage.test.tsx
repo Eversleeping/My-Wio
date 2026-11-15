@@ -96,8 +96,8 @@ test("uses the latest discovered default when creating a session", async () => {
   const {user, requests} = setup({appliedModel:"old-default", defaultModel:"claude-new-default", credentialRevision:"new-config"});
   await user.click((await screen.findAllByRole("button", {name:/^New session$/}))[0]);
   if ((screen.getByLabelText("Workspace") as HTMLSelectElement).value !== "workspace-1") await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
-  await within(screen.getByRole("dialog")).findByLabelText("Claude model or alias");
-  await waitFor(() => expect(within(screen.getByRole("dialog")).getByLabelText("Claude model or alias")).toHaveValue("claude-new-default"));
+  await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("button", {name:"New Claude session"})).toBeEnabled());
+  expect(within(screen.getByRole("dialog")).queryByLabelText("Claude model or alias")).not.toBeInTheDocument();
   await user.click(within(screen.getByRole("dialog")).getByRole("button", {name:"New Claude session"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/claude", body:expect.objectContaining({model:"claude-new-default"})}));
 });
@@ -218,15 +218,15 @@ test("selects an upstream model and accepts a custom model with reasoning effort
   await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude/claude-1/turns", body: expect.objectContaining({ model: "my-custom-model", effort: "max" }) }));
 });
 
-test("creates a Claude session for a workspace with the selected permissions", async () => {
+test("creates a Claude session for a workspace with default permissions", async () => {
   const { user, requests, onSelectThread } = setup();
   await user.click((await screen.findAllByRole("button", {name:/^New session$/}))[0]);
   if ((screen.getByLabelText("Workspace") as HTMLSelectElement).value !== "workspace-1") await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
-  await within(screen.getByRole("dialog")).findByLabelText("Claude model or alias");
-  await user.selectOptions(screen.getByLabelText("Tool permissions"), "acceptEdits");
+  await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("button", {name:"New Claude session"})).toBeEnabled());
+  expect(within(screen.getByRole("dialog")).queryByLabelText("Tool permissions")).not.toBeInTheDocument();
   const createButtons = screen.getAllByRole("button", { name: "New Claude session" });
   await user.click(createButtons[createButtons.length - 1]);
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "sonnet", permission_mode: "acceptEdits", effort: "" } }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "sonnet", permission_mode: "default", effort: "" } }));
   expect(onSelectThread).toHaveBeenCalledWith("claude-1", undefined);
 });
 
@@ -290,8 +290,8 @@ test("defaults new sessions to the model last applied to the selected server", a
  const { user, requests } = setup({ selected: true, appliedModel: "claude-opus-4-6" });
  await user.click((await screen.findAllByRole("button", {name:/^New session$/}))[0]);
  if ((screen.getByLabelText("Workspace") as HTMLSelectElement).value !== "workspace-1") await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
-  await within(screen.getByRole("dialog")).findByLabelText("Claude model or alias");
- expect(within(screen.getByRole("dialog", { name: "New session" })).getByLabelText("Claude model or alias")).toHaveValue("claude-opus-4-6");
+  await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("button", {name:"New Claude session"})).toBeEnabled());
+ expect(within(screen.getByRole("dialog", { name: "New session" })).queryByLabelText("Claude model or alias")).not.toBeInTheDocument();
  await user.click(screen.getAllByRole("button", { name: "New Claude session" }).at(-1)!);
  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "claude-opus-4-6", permission_mode: "default", effort: "high" } }));
 });

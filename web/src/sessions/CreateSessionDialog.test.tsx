@@ -39,6 +39,7 @@ for (const engine of ["codex", "gemini", "claude"] as Engine[]) test(`creates ${
   await waitFor(() => expect(within(dialog).getByLabelText("Engine")).toBeEnabled());
   await user.selectOptions(within(dialog).getByLabelText("Engine"), engine);
   expect(within(dialog).getAllByLabelText("Workspace")).toHaveLength(1);
+  expect(within(dialog).getAllByRole("combobox")).toHaveLength(2);
   expect(within(dialog).queryByRole("option", {name: /pending/})).not.toBeInTheDocument();
   const name = engine === "codex" ? "Create session" : `New ${engine === "gemini" ? "Gemini" : "Claude"} session`;
   await waitFor(() => expect(within(dialog).getByRole("button", {name})).toBeEnabled());
@@ -54,16 +55,13 @@ test("uses each workspace's remembered engine and resets all unsaved native fiel
   localStorage.setItem("wio_workspace_engine:two", "claude");
   const {user, dialog} = setup();
   await waitFor(() => expect(within(dialog).getByLabelText("Engine")).toHaveValue("gemini"));
-  await within(dialog).findByRole("option", {name: "flash"});
-  await user.selectOptions(within(dialog).getByLabelText("Tool permissions"), "yolo");
+  expect(within(dialog).queryByLabelText("Tool permissions")).not.toBeInTheDocument();
   await user.selectOptions(within(dialog).getByLabelText("Workspace"), "two");
   await waitFor(() => expect(within(dialog).getByLabelText("Engine")).toHaveValue("claude"));
-  await within(dialog).findByLabelText("Tool permissions");
-  expect(within(dialog).getByLabelText("Tool permissions")).toHaveValue("default");
-  await user.selectOptions(within(dialog).getByLabelText("Tool permissions"), "bypassPermissions");
+  expect(within(dialog).queryByLabelText("Claude model or alias")).not.toBeInTheDocument();
   await user.selectOptions(within(dialog).getByLabelText("Workspace"), "one");
-  await within(dialog).findByLabelText("Tool permissions");
-  expect(within(dialog).getByLabelText("Tool permissions")).toHaveValue("default");
+  await waitFor(() => expect(within(dialog).getByLabelText("Engine")).toHaveValue("gemini"));
+  expect(within(dialog).getAllByRole("combobox")).toHaveLength(2);
 });
 
 test("keeps unavailable engines disabled with a backend reason and a settings link", async () => {
@@ -105,9 +103,9 @@ for (const mode of ["auto_edit", "plan"]) test(`preserves selected Gemini defaul
   localStorage.setItem("wio_workspace_engine:one", "gemini");
   const currentSession = {engine: "gemini", id: "selected", workspace_id: "one", model: "flash", approval_mode: mode, thinking_level: ""} as AISession;
   const {user, dialog, writes} = setup({currentSession});
-  const permissions = await within(dialog).findByLabelText("Tool permissions");
+  await waitFor(() => expect(within(dialog).getByRole("button", {name: "New Gemini session"})).toBeEnabled());
   const expectedMode = mode === "plan" ? "default" : mode;
-  expect(permissions).toHaveValue(expectedMode);
+  expect(within(dialog).queryByLabelText("Tool permissions")).not.toBeInTheDocument();
   await user.click(within(dialog).getByRole("button", {name: "New Gemini session"}));
   await waitFor(() => expect(writes).toHaveLength(1));
   expect(writes[0].body).toMatchObject({workspace_id: "one", model: "flash", approval_mode: expectedMode});

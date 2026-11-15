@@ -37,6 +37,7 @@ test("unified dialog creates each engine and keeps workspace defaults separate",
     await dialog.getByLabel("Engine").selectOption(engine);
     const submit = dialog.getByRole("button", {name: engine === "codex" ? "Create session" : `New ${engine === "claude" ? "Claude" : "Gemini"} session`, exact: true});
     await expect(submit).toBeEnabled();
+    await expect(dialog.getByRole("combobox")).toHaveCount(2);
     await page.screenshot({path: testInfo.outputPath(`create-${engine}.png`)});
     await submit.click();
     await expect(dialog).not.toBeVisible();
