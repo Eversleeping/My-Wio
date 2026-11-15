@@ -157,3 +157,26 @@ test("opens unified creation with the requested workspace and keeps focus inside
   await user.click(within(dialog).getByRole("button",{name:"Close"}));
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
+
+test("collapses engine groups independently while keeping the selected conversation and workspace state", async () => {
+  const { user, data, refresh } = setup({ engine: "codex", id: "same" });
+  data.push({ ...data[0], id: "second", title: "second codex" });
+  refresh();
+  await screen.findByText("second codex");
+  await screen.findByText("Codex conversation");
+  const codex = screen.getByRole("button", { name: "Codex sessions" });
+  await user.click(codex);
+  expect(codex).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("codex title")).not.toBeInTheDocument();
+  expect(screen.queryByText("second codex")).not.toBeInTheDocument();
+  expect(screen.getByText("gemini title")).toBeInTheDocument();
+  expect(screen.getByText("claude title")).toBeInTheDocument();
+  expect(screen.getByText("Codex conversation")).toBeInTheDocument();
+  const workspace = document.getElementById("session-workspace-w")!;
+  await user.click(workspace);
+  await user.click(workspace);
+  expect(screen.getByRole("button", { name: "Codex sessions" })).toHaveAttribute("aria-expanded", "false");
+  await user.click(screen.getByRole("button", { name: "Codex sessions" }));
+  expect(screen.getByText("second codex")).toBeInTheDocument();
+  expect(document.querySelectorAll(".thread.active")).toHaveLength(1);
+});

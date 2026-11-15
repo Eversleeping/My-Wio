@@ -27,7 +27,13 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
   } });
   await page.goto("/?view=sessions");
   await expect(page.locator(".thread-project")).toHaveCount(1);
-  await expect(page.locator(".session-engine")).toHaveText(["Gemini", "Codex", "Claude"]);
+  await expect(page.locator(".session-engine")).toHaveText(["Codex", "Gemini", "Claude"]);
+  const codexGroup = page.getByRole("button", { name: "Codex sessions", exact: true });
+  await codexGroup.click();
+  await expect(codexGroup).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator('.thread-select').filter({hasText: 'codex conversation'})).toHaveCount(0);
+  await expect(page.locator('.thread-select').filter({hasText: 'gemini conversation'})).toBeVisible();
+  await codexGroup.click();
   const visited = new Set<string>();
   for (const engine of ["codex", "gemini", "claude", "codex", "gemini", "claude"]) {
     if (testInfo.project.name === "mobile-chromium") {
