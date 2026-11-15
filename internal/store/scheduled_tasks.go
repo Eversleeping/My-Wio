@@ -11,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 type ScheduledTask struct {
@@ -58,23 +59,18 @@ type ScheduledTaskInput struct {
 	ApprovalMode    string
 }
 
-// server_status is derived from the last heartbeat like everywhere else:
-// servers.status is only reset on a clean disconnect and stays "online" after
-// a control-plane crash or a hung Agent connection. Every branch of
-// scheduledTaskSelect takes the cutoff; see scheduledTaskArgs.
-const codexScheduledTaskSelect = `SELECT 'codex' AS agent_kind,'' AS thinking_level,st.id,st.thread_id,t.title thread_title,t.workspace_id,w.project_id,p.name project_name,
-	st.server_id,s.name server_name,CASE WHEN s.revoked_at IS NULL AND s.last_seen_at>? THEN 'online' ELSE 'offline' END server_status,t.codex_thread_id,w.path workspace_path,
-	st.name,st.prompt,st.schedule,st.timezone,st.enabled,st.model,st.reasoning_effort,st.approval_mode,
-	st.next_run_at,st.last_run_at,st.last_run_status,st.last_run_message,st.last_operation_id,st.created_at,st.updated_at
-	FROM codex_scheduled_tasks st
-	JOIN codex_threads t ON t.id=st.thread_id
-	JOIN workspaces w ON w.id=t.workspace_id
-	JOIN projects p ON p.id=w.project_id
-	JOIN servers s ON s.id=st.server_id`
+// Scheduled-task history uses the shared session source, but retains its own
+// server and the global project name (including revoked/offline servers).
+func scheduledTaskBranch(engine, thinking string) string {
+	return `SELECT '` + engine + `' AS agent_kind,` + thinking + ` AS thinking_level,st.id,st.thread_id,t.title thread_title,t.workspace_id,t.project_id,p.name project_name,
+ st.server_id,s.name server_name,CASE WHEN s.revoked_at IS NULL AND s.last_seen_at>? THEN 'online' ELSE 'offline' END server_status,t.native_id AS codex_thread_id,t.path workspace_path,
+ st.name,st.prompt,st.schedule,st.timezone,st.enabled,st.model,st.reasoning_effort,st.approval_mode,
+ st.next_run_at,st.last_run_at,st.last_run_status,st.last_run_message,st.last_operation_id,st.created_at,st.updated_at
+ FROM ` + scheduledTable(engine) + ` st JOIN (` + aiSessionRows + `) t ON t.id=st.thread_id AND t.engine='` + engine + `'
+ JOIN projects p ON p.id=t.project_id JOIN servers s ON s.id=st.server_id`
+}
 
-var geminiScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'gemini' AS agent_kind"), "codex_scheduled_tasks", "gemini_scheduled_tasks"), "JOIN codex_threads", "JOIN gemini_threads")
-var claudeScheduledTaskSelect = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(codexScheduledTaskSelect, "'codex' AS agent_kind", "'claude' AS agent_kind"), "codex_scheduled_tasks", "claude_scheduled_tasks"), "JOIN codex_threads", "JOIN claude_threads")
-var scheduledTaskSelect = "SELECT * FROM (" + codexScheduledTaskSelect + " UNION ALL " + strings.ReplaceAll(strings.ReplaceAll(geminiScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id"), "'' AS thinking_level", "st.thinking_level") + " UNION ALL " + strings.ReplaceAll(claudeScheduledTaskSelect, "t.codex_thread_id", "t.session_id AS codex_thread_id") + ") st"
+var scheduledTaskSelect = "SELECT * FROM (" + scheduledTaskBranch(session.Codex, "''") + " UNION ALL " + scheduledTaskBranch(session.Gemini, "st.thinking_level") + " UNION ALL " + scheduledTaskBranch(session.Claude, "''") + ") st"
 
 // scheduledTaskArgs prepends the server heartbeat cutoff of each of the three
 // branches of scheduledTaskSelect to the arguments of the outer query.

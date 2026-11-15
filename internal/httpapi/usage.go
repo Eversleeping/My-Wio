@@ -3,51 +3,35 @@ package httpapi
 import (
 	"database/sql"
 	"errors"
-	"net/http"
-
 	"github.com/go-chi/chi/v5"
+	"github.com/wio-platform/wio/internal/session"
+	"github.com/wio-platform/wio/internal/store"
+	"net/http"
 )
 
 func (a *API) geminiUsage(w http.ResponseWriter, r *http.Request) {
-	thread, ok := a.loadGeminiThread(w, r)
-	if !ok {
-		return
-	}
-	usage, err := a.store.SessionUsage(r.Context(), thread.ID, "gemini", thread.Status == "running" || thread.Status == "interrupting")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load session usage")
-		return
-	}
-	writeJSON(w, http.StatusOK, usage)
+	a.sessionUsage(w, r, session.Gemini, "Gemini ")
 }
-
 func (a *API) claudeUsage(w http.ResponseWriter, r *http.Request) {
-	thread, ok := a.loadClaudeThread(w, r)
-	if !ok {
-		return
-	}
-	usage, err := a.store.SessionUsage(r.Context(), thread.ID, "claude", thread.Status == "running" || thread.Status == "interrupting")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load session usage")
-		return
-	}
-	writeJSON(w, http.StatusOK, usage)
+	a.sessionUsage(w, r, session.Claude, "Claude ")
 }
-
 func (a *API) threadUsage(w http.ResponseWriter, r *http.Request) {
-	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
+	a.sessionUsage(w, r, session.Codex, "")
+}
+func (a *API) sessionUsage(w http.ResponseWriter, r *http.Request, engine, prefix string) {
+	usage, err := a.store.SessionUsageForRef(r.Context(), session.Ref{Engine: engine, ID: chi.URLParam(r, "threadID")})
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "session not found")
+		writeError(w, 404, prefix+"session not found")
+		return
+	}
+	var lookup store.SessionLookupError
+	if errors.As(err, &lookup) {
+		writeError(w, 500, "could not load "+prefix+"session")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load session")
+		writeError(w, 500, "could not load session usage")
 		return
 	}
-	usage, err := a.store.SessionUsage(r.Context(), thread.ID, "codex", thread.Status == "running")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load session usage")
-		return
-	}
-	writeJSON(w, http.StatusOK, usage)
+	writeJSON(w, 200, usage)
 }

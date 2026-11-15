@@ -465,3 +465,7 @@ CREATE TABLE ai_sessions (
 
 - 2026-11-15，P2-03，Codex：八个成对重复文件消失，统一为 `cli_settings.go`、`engine_credentials.go`、`session_management.go`、`session_questions.go`；Codex 通用版本设置也合入，专有更新操作保留在 `codex_updates.go`。按原九个文件/新五个文件统计，929→613 行，净减316行。旧方法/响应类型作为薄适配保留；Claude 问题取消检查、两引擎不同版本门槛、凭据命令/入队签名、fork-worktree 响应差异、审计和事件字符串全部保留。问题回答的加锁、回执复用和插入仍处于同一个原事务。
   - 验收：旧路由矩阵、版本设置/更新、凭据和问题回答定向测试通过；前端构建、go vet、全部 Go 测试（266.98秒）、PostgreSQL（27.48秒）、451项 Vitest、typecheck、双入口构建、fmt/diff 均通过；真实进程浏览器冒烟通过（setup/login/内置 Agent/三引擎回复，9.55秒）。未修改 Agent 依赖包，版本保持0.3.19。按授权本地提交后继续 P2-04。
+
+- 2026-11-15，P2-04 开工修订：统一查询底层保留 revoked 服务器行，公开会话/协作投影再过滤；定时任务历史保留其原有 offline 行和项目原名，避免读模型合并改变列表。先提交读模型，再处理驱动与调用方。协作入口仍需支持 Store 原有 API 和内部测试；为避免 Store→sessionservice→Store 循环，将不依赖 Store 的协作编排放入 `internal/sessionservice/core`，通过绑定原事务的端口访问数据；根 sessionservice 装配公共驱动，Store 驱动文件适配私有事务方法。引擎字面量验收按职责检查：公共编排/调度不能有引擎分支；原生事件解释、兼容迁移、凭据/CLI 持久化属于驱动持久化侧，逐项记录，不在 M3 改写 Agent 协议或迁移 SQL。
+
+- 2026-11-15，P2-04 提交一，Codex：新增 AISession/AISessions 统一读模型（现有 Session 是登录会话，故避免同名）；公共字段、版本能力、Codex 执行配置、字面量子串搜索、归档/引擎过滤和项目/会话置顶排序集中在同一查询。协作投影、定时任务列表与用量读取复用该来源；保留定时任务的任务服务器/项目原名和 revoked 历史，以及 Codex 用量对 revoked 行的旧读取语义。新增三引擎读模型、搜索转义/分页前过滤和撤销历史测试。Store/HTTP 的读模型、定时任务、用量、旧路由契约和协作矩阵定向测试通过（20.26秒/5.53秒）；完整验收在步骤结束前执行。P2-04 继续进行。

@@ -45,9 +45,7 @@ func (t CollaborationSession) Busy() bool {
 	return t.Status == "queued" || t.Status == "running" || t.Status == "interrupting" || t.Status == "preparing" || t.RecoveryPending
 }
 
-const collaborationSessions = `SELECT 'codex' AS engine,t.id,t.title,t.status,t.workspace_id,w.project_id,w.server_id,w.path,'' AS model,'on-request' AS mode,'' AS effort,t.codex_thread_id AS native_id,COALESCE((SELECT o.id FROM agent_operations o WHERE o.thread_id=t.id AND o.kind IN ('codex.turn.start','codex.turn.rewrite') ORDER BY o.created_at DESC LIMIT 1),'') AS operation_id,s.agent_version,t.archived_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id WHERE s.revoked_at IS NULL
- UNION ALL SELECT 'claude',t.id,t.title,t.status,t.workspace_id,w.project_id,w.server_id,w.path,t.model,t.permission_mode,COALESCE(o.effort,''),t.session_id,t.operation_id,s.agent_version,t.archived_at,t.updated_at FROM claude_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id LEFT JOIN claude_thread_options o ON o.thread_id=t.id WHERE s.revoked_at IS NULL
- UNION ALL SELECT 'gemini',t.id,t.title,t.status,t.workspace_id,w.project_id,w.server_id,w.path,t.model,t.approval_mode,t.thinking_level,t.session_id,t.operation_id,s.agent_version,t.archived_at,t.updated_at FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id WHERE s.revoked_at IS NULL`
+var collaborationSessions = "SELECT engine,id,title,status,workspace_id,project_id,server_id,path,model,mode,effort,native_id,operation_id,agent_version,archived_at,updated_at FROM (" + aiSessionRows + ") session_rows WHERE server_revoked_at IS NULL"
 
 func (s *Store) collaborationSession(ctx context.Context, db sqlx.QueryerContext, ref sessiontools.Ref) (CollaborationSession, error) {
 	var t CollaborationSession

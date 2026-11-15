@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 // SessionUsage reports only counters retained in the current transcript. Null
@@ -209,4 +210,20 @@ func (s *Store) SessionUsage(ctx context.Context, threadID, provider string, run
 		usage.OutputPerSecond = &value
 	}
 	return usage, nil
+}
+
+type SessionLookupError struct{ Err error }
+
+func (e SessionLookupError) Error() string { return e.Err.Error() }
+func (e SessionLookupError) Unwrap() error { return e.Err }
+
+// SessionUsageForRef resolves lifecycle state from the shared read model. Native
+// transcript counters still use the engine-specific event interpreter above.
+func (s *Store) SessionUsageForRef(ctx context.Context, ref session.Ref) (SessionUsage, error) {
+	t, err := s.aiSession(ctx, s.DB, ref, ref.Engine == session.Codex)
+	if err != nil {
+		return SessionUsage{}, SessionLookupError{err}
+	}
+	running := t.Status == "running" || (ref.Engine != session.Codex && t.Status == "interrupting")
+	return s.SessionUsage(ctx, t.ID, ref.Engine, running)
 }
