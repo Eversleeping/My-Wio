@@ -1,8 +1,6 @@
-import { useRealtime } from "./realtime/useRealtime";
 import {
   type StreamEvent,
   type Thread,
-  type AuditEntry,
   type Session,
   type Approval,
   type PageProps,
@@ -34,6 +32,7 @@ import { clearDataCacheMatching, useData } from "./useData";
 import { useI18n } from "./i18n";
 import { readLocationState, type View, navigateToLocation, navigation } from "./navigation";
 import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
+import { useRealtime } from "./realtime/useRealtime";
 import { setSession, api, APIError, onUnauthorized, post, put, remove } from "./api";
 import { LoadingScreen, LanguageSwitch, ErrorBanner, Field, Dialog } from "./components/FormUI";
 import { PageLoading, Empty, Status, ErrorState } from "./components/PageUI";
@@ -152,8 +151,6 @@ type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; glob
 
 type ThreadListPage = { items: Thread[]; has_more: boolean; next: number | null };
 
-type AuditListPage = { items: AuditEntry[]; has_more: boolean; next: number | null };
-
 const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
 
 const threadEventsCacheThreadLimit = 8;
@@ -165,8 +162,6 @@ const codexAutoFollowThreshold = 96;
 const threadEventsPageSize = 500;
 
 const threadListPageSize = 50;
-
-const auditListPageSize = 50;
 
 function setScrollTopImmediately(element: HTMLElement, top: number) {
   const scrollBehavior = element.style.scrollBehavior;
@@ -451,81 +446,6 @@ export function useThreadList(archived: boolean, realtime: unknown) {
       }
     })();
   }, [archived, firstPage.data]);
-  const reload = useCallback(() => firstPage.reload(), [firstPage.reload]);
-  return { data: firstPage.data ? items : null, error: firstPage.error, loading: firstPage.loading, reload, hasMore, loadingMore, loadError, loadMore };
-}
-
-function mergeAuditEntries(...pages: AuditEntry[][]) {
-  const merged: AuditEntry[] = [];
-  const seen = new Set<string>();
-  for (const page of pages) for (const entry of page) {
-    if (seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    merged.push(entry);
-  }
-  return merged;
-}
-
-function useAuditList(realtime: unknown) {
-  const firstPage = useData<AuditListPage>(`/audit?limit=${auditListPageSize}`, realtime);
-  const [tail, setTail] = useState<AuditEntry[]>([]);
-  const [tailLoaded, setTailLoaded] = useState(false);
-  const [tailNext, setTailNext] = useState<number | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const requestRef = useRef(0);
-  const tailRef = useRef(tail);
-  const tailLoadedRef = useRef(tailLoaded);
-  tailRef.current = tail;
-  tailLoadedRef.current = tailLoaded;
-  useEffect(() => () => { requestRef.current += 1; }, []);
-  const items = useMemo(() => mergeAuditEntries(firstPage.data?.items ?? [], tail), [firstPage.data?.items, tail]);
-  const next = tailLoaded ? tailNext : firstPage.data?.next ?? null;
-  const hasMore = tailLoaded ? tailNext !== null : Boolean(firstPage.data?.has_more);
-  const loadMore = useCallback(async () => {
-    if (loadingMore || next === null) return;
-    const request = ++requestRef.current;
-    setLoadingMore(true);
-    setLoadError("");
-    try {
-      const page = await api<AuditListPage>(`/audit?limit=${auditListPageSize}&offset=${next}`);
-      if (request !== requestRef.current) return;
-      setTail(current => mergeAuditEntries(current, page.items));
-      setTailLoaded(true);
-      setTailNext(page.next);
-    } catch (error) {
-      if (request === requestRef.current) setLoadError(message(error));
-    } finally {
-      if (request === requestRef.current) setLoadingMore(false);
-    }
-  }, [loadingMore, next]);
-  useEffect(() => {
-    if (!firstPage.data || !tailLoadedRef.current) return;
-    const loadedTailCount = tailRef.current.length;
-    if (loadedTailCount === 0) return;
-    const request = ++requestRef.current;
-    setLoadingMore(true);
-    setLoadError("");
-    void (async () => {
-      try {
-        const refreshed: AuditEntry[] = [];
-        let offset: number | null = auditListPageSize;
-        while (offset !== null && refreshed.length < loadedTailCount) {
-          const page: AuditListPage = await api<AuditListPage>(`/audit?limit=${auditListPageSize}&offset=${offset}`);
-          if (request !== requestRef.current) return;
-          refreshed.push(...page.items);
-          offset = page.next;
-        }
-        if (request !== requestRef.current) return;
-        setTail(mergeAuditEntries(refreshed));
-        setTailNext(offset);
-      } catch (error) {
-        if (request === requestRef.current) setLoadError(message(error));
-      } finally {
-        if (request === requestRef.current) setLoadingMore(false);
-      }
-    })();
-  }, [firstPage.data]);
   const reload = useCallback(() => firstPage.reload(), [firstPage.reload]);
   return { data: firstPage.data ? items : null, error: firstPage.error, loading: firstPage.loading, reload, hasMore, loadingMore, loadError, loadMore };
 }
