@@ -1,0 +1,18 @@
+{
+  "archived_at": null,
+  "codex_thread_id": "",
+  "created_at": "\u003ctime\u003e",
+  "id": "\u003cid\u003e",
+  "path": "/srv/contract",
+  "pinned_at": null,
+  "project_hidden_at": null,
+  "project_id": "\u003cid\u003e",
+  "project_name": "contract",
+  "project_pinned_at": null,
+  "server_id": "\u003cid\u003e",
+  "server_name": "node-1",
+  "status": "idle",
+  "title": "New session",
+  "updated_at": "\u003ctime\u003e",
+  "workspace_id": "\u003cid\u003e"
+}

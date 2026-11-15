@@ -137,6 +137,8 @@ P7 分三批交付：先实现明确计划下的依赖调度与基础工作台�
 
 2026-11-15 用户在 M1 完成后要求“继续”：沿用每完成一个任务自动本地提交的授权，推进 M2（P3-01 至 P3-07）全部任务。不推送、不发布、不部署。
 
+2026-11-15 用户在 M2 完成后要求“继续”：沿用逐任务自动本地提交的授权，推进 M3（P2-01 至 P2-05）全部任务；不推送、不发布、不部署。
+
 ### 并行
 
 - 多个 Agent 同时工作时各用独立 worktree，并且只领取互不重叠的步骤。下表列出会互相冲突的组合。
@@ -195,7 +197,7 @@ npm --prefix web run typecheck
 | P1-02 | 迁移运行器与 `schema_migrations` | M | P1-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 962262e |
 | P1-03 | 降级保护 | S | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 24cd12c |
 | P1-04 | 迁移编写规范与升级文档 | S | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | d89ca2a |
-| P2-01 | 引擎行为盘点与契约测试 | M | P0-02 | 待开始 | |  | |
+| P2-01 | 引擎行为盘点与契约测试 | M | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（见执行记录） |
 | P2-02 | `internal/session` 包与统一能力解析 | M | P2-01 | 待开始 | |  | |
 | P2-03 | 合并近乎相同的处理器 | S | P2-02、P3-02 | 待开始 | |  | |
 | P2-04 | 统一读模型与控制面驱动接口 | L | P2-02、P0-07 | 待开始 | |  | |
@@ -295,6 +297,8 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-14 | P1-01 审阅 | `TestPostgresMigrationAndStorage` 不能用 `-run` 只跑其中一个子测试：`assertCodexSnapshotTimeoutAndRetry` 用 `t.Run` 组织步骤，父测试后面的断言依赖这些子测试的副作用，子测试被筛掉后父测试失败 | 暂不处理，运行时不要筛选子测试。P1-02 改这个测试时可以顺手理顺。由用户决定 |
 
 | 2026-11-15 | P0-03、P1-04 / P0-08 本地验收 | `web/src/AppSession.test.tsx` 的“returns to sign-in when the session expires while the console is open”间歇性失败：登录页已出现，立即断言 `FakeWebSocket.instances[0].closed` 时仍为 false。P0-03 首次并发编译时遇到一次，本轮串行全量 Vitest 又出现一次；未改源码的定向复验 6 项通过。疑似断言早于 effect 清理完成，尚未认定产品缺陷 | 记录待单独排查，不夹带进重构；本轮完整复验结果见执行记录 |
+
+| 2026-11-15 | P2-01 | 旧 HTTP 接口偶然差异：Codex 独有 archived=all/可选分页对象、未知 archived 报错；另两引擎忽略；PATCH 空对象 Codex 400 另两者200；更新/发起成功响应、事件游标错误文本/窗口和存在性检查不同；Claude worktree 分叉不返回 workspace_id。详见 P2-engine-contracts.md | 保留旧路由行为，新增统一路由按 P2-05 契约；不单独修旧接口 |
 
 ## 变更记录
 

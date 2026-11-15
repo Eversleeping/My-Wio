@@ -68,6 +68,10 @@
 
 以下是方向性的草图。字段和方法以实现时的真实需要为准，P2-01 的盘点结果可以修正它。
 
+2026-11-15 执行基线更新为 M2 结束的 `be2c2d1`：Codex Store 声明已在 `store/codex_threads.go`，HTTP 线程/轮次在 `httpapi/codex_threads.go`、`codex_turns.go`，路由在 `httpapi/routes.go`，前端主体在 `web/src/codex/SessionView.tsx`；下文旧 `resources.go` / `App.tsx` 引用按这些位置理解。
+
+依赖核对修订：Store 已依赖 `sessiontools.Ref`，因此别名迁入的 `internal/session` 必须保持为不依赖 Store 的契约包；驱动实现和注册表的装配位于 `internal/sessionservice`（可以导入 Store）。协作的事务内数据访问与锁留在 Store，编排通过事务接口接入上层服务，不能用分开的 Store 调用替代原事务。登录会话已经有 `Store.SessionByToken`，统一 AI 会话以 `AISession` / `AISessions` 命名，避免与现有 `store.Session` 类型冲突。
+
 ### 包与类型
 
 新增 `internal/session` 包，位于 `store` 之上、`httpapi` 之下。
@@ -440,14 +444,14 @@ CREATE TABLE ai_sessions (
 
 ## 引擎差异清单
 
-由 P2-01 填写。
-
-| 操作 | Codex | Gemini | Claude | 差异性质 | 处理 |
-| --- | --- | --- | --- | --- | --- |
-| | | | | | |
+详细盘点见 [P2-01 引擎行为与持久化字段清单](P2-engine-contracts.md)：12 项操作（分叉与 worktree 分开）、版本门槛、全部物理列、原子条件与错误索引。`session_contract_test.go` 通过真实认证路由对三引擎执行公共生命周期、失败保护、事件/用量、追加、重发和两类分叉；Codex 无确认停止接口的用例明确跳过。CLI 原生输入/历史/中断差异有意保留；列表、空更新、错误文本和成功响应等偶然差异已登记总览，旧路由继续兼容。
 
 ## 执行记录
 
 按时间顺序追加，每条包含日期、步骤编号、会话标识、做了什么、验收结果、遗留事项。
 
 - 2026-11-14，方向同步，11-14 Codex：按 D10、D11 补充 P2 与 P7 的职责和接口边界，明确任务按实际操作关联结果、复用驱动且不依赖物理合表。仅更新计划，未领取或实现 P2 步骤；文档验证统一记录在 P7-00。
+
+- 2026-11-15，M3 / P2-01，Codex：从 `be2c2d1` 干净工作区领取；先盘点并锁定旧路由契约。本轮逐任务自动本地提交授权见总览。
+
+- 2026-11-15，P2-01，Codex：完成行为/版本/物理列盘点和显式错误索引（`P2-engine-contracts.md`）；新增真实认证路由的三引擎表驱动契约，覆盖创建/详情/更新/列表、轮次入队与完成、写锁、重发、追加、队列取消、确认停止、归档/删除、事件游标、用量、两类分叉；保存六份逐字段响应快照。36 个矩阵用例，Codex 不支持确认停止明确跳过。未改产品代码，偶然差异登记总览。`npm --prefix web run build`、`go vet ./...`、`go test ./...`（199.65 秒）、`npm --prefix web test`（451 项）、`npm --prefix web run typecheck`、Go 双入口构建、格式、差异检查与路线图本地链接检查均通过；无需 PostgreSQL/页面 E2E（未改 Store 或交互）。按授权本地提交，随后继续 P2-02。
