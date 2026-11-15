@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -21,7 +22,7 @@ test("shows recent operations, prioritizes active work, and filters by status", 
     return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
   const user = userEvent.setup();
-  render(<I18nProvider><OperationsPage realtime={0} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{operations: 0}}><OperationsPage  /></DataProvider></I18nProvider>);
   expect(await screen.findByText("Agent operations")).toBeInTheDocument();
   expect(await screen.findByText("Starting Compose")).toBeInTheDocument();
   expect(screen.getAllByRole("option", { name: "Canceled" })).toHaveLength(1);
@@ -41,7 +42,7 @@ test("links operations to their actual resource type", async () => {
     { ...base, id: "thread-operation", project_id: "project-1", project_name: "project-management", workspace_id: "workspace-1", workspace_path: "/srv/project", thread_id: "thread-1", thread_title: "Investigate deployment", resource_type: "thread", resource_id: "thread-1", kind: "codex.turn.start" }
   ];
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(operations), { status: 200, headers: { "Content-Type": "application/json" } })));
-  render(<I18nProvider><OperationsPage realtime={0} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{operations: 0}}><OperationsPage  /></DataProvider></I18nProvider>);
   expect(await screen.findByRole("link", { name: /server-1/ })).toHaveAttribute("href", "?view=servers");
   expect(screen.getByRole("link", { name: /project-management/ })).toHaveAttribute("href", "?view=projects&project_name=project-management&project_server_id=server-1");
   expect(screen.getByRole("link", { name: /project-workspace/ })).toHaveAttribute("href", "?view=projects&workspace_path=%2Fsrv%2Fproject&workspace_server_id=server-1");
@@ -65,7 +66,7 @@ test("interrupts active scans, waits for confirmation, and permits retry after f
     return new Response(JSON.stringify([active, old, complete]), { status: 200 });
   }));
   const user = userEvent.setup();
-  const { rerender } = render(<I18nProvider><OperationsPage realtime={0} /></I18nProvider>);
+  const { rerender } = render(<I18nProvider><DataProvider revisions={{operations: 0}}><OperationsPage  /></DataProvider></I18nProvider>);
   const resource = await screen.findByRole("link", { name: "node" });
   const row = resource.closest("tr")!;
   expect(within(screen.getByRole("link", { name: "done" }).closest("tr")!).queryByRole("button")).not.toBeInTheDocument();
@@ -76,7 +77,7 @@ test("interrupts active scans, waits for confirmation, and permits retry after f
   expect(postCount).toBe(1);
   active.interrupt_status = "failed";
   active.interrupt_error = "termination not confirmed";
-  rerender(<I18nProvider><OperationsPage realtime={1} /></I18nProvider>);
+  rerender(<I18nProvider><DataProvider revisions={{operations: 1}}><OperationsPage  /></DataProvider></I18nProvider>);
   await waitFor(() => expect(within(row).getByRole("button", { name: "Interrupt" })).toBeEnabled());
   expect(within(row).getByText(/termination not confirmed/)).toBeInTheDocument();
   await user.click(within(row).getByRole("button", { name: "Interrupt" }));
@@ -89,7 +90,7 @@ test("shows a failed interruption request and leaves retry available", async () 
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
     ? new Response(JSON.stringify({ error: "Connection unavailable" }), { status: 503 })
     : new Response(JSON.stringify([active]), { status: 200 })));
-  render(<I18nProvider><OperationsPage realtime={0} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{operations: 0}}><OperationsPage  /></DataProvider></I18nProvider>);
   await userEvent.click(await screen.findByRole("button", { name: "Interrupt" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Connection unavailable");
   await waitFor(() => expect(screen.getByRole("button", { name: "Interrupt" })).toBeEnabled());

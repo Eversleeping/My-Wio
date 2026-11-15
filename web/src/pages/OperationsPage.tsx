@@ -1,3 +1,5 @@
+import { operations as operationEndpoints } from "../data/operations";
+import { useResource } from "../data/resources";
 import { useEffect, useState } from "react";
 import { Activity, ExternalLink, RefreshCw, Square } from "lucide-react";
 import { post } from "../api";
@@ -43,13 +45,12 @@ function resourceHref(operation: OperationSummary) {
   return `?${params.toString()}`;
 }
 
-export default function OperationsPage({ realtime }: PageProps) {
+export default function OperationsPage() {
   const { t } = useI18n();
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState<string[]>([]);
   const [interruptError, setInterruptError] = useState("");
-  const path = status ? `/operations?status=${encodeURIComponent(status)}&limit=200` : "/operations?limit=200";
-  const operations = useData<OperationSummary[]>(path, realtime);
+  const operations = useResource(operationEndpoints.list(status));
   const hasActive = (operations.data ?? []).some(operation => activeStatuses.has(operation.status));
   useEffect(() => {
     if (!hasActive) return;
@@ -61,12 +62,12 @@ export default function OperationsPage({ realtime }: PageProps) {
     setSubmitting(current => [...current, operation.id]);
     setInterruptError("");
     try {
-      await post(`/operations/${encodeURIComponent(operation.id)}/interrupt`, {});
+      await operationEndpoints.interrupt(operation.id);
     } catch (error) {
       setInterruptError(error instanceof Error ? error.message : String(error));
+      operations.reload();
     } finally {
       setSubmitting(current => current.filter(id => id !== operation.id));
-      operations.reload();
     }
   }
   return <div className="page-stack operations-page">
