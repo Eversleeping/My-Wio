@@ -162,7 +162,7 @@ test("backs off websocket reconnects, resets after a stable connection and stops
 });
 
 test("reloads an edited Codex session after switching away while realtime batches arrive", async () => {
-  const thread = (id: string, title: string) => ({ id, workspace_id: `workspace-${id}`, project_id: "project-1", codex_thread_id: "", title, status: "idle", path: `/srv/${id}`, server_id: "server-1", server_name: "Server", project_name: "Project", created_at: "2026-07-23T00:00:00Z", updated_at: "2026-07-23T00:00:00Z", pinned_at: null, archived_at: null, project_pinned_at: null, project_hidden_at: null });
+  const thread = (id: string, title: string) => ({ engine:"codex", native_id:"", capabilities:{}, id, workspace_id: `workspace-${id}`, project_id: "project-1", codex_thread_id: "", title, status: "idle", path: `/srv/${id}`, server_id: "server-1", server_name: "Server", project_name: "Project", created_at: "2026-07-23T00:00:00Z", updated_at: "2026-07-23T00:00:00Z", pinned_at: null, archived_at: null, project_pinned_at: null, project_hidden_at: null });
   const message = (streamID: string, sequence: number, text: string) => ({ event_id: `${streamID}-${sequence}-${text}`, stream_id: streamID, sequence, kind: "user.message", occurred_at: "2026-07-23T00:00:00Z", payload: { text } });
   const edited = thread("edited-thread", "Edited session");
   const other = thread("other-thread", "Other session");
@@ -174,6 +174,8 @@ test("reloads an edited Codex session after switching away while realtime batche
     if (path === "/setup/status") return jsonResponse({ configured: true, auth_mode: "password" });
     if (path === "/auth/session") return jsonResponse(session);
     if (path === "/sessions") return jsonResponse({ items: url.searchParams.get("archived") === "true" ? [] : [edited, other], next_cursor: null, groups: [] });
+    if (path === `/sessions/codex/${edited.id}`) return jsonResponse(edited);
+    if (path === `/sessions/codex/${other.id}`) return jsonResponse(other);
     if (path.endsWith("/goal")) return jsonResponse({ status: "idle", supported: true, data: {} });
     if (path === `/sessions/codex/${other.id}/events`) return jsonResponse([message(other.id, 1, "Other conversation")]);
     if (path === `/sessions/codex/${edited.id}/events`) {
@@ -188,7 +190,7 @@ test("reloads an edited Codex session after switching away while realtime batche
   try {
     renderApp();
     await screen.findByText("Pre-edit tail");
-    await user.click(screen.getByRole("button", { name: "Other session Server" }));
+    await user.click(screen.getByRole("button", { name: /Codex.*Other session.*Server/ }));
     await screen.findByText("Other conversation");
 
     // The edit rewinds the stream, then a later batch reports only newer events.
@@ -198,7 +200,7 @@ test("reloads an edited Codex session after switching away while realtime batche
       act(() => socket.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ stream_id: edited.id, sequence, kind: "user.message" }) })));
       await act(() => new Promise(resolve => setTimeout(resolve, 150)));
     }
-    await user.click(screen.getByRole("button", { name: "Edited session Server" }));
+    await user.click(screen.getByRole("button", { name: /Codex.*Edited session.*Server/ }));
 
     await screen.findByText("Answer to the edit");
     expect(screen.getByText("Edited message")).toBeInTheDocument();

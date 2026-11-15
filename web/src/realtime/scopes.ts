@@ -1,7 +1,8 @@
+import type { Engine } from "../sessions/types";
 import { type View } from "../navigation";
 import { type StreamEvent } from "../types";
 
-export type RealtimeScope = Exclude<View, "sessions"> | "approvals";
+export type RealtimeScope = Exclude<View, "sessions"> | Engine | "approvals";
 
 export type RealtimeRevisions = Record<RealtimeScope, number>;
 

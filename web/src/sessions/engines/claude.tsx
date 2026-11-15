@@ -1,125 +1,34 @@
-import { Archive,ArchiveRestore,ArrowUp,Bot,CalendarClock,Copy,Gauge,GitFork,ListChecks,LoaderCircle,MessageSquare,MoreHorizontal,Pencil,Plus,Settings2,Square,UserRound,Workflow,X } from "lucide-react";
-import { useCallback,useEffect,useMemo,useRef,useState,type FormEvent } from "react";
-import { ContextMenu,type ContextMenuAction } from "../../ContextMenu";
+import { Archive, ArrowUp, Bot, CalendarClock, Copy, Gauge, GitFork, ListChecks, LoaderCircle, MessageSquare, MoreHorizontal, Pencil, Plus, Settings2, Square, UserRound, Workflow, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { ContextMenu } from "../../ContextMenu";
 import MarkdownContent from "../../MarkdownContent";
-import { SlashCommandMenu,type SlashCommandItem } from "../../SlashCommandMenu";
-import { api,patch,post,remove } from "../../api";
+import { SlashCommandMenu, type SlashCommandItem } from "../../SlashCommandMenu";
+import { api, post } from "../../api";
 import { claudeDisplayEvents } from "../../claudeContent";
-import { useClaudeModels,type ClaudeModel } from "../../claudeModels";
-import { useClaudeSkills,validClaudeSkillName,type ClaudeSkill } from "../../claudeSkills";
+import { useClaudeModels, type ClaudeModel } from "../../claudeModels";
+import { useClaudeSkills, validClaudeSkillName, type ClaudeSkill } from "../../claudeSkills";
 import { type FilePreviewSelection } from "../../codexContent";
 import { ClaudeCompactionEvent } from "../../components/ClaudeCompactionEvent";
 import { ClaudeModelPicker } from "../../components/ClaudeModelPicker";
 import { ClaudeQuestion } from "../../components/ClaudeQuestion";
 import { ClaudeToolGroup } from "../../components/ClaudeToolGroup";
-import { CollaborationTaskDialog,useSubmitPrompt } from "../../components/CollaborationTaskDialog";
+import { CollaborationTaskDialog, useSubmitPrompt } from "../../components/CollaborationTaskDialog";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { DialogActions } from "../../components/Dialog";
-import { Dialog,ErrorBanner,Field } from "../../components/FormUI";
+
+import { Dialog, ErrorBanner, Field } from "../../components/FormUI";
 import { MessageImages } from "../../components/MessageImages";
-import { Empty,ErrorState,Status } from "../../components/PageUI";
+import { Empty, ErrorState, Status } from "../../components/PageUI";
 import { SessionUsage } from "../../components/SessionUsage";
-import { formatDate,formatTime } from "../../format";
+import { formatDate, formatTime } from "../../format";
 import { useI18n } from "../../i18n";
 import { compressImage } from "../../imageCompression";
-import { useSessionManagement } from "../useSessionManagement";
-import { ScheduledTaskDialog } from "../../pages/ScheduledTaskDialog";
 import { message } from "../../text";
 import type { ClaudeThread,Server,StreamEvent,Workspace } from "../../types";
-import { useData,useThrottledValue } from "../../useData";
-import { ComposerAttachments,ComposerInput } from "../Composer";
-import { RenameSessionDialog } from "../SessionDialogs";
-import { SessionPage } from "../SessionPage";
-import { Sidebar } from "../Sidebar";
-import { groupSessions,withSelectedSession } from "../groups";
-import type { SessionEngineProps } from "../types";
-import { useSessionList } from "../useSessionList";
-import { useSessionRevision } from "../useSessionRevision";
+import { useData, useThrottledValue } from "../../useData";
+import { ComposerAttachments, ComposerInput } from "../Composer";
 
 const modes = ["default", "acceptEdits", "plan", "bypassPermissions"];
 const activeTurn = (thread: ClaudeThread) => ["queued", "running", "interrupting"].includes(thread.status);
-
-export default function ClaudePage({ realtime, notify, selectedThreadID, onSelectThread }: SessionEngineProps) {
-  const { t } = useI18n();
-  const [search, setSearch] = useState("");
-  const { tick, refresh: bumpRevision } = useSessionRevision();
-  const [archived, setArchived] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [workspaceID, setWorkspaceID] = useState("");
-  const [model, updateModel] = useState("sonnet");
-  const modelSelected = useRef(false);
-  const setModel = (value: string) => { modelSelected.current = true; updateModel(value); };
-  const [effort, setEffort] = useState("");
-  const [mode, setMode] = useState("default");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [renaming, setRenaming] = useState<ClaudeThread | null>(null);
-  const [title, setTitle] = useState("");
-  const [deleting, setDeleting] = useState<ClaudeThread | null>(null);
-  const newModels = useClaudeModels(createOpen ? workspaceID : "", "create");
-  useEffect(() => {
-    if (!modelSelected.current && newModels.data?.default_model) updateModel(newModels.data.default_model);
-  }, [newModels.data]);
-  const dependency = `${realtime}:${tick}`;
-  const threads = useSessionList<ClaudeThread>({ engine: "claude", archived, q: search }, dependency);
-  const selected = useData<ClaudeThread>(selectedThreadID ? `/sessions/claude/${selectedThreadID}` : null, dependency);
-  const workspaces = useData<Workspace[]>("/workspaces", dependency);
-  const servers = useData<Server[]>("/servers", realtime);
-  const thread = threads.data?.find(item => item.id === selectedThreadID) ?? selected.data;
-  const refresh = bumpRevision;
-
-  useEffect(() => { if (!selectedThreadID) { const first = threads.data?.find(item => !item.project_hidden_at); if (first) onSelectThread(first.id, true); } }, [selectedThreadID, threads.data, onSelectThread]);
-  useEffect(() => { if (selected.data) setArchived(Boolean(selected.data.archived_at)); }, [selected.data?.id, selected.data?.archived_at]);
-
-  const create = async (event: FormEvent) => {
-    event.preventDefault(); if (newModels.loading) return; setBusy(true); setError("");
-    try {
-      const created = await post<ClaudeThread>("/sessions/claude", { workspace_id: workspaceID, model: model.trim(), permission_mode: mode, effort });
-      setArchived(false); setCreateOpen(false); onSelectThread(created.id); refresh();
-    } catch (err) { setError(message(err)); } finally { setBusy(false); }
-  };
-  const change = async (target: ClaudeThread, data: object) => {
-    setBusy(true); setError("");
-    try { await patch(`/sessions/claude/${target.id}`, data); setRenaming(null); if ("archived" in data) onSelectThread(""); refresh(); }
-    catch (err) { notify(message(err)); } finally { setBusy(false); }
-  };
-  const deleteSession = async () => {
-    if (!deleting) return; setBusy(true);
-    try { await remove(`/sessions/claude/${deleting.id}`); if (selectedThreadID === deleting.id) onSelectThread(""); setDeleting(null); refresh(); }
-    catch (err) { notify(message(err)); } finally { setBusy(false); }
-  };
-  const modelForWorkspace = (id: string) => { const workspace = workspaces.data?.find(item => item.id === id); return servers.data?.find(item => item.id === workspace?.server_id)?.claude_profile_model || "sonnet"; };
-  const newSession = (id = thread?.workspace_id ?? "") => { const previous = threads.data?.find(item => item.workspace_id === id); setWorkspaceID(id); updateModel(modelForWorkspace(id)); modelSelected.current = false; setEffort(previous?.effort ?? ""); setMode(previous?.permission_mode ?? "default"); setError(""); setCreateOpen(true); };
-
-  const groups = useMemo(() => groupSessions(withSelectedSession(threads.data ?? [], selected.data, archived, search), workspaces.data ?? [], threads.groups), [search, archived, threads.data, threads.groups, selected.data, workspaces.data]);
-  const management = useSessionManagement<ClaudeThread>("claude", { workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify }, item => Boolean(item.input_supported), (scheduled, close) => <ScheduledTaskDialog open={Boolean(scheduled)} initialThreadID={scheduled?.id} agentKind="claude" lockThread threads={[]} claudeThreads={scheduled ? [scheduled] : []} notify={notify} onClose={close} onSaved={refresh} />);
-  const threadActions = (item: ClaudeThread): ContextMenuAction[] => { const actions=management.threadActions(item); return [
-    ...actions.filter(action => action.id === "pin"),
-    { id: "rename", label: t("gemini.rename"), icon: Pencil, disabled: busy || activeTurn(item) || item.recovery_pending, onSelect: () => { setRenaming(item); setTitle(item.title); } },
-    ...actions.filter(action => ["schedule","fork","fork-worktree"].includes(action.id)),
-    { id: "archive", danger: !item.archived_at, separatorBefore: true, label: t(item.archived_at ? "gemini.restore" : "gemini.archive"), icon: item.archived_at ? ArchiveRestore : Archive, disabled: busy || activeTurn(item) || item.recovery_pending, onSelect: () => change(item, { archived: !item.archived_at }) },
-    ...actions.filter(action => action.id.startsWith("copy-") || action.id === "new-window"),
-  ]; };
-
-
-  return <SessionPage engine="claude" thread={thread} selectedID={selectedThreadID} onSelect={onSelectThread} revision={realtime + tick} collaborationRevision={realtime} notify={notify} error={selected.error} reload={selected.reload}
-    sidebar={select => <Sidebar engine="claude" icon={Bot} archived={archived} onArchived={() => { setArchived(!archived); onSelectThread(""); }} search={search} onSearch={setSearch} revision={dependency} refresh={refresh} notify={notify} groups={groups} selectedID={thread?.id} busy={busy} source={threads} onNew={newSession} onSelect={select} projectActions={management.projectActions} threadActions={threadActions} onDelete={setDeleting} deleteDisabled={item => busy || activeTurn(item) || item.recovery_pending} />}
-    welcome={<div className="gemini-welcome"><Bot size={40} /><h2>Claude</h2><p>{t("claude.intro")}</p><button className="primary-button" onClick={() => newSession()}><Plus size={17} />{t("claude.newSession")}</button></div>}
-    dialogs={<>
-    <Dialog open={createOpen} title={t("claude.newSession")} onClose={() => { if (!busy) setCreateOpen(false); }}><form onSubmit={create}>
-      {workspaces.error && <ErrorState error={workspaces.error} reload={workspaces.reload} />}
-      <Field label={t("gemini.workspace")}><select required value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); updateModel(modelForWorkspace(event.target.value)); modelSelected.current = false; setEffort(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{(workspaces.data ?? []).filter(item => item.status === "ready").map(item => <option key={item.id} value={item.id}>{item.project_name} · {item.server_name} · {item.path}</option>)}</select></Field>
-      <ClaudeOptions availableModels={newModels.models} model={model} mode={mode} effort={effort} setEffort={setEffort} setModel={setModel} setMode={setMode} disabled={busy} effortSupported={Boolean(servers.data?.find(item => item.id === workspaces.data?.find(workspace => workspace.id === workspaceID)?.server_id)?.claude_effort_supported)} />
-      <p className="gemini-hint">{t("claude.permissionsHelp")}</p>{error && <ErrorBanner text={error} />}
-      <DialogActions><button className="primary-button" disabled={busy || newModels.loading || !workspaceID || !model.trim()}>{t("claude.newSession")}</button></DialogActions>
-    </form></Dialog>
-    <RenameSessionDialog open={Boolean(renaming)} busy={busy} title={title} setTitle={setTitle} onClose={() => setRenaming(null)} onSave={() => { if (renaming) void change(renaming, { title: title.trim() }); }} />
-    {management.dialogs}
-    <ConfirmDialog open={Boolean(deleting)} danger title={t("claude.delete")} impact={t("claude.deleteImpact")} confirmLabel={t("common.delete")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setDeleting(null)} onConfirm={deleteSession} />
-    </>}>
-    {openFile => thread && <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} onSchedule={() => management.schedule(thread)} onFork={eventID => management.fork(thread, eventID)} notify={notify} onNew={() => newSession(thread.workspace_id)} />}
-  </SessionPage>;
-}
 
 export function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disabled, compact = false, effortSupported = true, availableModels = [], requestCustom = 0 }: { model: string; mode: string; effort: string; setModel: (value: string) => void; setMode: (value: string) => void; setEffort: (value: string) => void; disabled: boolean; compact?: boolean; effortSupported?: boolean; availableModels?: ClaudeModel[]; requestCustom?: number }) {
   const { t } = useI18n();

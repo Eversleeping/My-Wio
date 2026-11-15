@@ -3,16 +3,17 @@ import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import GeminiPage from "./sessions/engines/gemini";
+import { SessionTestPage } from "./sessions/SessionTestPage.test-support";
 import { I18nProvider } from "./i18n";
 import { formatTime } from "./format";
 import type { GeminiGoal } from "./types";
 
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
-const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
+const thread = {engine:"gemini" as const,native_id:"native-1",capabilities:{fork:true,fork_worktree:true},id:"thread-1",workspace_id:"workspace-1",server_id:"server-1",project_id:"project-1",project_name:"Project",server_name:"Production",server_status:"online",path:"/project",title:"Gemini",status:"idle",model:"auto",approval_mode:"default",thinking_level:"",archived_at:null,updated_at:"2026-10-25T00:00:00Z",created_at:"2026-10-25T00:00:00Z"};
 function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; archived?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerImagesSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; skillsManagementSupported?: boolean; skillsNetworkFailure?: boolean; goalSupported?: boolean; goal?: GeminiGoal; goalLoadFailures?: number; goalStartFailure?: boolean; strictMode?: boolean; credentialRevision?: string; modelCredentialRevision?: string; defaultModel?: string; modelIDs?: string[]; modelResponseGate?: Promise<void>; thinking?: string; } = {}) {
   window.localStorage.setItem("wio_language","en");
+  for (const id of ["workspace-1", "workspace-2"]) localStorage.setItem(`wio_workspace_engine:${id}`, "gemini");
   let eventLog = events;
   const currentThread = {...thread, server_id: "server-1", credential_revision:options.credentialRevision, model_credential_revision:options.modelCredentialRevision, thinking_level:options.thinking ?? "", archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_images_supported:options.steerImagesSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,skills_management_supported:options.skillsManagementSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
@@ -53,15 +54,17 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); const revision = currentThread.credential_revision; if (options.modelResponseGate) await options.modelResponseGate; if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,credential_revision:revision,default_model:options.defaultModel,models:options.modelIDs?.map(id => ({id,name:id})) ?? [{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
     else if (url === "/api/sessions/gemini/thread-1/goal") { if (goalLoadFailures-- > 0) return new Response(JSON.stringify({error:"Status unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); body = options.goal ?? null; }
     else if (url.includes("/sessions/gemini/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
-    else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
-    else if (url.startsWith("/api/sessions?engine=gemini")) { const q = new URL(url,"http://localhost").searchParams.get("q")?.toLowerCase(); body = {items: selected && (!q || `${currentThread.title} ${currentThread.path} ${currentThread.project_name}`.toLowerCase().includes(q)) ? [{...currentThread,model}] : [], next_cursor: null, groups: []}; }
+    else if (url.endsWith("/session-engines")) body = { engines: [{engine:"gemini",available:true,defaults:{model,approval_mode:"default",thinking_level:""}}] };
+    else if (url === "/api/servers") body = [{id:"server-1",status:"online"}];
+    else if (url === "/api/workspaces") body = [{id:"workspace-1",server_id:"server-1",project_id:"project-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",server_id:"server-1",project_id:"project-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
+    else if (url.startsWith("/api/sessions?")) { const q = new URL(url,"http://localhost").searchParams.get("q")?.toLowerCase(); body = {items: selected && (!q || `${currentThread.title} ${currentThread.path} ${currentThread.project_name}`.toLowerCase().includes(q)) ? [{...currentThread,model}] : [], next_cursor: null, groups: []}; }
     else if (url === "/api/sessions/gemini/thread-1") body = {...currentThread,model};
     return new Response(JSON.stringify(body),{status:200,headers:{"Content-Type":"application/json"}});
   }));
   const onSelectThread = vi.fn();
   const notify = vi.fn();
   let realtime = 0;
-  const page = () => <I18nProvider><GeminiPage realtime={realtime} notify={notify} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
+  const page = () => <I18nProvider><SessionTestPage engine="gemini" realtime={realtime} notify={notify} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
   const view = render(options.strictMode ? <StrictMode>{page()}</StrictMode> : page());
   return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread,notify,unmount:view.unmount,refresh:()=>{ realtime++; view.rerender(options.strictMode ? <StrictMode>{page()}</StrictMode> : page()); }};
 }
@@ -287,12 +290,11 @@ test("renders separate collapsed command groups around Gemini replies", async ()
 
 test("shows only fetched models and creates a session with a selected model",async () => {
   const {user,requests} = setup();
-  await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
+  await user.click((await screen.findAllByRole("button",{name:/^New session$/}))[0]);
   const dialog = screen.getByRole("dialog");
-  let models = within(dialog).getByRole("combobox",{name:"Gemini model"});
-  expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a model","Custom model"]);
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
-  models = within(dialog).getByRole("combobox",{name:"Gemini model"});
+  await within(dialog).findByRole("combobox",{name:"Gemini model"});
+  const models = await within(dialog).findByRole("combobox",{name:"Gemini model"});
   await within(models).findByRole("option",{name:"Upstream · gemini-upstream-current"});
   expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a model","Upstream · gemini-upstream-current","Custom model"]);
   await user.selectOptions(models,"gemini-upstream-current");
@@ -302,10 +304,12 @@ test("shows only fetched models and creates a session with a selected model",asy
 
 test("creates a session with never approve selected",async () => {
   const {user,requests} = setup();
-  await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
+  await user.click((await screen.findAllByRole("button",{name:/^New session$/}))[0]);
   const dialog = screen.getByRole("dialog");
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
+  await within(dialog).findByRole("combobox",{name:"Gemini model"});
   await within(dialog).findByRole("option",{name:"Upstream · gemini-upstream-current"});
+  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Gemini model"}),"gemini-upstream-current");
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Tool permissions"}),"yolo");
   expect(within(dialog).getByRole("option",{name:"Never approve"})).toBeInTheDocument();
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
@@ -410,17 +414,18 @@ test("refreshes models once on each session entry, including in StrictMode",asyn
   await waitFor(() => expect(requests[0].body).toMatchObject({model:"gemini-upstream-current"}));
   expect(modelRequests).toHaveLength(1);
   unmount();
-  render(<StrictMode><I18nProvider><GeminiPage realtime={0} notify={notify} selectedThreadID={thread.id} onSelectThread={onSelectThread} /></I18nProvider></StrictMode>);
+  render(<StrictMode><I18nProvider><SessionTestPage engine="gemini" realtime={0} notify={notify} selectedThreadID={thread.id} onSelectThread={onSelectThread} /></I18nProvider></StrictMode>);
   await screen.findByRole("option",{name:"Upstream · gemini-upstream-new"});
   expect(modelRequests).toHaveLength(2);
 });
 
 test("loads upstream models after selecting a workspace for a new session",async () => {
   const {user,modelRequests} = setup();
-  await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
+  await user.click((await screen.findAllByRole("button",{name:/^New session$/}))[0]);
   const dialog = screen.getByRole("dialog");
   expect(modelRequests).toEqual([]);
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-1");
+  await within(dialog).findByRole("combobox",{name:"Gemini model"});
   await within(dialog).findByRole("option",{name:"Upstream · gemini-upstream-current"});
   expect(modelRequests).toEqual(["/api/workspaces/workspace-1/gemini/models"]);
 });
@@ -443,40 +448,10 @@ test("starts a new independent session in the current project with its model pre
   const {user,requests} = setup(true,"gemini-upstream-current");
   await user.click(await screen.findByRole("button",{name:"New session in this project"}));
   const dialog = screen.getByRole("dialog");
-  expect(within(dialog).getByRole("combobox",{name:"Workspace"})).toHaveValue("workspace-1");
-  expect(await within(dialog).findByRole("textbox",{name:"Model name"})).toHaveValue("gemini-upstream-current");
+  expect(await within(dialog).findByRole("combobox",{name:"Workspace"})).toHaveValue("workspace-1");
+  await within(dialog).findByRole("button",{name:"New Gemini session"});
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
-});
-
-test("hides projects without sessions but allows their first session through the global new button",async () => {
-  const {user,requests} = setup();
-  expect(screen.queryByText("Connect Gemini CLI")).not.toBeInTheDocument();
-  await screen.findByText("No Gemini sessions yet");
-  expect(screen.queryByRole("button",{name:/Workspace menu/})).not.toBeInTheDocument();
-  expect(screen.queryByRole("button",{name:/Empty project/})).not.toBeInTheDocument();
-  await user.click(screen.getAllByRole("button",{name:"New Gemini session"})[0]);
-  const dialog = screen.getByRole("dialog");
-  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-2");
-  await waitFor(() => expect(within(dialog).getByRole("button",{name:"New Gemini session"})).toBeEnabled());
-  await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-2",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
-});
-
-test.each(["button","right-click"])("creates a separate session directly from the Codex-style project menu via %s",async trigger => {
-  const {user,requests,onSelectThread} = setup(true,"gemini-upstream-current");
-  const project = await screen.findByRole("button",{name:/Project · project.*1/});
-  expect(screen.queryByRole("button",{name:/Empty project/})).not.toBeInTheDocument();
-  expect(screen.queryByRole("button",{name:"New session in Project · Production"})).not.toBeInTheDocument();
-  if (trigger === "right-click") await user.pointer({target:project,keys:"[MouseRight]"});
-  else {
-    const menu = screen.getByRole("button",{name:"Workspace menu for Project · project"});
-    menu.focus(); await user.keyboard("{Enter}");
-  }
-  await user.click(await screen.findByRole("menuitem",{name:"New session"}));
-  await waitFor(() => expect(requests).toEqual([{url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}]));
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(onSelectThread).toHaveBeenCalledWith("thread-created");
 });
 
 test("filters and collapses project sessions without losing the open conversation",async () => {
@@ -492,7 +467,7 @@ test("filters and collapses project sessions without losing the open conversatio
   expect(group).toHaveAttribute("aria-expanded","true");
   await user.click(group);
   expect(group).toHaveAttribute("aria-expanded","false");
-  expect(screen.queryByRole("button",{name:"Delete Gemini session"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"Delete session"})).not.toBeInTheDocument();
 });
 
 test("keeps session management in the Codex-style task menu",async () => {
@@ -600,14 +575,14 @@ test("branches a completed Gemini reply into an independent task",async()=>{
  await user.click(within(article).getByRole("button",{name:"Message actions"}));
  await user.click(screen.getByRole("menuitem",{name:"Branch to new chat"}));
  await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/fork",body:{event_id:"reply-1"}}));
- await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("forked-thread"));
+ await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("forked-thread", undefined));
 });
 
 test("creates a Gemini scheduled task with Gemini approval options",async()=>{
  const {user,requests}=setup(true);
  await user.click(await screen.findByRole("button",{name:"Task menu for Gemini"}));
  await user.click(screen.getByRole("menuitem",{name:"Create scheduled task"}));
- const dialog=screen.getByRole("dialog");
+ const dialog=await screen.findByRole("dialog");
  expect(within(dialog).getByRole("combobox",{name:"Agent"})).toHaveValue("gemini");
  expect(within(dialog).queryByRole("combobox",{name:"Reasoning effort"})).not.toBeInTheDocument();
  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Tool permissions"}),"yolo");

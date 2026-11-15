@@ -1,7 +1,7 @@
 import { DataProvider, clearResourceMemory } from "./data/resources";
 import { lazy, useMemo, useState, useCallback, useEffect, Suspense } from "react";
 import { useI18n } from "./i18n";
-import { readLocationState, type View, navigateToLocation, navigation } from "./navigation";
+import { readLocationState, isEngine, type View, navigateToLocation, navigation } from "./navigation";
 import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
 import { type Session, type Approval } from "./types";
 import { useRealtime } from "./realtime/useRealtime";
@@ -10,7 +10,7 @@ import { clearSessionMemory, invalidateSessionMemory } from "./sessions/memory";
 import { setSession, api, APIError, onUnauthorized } from "./api";
 import { LoadingScreen, LanguageSwitch } from "./components/FormUI";
 import { PageLoading } from "./components/PageUI";
-import { ServersPage, CodexPageRoute } from "./pages/lazyRoutes";
+import { ServersPage } from "./pages/lazyRoutes";
 import { ThemeSwitch } from "./theme";
 import { UserRound, LogOut, Menu, Wifi, WifiOff, ShieldCheck, Check } from "lucide-react";
 
@@ -21,10 +21,6 @@ const UnifiedSessionsPage = lazy(() => import("./sessions/UnifiedSessionsPage"))
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 
 const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
-
-const GeminiPageRoute = lazy(() => import("./sessions/engines/gemini"));
-
-const ClaudePageRoute = lazy(() => import("./sessions/engines/claude"));
 
 const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
 
@@ -41,8 +37,9 @@ export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>("totp");
   const [session, setCurrentSession] = useState<Session | null>(null);
   const [view, setView] = useState<View>(initialLocation.view);
-  const [codexThreadID, setCodexThreadID] = useState(initialLocation.threadID);
+  const [sessionThreadID, setSessionThreadID] = useState(initialLocation.threadID);
   const [sessionEngine, setSessionEngine] = useState(initialLocation.engine);
+  const [initialFilter, setInitialFilter] = useState(() => initialLocation.initialFilter ? {engine: initialLocation.initialFilter} : undefined);
   const [mobileNav, setMobileNav] = useState(false);
   const { realtimeRevisions, streamRevisions, socketConnected, subscribe } = useRealtime(auth === "authenticated");
   const [approvalSignal, setApprovalSignal] = useState(0);
@@ -103,10 +100,13 @@ export default function App() {
     const onPopState = () => {
       const location = readLocationState();
       setView(location.view);
-      setCodexThreadID(location.threadID);
+      setSessionThreadID(location.threadID);
       setSessionEngine(location.engine);
+      setInitialFilter(location.initialFilter ? {engine:location.initialFilter} : undefined);
+      if (isEngine(new URLSearchParams(window.location.search).get("view"))) navigateToLocation(location.view, location.threadID, true, location.engine);
       setMobileNav(false);
     };
+    if (isEngine(new URLSearchParams(window.location.search).get("view"))) navigateToLocation(initialLocation.view, initialLocation.threadID, true, initialLocation.engine);
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
@@ -125,24 +125,22 @@ export default function App() {
     }
   };
   const selectView = (next: View, threadID = "", replace = false) => {
-    const nextThreadID = next === "codex" || next === "gemini" || next === "claude" ? threadID : "";
+    const nextThreadID = next === "sessions" ? threadID : "";
+    setSessionEngine(undefined); setInitialFilter(undefined);
     setView(next);
-    setCodexThreadID(nextThreadID);
+    setSessionThreadID(nextThreadID);
     setMobileNav(false);
     navigateToLocation(next, nextThreadID, replace);
   };
   const selectSession = (ref: import("./sessions/types").SessionRef | null, replace = false) => {
-    setView("sessions"); setCodexThreadID(ref?.id ?? ""); setSessionEngine(ref?.engine); setMobileNav(false);
+    setView("sessions"); setSessionThreadID(ref?.id ?? ""); setSessionEngine(ref?.engine); setMobileNav(false);
     navigateToLocation("sessions", ref?.id ?? "", replace, ref?.engine);
   };
   const page = {
     dashboard: <Suspense fallback={<PageLoading />}><DashboardPage onNavigate={selectView} /></Suspense>,
     servers: <ServersPage notify={setToast} />,
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute notify={setToast} /></Suspense>,
-    sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && codexThreadID ? { engine: sessionEngine, id: codexThreadID } : undefined} onSelect={selectSession} /></Suspense>,
-    codex: <Suspense fallback={<PageLoading />}><CodexPageRoute realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} /></Suspense>,
-    gemini: <Suspense fallback={<PageLoading />}><GeminiPageRoute realtime={realtimeRevisions.gemini} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("gemini", threadID, replace)} /></Suspense>,
-    claude: <Suspense fallback={<PageLoading />}><ClaudePageRoute realtime={realtimeRevisions.claude} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("claude", threadID, replace)} /></Suspense>,
+    sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage initialFilter={initialFilter} realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && sessionThreadID ? { engine: sessionEngine, id: sessionThreadID } : undefined} onSelect={selectSession} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><OperationsPageRoute /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute /></Suspense>,
@@ -150,13 +148,13 @@ export default function App() {
   }[view];
 
   return (
-    <div className={`app-shell ${view === "sessions" || view === "codex" || view === "claude" || view === "gemini" ? "agent-shell" : ""}`}>
+    <div className={`app-shell ${view === "sessions" ? "agent-shell" : ""}`}>
       <aside className={`sidebar ${mobileNav ? "open" : ""}`}>
         <div className="brand"><span className="brand-mark">W</span><span>{t("app.name")}</span></div>
         <nav aria-label={t("nav.primary")}>
           {navigation.map(item => {
             const Icon = item.icon;
-            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><Icon size={18} /><span>{t(item.labelKey)}</span>{item.id === "codex" && (approvals.data?.length ?? 0) > 0 && <b className="nav-count" aria-live="polite">{approvals.data?.length}</b>}</button>;
+            return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><Icon size={18} /><span>{t(item.labelKey)}</span>{item.id === "sessions" && (approvals.data?.length ?? 0) > 0 && <b className="nav-count" aria-live="polite">{approvals.data?.length}</b>}</button>;
           })}
         </nav>
         <div className="sidebar-language"><ThemeSwitch /><LanguageSwitch /></div>
@@ -167,7 +165,7 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} title={t("nav.open")}><Menu size={20} /></button>
           <div><p className="eyebrow">{t("app.controlPlane")}</p><h1>{t(navigation.find(item => item.id === view)?.labelKey ?? "nav.overview")}</h1></div>
-          <div className="topbar-actions"><ThemeSwitch /><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`} role="status" aria-live="polite">{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
+          <div className="topbar-actions"><ThemeSwitch /><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`} role="status" aria-live="polite">{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("sessions"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
         </header>
         <div className="page-content"><DataProvider revisions={realtimeRevisions} connected={socketConnected}>{page}</DataProvider></div>
       </main>

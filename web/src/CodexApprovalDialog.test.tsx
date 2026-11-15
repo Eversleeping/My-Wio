@@ -2,7 +2,7 @@ import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { CodexPage } from "./pages/lazyRoutes";
+import ApprovalPanel from "./sessions/engines/codex/ApprovalPanel";
 import { I18nProvider } from "./i18n";
 import type { Approval } from "./types";
 
@@ -30,7 +30,7 @@ afterEach(() => {
 
 function ApprovalPage({ pending = approval }: { pending?: Approval }) {
   const [approvals, setApprovals] = useState<Approval[]>([pending]);
-  return <I18nProvider><CodexPage realtime={0} streamRevisions={{}} approvals={approvals} approvalSignal={0} reloadApprovals={() => setApprovals([])} notify={vi.fn()} selectedThreadID="" onSelectThread={vi.fn()} /></I18nProvider>;
+  return <I18nProvider><ApprovalPanel approvals={approvals} approvalSignal={0} reloadApprovals={() => setApprovals([])} notify={vi.fn()} /></I18nProvider>;
 }
 
 test("closes the approval dialog after the final request is approved", async () => {

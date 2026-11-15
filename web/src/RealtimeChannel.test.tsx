@@ -6,7 +6,7 @@ import { I18nProvider } from "./i18n";
 
 vi.mock("./pages/DashboardPage", async () => { const {useResourceRevision} = await import("./data/resources"); return { default: () => <div data-testid="dashboard">{useResourceRevision(["dashboard"]).split("|")[0]}</div> }; });
 vi.mock("./pages/ServersPage", async () => { const {useResourceRevision} = await import("./data/resources"); return { default: () => <div data-testid="servers">{useResourceRevision(["servers"]).split("|")[0]}</div> }; });
-vi.mock("./sessions/engines/codex", () => ({ default: ({ selectedThreadID }: { selectedThreadID: string }) => <div data-testid="codex">{selectedThreadID}</div> }));
+vi.mock("./sessions/UnifiedSessionsPage", () => ({ default: ({ selected }: { selected?: {id:string} }) => <div data-testid="codex">{selected?.id}</div> }));
 
 class Socket {
   static instances: Socket[] = [];
@@ -67,5 +67,5 @@ test("keeps views and thread selection synchronized across browser back and forw
   expect(window.location.search).toBe("?view=servers");
   act(() => window.history.forward());
   expect(await screen.findByTestId("codex")).toHaveTextContent("saved-thread");
-  expect(window.location.search).toBe("?view=codex&thread=saved-thread");
+  expect(window.location.search).toBe("?view=sessions&engine=codex&thread=saved-thread");
 });

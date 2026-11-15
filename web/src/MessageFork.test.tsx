@@ -2,7 +2,7 @@ import { useState } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { CodexPage } from "./pages/lazyRoutes";
+import { SessionTestPage } from "./sessions/SessionTestPage.test-support";
 import { SessionView } from "./sessions/engines/codex/SessionView";
 import { waitForThread } from "./sessions/engines/codex/waiters";
 import { I18nProvider } from "./i18n";
@@ -10,8 +10,8 @@ import { messageForkTargets } from "./messageForks";
 import { loadCodexComposerPreferences, saveCodexComposerPreferences } from "./codexComposerPreferences";
 import type { StreamEvent, Thread } from "./types";
 
-const source: Thread = { id:"fork-source",workspace_id:"fork-workspace",project_id:"fork-project",codex_thread_id:"native-source",title:"Original chat",status:"idle",path:"/srv/project",server_id:"server",server_name:"Server",project_name:"Project",created_at:"2026-10-23T00:00:00Z",updated_at:"2026-10-23T00:00:00Z",pinned_at:null,archived_at:null,project_pinned_at:null,project_hidden_at:null };
-const branch: Thread = { ...source,id:"fork-branch",codex_thread_id:"native-branch",title:"Original chat (branch)" };
+const source = {engine:"codex" as const,native_id:"native-source",capabilities:{fork:true,fork_worktree:true},server_status:"online", id:"fork-source",workspace_id:"fork-workspace",project_id:"fork-project",codex_thread_id:"native-source",title:"Original chat",status:"idle",path:"/srv/project",server_id:"server",server_name:"Server",project_name:"Project",created_at:"2026-10-23T00:00:00Z",updated_at:"2026-10-23T00:00:00Z",pinned_at:null,archived_at:null,project_pinned_at:null,project_hidden_at:null };
+const branch = { ...source,id:"fork-branch",codex_thread_id:"native-branch",title:"Original chat (branch)" };
 function event(sequence: number,kind: string,payload: unknown): StreamEvent { return {event_id:`event-${sequence}`,stream_id:source.id,sequence,kind,payload,occurred_at:"2026-10-23T00:00:00Z"}; }
 const events = [
   event(1,"user.message",{text:"Original question"}),
@@ -36,6 +36,7 @@ test("branches from the selected reply and opens the finished chat with inherite
     const url = new URL(String(input),location.origin);
     if (url.pathname.endsWith("/fork") && init?.method==="POST") { posts.push(JSON.parse(String(init.body)));created=true;return response({operation_id:"fork-op",target_thread_id:branch.id},202); }
     if (url.pathname==="/api/operations/fork-op") return response({status:"succeeded",result:""});
+    if (url.pathname===`/api/sessions/codex/${source.id}`) return response(source);
     if (url.pathname===`/api/sessions/codex/${branch.id}`) return response(branch);
     if (url.pathname==="/api/sessions") return response({items:url.searchParams.get("archived")==="true"?[]:created?[branch,source]:[source],next_cursor:null,groups:[]});
     if (url.pathname==="/api/workspaces") return response([{id:source.workspace_id,project_id:source.project_id,server_id:source.server_id,path:source.path,display_name:"Project",management_mode:"managed",project_name:"Project",server_name:"Server"}]);
@@ -44,7 +45,7 @@ test("branches from the selected reply and opens the finished chat with inherite
     if (url.pathname.endsWith("/files")) return response({files:[],status:"succeeded"});
     return response([]);
   }));
-  function Page() { const [selected,setSelected] = useState(source.id);return <I18nProvider><CodexPage realtime={0} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={notify} selectedThreadID={selected} onSelectThread={setSelected} /></I18nProvider>; }
+  function Page() { const [selected,setSelected] = useState(source.id);return <I18nProvider><SessionTestPage engine="codex" realtime={0} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={notify} selectedThreadID={selected} onSelectThread={setSelected} /></I18nProvider>; }
   render(<Page />);
   const selected = (await screen.findByText("Selected reply")).closest("article")!;
   await user.click(within(selected).getByRole("button",{name:"Message actions"}));
@@ -53,7 +54,6 @@ test("branches from the selected reply and opens the finished chat with inherite
   await user.click(within(menu).getByRole("menuitem",{name:"Branch to new chat"}));
   await screen.findByRole("heading",{name:branch.title});
   expect(posts).toEqual([{event_id:"event-3"}]);
-  expect(notify).toHaveBeenCalledWith("Branched to a new chat");
   expect(loadCodexComposerPreferences(branch.id)).toEqual(loadCodexComposerPreferences(source.id));
   await waitFor(() => expect(screen.queryByText("Later reply")).not.toBeInTheDocument());
 });

@@ -11,6 +11,7 @@ for (const engine of ["codex", "claude", "gemini"] as const) {
     const base = `/sessions/${engine}`;
     const workspace = { id: "workspace", project_id: "project", server_id: "server", server_name: "Server", project_name: "Project", path: "/srv/project", display_name: "Project", status: "ready", kind: "primary" };
     const thread = {
+      engine, native_id:"native", capabilities:{},
       id: "screenshot-thread", workspace_id: workspace.id, project_id: workspace.project_id,
       title: "Screenshot review", status: "idle", path: workspace.path, server_id: workspace.server_id,
       server_name: workspace.server_name, server_status: "online", project_name: workspace.project_name,
@@ -41,7 +42,7 @@ for (const engine of ["codex", "claude", "gemini"] as const) {
         return undefined;
       },
     });
-    await page.goto(`/?view=${engine}&thread=${thread.id}`);
+    await page.goto(`/?view=sessions&engine=${engine}&thread=${thread.id}`);
     await expect(page.locator(".session-header h2")).toHaveText(thread.title);
     const composer = page.locator("form.composer");
     const attach = composer.getByRole("button", { name: "Attach image", exact: true });

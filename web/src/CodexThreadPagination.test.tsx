@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { CodexPage } from "./pages/lazyRoutes";
+import { SessionTestPage } from "./sessions/SessionTestPage.test-support";
 import { I18nProvider } from "./i18n";
 import type { Thread, Workspace } from "./types";
 
@@ -9,8 +9,9 @@ function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function thread(id: string, title: string, archived = false): Thread {
+function thread(id: string, title: string, archived = false) {
   return {
+    engine: "codex", native_id: `codex-${id}`, capabilities: {},
     id,
     workspace_id: `workspace-${id}`,
     project_id: "project-1",
@@ -52,7 +53,7 @@ function workspace(value: Thread): Workspace {
 }
 
 function renderCodex(realtime: number, selectedThreadID = "", onSelectThread = vi.fn()) {
-  return render(<I18nProvider><CodexPage realtime={realtime} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={vi.fn()} selectedThreadID={selectedThreadID} onSelectThread={onSelectThread} /></I18nProvider>);
+  return render(<I18nProvider><SessionTestPage engine="codex" realtime={realtime} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={vi.fn()} selectedThreadID={selectedThreadID} onSelectThread={onSelectThread} /></I18nProvider>);
 }
 
 function auxiliaryResponse(path: string, threads: Thread[]) {
@@ -80,9 +81,9 @@ test("loads more sessions and preserves the loaded tail during a realtime first-
   let firstTitle = first.title;
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input), window.location.origin);
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: [{ ...first, title: firstTitle }], next_cursor: "tail", groups: [] });
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50&cursor=tail") return jsonResponse({ items: [second], next_cursor: null, groups: [] });
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=false&limit=50") return jsonResponse({ items: [{ ...first, title: firstTitle }], next_cursor: "tail", groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=false&limit=50&cursor=tail") return jsonResponse({ items: [second], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
     return auxiliaryResponse(url.pathname, [first, second]) ?? jsonResponse({ error: `unmocked ${url.pathname}${url.search}` }, 501);
   }));
 
@@ -92,7 +93,7 @@ test("loads more sessions and preserves the loaded tail during a realtime first-
   expect(await screen.findAllByText(second.title)).not.toHaveLength(0);
 
   firstTitle = "Refreshed first page session";
-  rerender(<I18nProvider><CodexPage realtime={1} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={vi.fn()} selectedThreadID="" onSelectThread={vi.fn()} /></I18nProvider>);
+  rerender(<I18nProvider><SessionTestPage engine="codex" realtime={1} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={vi.fn()} selectedThreadID="" onSelectThread={vi.fn()} /></I18nProvider>);
   expect(await screen.findAllByText(firstTitle)).not.toHaveLength(0);
   expect(screen.getAllByText(second.title)).not.toHaveLength(0);
 });
@@ -103,8 +104,8 @@ test("keeps a deep-linked session selected when it is outside the first page", a
   const onSelectThread = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input), window.location.origin);
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: [first], next_cursor: "tail", groups: [] });
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=false&limit=50") return jsonResponse({ items: [first], next_cursor: "tail", groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
     if (url.pathname === `/api/sessions/codex/${deep.id}`) return jsonResponse(deep);
     return auxiliaryResponse(url.pathname, [first, deep]) ?? jsonResponse({ error: `unmocked ${url.pathname}${url.search}` }, 501);
   }));
@@ -120,9 +121,9 @@ test("revalidates loaded tail pages after a realtime refresh removes a session",
   let secondVisible = true;
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input), window.location.origin);
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: [first], next_cursor: secondVisible ? "tail" : null, groups: [] });
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50&cursor=tail") return jsonResponse({ items: secondVisible ? [second] : [], next_cursor: null, groups: [] });
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=false&limit=50") return jsonResponse({ items: [first], next_cursor: secondVisible ? "tail" : null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=false&limit=50&cursor=tail") return jsonResponse({ items: secondVisible ? [second] : [], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
     return auxiliaryResponse(url.pathname, [first, second]) ?? jsonResponse({ error: `unmocked ${url.pathname}${url.search}` }, 501);
   }));
 
@@ -132,7 +133,7 @@ test("revalidates loaded tail pages after a realtime refresh removes a session",
   expect(await screen.findAllByText(second.title)).not.toHaveLength(0);
 
   secondVisible = false;
-  rerender(<I18nProvider><CodexPage realtime={1} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={vi.fn()} selectedThreadID="" onSelectThread={vi.fn()} /></I18nProvider>);
+  rerender(<I18nProvider><SessionTestPage engine="codex" realtime={1} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={vi.fn()} selectedThreadID="" onSelectThread={vi.fn()} /></I18nProvider>);
   await waitFor(() => expect(screen.queryByText(second.title)).not.toBeInTheDocument());
 });
 
@@ -143,8 +144,8 @@ test("requires the accessible danger dialog before deleting a session", async ()
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), window.location.origin);
     const method = init?.method ?? "GET";
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: deleted ? [] : [value], next_cursor: null, groups: [] });
-    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=false&limit=50") return jsonResponse({ items: deleted ? [] : [value], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
     if (url.pathname === `/api/sessions/codex/${value.id}` && method === "DELETE") {
       requests.push(`${method} ${url.pathname}`);
       deleted = true;
@@ -155,7 +156,7 @@ test("requires the accessible danger dialog before deleting a session", async ()
 
   renderCodex(0);
   const user = userEvent.setup();
-  await user.click(await screen.findByTitle("Delete session"));
+  await user.click(await screen.findByRole("button", {name:"Delete session"}));
   const dialog = screen.getByRole("dialog", { name: "Delete session" });
   expect(dialog).toHaveTextContent(`Delete session ${value.title}? This removes its conversation history.`);
   expect(requests).toHaveLength(0);

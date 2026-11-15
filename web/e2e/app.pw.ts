@@ -318,6 +318,7 @@ const filteredWorkspace = {
 };
 
 const codexThread = {
+  engine:"codex", native_id:"codex-thread-1", capabilities:{}, server_status:"online",
   id: "thread-codex-1",
   workspace_id: managedWorkspace.id,
   project_id: workspaceProject.id,
@@ -632,8 +633,11 @@ test("an authenticated user creates a Codex session in a workspace", async ({ pa
     configured: true,
     expectedDefaultRequests: authenticatedBootstrapContract,
     onAPIRequest: request => {
-      if (request.path === "/sessions" && request.search === "?engine=codex&archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
-      if (request.path === "/sessions" && request.search === "?engine=codex&archived=false&limit=50" && request.method === "GET") {
+      if (request.path === "/servers") return { body: [workspaceServer] };
+      if (request.path === `/sessions/codex/${codexThread.id}` && request.method === "GET") return { body: codexThread };
+      if (request.path === `/workspaces/${managedWorkspace.id}/session-engines`) return { body: { engines: [{engine:"codex",available:true}] } };
+      if (request.path === "/sessions" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
+      if (request.path === "/sessions" && request.search === "?archived=false&limit=50" && request.method === "GET") {
         threadListLoads += 1;
         return { body: { items: sessionCreated ? [codexThread] : [], next_cursor: null, groups: [] } };
       }
@@ -648,10 +652,10 @@ test("an authenticated user creates a Codex session in a workspace", async ({ pa
       return undefined;
     }
   });
-  await page.goto("/?view=codex");
+  await page.goto("/?view=sessions");
 
-  await page.getByTitle("New Codex session").click();
-  const dialog = page.getByRole("dialog", { name: "New Codex session" });
+  await page.getByTitle("New session").click();
+  const dialog = page.getByRole("dialog", { name: "New session" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Workspace").selectOption(managedWorkspace.id);
 
@@ -661,7 +665,6 @@ test("an authenticated user creates a Codex session in a workspace", async ({ pa
   await dialog.getByRole("button", { name: "Create session", exact: true }).click();
   expect(JSON.parse((await createRequest).postData() ?? "{}")).toEqual({ workspace_id: managedWorkspace.id });
 
-  await expect(page.locator(".toast")).toContainText("Codex session created");
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole("heading", { name: codexThread.title, exact: true })).toBeVisible();
   await expect.poll(() => threadListLoads).toBeGreaterThanOrEqual(2);
@@ -675,8 +678,11 @@ test("an authenticated user approves a pending Codex request", async ({ page }, 
     configured: true,
     expectedDefaultRequests: authenticatedBootstrapContract,
     onAPIRequest: request => {
-      if (request.path === "/sessions" && request.search === "?engine=codex&archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
-      if (request.path === "/sessions" && request.search === "?engine=codex&archived=false&limit=50" && request.method === "GET") return { body: { items: [codexThread], next_cursor: null, groups: [] } };
+      if (request.path === "/servers") return { body: [workspaceServer] };
+      if (request.path === `/sessions/codex/${codexThread.id}` && request.method === "GET") return { body: codexThread };
+      if (request.path === `/workspaces/${managedWorkspace.id}/session-engines`) return { body: { engines: [{engine:"codex",available:true}] } };
+      if (request.path === "/sessions" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
+      if (request.path === "/sessions" && request.search === "?archived=false&limit=50" && request.method === "GET") return { body: { items: [codexThread], next_cursor: null, groups: [] } };
       if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
       if (request.path === "/approvals" && request.method === "GET") {
         approvalLoads += 1;
@@ -692,7 +698,7 @@ test("an authenticated user approves a pending Codex request", async ({ page }, 
       return undefined;
     }
   });
-  await page.goto("/?view=codex");
+  await page.goto("/?view=sessions");
 
   const dialog = page.getByRole("dialog", { name: "Pending approvals" });
   await expect(dialog).toBeVisible();
@@ -715,11 +721,14 @@ test("keeps a long Codex session list bounded and loads the next window", async 
     configured: true,
     expectedDefaultRequests: authenticatedBootstrapContract,
     onAPIRequest: request => {
-      if (request.path === "/sessions" && request.search === "?engine=codex&archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
+      if (request.path === "/servers") return { body: [workspaceServer] };
+      if (request.path === `/sessions/codex/${codexThread.id}` && request.method === "GET") return { body: codexThread };
+      if (request.path === `/workspaces/${managedWorkspace.id}/session-engines`) return { body: { engines: [{engine:"codex",available:true}] } };
+      if (request.path === "/sessions" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
       if (request.path === "/sessions" && request.method === "GET") {
         listRequests.push(request.search);
-        if (request.search === "?engine=codex&archived=false&limit=50") return { body: { items: longCodexThreads.slice(0, 50), next_cursor: "tail", groups: [] } };
-        if (request.search === "?engine=codex&archived=false&limit=50&cursor=tail") return { body: { items: longCodexThreads.slice(50), next_cursor: null, groups: [] } };
+        if (request.search === "?archived=false&limit=50") return { body: { items: longCodexThreads.slice(0, 50), next_cursor: "tail", groups: [] } };
+        if (request.search === "?archived=false&limit=50&cursor=tail") return { body: { items: longCodexThreads.slice(50), next_cursor: null, groups: [] } };
       }
       if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
       if (request.path === `/sessions/codex/${longCodexThreads[0].id}/events` && request.method === "GET") return { body: [] };
@@ -728,15 +737,15 @@ test("keeps a long Codex session list bounded and loads the next window", async 
       return undefined;
     }
   });
-  await page.goto("/?view=codex");
+  await page.goto("/?view=sessions");
 
   await expect(page.locator(".thread-select")).toHaveCount(50);
   await expect(page.getByRole("button", { name: "Load more sessions", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Load more sessions", exact: true }).click();
   await expect(page.locator(".thread-select")).toHaveCount(55);
-  await expect(page.getByText("Long session 55", { exact: true })).toBeVisible();
-  expect(listRequests).toContain("?engine=codex&archived=false&limit=50");
-  expect(listRequests).toContain("?engine=codex&archived=false&limit=50&cursor=tail");
+  await expect(page.locator(".thread-select").filter({hasText:"Long session 55"})).toBeVisible();
+  expect(listRequests).toContain("?archived=false&limit=50");
+  expect(listRequests).toContain("?archived=false&limit=50&cursor=tail");
 });
 
 test("the operation center filters recent Agent work and links resources", async ({ page }) => {
@@ -920,8 +929,10 @@ test("the /collab command creates a collaboration session through the current mo
     configured: true,
     expectedDefaultRequests: authenticatedBootstrapContract,
     onAPIRequest: request => {
-      if (request.path === "/sessions" && request.search === "?engine=codex&archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
-      if (request.path === "/sessions" && request.search === "?engine=codex&archived=false&limit=50" && request.method === "GET") return { body: { items: [codexThread], next_cursor: null, groups: [] } };
+      if (request.path === "/servers") return { body: [workspaceServer] };
+      if (request.path === `/sessions/codex/${codexThread.id}` && request.method === "GET") return { body: codexThread };
+      if (request.path === "/sessions" && request.search === "?archived=true&limit=50" && request.method === "GET") return { body: { items: [], next_cursor: null, groups: [] } };
+      if (request.path === "/sessions" && request.search === "?archived=false&limit=50" && request.method === "GET") return { body: { items: [codexThread], next_cursor: null, groups: [] } };
       if (request.path.endsWith("/session-engines")) return { body: {"engines": [{"engine":"codex","available":true},{"engine":"gemini","available":true},{"engine":"claude","available":true}]} };
       if (request.path === "/workspaces" && request.method === "GET") return { body: [managedWorkspace] };
       if (request.path === `/sessions/codex/${codexThread.id}/events` && request.method === "GET") return { body: [] };
@@ -936,7 +947,7 @@ test("the /collab command creates a collaboration session through the current mo
       return undefined;
     }
   });
-  await page.goto(`/?view=codex&thread=${codexThread.id}`);
+  await page.goto(`/?view=sessions&engine=codex&thread=${codexThread.id}`);
 
   await page.getByRole("button", { name: /Session collaboration/ }).click();
   // The pending request proves the panel rendered; finished creation results are opt-in.

@@ -18,6 +18,7 @@ for (const engine of ["codex", "claude", "gemini"] as const) {
     const base = `/sessions/${engine}`;
     const workspace = { id: "workspace", project_id: "project", server_id: "server", server_name: "Server", project_name: "Project", path: "/srv/project", display_name: "Project", status: "ready", kind: "primary", management_mode: "managed" };
     const thread = {
+      engine, native_id:"native", capabilities:{},
       id: "images", workspace_id: workspace.id, project_id: workspace.project_id, title: "Image review", status: "idle",
       path: workspace.path, server_id: workspace.server_id, server_name: "Server", server_status: "online", project_name: "Project",
       model: engine === "claude" ? "sonnet" : engine === "gemini" ? "auto" : "gpt-5.6-sol", operation_id: "turn",
@@ -54,7 +55,7 @@ for (const engine of ["codex", "claude", "gemini"] as const) {
       if (request.path === `/workspaces/workspace/${engine}/models`) return { body: engine === "codex" ? { status: "succeeded", supported: true, data: [], error: "" } : { configured: true, models: [], default_model: thread.model } };
       return undefined;
     } });
-    await page.goto(`/?view=${engine}&thread=${thread.id}`);
+    await page.goto(`/?view=sessions&engine=${engine}&thread=${thread.id}`);
     await expect(async () => { await page.locator(".markdown-image").scrollIntoViewIfNeeded(); }).toPass();
     const thumbnail = page.getByRole("img", { name: "Generated screenshot" });
     await expect(thumbnail).toBeVisible();

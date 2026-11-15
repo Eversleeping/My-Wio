@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { MessageSquare, Pin, Plus, Trash2 } from "lucide-react";
 import { Dialog, Field } from "../components/FormUI";
 import { Empty, ErrorState, PageLoading, Status } from "../components/PageUI";
@@ -18,12 +18,16 @@ import { includeSelection, unifiedGroups } from "./unifiedGroups";
 import { useSessionList } from "./useSessionList";
 import { sessionBusy, useUnifiedManagement } from "./useUnifiedManagement";
 
-type Props = Omit<CodexPageProps, "selectedThreadID" | "onSelectThread"> & { selected?: SessionRef; onSelect: (ref: SessionRef | null, replace?: boolean) => void };
-export default function UnifiedSessionsPage({ selected, onSelect, ...props }: Props) {
+const ApprovalPanel = lazy(() => import("./engines/codex/ApprovalPanel"));
+
+type Props = Omit<CodexPageProps, "selectedThreadID" | "onSelectThread"> & { initialFilter?: {engine: Engine}; selected?: SessionRef; onSelect: (ref: SessionRef | null, replace?: boolean) => void };
+export default function UnifiedSessionsPage({ selected, initialFilter, onSelect, ...props }: Props) {
   const { t } = useI18n();
   const [filter, setFilter] = useState<Engine | "">(() => {
+    if (initialFilter) return initialFilter.engine;
     try { const value = localStorage.getItem("wio_sessions_engine"); return isEngine(value) ? value : ""; } catch { return ""; }
   });
+  useEffect(() => { if (initialFilter) setFilter(initialFilter.engine); }, [initialFilter]);
   const [search, setSearch] = useState("");
   const [archived, setArchived] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -47,12 +51,12 @@ export default function UnifiedSessionsPage({ selected, onSelect, ...props }: Pr
   const engine = selected?.engine ?? "codex";
   const Conversation = engineModule(engine).Conversation;
   const selectKey = (key: string) => { const item = items.find(item => sessionKey(item) === key); if (item) onSelect({ engine: item.engine, id: item.id }); };
-  return <SessionPage unified engine={engine} thread={active} selectedID={selected ? sessionKey(selected) : ""} onSelect={selectKey} revision={props.realtime + tick} collaborationRevision={props.realtime + tick} notify={props.notify} writable={workspaces.data?.find(w => w.id === active?.workspace_id)?.management_mode === "managed"} error={detail.error} reload={detail.reload}
-    sidebar={select => <Sidebar engine="sessions" icon={MessageSquare} archived={archived} onArchived={() => { setArchived(!archived); onSelect(null); }} search={search} onSearch={setSearch} revision={revision} refresh={refresh} notify={props.notify} groups={groups} selectedID={selected?.id} selectedEngine={selected?.engine} busy={management.busy} source={source} onNew={openNew} onSelect={() => undefined} projectActions={() => []} groupActions={group => management.groupActions(group, archived)} threadActions={management.threadActions} onDelete={management.delete} deleteDisabled={thread => management.busy || sessionBusy(thread)}
+  return <SessionPage engine={engine} thread={active} selectedID={selected ? sessionKey(selected) : ""} onSelect={selectKey} revision={props.realtime + tick} collaborationRevision={props.realtime + tick} notify={props.notify} writable={workspaces.data?.find(w => w.id === active?.workspace_id)?.management_mode === "managed"} error={detail.error} reload={detail.reload}
+    sidebar={select => <Sidebar icon={MessageSquare} archived={archived} onArchived={() => { setArchived(!archived); onSelect(null); }} search={search} onSearch={setSearch} revision={revision} refresh={refresh} notify={props.notify} groups={groups} selectedID={selected?.id} selectedEngine={selected?.engine} source={source} onNew={openNew} groupActions={group => management.groupActions(group, archived)} threadActions={management.threadActions}
       controls={<div className="session-filters"><Field label={t("sessions.engine")}><select aria-label={t("sessions.engine")} value={filter} onChange={event => setFilter(event.target.value as Engine | "")}><option value="">{t("sessions.allEngines")}</option>{engines.map(module => <option key={module.id} value={module.id}>{module.label}</option>)}</select></Field><label><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)} />{t("sessions.showAll")}</label>{workspaces.error && <ErrorState error={workspaces.error} reload={workspaces.reload} />}</div>}
       renderRow={thread => { const module = engineModule(thread.engine); const Icon = module.Icon; return <><button type="button" className="thread-select" onClick={() => select(sessionKey(thread))}><span><strong><span className="session-engine"><Icon size={13} />{module.label}</span>{thread.pinned_at && <Pin size={12} />}{thread.title}</strong><small>{thread.server_name} · {relative(thread.updated_at)}</small></span></button><div className="thread-actions"><Status value={thread.status} /><button className="icon-button danger thread-delete" aria-label={t("codex.deleteSession")} disabled={management.busy || sessionBusy(thread)} onClick={() => management.delete(thread)}><Trash2 size={14} /></button></div></>; }} />}
     welcome={<div className="gemini-welcome"><MessageSquare size={40} /><h2>{t("sessions.welcome")}</h2><p>{t("sessions.intro")}</p><button className="primary-button" onClick={() => openNew()}><Plus size={17} />{t("sessions.newSession")}</button></div>}
-    dialogs={<>{management.dialogs}{creation && <CreateSessionDialog initialWorkspaceID={creation.workspaceID} currentSession={active} workspaces={workspaces.data ?? []} onClose={() => setCreation(null)} onCreated={thread => { setCreation(null); setArchived(false); refresh(); onSelect({ engine: thread.engine, id: thread.id }); }} />}</>}>
+    dialogs={<><Suspense fallback={null}><ApprovalPanel {...props} /></Suspense>{management.dialogs}{creation && <CreateSessionDialog initialWorkspaceID={creation.workspaceID} currentSession={active} workspaces={workspaces.data ?? []} onClose={() => setCreation(null)} onCreated={thread => { setCreation(null); setArchived(false); refresh(); onSelect({ engine: thread.engine, id: thread.id }); }} />}</>}>
     {openFile => selected ? active ? <Suspense fallback={<PageLoading />}><Conversation key={sessionKey(active)} {...props} thread={active} revision={revision} onChanged={refresh} onOpenFile={openFile} onNew={() => openNew(active.workspace_id)} onFork={eventID => management.fork(active, eventID)} onSchedule={() => management.schedule(active)} onArchive={() => void management.archive(active)} busy={management.busy} /></Suspense> : detail.error ? <ErrorState error={detail.error} reload={detail.reload} /> : <PageLoading /> : <div className="gemini-welcome"><MessageSquare size={40} /><h2>{t("sessions.welcome")}</h2><p>{t("sessions.intro")}</p><button className="primary-button" onClick={() => openNew()}><Plus size={17} />{t("sessions.newSession")}</button></div>}
   </SessionPage>;
 }

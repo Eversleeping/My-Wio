@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useI18n } from "../i18n";
 
-export const sidebarHeightKey = "wio_codex_sidebar_height";
+export const sidebarHeightKey = "wio_sessions_sidebar_height";
 export const clampSidebarHeight = (value: number) => Math.min(80, Math.max(20, value));
 export function readSidebarHeight(storageKey = sidebarHeightKey) {
   try {

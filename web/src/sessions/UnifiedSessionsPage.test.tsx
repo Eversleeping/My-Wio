@@ -102,23 +102,34 @@ test("refreshes the mixed list from a shared realtime revision", async () => {
   expect(requests.filter(r => r.path.startsWith("/sessions?")).every(r => !r.path.includes("engine="))).toBe(true);
 });
 
-test("understands canonical and legacy URLs without converting legacy pages", () => {
+test("understands canonical and legacy URLs converts legacy pages", () => {
   window.history.replaceState(null, "", "/?view=sessions&engine=gemini&thread=a%2Fb");
   expect(readLocationState()).toEqual({ view: "sessions", engine: "gemini", threadID: "a/b" });
   expect(locationFor("sessions", "a/b", "gemini")).toBe("/?view=sessions&engine=gemini&thread=a%2Fb");
   window.history.replaceState(null, "", "/?view=claude&thread=old");
-  expect(readLocationState()).toEqual({ view: "claude", threadID: "old" });
+  expect(readLocationState()).toEqual({ view: "sessions", engine: "claude", threadID: "old" });
   window.history.replaceState(null, "", "/?view=sessions&engine=invalid&thread=bad");
   expect(readLocationState().threadID).toBe("");
 });
 
-test("migrates the selected engine's height first, clamps values and preserves the shared preference", () => {
+test("uses only the shared height preference and ignores obsolete engine keys", () => {
   localStorage.setItem("wio_codex_sidebar_height", "29");
   localStorage.setItem("wio_gemini_sidebar_height", "64");
-  expect(readUnifiedSidebarHeight("gemini")).toBe(64);
+  expect(readUnifiedSidebarHeight()).toBe(38);
   localStorage.setItem("wio_sessions_sidebar_height", "99");
-  expect(readUnifiedSidebarHeight("gemini")).toBe(80);
+  expect(readUnifiedSidebarHeight()).toBe(80);
   localStorage.setItem("wio_sessions_sidebar_height", "invalid");
-  expect(readUnifiedSidebarHeight("claude")).toBe(29);
-  localStorage.clear(); expect(readUnifiedSidebarHeight("codex")).toBe(38);
+  expect(readUnifiedSidebarHeight()).toBe(38);
+});
+
+test("collapses a workspace without losing its selected conversation", async () => {
+  const {user} = setup({engine:"gemini",id:"same"});
+  await screen.findByText("Gemini conversation");
+  const group = screen.getByRole("button",{name:/Project · Feature.*3/});
+  await user.click(group);
+  expect(group).toHaveAttribute("aria-expanded","false");
+  expect(screen.queryByText("gemini title")).not.toBeInTheDocument();
+  expect(screen.getByText("Gemini conversation")).toBeInTheDocument();
+  await user.click(group);
+  expect(screen.getByText("gemini title")).toBeInTheDocument();
 });

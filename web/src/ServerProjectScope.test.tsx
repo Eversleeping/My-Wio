@@ -1,9 +1,7 @@
+import UnifiedSessionsPage from "./sessions/UnifiedSessionsPage";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import CodexPage from "./sessions/engines/codex";
-import GeminiPage from "./sessions/engines/gemini";
-import ClaudePage from "./sessions/engines/claude";
 import { I18nProvider } from "./i18n";
 
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
@@ -11,7 +9,7 @@ afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 test.each(["codex", "gemini", "claude"])("%s scopes project pins and hidden-project recovery by server", async kind => {
   window.localStorage.setItem("wio_language", "en");
   const now = "2026-10-28T00:00:00Z";
-  let threads = ["a", "b"].map(id => ({ id: `thread-${id}`, workspace_id: `workspace-${id}`, project_id: "shared-project", server_id: `server-${id}`, server_name: `Server ${id.toUpperCase()}`, server_status: "online", project_name: "same", path: "/srv/same", title: `Task ${id}`, status: "idle", codex_thread_id: `native-${id}`, session_id: `native-${id}`, model: "flash", approval_mode: "default", operation_id: "", archived_at: null, pinned_at: null, project_pinned_at: null as string | null, project_hidden_at: null as string | null, created_at: now, updated_at: now, fork_supported: true, rewrite_supported: true }));
+  let threads = ["a", "b"].map(id => ({ engine: kind as "codex" | "gemini" | "claude", id: `thread-${id}`, workspace_id: `workspace-${id}`, project_id: "shared-project", server_id: `server-${id}`, server_name: `Server ${id.toUpperCase()}`, server_status: "online", project_name: "same", path: "/srv/same", title: `Task ${id}`, status: "idle", codex_thread_id: `native-${id}`, session_id: `native-${id}`, model: "flash", approval_mode: "default", operation_id: "", archived_at: null, pinned_at: null, project_pinned_at: null as string | null, project_hidden_at: null as string | null, created_at: now, updated_at: now, fork_supported: true, rewrite_supported: true }));
   const requests: { url: string; body: Record<string, unknown> }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(String(input), window.location.origin);
@@ -29,8 +27,7 @@ test.each(["codex", "gemini", "claude"])("%s scopes project pins and hidden-proj
     else if (url.pathname.includes("/workspaces/") || url.pathname.endsWith("/goal")) body = { status: "succeeded", data: {}, files: [], changes: [] };
     return new Response(JSON.stringify(body), { status: 200 });
   }));
-  const shared = { realtime: 0, notify: vi.fn(), selectedThreadID: "", onSelectThread: vi.fn() };
-  const page = (realtime = 0) => <I18nProvider>{kind === "codex" ? <CodexPage {...shared} realtime={realtime} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} /> : kind === "gemini" ? <GeminiPage {...shared} realtime={realtime} /> : <ClaudePage {...shared} realtime={realtime} />}</I18nProvider>;
+  const page = (realtime = 0) => <I18nProvider><UnifiedSessionsPage realtime={realtime} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={vi.fn()} notify={vi.fn()} onSelect={vi.fn()} /></I18nProvider>;
   const { container, rerender } = render(page());
   await waitFor(() => expect(container.querySelectorAll(".thread-project")).toHaveLength(2));
   const group = (server: string) => Array.from(container.querySelectorAll<HTMLElement>(".thread-project")).find(item => item.querySelector(".thread-project-toggle small")?.textContent === server)!;

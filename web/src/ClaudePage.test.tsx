@@ -2,15 +2,16 @@ import { compressImage } from "./imageCompression";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import ClaudePage from "./sessions/engines/claude";
+import { SessionTestPage } from "./sessions/SessionTestPage.test-support";
 import { I18nProvider } from "./i18n";
 
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
 
-const baseThread = { questions_supported: true, input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
+const baseThread = {engine:"claude" as const,native_id:"native",capabilities:{fork:true,fork_worktree:true}, questions_supported: true, input_supported: true, id: "claude-1", workspace_id: "workspace-1", project_id: "project-1", project_name: "Project", server_id: "server-1", server_name: "Server", server_status: "online", path: "/project", title: "Claude", status: "idle", operation_id: "op-1", session_id: "", model: "sonnet", permission_mode: "default", effort: "high", effort_supported: true, archived_at: null, recovery_pending: false, created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" };
 
 function setup(options: { defaultModel?: string; modelCredentialRevision?: string; credentialRevision?: string; modelResponseGate?: Promise<void>; modelsError?: boolean; selected?: boolean; recovery?: boolean; status?: string; appliedModel?: string; effortSupported?: boolean; inputSupported?: boolean; nativeID?: string; skills?: {name:string;description:string;argument_hint?:string}[]; skillsError?: boolean; skillSupported?:boolean; steerSupported?:boolean; steerReady?:boolean; steerFailures?:number; rewriteSupported?:boolean; rewriteFailures?:number; events?: unknown[] } = {}) {
   window.localStorage.setItem("wio_language", "en");
+  localStorage.setItem("wio_workspace_engine:workspace-1", "claude");
   const thread = { ...baseThread, model_credential_revision: options.modelCredentialRevision, rewrite_supported: options.rewriteSupported ?? true, steer_supported: options.steerSupported ?? false, steer_ready:options.steerReady ?? false, skills_supported: options.skillSupported ?? options.skills !== undefined, input_supported:options.inputSupported ?? true, session_id:options.nativeID ?? "", effort_supported: options.effortSupported ?? true, status: options.status ?? (options.recovery ? "interrupted" : "idle"), recovery_pending: Boolean(options.recovery) };
   const requests: Array<{ url: string; body: unknown }> = [];
   let steerFailures=options.steerFailures??0;
@@ -28,9 +29,9 @@ function setup(options: { defaultModel?: string; modelCredentialRevision?: strin
       body = { configured: true, credential_revision: options.credentialRevision, default_model: options.defaultModel, models: [{ id: "custom-upstream-model", name: "Custom upstream model" }] };
     }
     else if (url.endsWith("/session-engines")) body = {"engines": [{"engine":"codex","available":true},{"engine":"gemini","available":true},{"engine":"claude","available":true}]};
-    else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
-    else if (url === "/api/workspaces") body = [{ id: "workspace-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
-    else if (url.startsWith("/api/sessions?engine=claude")) body = {items: options.selected && (!new URL(url, "http://localhost").searchParams.get("q") || `${thread.title} ${thread.path} ${thread.project_name}`.toLowerCase().includes(new URL(url, "http://localhost").searchParams.get("q")!.toLowerCase())) ? [thread] : [], next_cursor: null, groups: []};
+    else if (url === "/api/servers") body = [{ id: "server-1", status:"online", claude_profile_model: options.appliedModel || "" }];
+    else if (url === "/api/workspaces") body = [{ id: "workspace-1", project_id:"project-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
+    else if (url.startsWith("/api/sessions?")) body = {items: options.selected && (!new URL(url, "http://localhost").searchParams.get("q") || `${thread.title} ${thread.path} ${thread.project_name}`.toLowerCase().includes(new URL(url, "http://localhost").searchParams.get("q")!.toLowerCase())) ? [thread] : [], next_cursor: null, groups: []};
     else if (url === "/api/sessions/claude/claude-1") body = thread;
     else if (url === "/api/sessions/claude/claude-1/usage") body = {input_tokens:18626887,output_tokens:89133,output_per_second:26.24,partial:false};
     else if (url.startsWith("/api/sessions/claude/claude-1/events")) body = options.events ?? [
@@ -41,7 +42,7 @@ function setup(options: { defaultModel?: string; modelCredentialRevision?: strin
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
   const onSelectThread = vi.fn();
-  const view = (realtime: number) => <I18nProvider><ClaudePage realtime={realtime} notify={vi.fn()} selectedThreadID={options.selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
+  const view = (realtime: number) => <I18nProvider><SessionTestPage engine="claude" realtime={realtime} notify={vi.fn()} selectedThreadID={options.selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
   const rendered = render(view(0)); let revision = 0;
   return { user: userEvent.setup(), requests, onSelectThread, thread, refresh: () => rendered.rerender(view(++revision)) };
 }
@@ -93,8 +94,9 @@ test("keeps the current model after discovery fails", async () => {
 
 test("uses the latest discovered default when creating a session", async () => {
   const {user, requests} = setup({appliedModel:"old-default", defaultModel:"claude-new-default", credentialRevision:"new-config"});
-  await user.click((await screen.findAllByRole("button", {name:"New Claude session"}))[0]);
-  await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
+  await user.click((await screen.findAllByRole("button", {name:/^New session$/}))[0]);
+  if ((screen.getByLabelText("Workspace") as HTMLSelectElement).value !== "workspace-1") await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
+  await within(screen.getByRole("dialog")).findByLabelText("Claude model or alias");
   await waitFor(() => expect(within(screen.getByRole("dialog")).getByLabelText("Claude model or alias")).toHaveValue("claude-new-default"));
   await user.click(within(screen.getByRole("dialog")).getByRole("button", {name:"New Claude session"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/claude", body:expect.objectContaining({model:"claude-new-default"})}));
@@ -218,20 +220,21 @@ test("selects an upstream model and accepts a custom model with reasoning effort
 
 test("creates a Claude session for a workspace with the selected permissions", async () => {
   const { user, requests, onSelectThread } = setup();
-  await user.click((await screen.findAllByRole("button", { name: "New Claude session" }))[0]);
-  await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
+  await user.click((await screen.findAllByRole("button", {name:/^New session$/}))[0]);
+  if ((screen.getByLabelText("Workspace") as HTMLSelectElement).value !== "workspace-1") await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
+  await within(screen.getByRole("dialog")).findByLabelText("Claude model or alias");
   await user.selectOptions(screen.getByLabelText("Tool permissions"), "acceptEdits");
   const createButtons = screen.getAllByRole("button", { name: "New Claude session" });
   await user.click(createButtons[createButtons.length - 1]);
   await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "sonnet", permission_mode: "acceptEdits", effort: "" } }));
-  expect(onSelectThread).toHaveBeenCalledWith("claude-1");
+  expect(onSelectThread).toHaveBeenCalledWith("claude-1", undefined);
 });
 
 test("renders streamed text and sends the next turn", async () => {
   const { user, requests } = setup({ selected: true });
   expect(await screen.findByText("Hi there")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Delete Claude session" }));
-  expect(await screen.findByRole("dialog", { name: "Delete Claude session" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Delete session" }));
+  expect(await screen.findByRole("dialog", { name: "Delete session" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   const input = await screen.findByRole("textbox", { name: "Ask Claude to work on this project…" });
   expect(screen.getByLabelText("Reasoning effort")).toHaveValue("high");
@@ -260,19 +263,20 @@ test.each([
 
 test("fills every missing event page after a large realtime gap", async () => {
   window.localStorage.setItem("wio_language", "en");
+  localStorage.setItem("wio_workspace_engine:workspace-1", "claude");
   let jumped = false;
   const requests: string[] = [];
   const event = (sequence: number, kind = "claude.init", text = "") => ({ event_id: `event-${sequence}`, stream_id: baseThread.id, sequence, kind, payload: { text } });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input); requests.push(url);
     let body: unknown = [];
-    if (url.startsWith("/api/sessions?engine=claude") || url === "/api/sessions/claude/claude-1") body = url.includes("?") ? {items:[baseThread],next_cursor:null,groups:[]} : baseThread;
+    if (url.startsWith("/api/sessions?") || url === "/api/sessions/claude/claude-1") body = url.includes("?") ? {items:[baseThread],next_cursor:null,groups:[]} : baseThread;
     else if (url.endsWith("/events?after=1")) body = Array.from({ length: 500 }, (_, index) => index === 248 ? event(250, "claude.message", "middle ") : event(index + 2));
     else if (url.endsWith("/events?after=501")) body = [event(502), event(503)];
     else if (url.includes("/events?session=")) body = jumped ? [event(504), event(505, "claude.message", "end")] : [event(1, "claude.user.message", "Start")];
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
-  const view = (realtime: number) => <I18nProvider><ClaudePage realtime={realtime} notify={vi.fn()} selectedThreadID={baseThread.id} onSelectThread={vi.fn()} /></I18nProvider>;
+  const view = (realtime: number) => <I18nProvider><SessionTestPage engine="claude" realtime={realtime} notify={vi.fn()} selectedThreadID={baseThread.id} onSelectThread={vi.fn()} /></I18nProvider>;
   const rendered = render(view(0));
   expect(await screen.findByText("Start")).toBeInTheDocument();
   jumped = true;
@@ -284,11 +288,12 @@ test("fills every missing event page after a large realtime gap", async () => {
 
 test("defaults new sessions to the model last applied to the selected server", async () => {
  const { user, requests } = setup({ selected: true, appliedModel: "claude-opus-4-6" });
- await user.click((await screen.findAllByRole("button", { name: "New Claude session" }))[0]);
- await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
- expect(within(screen.getByRole("dialog", { name: "New Claude session" })).getByLabelText("Claude model or alias")).toHaveValue("claude-opus-4-6");
+ await user.click((await screen.findAllByRole("button", {name:/^New session$/}))[0]);
+ if ((screen.getByLabelText("Workspace") as HTMLSelectElement).value !== "workspace-1") await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
+  await within(screen.getByRole("dialog")).findByLabelText("Claude model or alias");
+ expect(within(screen.getByRole("dialog", { name: "New session" })).getByLabelText("Claude model or alias")).toHaveValue("claude-opus-4-6");
  await user.click(screen.getAllByRole("button", { name: "New Claude session" }).at(-1)!);
- await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "claude-opus-4-6", permission_mode: "default", effort: "" } }));
+ await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "claude-opus-4-6", permission_mode: "default", effort: "high" } }));
 });
 
 test("groups sessions by workspace and supports collapsing, searching and the session menu", async () => {
@@ -296,11 +301,11 @@ test("groups sessions by workspace and supports collapsing, searching and the se
   const group = await screen.findByRole("button", { name: /Project · project Server 1/ });
   expect(group).toHaveAttribute("aria-expanded", "true");
   await user.click(group);
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Claude Server" })).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByRole("button", { name: /Claude.*Server/ })).not.toBeInTheDocument());
   await user.click(group);
-  expect(screen.getByRole("button", { name: "Claude Server" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Claude.*Server/ })).toBeInTheDocument();
   await user.type(screen.getByRole("searchbox"), "no-match");
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Claude Server" })).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByRole("button", { name: /Claude.*Server/ })).not.toBeInTheDocument());
   await user.clear(screen.getByRole("searchbox"));
   await user.click(screen.getByRole("button", { name: "Task menu for Claude" }));
   await user.click(screen.getByRole("menuitem", { name: "Rename session" }));
@@ -324,7 +329,7 @@ test("offers the complete project and task menus and queues an independent conti
  for(const label of ["Pin task","Rename session","Create scheduled task","Continue in new task","Continue in new worktree","Archive session","Copy working directory","Copy Wio session ID","Copy Claude session ID","Copy deep link","Open in new window"]){expect(screen.getByRole("menuitem",{name:label})).toBeInTheDocument();}
  await user.click(screen.getByRole("menuitem",{name:"Continue in new task"}));
  await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/fork",body:{}}));
- await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("fork-target"));
+ await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("fork-target", undefined));
  await user.click(screen.getByRole("button",{name:/Workspace menu/}));
  for(const label of ["New session","Pin project","Rename project","Create permanent worktree","Archive all project tasks","Hide project"]){expect(screen.getByRole("menuitem",{name:label})).toBeInTheDocument();}
  await user.click(screen.getByRole("menuitem",{name:"Rename project"}));
@@ -373,7 +378,7 @@ test("creates a collaboration session through the /collab dialog",async()=>{
 
 test("creates a scheduled Claude task with custom model, effort and permissions",async()=>{
  const {user,requests}=setup({selected:true});await user.click(await screen.findByRole("button",{name:"Task menu for Claude"}));await user.click(screen.getByRole("menuitem",{name:"Create scheduled task"}));
- const dialog=screen.getByRole("dialog");await user.type(within(dialog).getByLabelText("Name"),"Daily review");await user.type(within(dialog).getByLabelText("Prompt"),"Review the repository");await user.type(within(dialog).getByLabelText("Claude model or alias"),"custom-model");await user.selectOptions(within(dialog).getByLabelText("Reasoning effort"),"max");await user.selectOptions(within(dialog).getByLabelText("Tool permissions"),"plan");await user.click(within(dialog).getByRole("button",{name:"Save"}));
+ const dialog=await screen.findByRole("dialog");await user.type(within(dialog).getByLabelText("Name"),"Daily review");await user.type(within(dialog).getByLabelText("Prompt"),"Review the repository");await user.type(within(dialog).getByLabelText("Claude model or alias"),"custom-model");await user.selectOptions(within(dialog).getByLabelText("Reasoning effort"),"max");await user.selectOptions(within(dialog).getByLabelText("Tool permissions"),"plan");await user.click(within(dialog).getByRole("button",{name:"Save"}));
  await waitFor(()=>expect(requests).toContainEqual({url:"/api/scheduled-tasks",body:expect.objectContaining({agent_kind:"claude",thread_id:"claude-1",model:"custom-model",reasoning_effort:"max",approval_mode:"plan",prompt:"Review the repository"})}));
 });
 
@@ -454,7 +459,7 @@ test("branches the last streamed reply using its final event and selects the new
   await user.click(screen.getByRole("button", {name:"Message actions"}));
   await user.click(screen.getByRole("menuitem", {name:"Branch to new chat"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/fork",body:{event_id:"a2"}}));
-  await waitFor(() => expect(onSelectThread).toHaveBeenCalledWith("fork-target"));
+  await waitFor(() => expect(onSelectThread).toHaveBeenCalledWith("fork-target", undefined));
 });
 
 test("does not offer a reply branch after a newer user message", async () => {

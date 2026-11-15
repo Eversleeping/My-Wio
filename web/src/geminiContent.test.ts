@@ -146,7 +146,7 @@ test("merges assistant deltas but preserves tool boundaries and later turns", ()
 });
 
 test("routes Gemini links and realtime events independently of Codex", () => {
-  expect(locationFor("gemini", "session-1")).toContain("view=gemini&thread=session-1");
+  expect(locationFor("sessions", "session-1", "gemini")).toContain("view=sessions&engine=gemini&thread=session-1");
   expect(realtimeScopesForEvent({ kind: "gemini.message" })).toEqual(["gemini", "operations"]);
 });
 

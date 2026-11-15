@@ -1,114 +1,33 @@
 import { useVisibleClock } from "../../hooks/useVisibleInterval";
-import { Archive,ArchiveRestore,ArrowUp,Bot,Boxes,CalendarClock,Copy,Download,GitFork,Globe,Lightbulb,ListChecks,LoaderCircle,MessageSquare,MoreHorizontal,Pause,Pencil,Play,Plus,RefreshCw,Sparkles,Square,Target,UserRound,Users,Workflow,X } from "lucide-react";
-import { FormEvent,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
-import { ContextMenu,type ContextMenuAction } from "../../ContextMenu";
+import { ArrowUp, Bot, Boxes, CalendarClock, Copy, Download, GitFork, Globe, Lightbulb, ListChecks, LoaderCircle, MessageSquare, MoreHorizontal, Pause, Pencil, Play, Plus, RefreshCw, Sparkles, Square, Target, UserRound, Users, Workflow, X } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ContextMenu } from "../../ContextMenu";
 import MarkdownContent from "../../MarkdownContent";
-import { SlashCommandMenu,type SlashCommandItem } from "../../SlashCommandMenu";
-import { api,patch,post,remove } from "../../api";
+import { SlashCommandMenu, type SlashCommandItem } from "../../SlashCommandMenu";
+import { api, post, remove } from "../../api";
 import { type FilePreviewSelection } from "../../codexContent";
-import { CollaborationTaskDialog,useSubmitPrompt } from "../../components/CollaborationTaskDialog";
+import { CollaborationTaskDialog, useSubmitPrompt } from "../../components/CollaborationTaskDialog";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DialogActions } from "../../components/Dialog";
-import { Dialog,ErrorBanner,Field } from "../../components/FormUI";
+import { Dialog, ErrorBanner, Field } from "../../components/FormUI";
 import { GeminiQuestion } from "../../components/GeminiQuestion";
 import { GeminiSkillsDialog } from "../../components/GeminiSkillsDialog";
-import { GeminiThinkingPicker,compatibleGeminiThinking } from "../../components/GeminiThinkingPicker";
-import { GeminiTool,GeminiToolGroup } from "../../components/GeminiTool";
+import { GeminiThinkingPicker, compatibleGeminiThinking } from "../../components/GeminiThinkingPicker";
+import { GeminiTool, GeminiToolGroup } from "../../components/GeminiTool";
 import { MessageImages } from "../../components/MessageImages";
-import { Empty,ErrorState,Status } from "../../components/PageUI";
-import { SessionUsage,formatUsageNumber } from "../../components/SessionUsage";
+import { Empty, ErrorState, Status } from "../../components/PageUI";
+import { SessionUsage, formatUsageNumber } from "../../components/SessionUsage";
 import { formatTime } from "../../format";
-import { geminiForkTargets,geminiMessages,groupGeminiMessages } from "../../geminiContent";
+import { geminiForkTargets, geminiMessages, groupGeminiMessages } from "../../geminiContent";
 import { useGeminiModels } from "../../geminiModels";
 import { useI18n } from "../../i18n";
 import { compressImage } from "../../imageCompression";
-import { useSessionManagement } from "../useSessionManagement";
-import { ScheduledTaskDialog } from "../../pages/ScheduledTaskDialog";
 import { message } from "../../text";
 import type { GeminiGoal,GeminiThread,StreamEvent,Workspace } from "../../types";
 import { useData } from "../../useData";
-import { ComposerAttachments,ComposerInput } from "../Composer";
-import { RenameSessionDialog } from "../SessionDialogs";
-import { SessionPage } from "../SessionPage";
-import { Sidebar } from "../Sidebar";
-import { groupSessions,withSelectedSession } from "../groups";
-import type { SessionEngineProps } from "../types";
-import { useSessionList } from "../useSessionList";
-import { useSessionRevision } from "../useSessionRevision";
+import { ComposerAttachments, ComposerInput } from "../Composer";
 
 const isActive = (thread?: GeminiThread) => Boolean(thread && ["queued", "running", "interrupting"].includes(thread.status));
-
-export default function GeminiPage({ realtime, notify, selectedThreadID, onSelectThread }: SessionEngineProps) {
-  const { t } = useI18n();
-  const { tick, refresh: bumpRevision } = useSessionRevision();
-  const [archived, setArchived] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [newWorkspaceID, setNewWorkspaceID] = useState("");
-  const [newModel, setNewModel] = useState("");
-  const [newThinking, setNewThinking] = useState("");
-  const [newMode, setNewMode] = useState("default");
-  const [search, setSearch] = useState("");
-  const [deleting, setDeleting] = useState<GeminiThread | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [rename, setRename] = useState<GeminiThread | null>(null);
-  const [title, setTitle] = useState("");
-  const dependency = `${realtime}:${tick}`;
-  const threads = useSessionList<GeminiThread>({engine: "gemini", archived, q: search}, dependency);
-  const workspaces = useData<Workspace[]>("/workspaces", realtime);
-  const selected = useData<GeminiThread>(selectedThreadID ? `/sessions/gemini/${selectedThreadID}` : null, dependency);
-  const active = threads.data?.find(thread => thread.id === selectedThreadID) ?? selected.data;
-  useEffect(() => { if (!selectedThreadID) { const first=threads.data?.find(thread=>!thread.project_hidden_at);if(first) onSelectThread(first.id,true); } }, [onSelectThread, selectedThreadID, threads.data]);
-  useEffect(() => { if (selected.data) setArchived(Boolean(selected.data.archived_at)); }, [selected.data?.id, selected.data?.archived_at]);
-  const groups = useMemo(() => groupSessions(withSelectedSession(threads.data ?? [], selected.data, archived, search), workspaces.data ?? [], threads.groups), [archived, search, threads.data, threads.groups, selected.data, workspaces.data]);
-  const openNewSession = (workspaceID = active?.workspace_id ?? "") => {
-    const previous = active?.workspace_id === workspaceID ? active : threads.data?.find(thread => thread.workspace_id === workspaceID);
-    setNewWorkspaceID(workspaceID); setNewModel(previous?.model ?? ""); setNewThinking(previous?.thinking_level ?? ""); setNewMode(previous?.approval_mode === "plan" ? "default" : previous?.approval_mode ?? "default"); setCreateOpen(true);
-  };
-  const refresh = () => { threads.reload(); selected.reload(); bumpRevision(); };
-  const management = useSessionManagement<GeminiThread>("gemini", { workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify }, item => Boolean(item.fork_supported), (scheduled, close) => <ScheduledTaskDialog open={Boolean(scheduled)} initialThreadID={scheduled?.id} agentKind="gemini" lockThread threads={[]} geminiThreads={scheduled ? [scheduled] : []} notify={notify} onClose={close} onSaved={refresh} />);
-  const mutate = async (thread: GeminiThread, values: unknown) => {
-    setBusy(true);
-    try { await patch(`/sessions/gemini/${thread.id}`, values); setRename(null); refresh(); }
-    catch (error) { notify(message(error)); } finally { setBusy(false); }
-  };
-  const createSessionInWorkspace = async (workspaceID: string) => {
-    if (busy) return;
-    const previous = active?.workspace_id === workspaceID ? active : threads.data?.find(thread => thread.workspace_id === workspaceID);
-    if (!previous?.model) { openNewSession(workspaceID); return; }
-    setBusy(true);
-    try {
-      const created = await post<GeminiThread>("/sessions/gemini", { workspace_id: workspaceID, model: previous.model, approval_mode: previous.approval_mode === "plan" ? "default" : previous.approval_mode, thinking_level: previous.thinking_level ?? "" });
-      setArchived(false); onSelectThread(created.id); refresh();
-    } catch (error) { notify(message(error)); } finally { setBusy(false); }
-  };
-  const threadMenuActions = (thread: GeminiThread): ContextMenuAction[] => {
-    const actions=management.threadActions(thread);
-    return [
-    ...actions.filter(action=>action.id==="pin"),
-    { id: "rename", label: t("gemini.rename"), icon: Pencil, disabled: isActive(thread) || thread.recovery_pending || busy, onSelect: () => { setRename(thread); setTitle(thread.title); } },
-    ...actions.filter(action=>["schedule","fork","fork-worktree"].includes(action.id)),
-    { id: "archive", label: t(thread.archived_at ? "gemini.restore" : "gemini.archive"), icon: thread.archived_at ? ArchiveRestore : Archive, disabled: isActive(thread) || thread.recovery_pending || busy, onSelect: () => mutate(thread, { archived: !thread.archived_at }) },
-    ...actions.filter(action=>!["pin","schedule","fork","fork-worktree"].includes(action.id))
-  ]; };
-  const deleteThread = async () => {
-    if (!deleting) return;
-    setBusy(true);
-    try { await remove(`/sessions/gemini/${deleting.id}`); if (selectedThreadID === deleting.id) onSelectThread(""); setDeleting(null); refresh(); }
-    catch (error) { notify(message(error)); } finally { setBusy(false); }
-  };
-
-  return <SessionPage engine="gemini" thread={active} selectedID={selectedThreadID} onSelect={onSelectThread} revision={realtime + tick} collaborationRevision={realtime} notify={notify} error={selected.error} reload={selected.reload}
-    sidebar={select => <Sidebar engine="gemini" icon={Sparkles} archived={archived} onArchived={() => { setArchived(!archived); onSelectThread(""); }} search={search} onSearch={setSearch} revision={dependency} refresh={refresh} notify={notify} groups={groups} selectedID={active?.id} busy={busy} source={threads} onNew={openNewSession} onNewInWorkspace={createSessionInWorkspace} onSelect={select} projectActions={management.projectActions} threadActions={threadMenuActions} onDelete={setDeleting} deleteDisabled={item => busy || isActive(item) || Boolean(item.recovery_pending)} />}
-    welcome={<div className="gemini-welcome"><Sparkles size={40} /><h2>{t("gemini.welcome")}</h2><p>{t("gemini.intro")}</p><button className="primary-button" onClick={() => openNewSession()}><Plus size={17} />{t("gemini.newSession")}</button></div>}
-    dialogs={<>
-    {management.dialogs}
-    <Dialog open={createOpen} title={t("gemini.newSession")} onClose={() => setCreateOpen(false)}><CreateGeminiSession initialWorkspaceID={newWorkspaceID} initialModel={newModel} initialThinking={newThinking} initialMode={newMode} workspaces={workspaces.data ?? []} error={workspaces.error} onRetry={workspaces.reload} onCreated={thread => { setArchived(false); onSelectThread(thread.id); setCreateOpen(false); refresh(); }} /></Dialog>
-    <RenameSessionDialog open={Boolean(rename)} busy={busy} title={title} setTitle={setTitle} autoFocus onClose={() => setRename(null)} onSave={() => { if (rename) void mutate(rename, { title }); }} />
-    <ConfirmDialog open={Boolean(deleting)} danger title={t("gemini.delete")} impact={t("gemini.deleteConfirm", { title: deleting?.title ?? "" })} confirmLabel={t("common.delete")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setDeleting(null)} onConfirm={deleteThread} />
-    </>}>
-    {openFile => active && <GeminiSession key={active.id} thread={active} realtime={dependency} notify={notify} onChanged={refresh} onNewSession={() => openNewSession(active.workspace_id)} onOpenFile={openFile} onFork={eventID => void management.fork(active, eventID)} onSchedule={() => management.schedule(active)} />}
-  </SessionPage>;
-}
 
 function ModelOptions({ models, modelCredentialRevision, model, mode, thinking, setThinking, setModel, setMode, disabled = false, autoSelect = false, planSupported = false, actions }: { models: ReturnType<typeof useGeminiModels>; modelCredentialRevision?: string; model: string; mode: string; thinking: string; setThinking: (value: string) => void; setModel: (value: string) => void; setMode: (value: string) => void; disabled?: boolean; autoSelect?: boolean; planSupported?: boolean; actions?: ReactNode }) {
   const { t } = useI18n();

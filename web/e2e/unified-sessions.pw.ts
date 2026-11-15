@@ -18,6 +18,7 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
     if (request.path === "/sessions") { listRequests.push(request.search); return { body: { items: sessions, next_cursor: null, groups: [{ workspace_id: workspace.id, matched_count: 3, project_pinned_at: null }] } }; }
     const thread = sessions.find(item => request.path === `/sessions/${item.engine}/${item.id}`);
     if (thread) return { body: thread };
+    if (request.path === "/sessions/codex/shared-id/collaboration") return {body:{supported:true,grant:{enabled:true,show_unread_results:true},notifications:[{target_key:"claude:shared-id",event_id:"old-result"}],requests:[],links:[{source_key:"codex:shared-id",target_key:"claude:shared-id",relation:"created",missing:false,session:{engine:"claude",id:"shared-id",title:"Historical result",status:"idle",workspace_id:workspace.id,url:"/?view=claude&thread=shared-id"}}]}};
     if (/\/events$/.test(request.path)) return { body: [] };
     if (/\/goal$/.test(request.path)) return { body: request.path.includes("/codex/") ? { status: "succeeded", supported: true, data: null, error: "" } : null };
     if (request.path === `/workspaces/${workspace.id}/files`) return { body: { files: [], status: "succeeded", error: "", truncated: false } };
@@ -38,6 +39,17 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
     await expect(page.locator(".thread.active")).toHaveCount(1);
     await expect(page.locator(".conversation-stream")).toBeVisible();
   }
+  // A persisted collaboration result and its unread notification retain old URLs.
+  await page.goto("/?view=codex&thread=shared-id");
+  await expect(page).toHaveURL(/view=sessions&engine=codex&thread=shared-id/);
+  await page.getByRole("button",{name:/Session collaboration/}).click();
+  await expect(page.getByText("1 unread results")).toBeVisible();
+  await page.getByRole("link",{name:"Historical result · claude"}).click();
+  await expect(page).toHaveURL(/view=sessions&engine=claude&thread=shared-id/);
+  await expect(page.locator(".session-header h2")).toHaveText("claude conversation");
+  await page.goto("/?view=gemini");
+  await expect(page).toHaveURL("/?view=sessions");
+  await expect(page.getByLabel("Engine",{exact:true})).toHaveValue("gemini");
   await page.screenshot({ path: testInfo.outputPath("unified-sessions.png"), fullPage: true });
-  expect(listRequests.every(search => !new URLSearchParams(search).has("engine"))).toBe(true);
+  expect(listRequests.some(search => new URLSearchParams(search).get("engine") === "gemini")).toBe(true);
 });
