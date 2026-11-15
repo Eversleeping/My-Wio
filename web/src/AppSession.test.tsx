@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
@@ -80,7 +80,7 @@ test("returns to sign-in when the session expires while the console is open", as
   expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   expect(requests).toContain("GET /summary");
   expect(FakeWebSocket.instances).toHaveLength(1);
-  expect(FakeWebSocket.instances[0].closed).toBe(true);
+  await waitFor(() => expect(FakeWebSocket.instances[0].closed).toBe(true));
 });
 
 test("signs out locally even when the logout request fails", async () => {

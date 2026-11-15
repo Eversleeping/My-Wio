@@ -143,6 +143,8 @@ P7 分三批交付：先实现明确计划下的依赖调度与基础工作台�
 
 2026-11-15 用户在 M3 部署完成后要求“继续”：沿用逐任务自动本地提交的授权，推进 M4（P2-06 至 P2-08、P3-08、P3-09）；先做前端外壳，再做数据与刷新收敛、持久化迁移。后续发布和部署另行执行。
 
+2026-11-15 用户明确授权将已登记的 AppSession 时序测试纳入本轮，单独修正测试并提交：使用 `waitFor` 等待 WebSocket 关闭，产品代码不变；完成后继续关闭 M4 验收。
+
 ### 并行
 
 - 多个 Agent 同时工作时各用独立 worktree，并且只领取互不重叠的步骤。下表列出会互相冲突的组合。
@@ -300,7 +302,7 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-14 | P0-07 审阅 | Agent 的 `Client.Run` 返回时不等待仍在执行的操作。操作在各自的 goroutine 里运行（`internal/agent/client.go` 的 `go c.handleOperation`），连接取消后仍可能通过 `saveOperationResult` 往状态目录的 `operation-results/` 写回执 | 已修复（当前工作区，0.3.14）：Client.Run 等待操作、探测和维护任务及最终回执写入；跨进程验收增加活动 Claude 在 Agent 退出时的进程回收与中断回执断言，移除临时目录清理重试绕过 |
 | 2026-11-14 | P1-01 审阅 | `TestPostgresMigrationAndStorage` 不能用 `-run` 只跑其中一个子测试：`assertCodexSnapshotTimeoutAndRetry` 用 `t.Run` 组织步骤，父测试后面的断言依赖这些子测试的副作用，子测试被筛掉后父测试失败 | 暂不处理，运行时不要筛选子测试。P1-02 改这个测试时可以顺手理顺。由用户决定 |
 
-| 2026-11-15 | P0-03、P1-04 / P0-08 本地验收 | `web/src/AppSession.test.tsx` 的“returns to sign-in when the session expires while the console is open”间歇性失败：登录页已出现，立即断言 `FakeWebSocket.instances[0].closed` 时仍为 false。P0-03 首次并发编译时遇到一次，本轮串行全量 Vitest 又出现一次；未改源码的定向复验 6 项通过。疑似断言早于 effect 清理完成，尚未认定产品缺陷 | 记录待单独排查，不夹带进重构；本轮完整复验结果见执行记录 |
+| 2026-11-15 | P0-03、P1-04 / P0-08 本地验收 | `web/src/AppSession.test.tsx` 的“returns to sign-in when the session expires while the console is open”间歇性失败：登录页已出现，立即断言 `FakeWebSocket.instances[0].closed` 时仍为 false。P0-03 首次并发编译时遇到一次，本轮串行全量 Vitest 又出现一次；未改源码的定向复验 6 项通过。疑似断言早于 effect 清理完成，尚未认定产品缺陷 | 已按2026-11-15用户授权单独修正测试：用waitFor等待WebSocket关闭，产品代码未变。定向6项、全量478项通过；禁止关闭的反向探测按预期失败。详情见P2执行记录 |
 
 | 2026-11-15 | P2-01 | 旧 HTTP 接口偶然差异：Codex 独有 archived=all/可选分页对象、未知 archived 报错；另两引擎忽略；PATCH 空对象 Codex 400 另两者200；更新/发起成功响应、事件游标错误文本/窗口和存在性检查不同；Claude worktree 分叉不返回 workspace_id。详见 P2-engine-contracts.md | 保留旧路由行为，新增统一路由按 P2-05 契约；不单独修旧接口 |
 
