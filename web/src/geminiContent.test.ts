@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { geminiMessages, geminiForkTargets, groupGeminiMessages, type GeminiMessage } from "./geminiContent";
-import { locationFor, realtimeScopesForEvent } from "./App";
+import { locationFor } from "./navigation";
+import { realtimeScopesForEvent } from "./realtime/scopes";
 import type { StreamEvent } from "./types";
 
 function event(sequence: number, kind: string, payload: unknown): StreamEvent { return { event_id: String(sequence), stream_id: "session", sequence, kind, payload, occurred_at: "2026-10-24T00:00:00Z" }; }

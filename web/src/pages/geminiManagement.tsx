@@ -4,7 +4,7 @@ import { Archive, CalendarClock, Copy, ExternalLink, EyeOff, FolderOpen, GitBran
 import { api, patch, post } from "../api";
 import { Dialog, Field } from "../components/FormUI";
 import { message } from "../text";
-import { locationFor } from "../App";
+import { locationFor } from "../navigation";
 import { DialogActions } from "../components/Dialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { ContextMenuAction } from "../ContextMenu";

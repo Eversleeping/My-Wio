@@ -1,6 +1,6 @@
 import { act, render } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { realtimeScopesForEvent } from "./App";
+import { realtimeScopesForEvent } from "./realtime/scopes";
 import { DashboardPage } from "./pages/DashboardPage";
 import { I18nProvider } from "./i18n";
 

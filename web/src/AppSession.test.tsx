@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
-import { websocketReconnectDelay } from "./App";
+import { websocketReconnectDelay } from "./realtime/useRealtime";
 import { I18nProvider } from "./i18n";
 
 class FakeWebSocket {

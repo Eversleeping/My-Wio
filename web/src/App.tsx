@@ -1,20 +1,105 @@
-import { type StreamEvent, type Thread, type AuditEntry, type Session, type Approval, type PageProps, type Workspace, type WorkspaceFile, type WorkspaceFilesSnapshot, type WorkspaceChangesSnapshot, type WorkspaceGitSnapshot, type CodexSnapshot, type CodexStatusData, type CodexMCPServer, type CodexSkill, type CodexGoal } from "./types";
-import { lazy, useMemo, useState, useCallback, useEffect, Suspense, useRef, KeyboardEvent as ReactKeyboardEvent, useLayoutEffect, FormEvent } from "react";
+import { useRealtime } from "./realtime/useRealtime";
+import {
+  type StreamEvent,
+  type Thread,
+  type AuditEntry,
+  type Session,
+  type Approval,
+  type PageProps,
+  type Workspace,
+  type WorkspaceFile,
+  type WorkspaceFilesSnapshot,
+  type WorkspaceChangesSnapshot,
+  type WorkspaceGitSnapshot,
+  type CodexSnapshot,
+  type CodexStatusData,
+  type CodexMCPServer,
+  type CodexSkill,
+  type CodexGoal
+} from "./types";
+import {
+  lazy,
+  useMemo,
+  useState,
+  useCallback,
+  useEffect,
+  Suspense,
+  useRef,
+  KeyboardEvent as ReactKeyboardEvent,
+  useLayoutEffect,
+  FormEvent
+} from "react";
 import { clearFileDrafts, AddWorkspaceFileDialog } from "./workspaceFileEditing";
 import { clearDataCacheMatching, useData } from "./useData";
-import { LayoutDashboard, Server as ServerIcon, GitBranch, Code2, Sparkles, Bot, Rocket, ListChecks, Activity, Settings, UserRound, LogOut, Menu, Wifi, WifiOff, ShieldCheck, Check, FileDiff, FolderTree, FilePlus2, LoaderCircle, RefreshCw, AlertTriangle, Folder, GitCommit, ArrowRightLeft, ArrowUpFromLine, ChevronDown, ChevronRight, FolderOpen, File as FileIcon, Plus, Cpu, Gauge, Target, Minimize2, Users, Network, Boxes, StickyNote, Workflow, Braces, Archive, Pause, Play, Pencil, Trash2, X, Square, Ban, Image as ImageIcon, Copy, MoreHorizontal, GitFork, SquareTerminal, Wrench } from "lucide-react";
 import { useI18n } from "./i18n";
+import { readLocationState, type View, navigateToLocation, navigation } from "./navigation";
 import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
-import { setSession, api, APIError, onUnauthorized, socketURL, post, put, remove } from "./api";
+import { setSession, api, APIError, onUnauthorized, post, put, remove } from "./api";
 import { LoadingScreen, LanguageSwitch, ErrorBanner, Field, Dialog } from "./components/FormUI";
 import { PageLoading, Empty, Status, ErrorState } from "./components/PageUI";
 import { ThemeSwitch } from "./theme";
+import {
+  UserRound,
+  LogOut,
+  Menu,
+  Wifi,
+  WifiOff,
+  ShieldCheck,
+  Check,
+  FileDiff,
+  FolderTree,
+  FilePlus2,
+  LoaderCircle,
+  RefreshCw,
+  AlertTriangle,
+  Folder,
+  GitCommit,
+  ArrowRightLeft,
+  ArrowUpFromLine,
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  File as FileIcon,
+  Plus,
+  Cpu,
+  Gauge,
+  Activity,
+  Target,
+  Minimize2,
+  Users,
+  Network,
+  Boxes,
+  StickyNote,
+  Workflow,
+  GitBranch,
+  Server as ServerIcon,
+  Braces,
+  Bot,
+  Archive,
+  Pause,
+  Play,
+  Pencil,
+  Trash2,
+  X,
+  Square,
+  Ban,
+  Image as ImageIcon,
+  Copy,
+  MoreHorizontal,
+  GitFork,
+  SquareTerminal,
+  Wrench
+} from "lucide-react";
 import { message, copyText, pretty } from "./text";
 import { type FilePreviewSelection } from "./codexContent";
 import { VirtualizedList, VirtualizedItems } from "./components/VirtualizedList";
 import { DialogActions } from "./components/Dialog";
 import { CodexRequests } from "./codexRequests";
-import { loadCodexComposerPreferences, type CodexComposerPreferences, saveCodexComposerPreferences } from "./codexComposerPreferences";
+import {
+  loadCodexComposerPreferences,
+  type CodexComposerPreferences,
+  saveCodexComposerPreferences
+} from "./codexComposerPreferences";
 import { useSubmitPrompt, CollaborationTaskDialog } from "./components/CollaborationTaskDialog";
 import { parseQuestionReply, asyncQuestions, questionReply, readableQuestionReply } from "./asyncUserInput";
 import { messageForkTargets } from "./messageForks";
@@ -30,12 +115,6 @@ import { extractImageSources } from "./imageContent";
 import { MarkdownContent } from "./components/LazyMarkdown";
 import { MessageImages } from "./components/MessageImages";
 import { ContextMenu } from "./ContextMenu";
-
-type View = "dashboard" | "servers" | "projects" | "codex" | "gemini" | "claude" | "deployments" | "operations" | "monitoring" | "settings";
-
-type RealtimeScope = View | "approvals";
-
-type RealtimeRevisions = Record<RealtimeScope, number>;
 
 type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
 
@@ -67,10 +146,6 @@ const MonitoringPageRoute = lazy(() => import("./pages/MonitoringPage"));
 
 const SettingsPageRoute = lazy(() => import("./pages/SettingsPage"));
 
-type StreamRevision = { revision: number; minimumSequence: number | null };
-
-type StreamRevisions = Record<string, StreamRevision>;
-
 // invalidatedFrom is the lowest sequence invalidated since the entry was stored:
 // undefined when nothing changed and null when the position is unknown.
 type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean; invalidatedFrom?: number | null };
@@ -92,29 +167,6 @@ const threadEventsPageSize = 500;
 const threadListPageSize = 50;
 
 const auditListPageSize = 50;
-
-const websocketReconnectBaseDelay = 1_000;
-
-const websocketReconnectMaximumDelay = 30_000;
-
-const websocketStableConnectionDelay = 30_000;
-
-const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "gemini", "claude", "deployments", "operations", "monitoring", "settings", "approvals"];
-
-const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, gemini: 0, claude: 0, deployments: 0, operations: 0, monitoring: 0, settings: 0, approvals: 0 });
-
-export function realtimeScopesForEvent(event: Pick<Partial<StreamEvent>, "kind">): RealtimeScope[] {
-  const kind = event.kind ?? "";
-  if (kind.startsWith("gemini.")) return ["gemini", "operations"];
-  if (kind.startsWith("claude.")) return ["claude", "operations"];
-  if (kind === "inventory.updated") return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
-  if (kind.startsWith("deployment.")) return ["dashboard", "deployments", "operations", "monitoring"];
-  if (kind.startsWith("agent.")) return ["dashboard", "servers", "projects", "deployments", "operations", "monitoring"];
-  if (kind.startsWith("approval.") || kind.startsWith("codex.approval.") || kind === "codex.serverRequest.resolved") return ["codex", "approvals"];
-  if (["codex.turn.completed", "codex.turn.failed", "codex.turn.cancelled"].includes(kind)) return ["dashboard", "codex", "approvals"];
-  if (kind === "user.message" || kind.startsWith("codex.") || kind.startsWith("thread.")) return ["dashboard", "codex"];
-  return allRealtimeScopes;
-}
 
 function setScrollTopImmediately(element: HTMLElement, top: number) {
   const scrollBehavior = element.style.scrollBehavior;
@@ -186,40 +238,6 @@ function storeThreadEvents(path: string, entry: ThreadEventsCacheEntry) {
   }
 }
 
-/** Exponential reconnect delay with equal jitter: 0.5–1 s first, doubling up to 15–30 s. */
-export function websocketReconnectDelay(attempt: number, random = Math.random) {
-  const ceiling = Math.min(websocketReconnectMaximumDelay, websocketReconnectBaseDelay * 2 ** Math.max(0, attempt));
-  return Math.round(ceiling / 2 + random() * ceiling / 2);
-}
-
-const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboard }> = [
-  { id: "dashboard", labelKey: "nav.overview", icon: LayoutDashboard },
-  { id: "servers", labelKey: "nav.servers", icon: ServerIcon },
-  { id: "projects", labelKey: "nav.projects", icon: GitBranch },
-  { id: "codex", labelKey: "nav.codex", icon: Code2 },
-  { id: "gemini", labelKey: "nav.gemini", icon: Sparkles },
-  { id: "claude", labelKey: "nav.claude", icon: Bot },
-  { id: "deployments", labelKey: "nav.deployments", icon: Rocket },
-  { id: "operations", labelKey: "nav.operations", icon: ListChecks },
-  { id: "monitoring", labelKey: "nav.monitoring", icon: Activity },
-  { id: "settings", labelKey: "nav.settings", icon: Settings }
-];
-
-function readLocationState(): { view: View; threadID: string } {
-  const params = new URLSearchParams(window.location.search);
-  const requestedView = params.get("view");
-  const view = navigation.some(item => item.id === requestedView) ? requestedView as View : "dashboard";
-  return { view, threadID: view === "codex" || view === "gemini" || view === "claude" ? params.get("thread") ?? "" : "" };
-}
-
-export function locationFor(view: View, threadID = "") {
-  const params = new URLSearchParams();
-  if (view !== "dashboard") params.set("view", view);
-  if ((view === "codex" || view === "gemini" || view === "claude") && threadID) params.set("thread", threadID);
-  const query = params.toString();
-  return `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
-}
-
 export default function App() {
   const { t } = useI18n();
   const initialLocation = useMemo(readLocationState, []);
@@ -229,9 +247,7 @@ export default function App() {
   const [view, setView] = useState<View>(initialLocation.view);
   const [codexThreadID, setCodexThreadID] = useState(initialLocation.threadID);
   const [mobileNav, setMobileNav] = useState(false);
-  const [realtimeRevisions, setRealtimeRevisions] = useState<RealtimeRevisions>(initialRealtimeRevisions);
-  const [streamRevisions, setStreamRevisions] = useState<StreamRevisions>({});
-  const [socketConnected, setSocketConnected] = useState(false);
+  const { realtimeRevisions, streamRevisions, socketConnected, subscribe } = useRealtime(auth === "authenticated");
   const [approvalSignal, setApprovalSignal] = useState(0);
   const [toast, setToast] = useState("");
   const approvals = useData<Approval[]>(auth === "authenticated" ? "/approvals" : null, realtimeRevisions.approvals);
@@ -276,98 +292,9 @@ export default function App() {
     return onUnauthorized(() => authenticate(null));
   }, [auth, authenticate]);
 
-  useEffect(() => {
-    if (auth !== "authenticated") return;
-    let socket: WebSocket | null = null;
-    let timer = 0;
-    let refreshTimer = 0;
-    let stableTimer = 0;
-    let reconnectAttempt = 0;
-    let stopped = false;
-    const pendingStreams = new Map<string, number | null>();
-    const pendingRealtimeScopes = new Set<RealtimeScope>();
-    const markPendingStream = (streamID: string, sequence?: number) => {
-      const nextSequence = typeof sequence === "number" && Number.isInteger(sequence) && sequence > 0 ? sequence : null;
-      const current = pendingStreams.get(streamID);
-      if (current === undefined) pendingStreams.set(streamID, nextSequence);
-      else if (current === null || nextSequence === null) pendingStreams.set(streamID, null);
-      else pendingStreams.set(streamID, Math.min(current, nextSequence));
-    };
-    const markPendingRealtimeScopes = (scopes: RealtimeScope[]) => {
-      for (const scope of scopes) pendingRealtimeScopes.add(scope);
-    };
-    const scheduleRefresh = () => {
-      if (refreshTimer) return;
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = 0;
-        if (pendingRealtimeScopes.size > 0) {
-          const scopes = Array.from(pendingRealtimeScopes);
-          pendingRealtimeScopes.clear();
-          setRealtimeRevisions(current => {
-            const next = { ...current };
-            for (const scope of scopes) next[scope] += 1;
-            return next;
-          });
-        }
-        if (pendingStreams.size > 0) {
-          const streams = Array.from(pendingStreams.entries());
-          pendingStreams.clear();
-          // Cached views keep the lowest sequence of every batch, including
-          // batches that arrive while another thread is shown.
-          for (const [streamID, minimumSequence] of streams) if (streamID !== "*") invalidateThreadEvents(streamID, minimumSequence);
-          setStreamRevisions(current => {
-            const next = { ...current };
-            for (const [streamID, minimumSequence] of streams) next[streamID] = { revision: (next[streamID]?.revision ?? 0) + 1, minimumSequence };
-            return next;
-          });
-        }
-      }, 100);
-    };
-    const reconnect = () => {
-      if (stopped) return;
-      timer = window.setTimeout(connect, websocketReconnectDelay(reconnectAttempt));
-      reconnectAttempt += 1;
-    };
-    const connect = () => {
-      if (stopped) return;
-      let opened = false;
-      socket = new WebSocket(socketURL());
-      socket.onopen = () => {
-        opened = true;
-        // Only a connection that stays up restores the short initial retry delay.
-        stableTimer = window.setTimeout(() => { reconnectAttempt = 0; }, websocketStableConnectionDelay);
-        setSocketConnected(true); markPendingStream("*"); markPendingRealtimeScopes(allRealtimeScopes); scheduleRefresh();
-      };
-      socket.onmessage = messageEvent => {
-        try {
-          const event = JSON.parse(String(messageEvent.data)) as Partial<StreamEvent>;
-          markPendingStream(event.stream_id || "*", event.sequence);
-          markPendingRealtimeScopes(realtimeScopesForEvent(event));
-        } catch {
-          markPendingStream("*");
-          markPendingRealtimeScopes(allRealtimeScopes);
-        }
-        scheduleRefresh();
-      };
-      socket.onclose = () => {
-        clearTimeout(stableTimer);
-        setSocketConnected(false);
-        if (stopped) return;
-        if (opened) { reconnect(); return; }
-        // Browsers hide the status of a rejected upgrade. Check the session first:
-        // a 401 signs out through the central handler instead of retrying forever.
-        api("/auth/session").then(reconnect, error => { if (!(error instanceof APIError && error.status === 401)) reconnect(); });
-      };
-    };
-    connect();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      clearTimeout(refreshTimer);
-      clearTimeout(stableTimer);
-      socket?.close();
-    };
-  }, [auth]);
+  useEffect(() => subscribe((streamID, minimumSequence) => {
+    if (streamID !== "*") invalidateThreadEvents(streamID, minimumSequence);
+  }), [subscribe]);
 
   useEffect(() => {
     if (!toast) return;
@@ -404,8 +331,7 @@ export default function App() {
     setView(next);
     setCodexThreadID(nextThreadID);
     setMobileNav(false);
-    const nextLocation = locationFor(next, nextThreadID);
-    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextLocation) window.history[replace ? "replaceState" : "pushState"](null, "", nextLocation);
+    navigateToLocation(next, nextThreadID, replace);
   };
   const page = {
     dashboard: <Suspense fallback={<PageLoading />}><DashboardPage realtime={realtimeRevisions.dashboard} onNavigate={selectView} /></Suspense>,
