@@ -2,7 +2,7 @@ import { compressImage } from "./imageCompression";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import ClaudePage from "./pages/ClaudePage";
+import ClaudePage from "./sessions/engines/claude";
 import { I18nProvider } from "./i18n";
 
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
@@ -19,7 +19,7 @@ function setup(options: { defaultModel?: string; modelCredentialRevision?: strin
     const url = String(input); let body: unknown = [];
     if(url.endsWith("/claude/skills")) { requests.push({url,body:{}}); return new Response(JSON.stringify({operation_id:"skill-op"}), {status:202}); }
     if(url.endsWith("/claude/skills/skill-op")) return new Response(JSON.stringify(options.skillsError ? {status:"failed",error:"Could not initialize CLI"} : {status:"succeeded",skills:options.skills ?? []}),{status:200});
-    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/rewrite") && rewriteFailures-->0)return new Response(JSON.stringify({error:"Rewrite temporarily failed"}),{status:503}); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url.endsWith("/answer") ? {operation_id:"answer-op"} : url === "/api/claude/threads" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
+    if (init.method === "POST" || init.method === "PATCH") { requests.push({ url, body: JSON.parse(String(init.body)) }); if(url.endsWith("/rewrite") && rewriteFailures-->0)return new Response(JSON.stringify({error:"Rewrite temporarily failed"}),{status:503}); if(url.endsWith("/steer") && steerFailures-->0)return new Response(JSON.stringify({error:"Temporary network failure"}),{status:503}); body = url.endsWith("/answer") ? {operation_id:"answer-op"} : url === "/api/sessions/claude" ? thread : url.endsWith("/fork") || url.endsWith("/fork-worktree") ? {operation_id:"fork-op",target_thread_id:"fork-target"} : { ok: true }; }
     else if (url.startsWith("/api/operations/")) body={status:"succeeded"};
     else if (url === "/api/sessions/claude/claude-1/collaboration") body = { supported: true, grant: { enabled: true, worktree: false, target_modes: {} }, links: [], requests: [] };
     else if (url === "/api/workspaces/workspace-1/claude/models") {
@@ -29,10 +29,10 @@ function setup(options: { defaultModel?: string; modelCredentialRevision?: strin
     }
     else if (url === "/api/servers") body = [{ id: "server-1", claude_profile_model: options.appliedModel || "" }];
     else if (url === "/api/workspaces") body = [{ id: "workspace-1", server_id: "server-1", project_name: "Project", server_name: "Server", path: "/project", status: "ready" }];
-    else if (url.startsWith("/api/claude/threads?") && options.selected) body = [thread];
-    else if (url === "/api/claude/threads/claude-1") body = thread;
-    else if (url === "/api/claude/threads/claude-1/usage") body = {input_tokens:18626887,output_tokens:89133,output_per_second:26.24,partial:false};
-    else if (url.startsWith("/api/claude/threads/claude-1/events")) body = options.events ?? [
+    else if (url.startsWith("/api/sessions?engine=claude")) body = {items: options.selected && (!new URL(url, "http://localhost").searchParams.get("q") || `${thread.title} ${thread.path} ${thread.project_name}`.toLowerCase().includes(new URL(url, "http://localhost").searchParams.get("q")!.toLowerCase())) ? [thread] : [], next_cursor: null, groups: []};
+    else if (url === "/api/sessions/claude/claude-1") body = thread;
+    else if (url === "/api/sessions/claude/claude-1/usage") body = {input_tokens:18626887,output_tokens:89133,output_per_second:26.24,partial:false};
+    else if (url.startsWith("/api/sessions/claude/claude-1/events")) body = options.events ?? [
       { event_id: "u", stream_id: thread.id, sequence: 1, kind: "claude.user.message", payload: { text: "Hello" } },
       { event_id: "a1", stream_id: thread.id, sequence: 2, kind: "claude.message", payload: { text: "Hi " } },
       { event_id: "a2", stream_id: thread.id, sequence: 3, kind: "claude.message", payload: { text: "there" } }
@@ -53,7 +53,7 @@ test("adopts a changed API default on session entry and sends it without resetti
   expect(screen.getByLabelText("Reasoning effort")).toHaveValue("high");
   await user.type(screen.getByRole("textbox", {name:"Ask Claude to work on this project…"}), "Continue");
   await user.click(screen.getByRole("button", {name:"Send"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns", body:expect.objectContaining({model:"claude-new-default", effort:"high"})}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/turns", body:expect.objectContaining({model:"claude-new-default", effort:"high"})}));
 });
 
 test("keeps the saved model when its configuration is unchanged", async () => {
@@ -96,7 +96,7 @@ test("uses the latest discovered default when creating a session", async () => {
   await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
   await waitFor(() => expect(within(screen.getByRole("dialog")).getByLabelText("Claude model or alias")).toHaveValue("claude-new-default"));
   await user.click(within(screen.getByRole("dialog")).getByRole("button", {name:"New Claude session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/claude/threads", body:expect.objectContaining({model:"claude-new-default"})}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/claude", body:expect.objectContaining({model:"claude-new-default"})}));
 });
 
 test("shows token totals and average output below the Claude session title", async () => {
@@ -117,11 +117,11 @@ test("steers a running Claude task and switches between stopping and sending", a
   expect(screen.getByRole("button",{name:"Interrupt"})).toBeEnabled();
   await user.type(input,"Focus on the failing tests");
   await user.click(screen.getByRole("button",{name:"Send correction"}));
-  await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/steer",body:{prompt:"Focus on the failing tests",operation_id:"op-1",request_id:expect.any(String)}}));
+  await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/steer",body:{prompt:"Focus on the failing tests",operation_id:"op-1",request_id:expect.any(String)}}));
   expect(input).toHaveValue("");
   expect(requests.filter(request=>request.url.endsWith("/turns"))).toHaveLength(0);
   await user.click(screen.getByRole("button",{name:"Interrupt"}));
-  await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/interrupt",body:{}}));
+  await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/interrupt",body:{}}));
 });
 
 test("preserves a failed correction and retries with the same request ID", async () => {
@@ -183,7 +183,7 @@ test("discovers skills before the first turn and sends namespaced native command
   expect(requests.filter(request => request.url.endsWith("/turns"))).toHaveLength(0);
   await user.type(input, "src");
   await user.keyboard("{Enter}");
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/turns", body: expect.objectContaining({ prompt: "/plugin:code.review src" }) }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude/claude-1/turns", body: expect.objectContaining({ prompt: "/plugin:code.review src" }) }));
   expect(requests.filter(request => request.url.endsWith("/claude/skills"))).toHaveLength(1);
 });
 
@@ -212,7 +212,7 @@ test("selects an upstream model and accepts a custom model with reasoning effort
   await user.selectOptions(screen.getByLabelText("Reasoning effort"), "max");
   await user.type(screen.getByRole("textbox", { name: "Ask Claude to work on this project…" }), "Review");
   await user.click(screen.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/turns", body: expect.objectContaining({ model: "my-custom-model", effort: "max" }) }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude/claude-1/turns", body: expect.objectContaining({ model: "my-custom-model", effort: "max" }) }));
 });
 
 test("creates a Claude session for a workspace with the selected permissions", async () => {
@@ -222,7 +222,7 @@ test("creates a Claude session for a workspace with the selected permissions", a
   await user.selectOptions(screen.getByLabelText("Tool permissions"), "acceptEdits");
   const createButtons = screen.getAllByRole("button", { name: "New Claude session" });
   await user.click(createButtons[createButtons.length - 1]);
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads", body: { workspace_id: "workspace-1", model: "sonnet", permission_mode: "acceptEdits", effort: "" } }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "sonnet", permission_mode: "acceptEdits", effort: "" } }));
   expect(onSelectThread).toHaveBeenCalledWith("claude-1");
 });
 
@@ -237,7 +237,7 @@ test("renders streamed text and sends the next turn", async () => {
   await user.selectOptions(screen.getByLabelText("Reasoning effort"), "max");
   await user.type(input, "Continue the task");
   await user.click(screen.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/turns", body: { prompt: "Continue the task", model: "sonnet", permission_mode: "default", effort: "max" } }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude/claude-1/turns", body: { prompt: "Continue the task", model: "sonnet", permission_mode: "default", effort: "max" } }));
 });
 
 test("requires explicit confirmation before releasing a lost task", async () => {
@@ -246,7 +246,7 @@ test("requires explicit confirmation before releasing a lost task", async () => 
   await user.click(screen.getByRole("button", { name: "Confirm process stopped" }));
   expect(requests).toHaveLength(0);
   await user.click(screen.getAllByRole("button", { name: "Confirm process stopped" }).at(-1)!);
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/confirm-stopped", body: { operation_id: "op-1", confirmed: true } }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude/claude-1/confirm-stopped", body: { operation_id: "op-1", confirmed: true } }));
 });
 
 test.each([
@@ -265,7 +265,7 @@ test("fills every missing event page after a large realtime gap", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input); requests.push(url);
     let body: unknown = [];
-    if (url.startsWith("/api/claude/threads?") || url === "/api/claude/threads/claude-1") body = url.includes("?") ? [baseThread] : baseThread;
+    if (url.startsWith("/api/sessions?engine=claude") || url === "/api/sessions/claude/claude-1") body = url.includes("?") ? {items:[baseThread],next_cursor:null,groups:[]} : baseThread;
     else if (url.endsWith("/events?after=1")) body = Array.from({ length: 500 }, (_, index) => index === 248 ? event(250, "claude.message", "middle ") : event(index + 2));
     else if (url.endsWith("/events?after=501")) body = [event(502), event(503)];
     else if (url.includes("/events?session=")) body = jumped ? [event(504), event(505, "claude.message", "end")] : [event(1, "claude.user.message", "Start")];
@@ -277,8 +277,8 @@ test("fills every missing event page after a large realtime gap", async () => {
   jumped = true;
   rendered.rerender(view(1));
   expect(await screen.findByText("middle end", {}, { timeout: 3000 })).toBeInTheDocument();
-  expect(requests).toContain("/api/claude/threads/claude-1/events?after=1");
-  expect(requests).toContain("/api/claude/threads/claude-1/events?after=501");
+  expect(requests).toContain("/api/sessions/claude/claude-1/events?after=1");
+  expect(requests).toContain("/api/sessions/claude/claude-1/events?after=501");
 });
 
 test("defaults new sessions to the model last applied to the selected server", async () => {
@@ -287,7 +287,7 @@ test("defaults new sessions to the model last applied to the selected server", a
  await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-1");
  expect(within(screen.getByRole("dialog", { name: "New Claude session" })).getByLabelText("Claude model or alias")).toHaveValue("claude-opus-4-6");
  await user.click(screen.getAllByRole("button", { name: "New Claude session" }).at(-1)!);
- await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads", body: { workspace_id: "workspace-1", model: "claude-opus-4-6", permission_mode: "default", effort: "" } }));
+ await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude", body: { workspace_id: "workspace-1", model: "claude-opus-4-6", permission_mode: "default", effort: "" } }));
 });
 
 test("groups sessions by workspace and supports collapsing, searching and the session menu", async () => {
@@ -295,11 +295,11 @@ test("groups sessions by workspace and supports collapsing, searching and the se
   const group = await screen.findByRole("button", { name: /Project · project Server 1/ });
   expect(group).toHaveAttribute("aria-expanded", "true");
   await user.click(group);
-  expect(screen.queryByRole("button", { name: "Claude Server" })).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Claude Server" })).not.toBeInTheDocument());
   await user.click(group);
   expect(screen.getByRole("button", { name: "Claude Server" })).toBeInTheDocument();
   await user.type(screen.getByRole("searchbox"), "no-match");
-  expect(screen.queryByRole("button", { name: "Claude Server" })).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Claude Server" })).not.toBeInTheDocument());
   await user.clear(screen.getByRole("searchbox"));
   await user.click(screen.getByRole("button", { name: "Task menu for Claude" }));
   await user.click(screen.getByRole("menuitem", { name: "Rename session" }));
@@ -313,7 +313,7 @@ test("allows resetting a saved effort when an older Agent cannot apply it", asyn
   await user.selectOptions(effort, "");
   await user.type(screen.getByRole("textbox", { name: "Ask Claude to work on this project…" }), "Use the default");
   await user.click(screen.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/claude/threads/claude-1/turns", body: { prompt: "Use the default", model: "sonnet", permission_mode: "default", effort: "" } }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/sessions/claude/claude-1/turns", body: { prompt: "Use the default", model: "sonnet", permission_mode: "default", effort: "" } }));
 });
 
 
@@ -322,7 +322,7 @@ test("offers the complete project and task menus and queues an independent conti
  await user.click(await screen.findByRole("button",{name:"Task menu for Claude"}));
  for(const label of ["Pin task","Rename session","Create scheduled task","Continue in new task","Continue in new worktree","Archive session","Copy working directory","Copy Wio session ID","Copy Claude session ID","Copy deep link","Open in new window"]){expect(screen.getByRole("menuitem",{name:label})).toBeInTheDocument();}
  await user.click(screen.getByRole("menuitem",{name:"Continue in new task"}));
- await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/fork",body:{}}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/fork",body:{}}));
  await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("fork-target"));
  await user.click(screen.getByRole("button",{name:/Workspace menu/}));
  for(const label of ["New session","Pin project","Rename project","Create permanent worktree","Archive all project tasks","Hide project"]){expect(screen.getByRole("menuitem",{name:label})).toBeInTheDocument();}
@@ -340,7 +340,7 @@ test("pastes and removes images, sends image-only input, and previews image hist
  paste();await waitFor(()=>expect(document.querySelector(".composer-images img")).toHaveAttribute("src",dataURL));
  await user.click(document.querySelector<HTMLButtonElement>(".composer-images button")!);expect(document.querySelector(".composer-images img")).toBeNull();
  paste();await waitFor(()=>expect(document.querySelector(".composer-images img")).toBeInTheDocument());await user.click(screen.getByRole("button",{name:"Send"}));
- await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns",body:{prompt:"",model:"sonnet",permission_mode:"default",effort:"high",images:[{data_url:dataURL}]}}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/turns",body:{prompt:"",model:"sonnet",permission_mode:"default",effort:"high",images:[{data_url:dataURL}]}}));
  expect(document.querySelector(".composer-images img")).toBeNull();
 });
 
@@ -352,7 +352,7 @@ test("uses keyboard slash options locally and sends discovered native skills",as
  await user.click(within(screen.getByRole("listbox")).getByRole("option",{name:"Max"}));expect(screen.getByLabelText("Reasoning effort")).toHaveValue("max");expect(requests).toHaveLength(0);
  await user.type(input,"/plan");await user.keyboard("{Enter}");expect(screen.getByLabelText("Tool permissions")).toHaveValue("plan");expect(requests).toHaveLength(0);
  await user.type(input,"/review-code");await user.keyboard("{Enter}");expect(input).toHaveValue("/review-code ");await user.type(input,"inspect changes");await user.keyboard("{Enter}");
- await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns",body:{prompt:"/review-code inspect changes",model:"sonnet",permission_mode:"plan",effort:"max"}}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/turns",body:{prompt:"/review-code inspect changes",model:"sonnet",permission_mode:"plan",effort:"max"}}));
 });
 
 test("creates a collaboration session through the /collab dialog",async()=>{
@@ -365,7 +365,7 @@ test("creates a collaboration session through the /collab dialog",async()=>{
  await user.selectOptions(within(dialog).getByRole("combobox",{name:"Thinking level"}),"max");
  await user.type(within(dialog).getByRole("textbox",{name:"Task"}),"Check the tests");
  await user.click(within(dialog).getByRole("button",{name:"Send to model"}));
- await waitFor(()=>expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/turns",body:expect.objectContaining({model:"sonnet",effort:"high",prompt:expect.stringContaining('"engine": "claude",\n  "model": "custom-upstream-model",\n  "effort": "max",\n  "directory_mode": "shared"')})}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/turns",body:expect.objectContaining({model:"sonnet",effort:"high",prompt:expect.stringContaining('"engine": "claude",\n  "model": "custom-upstream-model",\n  "effort": "max",\n  "directory_mode": "shared"')})}));
  expect(screen.queryByRole("dialog",{name:"Create collaboration session"})).not.toBeInTheDocument();
  await waitFor(()=>expect(input).toHaveValue(""));
 });
@@ -452,7 +452,7 @@ test("branches the last streamed reply using its final event and selects the new
   expect(await screen.findByText("Hi there")).toBeInTheDocument();
   await user.click(screen.getByRole("button", {name:"Message actions"}));
   await user.click(screen.getByRole("menuitem", {name:"Branch to new chat"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/fork",body:{event_id:"a2"}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/fork",body:{event_id:"a2"}}));
   await waitFor(() => expect(onSelectThread).toHaveBeenCalledWith("fork-target"));
 });
 
@@ -481,7 +481,7 @@ test("edits a user message with images, keeps a failed draft and retries the rew
   expect(document.querySelector(".composer-images img")).toHaveAttribute("src",image);
   await user.click(screen.getByRole("button",{name:"Send"}));
   await waitFor(()=>expect(input).toHaveValue(""));
-  expect(requests.filter(r=>r.url.endsWith("/rewrite"))).toEqual(Array(2).fill({url:"/api/claude/threads/claude-1/events/user-image/rewrite",body:{prompt:"/model revised",model:"sonnet",permission_mode:"default",effort:"high",images:[{data_url:image}]}}));
+  expect(requests.filter(r=>r.url.endsWith("/rewrite"))).toEqual(Array(2).fill({url:"/api/sessions/claude/claude-1/events/user-image/rewrite",body:{prompt:"/model revised",model:"sonnet",permission_mode:"default",effort:"high",images:[{data_url:image}]}}));
   expect(requests.some(r=>r.url.endsWith("/turns"))).toBe(false);
 });
 
@@ -532,7 +532,7 @@ test("answers Claude native questions with single, multiple and custom choices",
   await user.type(screen.getAllByLabelText("Your answer")[1],"Include examples");
   await user.click(submit);
   expect(await screen.findByRole("button",{name:"Answers sent"})).toBeDisabled();
-  expect(requests).toContainEqual({url:"/api/claude/threads/claude-1/questions/op-1:req/answer",body:{answers:{"0":{answers:["PostgreSQL"]},"1":{answers:["Tests","Docs","Include examples"]}}}});
+  expect(requests).toContainEqual({url:"/api/sessions/claude/claude-1/questions/op-1:req/answer",body:{answers:{"0":{answers:["PostgreSQL"]},"1":{answers:["Tests","Docs","Include examples"]}}}});
   expect(requests.filter(request=>request.url.endsWith("/turns") || request.url.endsWith("/steer"))).toHaveLength(0);
 });
 

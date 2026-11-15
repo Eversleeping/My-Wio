@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import CodexPage from "./pages/CodexPage";
 import GeminiPage from "./pages/GeminiPage";
-import ClaudePage from "./pages/ClaudePage";
+import ClaudePage from "./sessions/engines/claude";
 import { I18nProvider } from "./i18n";
 
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
@@ -23,7 +23,8 @@ test.each(["codex", "gemini", "claude"])("%s scopes project pins and hidden-proj
       body = {};
     } else if (url.pathname === "/api/projects/hidden") body = threads.filter(thread => thread.project_hidden_at).map(thread => ({ project_id: thread.project_id, server_id: thread.server_id, project_name: thread.project_name, server_name: thread.server_name, hidden_at: now }));
     else if (url.pathname === "/api/threads") body = { items: url.searchParams.get("archived") === "true" ? [] : threads, has_more: false, next: null };
-    else if (url.pathname === "/api/gemini/threads" || url.pathname === "/api/claude/threads") body = url.searchParams.get("archived") === "true" ? [] : threads;
+    else if (url.pathname === "/api/sessions") body = {items: url.searchParams.get("archived") === "true" ? [] : threads, next_cursor: null, groups: []};
+    else if (url.pathname === "/api/gemini/threads") body = url.searchParams.get("archived") === "true" ? [] : threads;
     else if (url.pathname === "/api/workspaces") body = threads.map(thread => ({ id: thread.workspace_id, project_id: thread.project_id, server_id: thread.server_id, server_name: thread.server_name, project_name: "same", path: "/srv/same", branch: "main", status: "ready", management_mode: "managed" }));
     else if (url.pathname.endsWith("/gemini/models")) body = { configured: true, models: [{ id: "flash", name: "flash" }] };
     else if (/\/threads\/thread-[ab]$/.test(url.pathname)) body = threads.find(thread => url.pathname.endsWith(thread.id));

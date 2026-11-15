@@ -21,7 +21,7 @@ const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
 
 const GeminiPageRoute = lazy(() => import("./pages/GeminiPage"));
 
-const ClaudePageRoute = lazy(() => import("./pages/ClaudePage"));
+const ClaudePageRoute = lazy(() => import("./sessions/engines/claude"));
 
 const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
 

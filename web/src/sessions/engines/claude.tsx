@@ -1,37 +1,36 @@
-import { SessionCollaboration } from "../components/SessionCollaboration";
-import { ClaudeQuestion } from "../components/ClaudeQuestion";
-import { type CSSProperties, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SessionPage } from "../SessionPage";
+import { Sidebar } from "../Sidebar";
+import { groupSessions, withSelectedSession } from "../groups";
+import { useSessionList } from "../useSessionList";
+import { ClaudeQuestion } from "../../components/ClaudeQuestion";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, MoreHorizontal, Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound, Workflow } from "lucide-react";
-import { api, patch, post, remove } from "../api";
-import { Dialog, ErrorBanner, Field } from "../components/FormUI";
-import { WorkspaceFilesPanel } from "../workspace/WorkspaceFilesPanel";
-import { message } from "../text";
-import { type FilePreviewSelection } from "../codexContent";
-import { SlashCommandMenu, type SlashCommandItem } from "../SlashCommandMenu";
-import { CollaborationTaskDialog, useSubmitPrompt } from "../components/CollaborationTaskDialog";
-import { compressImage } from "../imageCompression";
-import { MessageImages } from "../components/MessageImages";
-import { ComposerImagePicker } from "../components/ComposerImagePicker";
-import { SessionUsage } from "../components/SessionUsage";
-import { ClaudeModelPicker } from "../components/ClaudeModelPicker";
-import { ClaudeToolGroup } from "../components/ClaudeToolGroup";
-import { ClaudeCompactionEvent } from "../components/ClaudeCompactionEvent";
-import { claudeDisplayEvents } from "../claudeContent";
-import { useClaudeSkills, validClaudeSkillName, type ClaudeSkill } from "../claudeSkills";
-import { useClaudeModels, type ClaudeModel } from "../claudeModels";
-import { useClaudeManagement } from "./claudeManagement";
-import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
-import { HiddenProjectsButton } from "../components/HiddenProjectsButton";
-import { SidebarHeightDivider, readSidebarHeight } from "../components/SidebarHeightDivider";
-import { ConfirmDialog } from "../components/ConfirmDialog";
-import { DialogActions } from "../components/Dialog";
-import { Empty, ErrorState, Status } from "../components/PageUI";
-import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "../components/SessionPreviews";
-import { useI18n } from "../i18n";
-import { formatDate, formatTime } from "../format";
-import MarkdownContent from "../MarkdownContent";
-import type { ClaudeThread, Server, StreamEvent, Workspace } from "../types";
-import { useData, useThrottledValue } from "../useData";
+import { api, patch, post, remove } from "../../api";
+import { Dialog, ErrorBanner, Field } from "../../components/FormUI";
+import { message } from "../../text";
+import { type FilePreviewSelection } from "../../codexContent";
+import { SlashCommandMenu, type SlashCommandItem } from "../../SlashCommandMenu";
+import { CollaborationTaskDialog, useSubmitPrompt } from "../../components/CollaborationTaskDialog";
+import { compressImage } from "../../imageCompression";
+import { MessageImages } from "../../components/MessageImages";
+import { ComposerImagePicker } from "../../components/ComposerImagePicker";
+import { SessionUsage } from "../../components/SessionUsage";
+import { ClaudeModelPicker } from "../../components/ClaudeModelPicker";
+import { ClaudeToolGroup } from "../../components/ClaudeToolGroup";
+import { ClaudeCompactionEvent } from "../../components/ClaudeCompactionEvent";
+import { claudeDisplayEvents } from "../../claudeContent";
+import { useClaudeSkills, validClaudeSkillName, type ClaudeSkill } from "../../claudeSkills";
+import { useClaudeModels, type ClaudeModel } from "../../claudeModels";
+import { useClaudeManagement } from "../../pages/claudeManagement";
+import { ContextMenu, type ContextMenuAction } from "../../ContextMenu";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { DialogActions } from "../../components/Dialog";
+import { Empty, ErrorState, Status } from "../../components/PageUI";
+import { useI18n } from "../../i18n";
+import { formatDate, formatTime } from "../../format";
+import MarkdownContent from "../../MarkdownContent";
+import type { ClaudeThread, Server, StreamEvent, Workspace } from "../../types";
+import { useData, useThrottledValue } from "../../useData";
 
 type Props = { realtime: number; notify: (text: string) => void; selectedThreadID: string; onSelectThread: (id: string, replace?: boolean) => void };
 const modes = ["default", "acceptEdits", "plan", "bypassPermissions"];
@@ -39,10 +38,7 @@ const activeTurn = (thread: ClaudeThread) => ["queued", "running", "interrupting
 
 export default function ClaudePage({ realtime, notify, selectedThreadID, onSelectThread }: Props) {
   const { t } = useI18n();
-  const [sidebarHeight, setSidebarHeight] = useState(() => readSidebarHeight("wio_claude_sidebar_height"));
   const [search, setSearch] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  useEffect(() => { try { localStorage.setItem("wio_claude_sidebar_height", String(sidebarHeight)); } catch { /* Keep resizing available without storage. */ } }, [sidebarHeight]);
   const [tick, setTick] = useState(0);
   const [archived, setArchived] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -57,47 +53,43 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const [renaming, setRenaming] = useState<ClaudeThread | null>(null);
   const [title, setTitle] = useState("");
   const [deleting, setDeleting] = useState<ClaudeThread | null>(null);
-  const [mobile, setMobile] = useState("sessions");
   const newModels = useClaudeModels(createOpen ? workspaceID : "", "create");
   useEffect(() => {
     if (!modelSelected.current && newModels.data?.default_model) updateModel(newModels.data.default_model);
   }, [newModels.data]);
   const dependency = `${realtime}:${tick}`;
-  const threads = useData<ClaudeThread[]>(`/claude/threads?archived=${archived}`, dependency);
-  const selected = useData<ClaudeThread>(selectedThreadID ? `/claude/threads/${selectedThreadID}` : null, dependency);
+  const threads = useSessionList<ClaudeThread>({ engine: "claude", archived, q: search }, dependency);
+  const selected = useData<ClaudeThread>(selectedThreadID ? `/sessions/claude/${selectedThreadID}` : null, dependency);
   const workspaces = useData<Workspace[]>("/workspaces", dependency);
   const servers = useData<Server[]>("/servers", realtime);
   const thread = threads.data?.find(item => item.id === selectedThreadID) ?? selected.data;
-  const previews = useSessionPreviews(`${selectedThreadID}:${thread?.workspace_id ?? ""}`, thread?.workspace_id ?? "");
-  const openFile = (selection: FilePreviewSelection) => { previews.open(selection); setMobile("conversation"); };
   const refresh = () => setTick(value => value + 1);
 
   useEffect(() => { const timer = window.setInterval(() => { if (!document.hidden) refresh(); }, 5000); return () => clearInterval(timer); }, []);
   useEffect(() => { if (!selectedThreadID) { const first = threads.data?.find(item => !item.project_hidden_at); if (first) onSelectThread(first.id, true); } }, [selectedThreadID, threads.data, onSelectThread]);
   useEffect(() => { if (selected.data) setArchived(Boolean(selected.data.archived_at)); }, [selected.data?.id, selected.data?.archived_at]);
-  useEffect(() => { if (selectedThreadID) setMobile("conversation"); }, [selectedThreadID]);
 
   const create = async (event: FormEvent) => {
     event.preventDefault(); if (newModels.loading) return; setBusy(true); setError("");
     try {
-      const created = await post<ClaudeThread>("/claude/threads", { workspace_id: workspaceID, model: model.trim(), permission_mode: mode, effort });
+      const created = await post<ClaudeThread>("/sessions/claude", { workspace_id: workspaceID, model: model.trim(), permission_mode: mode, effort });
       setArchived(false); setCreateOpen(false); onSelectThread(created.id); refresh();
     } catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
   const change = async (target: ClaudeThread, data: object) => {
     setBusy(true); setError("");
-    try { await patch(`/claude/threads/${target.id}`, data); setRenaming(null); if ("archived" in data) onSelectThread(""); refresh(); }
+    try { await patch(`/sessions/claude/${target.id}`, data); setRenaming(null); if ("archived" in data) onSelectThread(""); refresh(); }
     catch (err) { notify(message(err)); } finally { setBusy(false); }
   };
   const deleteSession = async () => {
     if (!deleting) return; setBusy(true);
-    try { await remove(`/claude/threads/${deleting.id}`); if (selectedThreadID === deleting.id) onSelectThread(""); setDeleting(null); refresh(); }
+    try { await remove(`/sessions/claude/${deleting.id}`); if (selectedThreadID === deleting.id) onSelectThread(""); setDeleting(null); refresh(); }
     catch (err) { notify(message(err)); } finally { setBusy(false); }
   };
   const modelForWorkspace = (id: string) => { const workspace = workspaces.data?.find(item => item.id === id); return servers.data?.find(item => item.id === workspace?.server_id)?.claude_profile_model || "sonnet"; };
   const newSession = (id = thread?.workspace_id ?? "") => { const previous = threads.data?.find(item => item.workspace_id === id); setWorkspaceID(id); updateModel(modelForWorkspace(id)); modelSelected.current = false; setEffort(previous?.effort ?? ""); setMode(previous?.permission_mode ?? "default"); setError(""); setCreateOpen(true); };
 
-  const groups = useMemo(() => groupClaudeThreads(threads.data ?? [], workspaces.data ?? [], search), [search, threads.data, workspaces.data]);
+  const groups = useMemo(() => groupSessions(withSelectedSession(threads.data ?? [], selected.data, archived, search), workspaces.data ?? [], threads.groups), [search, archived, threads.data, threads.groups, selected.data, workspaces.data]);
   const management = useClaudeManagement({ workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify });
   const threadActions = (item: ClaudeThread): ContextMenuAction[] => { const actions=management.threadActions(item); return [
     ...actions.filter(action => action.id === "pin"),
@@ -108,41 +100,10 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   ]; };
 
 
-  return <div className={`codex-layout gemini-layout gemini-mobile-${mobile}`}>
-    <div className="gemini-mobile-tabs">{["sessions", "files", "conversation"].map(view => <button key={view} className={mobile === view ? "active" : ""} onClick={() => setMobile(view)}>{t(`gemini.${view}`)}</button>)}</div>
-    <aside className="codex-sidebar" style={{ "--thread-list-height": `${sidebarHeight}%` } as CSSProperties}>
-      <div className="thread-list gemini-thread-list">
-        <div className="panel-heading"><div><Bot size={18} /><h2>{t(archived ? "codex.archivedTasks" : "gemini.sessions")}</h2></div><div className="row-actions">
-          <HiddenProjectsButton realtime={dependency} onRestored={refresh} notify={notify} />
-          <button className={`icon-button ${archived ? "active" : ""}`} aria-pressed={archived} aria-label={t(archived ? "gemini.showActive" : "gemini.showArchived")} onClick={() => { setArchived(!archived); onSelectThread(""); }}><Archive size={18} /></button>
-          {!archived && <button className="icon-button" aria-label={t("claude.newSession")} onClick={() => newSession()}><Plus size={18} /></button>}
-        </div></div>
-        <input className="gemini-session-search" type="search" aria-label={t("gemini.searchSessions")} placeholder={t("gemini.searchSessions")} value={search} onChange={event => setSearch(event.target.value)} />
-        <div className="thread-items">{threads.error ? <ErrorState error={threads.error} reload={threads.reload} /> : threads.loading ? <p className="gemini-hint">{t("common.loading")}</p> : groups.length ? groups.map(([id, group]) => {
-          const first = group.context;
-          const heading = <button type="button" className="thread-project-toggle" aria-expanded={!collapsed.has(id)} title={`${t(collapsed.has(id) ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${first.server_name} · ${group.path}`} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })}>{collapsed.has(id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong><span>{group.name}</span><small>{first.server_name}</small></strong>{first.project_pinned_at && <Pin className="pinned-icon" size={12} />}<span>{group.threads.length}</span></button>;
-          return <section className="thread-project" key={id}>
-            {archived ? <div className="thread-project-heading">{heading}</div> : <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.name })} actions={[
-              { id: "new-session", label: t("codex.createSessionHere"), icon: Plus, disabled: busy, onSelect: () => newSession(id) },
-              ...management.projectActions(first),
-            ]}>{heading}</ContextMenu>}
-            {!collapsed.has(id) && <div className="project-threads">{[...group.threads].sort((a,b)=>Number(!a.pinned_at)-Number(!b.pinned_at) || (b.pinned_at ?? "").localeCompare(a.pinned_at ?? "")).map(item => <ContextMenu key={item.id} className={`thread ${thread?.id === item.id ? "active" : ""}`} label={t("codex.threadMenu", { name: item.title })} actions={threadActions(item)}>
-              <button className="thread-select" onClick={() => { onSelectThread(item.id); setMobile("conversation"); }}><span><strong>{item.pinned_at && <Pin size={12} />}{item.title}</strong><small>{item.server_name}</small></span></button>
-              <div className="thread-actions"><Status value={item.status} /><button className="icon-button danger thread-delete" aria-label={t("claude.delete")} disabled={busy || activeTurn(item) || item.recovery_pending} onClick={() => setDeleting(item)}><Trash2 size={14} /></button></div>
-            </ContextMenu>)}</div>}
-          </section>;
-        }) : <Empty icon={<MessageSquare size={24} />} text={t("claude.noSessions")} />}</div>
-      </div>
-      {thread && <SidebarHeightDivider value={sidebarHeight} onChange={setSidebarHeight} />}
-      {thread && <WorkspaceFilesPanel workspaceID={thread.workspace_id} taskID={thread.operation_id} taskStatus={thread.status} realtime={realtime + tick} activePath={previews.preview?.path ?? ""} activeMode={previews.preview?.mode === "diff" ? "diff" : "file"} onOpenFile={openFile} notify={notify} />}
-    </aside>
-    <div className="gemini-main">{thread ? <>
-      <SessionPreviewTabs previews={previews} />
-      {thread && <SessionCollaboration key={"collaboration:"+thread.id} engine="claude" id={thread.id} workspaceID={thread.workspace_id} projectID={thread.project_id} revision={realtime} />}
-      <SessionPreviewPanels previews={previews} workspaceID={thread.workspace_id} workspaceRoot={thread.path} writable realtime={realtime + tick} notify={notify} onOpenFile={openFile}>
-        <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} onSchedule={() => management.schedule(thread)} onFork={eventID => management.fork(thread, eventID)} notify={notify} onNew={() => newSession(thread.workspace_id)} />
-      </SessionPreviewPanels>
-    </> : selectedThreadID && selected.error ? <ErrorState error={selected.error} reload={selected.reload} /> : <div className="gemini-welcome"><Bot size={40} /><h2>Claude</h2><p>{t("claude.intro")}</p><button className="primary-button" onClick={() => newSession()}><Plus size={17} />{t("claude.newSession")}</button></div>}</div>
+  return <SessionPage engine="claude" thread={thread} selectedID={selectedThreadID} onSelect={onSelectThread} revision={realtime + tick} collaborationRevision={realtime} notify={notify} error={selected.error} reload={selected.reload}
+    sidebar={select => <Sidebar engine="claude" icon={Bot} archived={archived} onArchived={() => { setArchived(!archived); onSelectThread(""); }} search={search} onSearch={setSearch} revision={dependency} refresh={refresh} notify={notify} groups={groups} selectedID={thread?.id} busy={busy} source={threads} onNew={newSession} onSelect={select} projectActions={management.projectActions} threadActions={threadActions} onDelete={setDeleting} deleteDisabled={item => busy || activeTurn(item) || item.recovery_pending} />}
+    welcome={<div className="gemini-welcome"><Bot size={40} /><h2>Claude</h2><p>{t("claude.intro")}</p><button className="primary-button" onClick={() => newSession()}><Plus size={17} />{t("claude.newSession")}</button></div>}
+    dialogs={<>
     <Dialog open={createOpen} title={t("claude.newSession")} onClose={() => { if (!busy) setCreateOpen(false); }}><form onSubmit={create}>
       {workspaces.error && <ErrorState error={workspaces.error} reload={workspaces.reload} />}
       <Field label={t("gemini.workspace")}><select required value={workspaceID} onChange={event => { setWorkspaceID(event.target.value); updateModel(modelForWorkspace(event.target.value)); modelSelected.current = false; setEffort(""); }}><option value="">{t("gemini.selectWorkspace")}</option>{(workspaces.data ?? []).filter(item => item.status === "ready").map(item => <option key={item.id} value={item.id}>{item.project_name} · {item.server_name} · {item.path}</option>)}</select></Field>
@@ -153,7 +114,9 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
     <Dialog open={Boolean(renaming)} title={t("gemini.rename")} onClose={() => { if (!busy) setRenaming(null); }}><form onSubmit={event => { event.preventDefault(); if (renaming) void change(renaming, { title: title.trim() }); }}><Field label={t("gemini.title")}><input required maxLength={180} value={title} onChange={event => setTitle(event.target.value)} /></Field><DialogActions><button className="primary-button" disabled={busy || !title.trim()}>{t("common.save")}</button></DialogActions></form></Dialog>
     {management.dialogs}
     <ConfirmDialog open={Boolean(deleting)} danger title={t("claude.delete")} impact={t("claude.deleteImpact")} confirmLabel={t("common.delete")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setDeleting(null)} onConfirm={deleteSession} />
-  </div>;
+    </>}>
+    {openFile => thread && <ClaudeSession key={thread.id} thread={thread} revision={dependency} onChanged={refresh} onOpenFile={openFile} onArchive={() => void change(thread, { archived: !thread.archived_at })} onSchedule={() => management.schedule(thread)} onFork={eventID => management.fork(thread, eventID)} notify={notify} onNew={() => newSession(thread.workspace_id)} />}
+  </SessionPage>;
 }
 
 function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disabled, compact = false, effortSupported = true, availableModels = [], requestCustom = 0 }: { model: string; mode: string; effort: string; setModel: (value: string) => void; setMode: (value: string) => void; setEffort: (value: string) => void; disabled: boolean; compact?: boolean; effortSupported?: boolean; availableModels?: ClaudeModel[]; requestCustom?: number }) {
@@ -187,7 +150,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     historySession.current = thread.session_id;
     allEventsRef.current = []; setAllEvents([]);
   }, [thread.session_id]);
-  const events = useData<StreamEvent[]>(`/claude/threads/${thread.id}/events?session=${encodeURIComponent(thread.session_id)}`, throttledRevision);
+  const events = useData<StreamEvent[]>(`/sessions/claude/${thread.id}/events?session=${encodeURIComponent(thread.session_id)}`, throttledRevision);
   const mergeEvents = useCallback((incoming: StreamEvent[]) => {
     const lastSequence = allEventsRef.current.at(-1)?.sequence ?? 0;
     const replacement = [...incoming].reverse().find(event => event.sequence > lastSequence && (event.payload as {history_rewritten?: boolean}).history_rewritten);
@@ -209,7 +172,7 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
     const controller = new AbortController();
     void (async () => {
       while (cursor < first - 1) {
-        const page = await api<StreamEvent[]>(`/claude/threads/${thread.id}/events?after=${cursor}`, { signal: controller.signal });
+        const page = await api<StreamEvent[]>(`/sessions/claude/${thread.id}/events?after=${cursor}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
         const next = page.at(-1)?.sequence ?? cursor;
         if (next <= cursor) throw new Error("Could not load missing Claude events");
@@ -296,21 +259,21 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
         if (!steerReady) return;
         const imageIDs = images.map(image=>image.id).join(",");
         if (!steeringRequest.current || steeringRequest.current.operation!==thread.operation_id || steeringRequest.current.prompt!==prompt || steeringRequest.current.images!==imageIDs) steeringRequest.current={operation:thread.operation_id,prompt,images:imageIDs,id:crypto.randomUUID()};
-        await post(`/claude/threads/${thread.id}/steer`, {prompt:prompt.trim(),operation_id:thread.operation_id,request_id:steeringRequest.current.id,...(images.length?{images:imagePayload}:{})});
+        await post(`/sessions/claude/${thread.id}/steer`, {prompt:prompt.trim(),operation_id:thread.operation_id,request_id:steeringRequest.current.id,...(images.length?{images:imagePayload}:{})});
         steeringRequest.current=undefined;
       } else {
         if (steeringRequest.current) { setError(t("claude.steerTaskEnded")); return; }
-        await post(editingEventID ? `/claude/threads/${thread.id}/events/${editingEventID}/rewrite` : `/claude/threads/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:imagePayload} : {}) });
+        await post(editingEventID ? `/sessions/claude/${thread.id}/events/${editingEventID}/rewrite` : `/sessions/claude/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:imagePayload} : {}) });
       }
       setPrompt(""); setImages([]); setEditingEventID(""); follow.current=true; onChanged();
     }
     catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
-  const interrupt = async () => { setBusy(true); setError(""); try { await post(`/claude/threads/${thread.id}/interrupt`, {}); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
-  const confirmStopped = async () => { setBusy(true); try { await post(`/claude/threads/${thread.id}/confirm-stopped`, { operation_id: thread.operation_id, confirmed: true }); setConfirming(false); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
+  const interrupt = async () => { setBusy(true); setError(""); try { await post(`/sessions/claude/${thread.id}/interrupt`, {}); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
+  const confirmStopped = async () => { setBusy(true); try { await post(`/sessions/claude/${thread.id}/confirm-stopped`, { operation_id: thread.operation_id, confirmed: true }); setConfirming(false); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
   const earlier = async () => {
     if (!allEvents.length || historyBusy) return; setHistoryBusy(true);
-    try { const session = historySession.current; const older = await api<StreamEvent[]>(`/claude/threads/${thread.id}/events?before=${allEvents[0].sequence}`); if (historySession.current === session) mergeEvents(older); }
+    try { const session = historySession.current; const older = await api<StreamEvent[]>(`/sessions/claude/${thread.id}/events?before=${allEvents[0].sequence}`); if (historySession.current === session) mergeEvents(older); }
     catch (err) { setError(message(err)); } finally { setHistoryBusy(false); }
   };
   return <section className="session-panel gemini-session claude-session"><header className="session-header"><div className="session-heading"><h2>{thread.title}</h2><span className="session-meta" title={`${thread.server_name} · ${thread.path}`}>{thread.server_name}<i />{thread.path}</span></div><div className="session-actions"><Status value={thread.status} /><button className="icon-button" title={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} aria-label={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} disabled={busy || running || thread.recovery_pending} onClick={onArchive}><Archive size={16} /></button></div><SessionUsage provider="claude" threadID={thread.id} revision={revision} running={running} /></header>
@@ -340,23 +303,3 @@ function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onS
   </section>;
 }
 
-// Groups only workspaces that still contain sessions; an empty workspace would
-// show as a "(0)" project entry in the sidebar.
-export function groupClaudeThreads(threads: ClaudeThread[], workspaces: Workspace[], search: string) {
-  const result = new Map<string, { name: string; path: string; context: ClaudeThread; threads: ClaudeThread[] }>();
-  const byID = new Map(workspaces.map(item => [item.id, item]));
-  for (const item of threads) {
-    if (item.project_hidden_at) continue;
-    const workspace = byID.get(item.workspace_id);
-    const path = workspace?.path || item.path;
-    const identity = [workspace?.display_name?.trim(), workspace?.branch?.trim(), path.split(/[\\/]/).filter(Boolean).at(-1)].find(value => value && value !== item.project_name);
-    const group = result.get(item.workspace_id) ?? { name: identity ? `${item.project_name} · ${identity}` : item.project_name, path, context: item, threads: [] };
-    group.threads.push(item); result.set(item.workspace_id, group);
-  }
-  const query = search.trim().toLocaleLowerCase();
-  return [...result.entries()].sort(([,a],[,b]) => Number(!a.context.project_pinned_at) - Number(!b.context.project_pinned_at) || (b.context.project_pinned_at ?? "").localeCompare(a.context.project_pinned_at ?? "")).flatMap(([id, group]) => {
-    if (!query || `${group.name} ${group.path}`.toLocaleLowerCase().includes(query)) return [[id, group] as const];
-    const matching = group.threads.filter(item => `${item.title} ${item.server_name} ${item.id} ${item.session_id}`.toLocaleLowerCase().includes(query));
-    return matching.length ? [[id, { ...group, threads: matching }] as const] : [];
-  });
-}
