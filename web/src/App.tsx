@@ -136,7 +136,7 @@ export default function App() {
     claude: <Suspense fallback={<PageLoading />}><ClaudePageRoute realtime={realtimeRevisions.claude} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("claude", threadID, replace)} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute realtime={realtimeRevisions.deployments} notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><OperationsPageRoute realtime={realtimeRevisions.operations} /></Suspense>,
-    monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute realtime={realtimeRevisions.monitoring} /></Suspense>,
+    monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute /></Suspense>,
     settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute realtime={realtimeRevisions.settings} notify={setToast} /></Suspense>
   }[view];
 

@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { MonitoringPage } from "./pages/MonitoringPage";
@@ -14,7 +15,7 @@ function renderMetrics(capacity: boolean) {
     const data = url === "/api/servers" ? [{ id: "server-1", name: "测试节点", status: "online" }] : url.includes("/metrics?") ? [point] : url.includes("/operation-metrics?") ? {} : [];
     return new Response(JSON.stringify(data), { status: 200 });
   }));
-  return render(<I18nProvider><MonitoringPage realtime={0} /></I18nProvider>);
+  return render(<I18nProvider><DataProvider revisions={{monitoring: 0}}><MonitoringPage  /></DataProvider></I18nProvider>);
 }
 
 test("shows actual used/total capacity with binary units alongside utilization and peak", async () => {

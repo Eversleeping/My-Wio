@@ -1,3 +1,6 @@
+import { monitoring } from "../data/monitoring";
+import { servers as serverEndpoints } from "../data/servers";
+import { useResource } from "../data/resources";
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -25,15 +28,15 @@ type ChartPoint = { time: string; values: number[] };
 type ChartSeries = { label: string; color: string; format: (value?: number) => string };
 type NetworkRate = { time: string; rx: number; tx: number };
 
-export function MonitoringPage({ realtime }: { realtime: number }) {
+export function MonitoringPage() {
   const { t } = useI18n();
-  const servers = useData<Server[]>("/servers", realtime);
-  const alerts = useData<Alert[]>("/alerts", realtime);
+  const servers = useResource(serverEndpoints.list());
+  const alerts = useResource(monitoring.alerts());
   const [serverID, setServerID] = useState("");
   const [rangeHours, setRangeHours] = useState(24);
   useEffect(() => { if (!serverID && servers.data?.[0]) setServerID(servers.data[0].id); }, [servers.data, serverID]);
-  const metrics = useData<Metric[]>(serverID ? `/servers/${serverID}/metrics?hours=${rangeHours}` : null, `${realtime}:${serverID}:${rangeHours}`);
-  const operationMetrics = useData<OperationMetrics>(serverID ? `/servers/${serverID}/operation-metrics?hours=${rangeHours}` : null, `${realtime}:operation:${serverID}:${rangeHours}`);
+  const metrics = useResource(serverID ? monitoring.metrics(serverID, rangeHours) : null);
+  const operationMetrics = useResource(serverID ? monitoring.operationMetrics(serverID, rangeHours) : null);
   const activeServer = servers.data?.find(server => server.id === serverID);
   const sampled = useMemo(() => downsampleMetrics(metrics.data ?? [], 420), [metrics.data]);
   const network = useMemo(() => networkRates(sampled), [sampled]);
@@ -71,7 +74,7 @@ export function MonitoringPage({ realtime }: { realtime: number }) {
       </div>
       {operationMetrics.error && <div className="snapshot-notice warning"><AlertTriangle size={15} />{operationMetrics.error}</div>}
     </Section>
-    <Section title={t("monitor.alerts")} icon={<BellRing size={18} />}><DataTable headers={[t("column.severity"), t("column.alert"), t("column.server"), t("column.state"), t("column.started"), ""]} empty={t("monitor.noAlerts")}>{(alerts.data ?? []).map(alert => <tr key={alert.id}><td><Status value={alert.severity} /></td><td><div className="cell-main"><strong>{alert.title}</strong><small>{alert.detail}</small></div></td><td>{alert.server_name}</td><td><Status value={alert.status} /></td><td>{relative(alert.opened_at)}</td><td>{!alert.acknowledged_at && <button className="icon-button" title={t("monitor.acknowledge")} onClick={async () => { await post(`/alerts/${alert.id}/acknowledge`, {}); alerts.reload(); }}><Check size={16} /></button>}</td></tr>)}</DataTable></Section>
+    <Section title={t("monitor.alerts")} icon={<BellRing size={18} />}><DataTable headers={[t("column.severity"), t("column.alert"), t("column.server"), t("column.state"), t("column.started"), ""]} empty={t("monitor.noAlerts")}>{(alerts.data ?? []).map(alert => <tr key={alert.id}><td><Status value={alert.severity} /></td><td><div className="cell-main"><strong>{alert.title}</strong><small>{alert.detail}</small></div></td><td>{alert.server_name}</td><td><Status value={alert.status} /></td><td>{relative(alert.opened_at)}</td><td>{!alert.acknowledged_at && <button className="icon-button" title={t("monitor.acknowledge")} onClick={async () => { await monitoring.acknowledge(alert.id); }}><Check size={16} /></button>}</td></tr>)}</DataTable></Section>
   </div>;
 }
 
