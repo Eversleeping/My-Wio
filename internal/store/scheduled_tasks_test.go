@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -259,5 +260,41 @@ func TestMarkScheduledCodexRunQueuedKeepsResultsThatArrivedFirst(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+func TestDeleteSessionRemovesScheduledTasks(t *testing.T) {
+	for _, engine := range []string{"codex", "gemini", "claude"} {
+		t.Run(engine, func(t *testing.T) {
+			db := testStore(t)
+			ctx := context.Background()
+			f := newCollaborationFixture(t, db, engine)
+			task := createTestScheduledTask(t, db, engine, f.source.ID, time.Now().UTC())
+			var deleteSession func(context.Context, string) error
+			table := engine + "_threads"
+			switch engine {
+			case "codex":
+				deleteSession = db.DeleteThread
+			case "gemini":
+				deleteSession = db.DeleteGeminiThread
+			case "claude":
+				deleteSession = db.DeleteClaudeThread
+			}
+			if err := deleteSession(ctx, f.source.ID); !errors.Is(err, ErrThreadActive) {
+				t.Fatalf("active delete: %v", err)
+			}
+			if _, err := db.ScheduledTask(ctx, task.ID); err != nil {
+				t.Fatalf("active task removed: %v", err)
+			}
+			if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE "+table+" SET status='idle' WHERE id=?"), f.source.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := deleteSession(ctx, f.source.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ScheduledTask(ctx, task.ID); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("task after delete: %v", err)
+			}
+		})
 	}
 }
