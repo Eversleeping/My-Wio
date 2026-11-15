@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -84,7 +85,7 @@ test("shows modified, added, untracked, and deleted files", () => {
   expect(container.querySelector(".change-file-status.deleted")).toHaveTextContent("D");
 });
 
-test("polls pending changes and Git inspection without realtime events, then stops", async () => {
+test("uses the shared disconnected fallback for changes and Git, then stops on reconnect", async () => {
   window.localStorage.setItem("wio_language", "en");
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   let complete = false;
@@ -103,16 +104,19 @@ test("polls pending changes and Git inspection without realtime events, then sto
     }
     return jsonResponse({ workspace_id: "workspace-1", files: [], status: "succeeded" });
   }));
-  const { unmount } = render(<I18nProvider><WorkspaceFilesPanel workspaceID="workspace-1" taskID="task-1" taskStatus="running" realtime={0} notify={vi.fn()} activePath="" activeMode="file" onOpenFile={vi.fn()} /></I18nProvider>);
+  const view = (connected: boolean) => <I18nProvider><DataProvider revisions={{}} connected={connected}><WorkspaceFilesPanel workspaceID="workspace-1" taskID="task-1" taskStatus="running" realtime={0} notify={vi.fn()} activePath="" activeMode="file" onOpenFile={vi.fn()} /></DataProvider></I18nProvider>;
+  const { unmount, rerender } = render(view(false));
   await userEvent.click(screen.getByRole("button", { name: "Show file changes" }));
   await screen.findByText("Scanning file changes");
   complete = true;
   const before = { changeReads, gitReads };
-  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
   expect(await screen.findByText("modified.ts")).toBeInTheDocument();
   expect(changeReads).toBeGreaterThan(before.changeReads);
   expect(gitReads).toBeGreaterThan(before.gitReads);
   expect(screen.getByTitle("Refresh file changes")).toBeEnabled();
+  rerender(view(true));
+  await act(async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); });
   const settled = { changeReads, gitReads };
   await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
   expect({ changeReads, gitReads }).toEqual(settled);

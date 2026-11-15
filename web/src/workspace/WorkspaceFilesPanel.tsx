@@ -1,3 +1,4 @@
+import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { type FilePreviewSelection } from "../codexContent";
 import { useI18n } from "../i18n";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
@@ -47,22 +48,9 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
   const branch = gitData?.status.branch ?? "";
   const fileScanning = currentSnapshot?.status === "scanning";
   const changeScanning = currentChanges?.status === "scanning";
-  useEffect(() => {
-    if (!workspaceID || !fileScanning) return;
-    const timer = window.setInterval(snapshot.reload, 5000);
-    return () => window.clearInterval(timer);
-  }, [fileScanning, snapshot.reload, workspaceID]);
-  useEffect(() => {
-    if (!workspaceID || mode !== "changes" || (!changeScanning && currentGit?.status !== "refreshing")) return;
-    // Realtime delivery may be delayed or disconnected. Poll only outstanding
-    // scans so the UI still picks up completion without another page refresh.
-    const timer = window.setInterval(() => {
-      if (document.hidden) return;
-      if (changeScanning) changes.reload();
-      if (currentGit?.status === "refreshing") git.reload();
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [changeScanning, changes.reload, currentGit?.status, git.reload, mode, workspaceID]);
+  // File-scan expiry is persisted by maintenance without a realtime event.
+  // Read only outstanding scans so connected clients also observe the timeout.
+  useVisibleInterval(snapshot.reload, workspaceID && fileScanning ? 5000 : null);
   const refreshFiles = useCallback(async (silent = false) => {
     if (!workspaceID) return;
     try {
