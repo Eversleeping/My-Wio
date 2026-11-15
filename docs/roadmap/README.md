@@ -219,7 +219,7 @@ npm --prefix web run typecheck
 | P3-06 | `App.tsx` 拆分二：实时通道与路由 | M | P3-05 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 8a265d6、69ffc1a |
 | P3-07 | `App.tsx` 拆分三：Codex 会话与工作区文件面板 | M | P3-06 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | f2413cf、6f51ba1 |
 | P3-08 | 前端数据层收敛 | M | P3-06 | 已完成 | 11-15 Codex | 7551c00 | GPT-6 |
-| P3-09 | 轮询收敛 | M | P3-08 | 进行中 | 11-15 Codex |  | |
+| P3-09 | 轮询收敛 | M | P3-08 | 已完成 | 11-15 Codex | 056227d | GPT-6 |
 | P3-10 | 拆分 `styles.css` 与 `i18n.tsx` | M | P3-07 | 待开始 | |  | |
 | P4-01 | 操作与事件类型常量化 | M | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | b675034 |
 | P4-02 | 心跳携带能力列表 | M | P1-04、P2-02、P0-07 | 待开始 | |  | |
