@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -50,7 +51,7 @@ test("creates and edits public access settings, manages containers, and exposes 
   }));
 
   const user = userEvent.setup();
-  render(<I18nProvider><DeploymentsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{}}><DeploymentsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
   expect((await screen.findAllByText("project-management")).length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "Deploy" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Stop containers" })).toBeInTheDocument();
@@ -131,7 +132,7 @@ test("queues destructive target cleanup with an explicit confirmation", async ()
   }));
 
   const user = userEvent.setup();
-  render(<I18nProvider><DeploymentsPage realtime={0} notify={notify} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{}}><DeploymentsPage notify={notify} /></DataProvider></I18nProvider>);
   expect((await screen.findAllByText("project-management")).length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "More deployment actions" }));
   await user.click(screen.getByRole("menuitem", { name: "Delete deployment target" }));
@@ -157,7 +158,7 @@ test("shows a detected public URL without treating it as a configured override",
   }));
 
   const user = userEvent.setup();
-  render(<I18nProvider><DeploymentsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{}}><DeploymentsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
   expect(await screen.findByRole("link", { name: "203.0.113.10:5010" })).toHaveAttribute("href", detectedTarget.public_url);
   await user.click(screen.getByRole("button", { name: "More deployment actions" }));
   await user.click(screen.getByRole("menuitem", { name: "Edit deployment target" }));
@@ -183,7 +184,7 @@ test("rolls back to the exact historical deployment selected from the history", 
     return new Response(JSON.stringify(payload), { status: method === "POST" ? 202 : 200, headers: { "Content-Type": "application/json" } });
   }));
   const user = userEvent.setup();
-  render(<I18nProvider><DeploymentsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{}}><DeploymentsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
   expect((await screen.findAllByText("project-management")).length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "Rollback to this release" }));
   const confirmation = await screen.findByRole("dialog", { name: /Rollback/ });
@@ -202,7 +203,7 @@ test("disables historical rollback for an Agent without exact release support", 
     else if (url === "/api/servers") payload = [{ ...server, exact_rollback_supported: false }];
     return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
-  render(<I18nProvider><DeploymentsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{}}><DeploymentsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
   const rollback = await screen.findByRole("button", { name: "Rollback to this release" });
   expect(rollback).toBeDisabled();
   expect(rollback).toHaveAttribute("title", "Upgrade the target Agent before rolling back to a historical release");

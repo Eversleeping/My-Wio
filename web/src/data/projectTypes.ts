@@ -47,4 +47,3 @@ export type WorkspaceGitAction =
   | { type: "unstage"; paths: string[]; all: boolean }
   | { type: "discard"; paths: string[]; all: boolean }
   | { type: "commit"; message: string };
-

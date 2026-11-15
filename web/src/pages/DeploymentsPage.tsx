@@ -1,39 +1,40 @@
-import { type FormEvent, type ReactNode, useState } from "react";
 import {
-  AlertTriangle,
-  Check,
-  ExternalLink,
-  GitBranch,
-  History,
-  LoaderCircle,
-  Pencil,
-  Play,
-  Plus,
-  RefreshCw,
-  Rocket,
-  Server as ServerIcon,
-  ShieldCheck,
-  Square,
-  SquareTerminal,
-  Trash2,
-  Undo2
+AlertTriangle,
+Check,
+ExternalLink,
+GitBranch,
+History,
+LoaderCircle,
+Pencil,
+Play,
+Plus,
+RefreshCw,
+Rocket,
+Server as ServerIcon,
+ShieldCheck,
+Square,
+SquareTerminal,
+Trash2,
+Undo2
 } from "lucide-react";
-import { post, put, remove } from "../api";
-import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
+import { useState,type FormEvent,type ReactNode } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
-import { DataTable, Empty, Section, Status } from "../components/PageUI";
-import { formatTime, relative, shortSHA } from "../format";
+import { Dialog as AccessibleDialog,DialogActions,type DialogProps } from "../components/Dialog";
+import { DataTable,Empty,Section,Status } from "../components/PageUI";
+import { ContextMenu,type ContextMenuAction } from "../ContextMenu";
+import { deployments as deploymentEndpoints,type DeploymentContainerAction } from "../data/deployments";
+import { projects as projectEndpoints } from "../data/projects";
+import { useResource } from "../data/resources";
+import { servers as serverEndpoints } from "../data/servers";
+import { settings as settingEndpoints } from "../data/settings";
+import { formatTime,relative,shortSHA } from "../format";
 import { useI18n } from "../i18n";
-import type { Deployment, DeploymentDetail, DeploymentSnapshot, DeploymentTarget, DeploymentTargetReview, SecretSet, Server, Workspace } from "../types";
-import { useData } from "../useData";
+import type { Deployment,DeploymentSnapshot,DeploymentTarget,DeploymentTargetReview,Server } from "../types";
 
 export interface PageProps {
-  realtime: number;
   notify: (text: string) => void;
 }
 
-type DeploymentContainerAction = "start" | "stop" | "restart" | "remove";
 type PublicAccessMode = "port" | "domain";
 
 type DeploymentForm = {
@@ -167,17 +168,17 @@ function HistoryRollbackButton({ item, targets, servers, busy, onSelect }: { ite
   return <button className="icon-button" disabled={!available || busy !== ""} title={title} aria-label={t("deployment.rollbackVersion")} onClick={() => onSelect(target, item.id, item.resolved_commit || item.commit_ref)}><Undo2 size={15} /></button>;
 }
 
-export function DeploymentsPage({ realtime, notify }: PageProps) {
+export function DeploymentsPage({ notify }: PageProps) {
   const { t } = useI18n();
-  const targets = useData<DeploymentTarget[]>("/deployment-targets", realtime);
-  const deploymentRequest = useData<Deployment[]>("/deployments", realtime);
+  const targets = useResource(deploymentEndpoints.targets());
+  const deploymentRequest = useResource(deploymentEndpoints.list());
   const deployments = {
     ...deploymentRequest,
     data: deploymentRequest.data?.map(item => item.snapshot_available ? item : { ...item, project_name: t("deployment.snapshotUnavailable"), environment: "", public_url: "" }) ?? deploymentRequest.data
   };
-  const workspaces = useData<Workspace[]>("/workspaces", realtime);
-  const servers = useData<Server[]>("/servers", realtime);
-  const secrets = useData<SecretSet[]>("/secret-sets", realtime);
+  const workspaces = useResource(projectEndpoints.workspaces());
+  const servers = useResource(serverEndpoints.list());
+  const secrets = useResource(settingEndpoints.secrets());
   const emptyForm: DeploymentForm = { source_type: "workspace", workspace_id: "", server_id: "", secret_set_id: "", environment: "production", repository: "", git_ref: "", compose_file: "compose.yaml", build_mode: "build", public_access_mode: "port", public_port: "", public_domain: "", public_host: "", health: "" };
   const [targetDialog, setTargetDialog] = useState(false);
   const [editingTarget, setEditingTarget] = useState<DeploymentTarget | null>(null);
@@ -191,8 +192,8 @@ export function DeploymentsPage({ realtime, notify }: PageProps) {
     | { type: "container"; target: DeploymentTarget; action: Exclude<DeploymentContainerAction, "start"> }
     | null
   >(null);
-  const detail = useData<DeploymentDetail>(detailID ? `/deployments/${detailID}` : null, realtime);
-  const targetReviewRequest = useData<DeploymentTargetReview>(editingTarget ? `/deployment-targets/${editingTarget.id}/review` : null, realtime);
+  const detail = useResource(detailID ? deploymentEndpoints.detail(detailID) : null);
+  const targetReviewRequest = useResource(editingTarget ? deploymentEndpoints.review(editingTarget.id) : null);
   const active = (status: string) => ["queued", "preparing", "running"].includes(status);
   const openCreate = () => { setEditingTarget(null); setForm(emptyForm); setTargetDialog(true); };
   const openEdit = (target: DeploymentTarget) => {
@@ -211,20 +212,18 @@ export function DeploymentsPage({ realtime, notify }: PageProps) {
     const health_checks = healthChecksFor(health);
     setBusy(editingTarget ? `edit:${editingTarget.id}` : "create");
     try {
-      if (editingTarget) await put(`/deployment-targets/${editingTarget.id}`, { ...target, public_url, health_checks });
-      else await post("/deployment-targets", { ...target, public_url, health_checks });
+      if (editingTarget) await deploymentEndpoints.updateTarget(editingTarget.id, { ...target, public_url, health_checks });
+      else await deploymentEndpoints.createTarget({ ...target, public_url, health_checks });
       setTargetDialog(false);
-      targets.reload();
       notify(t(editingTarget ? "deployment.targetUpdated" : "deployment.targetCreated"));
     } catch (err) { notify(message(err)); } finally { setBusy(""); }
   };
-  const run = async (target: DeploymentTarget) => { setBusy(`deploy:${target.id}`); try { const response = await post<{ deployment: Deployment }>(`/deployment-targets/${target.id}/deploy`, { commit_ref: target.git_ref }); targets.reload(); deployments.reload(); setDetailID(response.deployment.id); notify(t("deployment.queued")); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
-  const rollback = async (target: DeploymentTarget, sourceDeploymentID = "") => { setBusy(`rollback:${target.id}`); try { const response = await post<{ deployment: Deployment }>(`/deployment-targets/${target.id}/rollback`, sourceDeploymentID ? { deployment_id: sourceDeploymentID } : {}); targets.reload(); deployments.reload(); setDetailID(response.deployment.id); notify(t("deployment.rollbackQueued")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
+  const run = async (target: DeploymentTarget) => { setBusy(`deploy:${target.id}`); try { const response = await deploymentEndpoints.deploy(target.id, target.git_ref); setDetailID(response.deployment.id); notify(t("deployment.queued")); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
+  const rollback = async (target: DeploymentTarget, sourceDeploymentID = "") => { setBusy(`rollback:${target.id}`); try { const response = await deploymentEndpoints.rollback(target.id, sourceDeploymentID); setDetailID(response.deployment.id); notify(t("deployment.rollbackQueued")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
   const manageContainer = async (target: DeploymentTarget, action: DeploymentContainerAction) => {
     setBusy(`container:${action}:${target.id}`);
     try {
-      await post(`/deployment-targets/${target.id}/container`, { action });
-      targets.reload();
+      await deploymentEndpoints.container(target.id, action);
       notify(t(`deployment.container${action[0].toUpperCase()}${action.slice(1)}Queued`));
       if (action !== "start") setDeploymentConfirmation(null);
     } catch (err) { notify(message(err)); } finally { setBusy(""); }
@@ -233,8 +232,8 @@ export function DeploymentsPage({ realtime, notify }: PageProps) {
     if (action === "start") void manageContainer(target, action);
     else setDeploymentConfirmation({ type: "container", target, action });
   };
-  const deleteTarget = async (target: DeploymentTarget) => { setBusy(`delete-target:${target.id}`); try { await remove(`/deployment-targets/${target.id}`); targets.reload(); deployments.reload(); notify(t("deployment.targetDeleteQueued")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
-  const deleteHistory = async (item: Deployment) => { setBusy(`delete-deployment:${item.id}`); try { await remove(`/deployments/${item.id}`); if (detailID === item.id) setDetailID(""); deployments.reload(); notify(t("deployment.historyDeleted")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
+  const deleteTarget = async (target: DeploymentTarget) => { setBusy(`delete-target:${target.id}`); try { await deploymentEndpoints.removeTarget(target.id); notify(t("deployment.targetDeleteQueued")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
+  const deleteHistory = async (item: Deployment) => { setBusy(`delete-deployment:${item.id}`); try { await deploymentEndpoints.removeHistory(item.id); if (detailID === item.id) setDetailID(""); notify(t("deployment.historyDeleted")); setDeploymentConfirmation(null); } catch (err) { notify(message(err)); } finally { setBusy(""); } };
   const availableWorkspaces = (workspaces.data ?? []).filter(item => item.server_id === form.server_id && item.status === "ready");
   const selectedServer = (servers.data ?? []).find(server => server.id === form.server_id);
   const publicAccessPreview = form.public_access_mode === "port" ? publicURLForPort(selectedServer, form.public_port, form.public_host) : form.public_domain.trim();
