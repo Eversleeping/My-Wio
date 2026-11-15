@@ -14,7 +14,7 @@ export const settings = {
   selectVersion: (engine: Engine, version: string) => writeResource(mutation<CodexCLISettings>(`/settings/${engine}-cli/select-version`, "POST", ["settings"]), {version}),
   audit: (offset?: number) => query<AuditListPage>(`/audit?limit=${auditListPageSize}${offset === undefined ? "" : `&offset=${offset}`}`, ["settings"]),
   scheduledTasks: () => query<ScheduledTask[]>("/scheduled-tasks", ["settings"]),
-  // Native selectors keep their array response until the unified scheduling UI.
+  // Settings keeps its native array selectors during the M6 compatibility window.
   codexThreads: () => query<Thread[]>("/threads", ["settings"]),
   claudeThreads: () => query<ClaudeThread[]>("/claude/threads", ["settings"]),
   geminiThreads: () => query<GeminiThread[]>("/gemini/threads", ["settings"]),

@@ -1,5 +1,3 @@
-import { ScheduledTaskDialog } from "../../pages/ScheduledTaskDialog";
-import type { ScheduleProps } from "../engineModules";
 import { useEffect, useRef, useState } from "react";
 import { post } from "../../api";
 import { useClaudeModels } from "../../claudeModels";
@@ -40,5 +38,3 @@ export function Create(props: NativeCreateProps) {
 export function Conversation(props: ConversationProps) {
   return <ClaudeSession thread={props.thread as ClaudeThread} revision={props.revision} onChanged={props.onChanged} onOpenFile={props.onOpenFile} onArchive={props.onArchive} onSchedule={props.onSchedule} onFork={props.onFork} onNew={props.onNew} notify={props.notify} />;
 }
-
-export function Schedule(props: ScheduleProps) { return <ScheduledTaskDialog open agentKind="claude" initialThreadID={props.thread.id} lockThread threads={[]} claudeThreads={[props.thread as ClaudeThread]} notify={props.notify} onClose={props.onClose} onSaved={props.onSaved} />; }

@@ -18,6 +18,7 @@ import { includeSelection, unifiedGroups } from "./unifiedGroups";
 import { useSessionList } from "./useSessionList";
 import { sessionBusy, useUnifiedManagement } from "./useUnifiedManagement";
 
+const WorkspaceScheduledTasks = lazy(() => import("./WorkspaceScheduledTasks"));
 const ApprovalPanel = lazy(() => import("./engines/codex/ApprovalPanel"));
 
 type Props = Omit<CodexPageProps, "selectedThreadID" | "onSelectThread"> & { entry?: SessionEntry; onEntryConsumed?: () => void; initialFilter?: {engine: Engine}; selected?: SessionRef; onSelect: (ref: SessionRef | null, replace?: boolean) => void };
@@ -40,6 +41,7 @@ export default function UnifiedSessionsPage({ selected, initialFilter, entry, on
   const detail = useData<AISession>(selected ? sessionPath(selected.engine, selected.id) : null, revision);
   const listed = source.data?.find(item => selected && sessionKey(item) === sessionKey(selected));
   const active = detail.data ?? listed ?? null;
+  const [scheduling, setScheduling] = useState<{workspaceID:string; thread?:AISession} | null>(null);
   const [creation, setCreation] = useState<{ workspaceID: string } | null>(null);
   const appliedEntry = useRef<SessionEntry>();
   const focusedEntry = useRef<SessionEntry>();
@@ -67,7 +69,7 @@ export default function UnifiedSessionsPage({ selected, initialFilter, entry, on
     const group = document.getElementById(`session-workspace-${focusWorkspaceID}`);
     if (group) { group.focus(); group.scrollIntoView?.({block:"nearest"}); focusedEntry.current = entry; }
   }, [entry, focusWorkspaceID, groups]);
-  const management = useUnifiedManagement({ workspaces: workspaces.data ?? [], online: new Set((servers.data ?? []).filter(server => server.status === "online").map(server => server.id)), refresh, select: ref => { if (ref) setArchived(false); onSelect(ref); }, notify: props.notify, onNew: openNew });
+  const management = useUnifiedManagement({ workspaces: workspaces.data ?? [], online: new Set((servers.data ?? []).filter(server => server.status === "online").map(server => server.id)), refresh, select: ref => { if (ref) setArchived(false); onSelect(ref); }, notify: props.notify, onNew: openNew, onSchedule: thread => setScheduling({workspaceID:thread.workspace_id,thread}), onWorkspaceSchedule: workspaceID => setScheduling({workspaceID}) });
   const engine = selected?.engine ?? "codex";
   const Conversation = engineModule(engine).Conversation;
   const selectKey = (key: string) => { const item = items.find(item => sessionKey(item) === key); if (item) onSelect({ engine: item.engine, id: item.id }); };
@@ -76,7 +78,7 @@ export default function UnifiedSessionsPage({ selected, initialFilter, entry, on
       controls={<div className="session-filters"><Field label={t("sessions.engine")}><select aria-label={t("sessions.engine")} value={filter} onChange={event => setFilter(event.target.value as Engine | "")}><option value="">{t("sessions.allEngines")}</option>{engines.map(module => <option key={module.id} value={module.id}>{module.label}</option>)}</select></Field><label><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)} />{t("sessions.showAll")}</label>{workspaces.error && <ErrorState error={workspaces.error} reload={workspaces.reload} />}</div>}
       renderRow={thread => { const module = engineModule(thread.engine); const Icon = module.Icon; return <><button type="button" className="thread-select" onClick={() => select(sessionKey(thread))}><span><strong><span className="session-engine"><Icon size={13} />{module.label}</span>{thread.pinned_at && <Pin size={12} />}{thread.title}</strong><small>{thread.server_name} · {relative(thread.updated_at)}</small></span></button><div className="thread-actions"><Status value={thread.status} /><button className="icon-button danger thread-delete" aria-label={t("codex.deleteSession")} disabled={management.busy || sessionBusy(thread)} onClick={() => management.delete(thread)}><Trash2 size={14} /></button></div></>; }} />}
     welcome={<div className="gemini-welcome"><MessageSquare size={40} /><h2>{t("sessions.welcome")}</h2><p>{t("sessions.intro")}</p><button className="primary-button" onClick={() => openNew()}><Plus size={17} />{t("sessions.newSession")}</button></div>}
-    dialogs={<><Suspense fallback={null}><ApprovalPanel {...props} /></Suspense>{management.dialogs}{creation && <CreateSessionDialog initialWorkspaceID={creation.workspaceID} currentSession={active} workspaces={workspaces.data ?? []} onClose={() => setCreation(null)} onCreated={thread => { setCreation(null); setArchived(false); refresh(); onSelect({ engine: thread.engine, id: thread.id }); }} />}</>}>
+    dialogs={<>{scheduling && <Suspense fallback={<PageLoading />}><WorkspaceScheduledTasks workspaceID={scheduling.workspaceID} workspace={workspaces.data?.find(item => item.id === scheduling.workspaceID)} initialThread={scheduling.thread} revision={revision} notify={props.notify} onClose={() => setScheduling(null)} /></Suspense>}<Suspense fallback={null}><ApprovalPanel {...props} /></Suspense>{management.dialogs}{creation && <CreateSessionDialog initialWorkspaceID={creation.workspaceID} currentSession={active} workspaces={workspaces.data ?? []} onClose={() => setCreation(null)} onCreated={thread => { setCreation(null); setArchived(false); refresh(); onSelect({ engine: thread.engine, id: thread.id }); }} />}</>}>
     {openFile => selected ? active ? <Suspense fallback={<PageLoading />}><Conversation key={sessionKey(active)} {...props} thread={active} revision={revision} onChanged={refresh} onOpenFile={openFile} onNew={() => openNew(active.workspace_id)} onFork={eventID => management.fork(active, eventID)} onSchedule={() => management.schedule(active)} onArchive={() => void management.archive(active)} busy={management.busy} /></Suspense> : detail.error ? <ErrorState error={detail.error} reload={detail.reload} /> : <PageLoading /> : <div className="gemini-welcome"><MessageSquare size={40} /><h2>{t("sessions.welcome")}</h2><p>{t("sessions.intro")}</p><button className="primary-button" onClick={() => openNew()}><Plus size={17} />{t("sessions.newSession")}</button></div>}
   </SessionPage>;
 }

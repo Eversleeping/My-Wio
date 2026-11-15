@@ -1,10 +1,9 @@
+import { engineModule, engines } from "../sessions/engineModules";
+import type { AISession, Engine } from "../sessions/types";
+import { PageLoading } from "../components/PageUI";
 import { Check, LoaderCircle } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
-import { compatibleReasoningEffort, reasoningOptionsFor, useCodexModels } from "../codexModels";
-import { CodexModelPicker } from "../components/CodexModelPicker";
+import { type FormEvent, type ReactNode, useEffect, useState, Suspense } from "react";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
-import { GeminiThinkingPicker, compatibleGeminiThinking } from "../components/GeminiThinkingPicker";
-import { useResource } from "../data/resources";
 import { settings } from "../data/settings";
 import { useI18n } from "../i18n";
 import type { ClaudeThread, GeminiThread, ScheduledTask, Thread } from "../types";
@@ -91,11 +90,11 @@ function scheduledScheduleExpression(form: ScheduledTaskFormValue): string {
 
 function scheduledTaskFormValue(task?: ScheduledTask, initialThreadID = "", kind: "codex" | "gemini" | "claude" = "codex"): ScheduledTaskFormValue {
   const base = defaultScheduledTaskForm();
-  if (!task) return { ...base, agent_kind:kind, approval_mode:kind!=="codex"?"default":"on-request", thread_id: initialThreadID };
+  if (!task) return { ...base, agent_kind:kind, approval_mode:engineModule(kind).scheduleApprovalMode, thread_id: initialThreadID };
   return { ...base, ...scheduledScheduleFields(task.schedule), thinking_level:task.thinking_level ?? "", agent_kind:task.agent_kind ?? "codex", id: task.id, thread_id: task.thread_id, name: task.name, prompt: task.prompt, timezone: task.timezone, enabled: task.enabled, model: task.model, reasoning_effort: task.reasoning_effort, approval_mode: task.approval_mode };
 }
 
-export function ScheduledTaskDialog({ open, task, initialThreadID, agentKind = "codex", lockThread = false, threads, geminiThreads = [], claudeThreads = [], notify, onClose, onSaved }: { open: boolean; task?: ScheduledTask; initialThreadID?: string; agentKind?: "codex" | "gemini" | "claude"; lockThread?: boolean; threads: Thread[]; geminiThreads?: GeminiThread[]; claudeThreads?: ClaudeThread[]; notify: (text: string) => void; onClose: () => void; onSaved: () => void }) {
+export function ScheduledTaskDialog({ open, task, initialThreadID, agentKind = "codex", lockThread = false, threads, geminiThreads = [], claudeThreads = [], sessions, sessionNotice, notify, onClose, onSaved }: { open: boolean; task?: ScheduledTask; initialThreadID?: string; agentKind?: "codex" | "gemini" | "claude"; lockThread?: boolean; threads: Thread[]; geminiThreads?: GeminiThread[]; claudeThreads?: ClaudeThread[]; sessions?: AISession[]; sessionNotice?: ReactNode; notify: (text: string) => void; onClose: () => void; onSaved: () => void }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<ScheduledTaskFormValue>(() => scheduledTaskFormValue(task, initialThreadID, agentKind));
@@ -108,27 +107,19 @@ export function ScheduledTaskDialog({ open, task, initialThreadID, agentKind = "
     if (!schedule) return;
     setBusy(true);
     try {
-      const payload = { ...(form.agent_kind==="gemini" ? {thinking_level:form.thinking_level} : {}), agent_kind:form.agent_kind, thread_id: form.thread_id, name: form.name, prompt: form.prompt, schedule, timezone: form.timezone, enabled: form.enabled, model: form.model, reasoning_effort: form.reasoning_effort, approval_mode: form.approval_mode };
+      const payload = { ...engineModule(form.agent_kind).schedulePayload(form), agent_kind:form.agent_kind, thread_id: form.thread_id, name: form.name, prompt: form.prompt, schedule, timezone: form.timezone, enabled: form.enabled, model: form.model, reasoning_effort: form.reasoning_effort, approval_mode: form.approval_mode };
       await settings.saveScheduledTask(form.id, payload);
       onClose();
       onSaved();
       notify(t("settings.scheduledTaskSaved"));
     } catch (error) { notify(message(error)); } finally { setBusy(false); }
   };
-  const catalogue = useCodexModels(open && form.agent_kind==="codex" ? threads.find(thread => thread.id === form.thread_id)?.workspace_id : undefined, false);
-  const codexReasoningOptions = reasoningOptionsFor(catalogue.models, form.model);
-  useEffect(() => {
-    const next = compatibleReasoningEffort(catalogue.models, form.model, form.reasoning_effort);
-    if (form.agent_kind==="codex" && next !== form.reasoning_effort) setForm(current => ({ ...current, reasoning_effort: next }));
-  }, [catalogue.models, form.model, form.reasoning_effort]);
-  const availableThreads = form.agent_kind==="claude" ? claudeThreads : form.agent_kind==="gemini" ? geminiThreads : threads;
+  const availableThreads = sessions ? sessions.filter(thread => thread.engine === form.agent_kind) : {codex:threads,gemini:geminiThreads,claude:claudeThreads}[form.agent_kind];
   const threadAvailable = availableThreads.some(thread => thread.id === form.thread_id);
-  const geminiWorkspace = geminiThreads.find(thread=>thread.id===form.thread_id)?.workspace_id;
-  const geminiModels = useResource(open && form.agent_kind==="gemini" && geminiWorkspace ? settings.geminiModels(geminiWorkspace) : null);
-  const [customGeminiModel,setCustomGeminiModel]=useState(false);
-  useEffect(() => { if (open) setCustomGeminiModel(false); }, [open, task?.id, form.agent_kind, form.thread_id]);
+  const NativeFields = engineModule(form.agent_kind).ScheduleFields;
   return <Dialog open={open} title={t(form.id ? "settings.editScheduledTask" : "settings.newScheduledTask")} onClose={() => { if (!busy) onClose(); }} wide><form onSubmit={save}>
-    <Field label={t("settings.agentKind")}><select value={form.agent_kind} disabled={busy || lockThread || Boolean(form.id)} onChange={e=>update({agent_kind:e.target.value as "codex"|"gemini"|"claude",thread_id:"",model:"",thinking_level:"",reasoning_effort:"",approval_mode:e.target.value!=="codex"?"default":"on-request"})}><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="claude">Claude</option></select></Field>
+    {sessionNotice}
+    <Field label={t("settings.agentKind")}><select value={form.agent_kind} disabled={busy || lockThread || Boolean(form.id)} onChange={e=>update({agent_kind:e.target.value as "codex"|"gemini"|"claude",thread_id:"",model:"",thinking_level:"",reasoning_effort:"",approval_mode:engineModule(e.target.value as Engine).scheduleApprovalMode})}>{engines.map(module => <option key={module.id} value={module.id}>{module.label}</option>)}</select></Field>
     <div className="form-grid"><Field label={t("settings.name")}><input value={form.name} onChange={event => update({ name: event.target.value })} maxLength={180} required /></Field><Field label={t("settings.scheduledThread")}><select value={form.thread_id} disabled={lockThread || busy} onChange={event => update({ thread_id: event.target.value,thinking_level:"" })} required><option value="">{t("settings.selectScheduledThread")}</option>{form.thread_id && !threadAvailable && <option value={form.thread_id}>{task?.thread_title || form.thread_id}</option>}{availableThreads.map(thread => <option value={thread.id} key={thread.id}>{thread.title} / {thread.project_name} / {thread.server_name}</option>)}</select></Field></div>
     <Field label={t("settings.prompt")}><textarea rows={5} value={form.prompt} onChange={event => update({ prompt: event.target.value })} maxLength={20000} required /></Field>
     <div className="form-grid"><Field label={t("settings.scheduleFrequency")}><select value={form.frequency} disabled={busy} onChange={event => update({ frequency: event.target.value as ScheduledTaskFrequency })}><option value="daily">{t("settings.scheduleDaily")}</option><option value="weekdays">{t("settings.scheduleWeekdays")}</option><option value="weekly">{t("settings.scheduleWeekly")}</option><option value="monthly">{t("settings.scheduleMonthly")}</option><option value="interval">{t("settings.scheduleInterval")}</option><option value="custom">{t("settings.scheduleCustom")}</option></select></Field><Field label={t("settings.timezone")}><input value={form.timezone} disabled={busy} onChange={event => update({ timezone: event.target.value })} placeholder="Asia/Shanghai" required /></Field></div>
@@ -137,17 +128,7 @@ export function ScheduledTaskDialog({ open, task, initialThreadID, agentKind = "
     {form.frequency === "monthly" && <Field label={t("settings.scheduleMonthDay")}><select value={form.monthDay} disabled={busy} onChange={event => update({ monthDay: event.target.value })}>{scheduledMonthDays.map(value => <option value={value} key={value}>{value}</option>)}</select></Field>}
     {form.frequency === "interval" && <div className="form-grid"><Field label={t("settings.scheduleIntervalValue")}><select value={form.intervalValue} disabled={busy} onChange={event => update({ intervalValue: event.target.value })}>{!scheduledIntervalValues.includes(form.intervalValue) && <option value={form.intervalValue}>{form.intervalValue}</option>}{scheduledIntervalValues.map(value => <option value={value} key={value}>{value}</option>)}</select></Field><Field label={t("settings.scheduleIntervalUnit")}><select value={form.intervalUnit} disabled={busy} onChange={event => update({ intervalUnit: event.target.value as ScheduledTaskIntervalUnit })}><option value="m">{t("settings.scheduleMinutes")}</option><option value="h">{t("settings.scheduleHours")}</option><option value="d">{t("settings.scheduleDays")}</option></select></Field></div>}
     {form.frequency === "custom" && <Field label={t("settings.scheduleExpression")}><input value={form.schedule} disabled={busy} onChange={event => update({ schedule: event.target.value })} placeholder={t("settings.schedulePlaceholder")} maxLength={100} required /></Field>}
-    {form.agent_kind==="claude" ? <>
-     <div className="form-grid"><Field label={t("claude.model")}><input value={form.model} maxLength={128} placeholder={t("settings.followSessionModel")} disabled={busy} onChange={e=>update({model:e.target.value})} /></Field><Field label={t("claude.effort")}><select value={form.reasoning_effort} disabled={busy} onChange={e=>update({reasoning_effort:e.target.value})}>{["","low","medium","high","xhigh","max"].map(value=><option key={value} value={value}>{t(`claude.effort.${value || "default"}`)}</option>)}</select></Field></div>
-     <div className="form-grid"><Field label={t("claude.permission")}><select value={form.approval_mode} disabled={busy} onChange={e=>update({approval_mode:e.target.value})}>{["default","acceptEdits","plan","bypassPermissions"].map(value=><option key={value} value={value}>{t(`claude.permission.${value}`)}</option>)}</select></Field><label className="toggle-row"><input type="checkbox" checked={form.enabled} disabled={busy} onChange={e=>update({enabled:e.target.checked})}/><span>{t("settings.scheduleEnabled")}</span></label></div>
-    </> : form.agent_kind==="gemini" ? <>
-     <Field label={t("gemini.model")}><select value={customGeminiModel || (form.model && !(geminiModels.data?.models ?? []).some(m=>m.id===form.model)) ? "__custom__" : form.model} disabled={busy} onChange={e=>{setCustomGeminiModel(e.target.value==="__custom__");update({model:e.target.value==="__custom__"?"":e.target.value,thinking_level:""});}}><option value="">{t("settings.followSessionModel")}</option>{(geminiModels.data?.models??[]).map(m=><option value={m.id} key={m.id}>{m.name===m.id?m.id:`${m.name} · ${m.id}`}</option>)}<option value="__custom__">{t("gemini.customModel")}</option></select>{(customGeminiModel || Boolean(form.model && !(geminiModels.data?.models??[]).some(m=>m.id===form.model))) && <input maxLength={128} value={form.model} onChange={e=>update({model:e.target.value,thinking_level:compatibleGeminiThinking(e.target.value,form.thinking_level)})} aria-label={t("gemini.customModelName")} />}</Field>
-     <GeminiThinkingPicker model={form.model || geminiThreads.find(thread=>thread.id===form.thread_id)?.model || ""} value={form.thinking_level} onChange={thinking_level=>update({thinking_level})} disabled={busy} followSession />
-     <div className="form-grid"><Field label={t("gemini.permissions")}><select value={form.approval_mode} disabled={busy} onChange={e=>update({approval_mode:e.target.value})}><option value="default">{t("gemini.defaultMode")}</option><option value="auto_edit">{t("gemini.autoEditMode")}</option><option value="yolo">{t("gemini.neverApprove")}</option></select></Field><label className="toggle-row"><input type="checkbox" checked={form.enabled} disabled={busy} onChange={e=>update({enabled:e.target.checked})}/><span>{t("settings.scheduleEnabled")}</span></label></div>
-    </> : <>
-    <div className="form-grid"><Field label={t("codex.modelOverride")}><CodexModelPicker models={catalogue.models} loading={catalogue.loading} error={catalogue.error} value={form.model} onChange={model => update({ model })} allowServerDefault /></Field><Field label={t("codex.reasoningEffort")}><select value={form.reasoning_effort} disabled={busy} onChange={event => update({ reasoning_effort: event.target.value })}><option value="">{t("codex.reasoningDefault")}</option>{codexReasoningOptions.map(option => <option value={option.value} key={option.value}>{option.labelKey ? t(option.labelKey) : option.value}</option>)}</select></Field></div>
-    <div className="form-grid"><Field label={t("codex.approveOnRequest")}><select value={form.approval_mode} disabled={busy} onChange={event => update({ approval_mode: event.target.value })}><option value="on-request">{t("codex.approveOnRequest")}</option><option value="untrusted">{t("codex.untrusted")}</option><option value="never">{t("codex.neverApprove")}</option></select></Field><label className="toggle-row"><input type="checkbox" checked={form.enabled} disabled={busy} onChange={event => update({ enabled: event.target.checked })} /><span>{t("settings.scheduleEnabled")}</span></label></div>
-    </>}
+    <Suspense fallback={<PageLoading />}><NativeFields key={`${form.agent_kind}:${form.thread_id}:${task?.id ?? "new"}`} form={form} update={update} busy={busy} open={open} thread={availableThreads.find(thread => thread.id === form.thread_id)} /></Suspense>
 
     <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={busy || !form.thread_id || !form.name.trim() || !form.prompt.trim()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}{t("common.save")}</button></DialogActions>
   </form></Dialog>;

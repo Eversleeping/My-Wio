@@ -1,5 +1,3 @@
-import { ScheduledTaskDialog } from "../../pages/ScheduledTaskDialog";
-import type { ScheduleProps } from "../engineModules";
 import type { ConversationProps, NativeCreateProps } from "../engineModules";
 import type { AISession } from "../types";
 import type { GeminiThread } from "../../types";
@@ -11,5 +9,3 @@ export function Create(props: NativeCreateProps) {
 export function Conversation(props: ConversationProps) {
   return <GeminiSession thread={props.thread as GeminiThread} realtime={props.revision} notify={props.notify} onChanged={props.onChanged} onNewSession={props.onNew} onOpenFile={props.onOpenFile} onFork={props.onFork} onSchedule={props.onSchedule} />;
 }
-
-export function Schedule(props: ScheduleProps) { return <ScheduledTaskDialog open agentKind="gemini" initialThreadID={props.thread.id} lockThread threads={[]} geminiThreads={[props.thread as GeminiThread]} notify={props.notify} onClose={props.onClose} onSaved={props.onSaved} />; }

@@ -1,5 +1,3 @@
-import { ScheduledTaskDialog } from "../../pages/ScheduledTaskDialog";
-import type { ScheduleProps } from "../engineModules";
 import { clearCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences } from "../../codexComposerPreferences";
 import type { ConversationProps, NativeCreateProps } from "../engineModules";
 import type { AISession } from "../types";
@@ -18,5 +16,3 @@ export function Conversation(props: ConversationProps) {
 
   </>;
 }
-
-export function Schedule(props: ScheduleProps) { return <ScheduledTaskDialog open agentKind="codex" initialThreadID={props.thread.id} lockThread threads={[props.thread as Thread]} notify={props.notify} onClose={props.onClose} onSaved={props.onSaved} />; }
