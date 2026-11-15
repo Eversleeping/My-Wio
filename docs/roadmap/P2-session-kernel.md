@@ -460,3 +460,8 @@ CREATE TABLE ai_sessions (
 
 - 2026-11-15，P2-02，Codex：新增不依赖 Store 的 `internal/session` 契约包；Ref 迁为别名，统一 20 个能力位及版本解析。三种线程读取增加 capabilities；Gemini/Claude 旧 Supported 字段全部从同一结果赋值，动态 ready 判定不变；Codex 只多查版本列（不公开）以解析能力。新增 Ref 线上格式、全部会话版本边界（含 CLI 双门槛、无效版本和描述后缀）、高版本引擎能力形状，以及详情/列表的旧字段与新对象一致性测试；更新兼容版本文档。`go list -deps ./cmd/agent` 确认 session/sessiontools 为 Agent 依赖，同步版本 0.3.19。
   - 验收：前端构建、go vet、全部 Go 测试（275.92 秒）、PostgreSQL（26.76 秒）、前端类型检查、双入口构建、fmt/diff、staticcheck 与 version-check 均通过；旧路由 36 项矩阵保持通过。首次 Vitest 为 450 通过/1 失败，失败为总览已登记的 AppSession WebSocket 清理时序断言；源码不变的文件复验 6 项通过，完整复验 451 项通过。未改页面交互，不要求额外 E2E。本地提交后继续 P2-03。
+
+- 2026-11-15，P2-03 开工核对：Codex 的版本设置/检查/选择与另两引擎相同，一并合并；`updateCodexCLI` 的旧门槛、专门操作和错误响应继续独立。Codex 凭据是多 profile 绑定/加密包，问题回答走审批/输入流程，项目归档的错误映射、审计名与发布事件也不同，不硬并入两引擎公共实现。合并范围保持 HTTP/Store 旧公开方法作为薄适配，问题回答事务和 Claude 特有取消检查均保留。
+
+- 2026-11-15，P2-03，Codex：八个成对重复文件消失，统一为 `cli_settings.go`、`engine_credentials.go`、`session_management.go`、`session_questions.go`；Codex 通用版本设置也合入，专有更新操作保留在 `codex_updates.go`。按原九个文件/新五个文件统计，929→613 行，净减316行。旧方法/响应类型作为薄适配保留；Claude 问题取消检查、两引擎不同版本门槛、凭据命令/入队签名、fork-worktree 响应差异、审计和事件字符串全部保留。问题回答的加锁、回执复用和插入仍处于同一个原事务。
+  - 验收：旧路由矩阵、版本设置/更新、凭据和问题回答定向测试通过；前端构建、go vet、全部 Go 测试（266.98秒）、PostgreSQL（27.48秒）、451项 Vitest、typecheck、双入口构建、fmt/diff 均通过；真实进程浏览器冒烟通过（setup/login/内置 Agent/三引擎回复，9.55秒）。未修改 Agent 依赖包，版本保持0.3.19。按授权本地提交后继续 P2-04。
