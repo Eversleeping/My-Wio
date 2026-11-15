@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { useData, useThrottledValue } from "../useData";
 
@@ -26,17 +25,11 @@ export function formatUsageRate(value: unknown, language: string) {
   return new Intl.NumberFormat(language, value > 0 && value < 0.01 ? { maximumSignificantDigits: 2 } : { maximumFractionDigits: 2 }).format(value);
 }
 
-export function SessionUsage({ provider, threadID, revision, running }: { provider: "gemini" | "codex" | "claude"; threadID: string; revision: unknown; running: boolean }) {
+export function SessionUsage({ provider, threadID, revision }: { provider: "gemini" | "codex" | "claude"; threadID: string; revision: unknown; running: boolean }) {
   const { t, language } = useI18n();
-  const [tick, setTick] = useState(0);
   const throttled = useThrottledValue(revision, 1500);
-  useEffect(() => {
-    if (!running) return;
-    const timer = window.setInterval(() => { if (!document.hidden) setTick(value => value + 1); }, 5000);
-    return () => window.clearInterval(timer);
-  }, [running]);
   const path = `/sessions/${provider}/${threadID}/usage`;
-  const usage = useData<Usage>(path, `${throttled}:${tick}`);
+  const usage = useData<Usage>(path, throttled);
   const input = formatUsageNumber(usage.data?.input_tokens, language);
   const output = formatUsageNumber(usage.data?.output_tokens, language);
   const rate = formatUsageRate(usage.data?.output_per_second, language);
