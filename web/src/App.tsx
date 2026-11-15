@@ -19,7 +19,7 @@ const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 
 const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
 
-const GeminiPageRoute = lazy(() => import("./pages/GeminiPage"));
+const GeminiPageRoute = lazy(() => import("./sessions/engines/gemini"));
 
 const ClaudePageRoute = lazy(() => import("./sessions/engines/claude"));
 

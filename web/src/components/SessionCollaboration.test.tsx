@@ -55,7 +55,7 @@ test("hides deleted and archived children and deletes a child after confirmation
   await user.click(screen.getByRole("button", { name: "Delete child session Finished child" }));
   expect(deleted).toEqual([]);
   await user.click(screen.getByRole("button", { name: "Delete" }));
-  await waitFor(() => expect(deleted).toEqual([expect.stringContaining("/gemini/threads/done")]));
+  await waitFor(() => expect(deleted).toEqual([expect.stringContaining("/sessions/gemini/done")]));
 });
 
 test("opts into unread and creation results independently and persists display preferences", async () => {

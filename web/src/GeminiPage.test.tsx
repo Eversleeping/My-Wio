@@ -3,7 +3,7 @@ import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import GeminiPage from "./pages/GeminiPage";
+import GeminiPage from "./sessions/engines/gemini";
 import { I18nProvider } from "./i18n";
 import { formatTime } from "./format";
 import type { GeminiGoal } from "./types";
@@ -51,11 +51,11 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
     else if (url === "/api/operations/fork-op") body={status:"succeeded"};
     else if (url.endsWith("/gemini/skills/skills-op")) body={status:"succeeded",skills:[...(!skillRemoved ? [{name:"code-review",description:"Review code",enabled:skillEnabled,builtin:false,scope:"workspace"}] : []),{name:"disabled",description:"Disabled skill",enabled:false,builtin:false,scope:"external"}]};
     else if (url.endsWith("/gemini/models")) { modelRequests.push(url); const revision = currentThread.credential_revision; if (options.modelResponseGate) await options.modelResponseGate; if (upstreamState === "failed") return new Response(JSON.stringify({error:"Upstream unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); if (upstreamState === "unconfigured") body = {models:[],configured:false}; else body = {configured:true,credential_revision:revision,default_model:options.defaultModel,models:options.modelIDs?.map(id => ({id,name:id})) ?? [{id:modelRequests.length === 1 ? "gemini-upstream-current" : "gemini-upstream-new",name:"Upstream"}]}; }
-    else if (url === "/api/gemini/threads/thread-1/goal") { if (goalLoadFailures-- > 0) return new Response(JSON.stringify({error:"Status unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); body = options.goal ?? null; }
-    else if (url.includes("/gemini/threads/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
+    else if (url === "/api/sessions/gemini/thread-1/goal") { if (goalLoadFailures-- > 0) return new Response(JSON.stringify({error:"Status unavailable"}),{status:502,headers:{"Content-Type":"application/json"}}); body = options.goal ?? null; }
+    else if (url.includes("/sessions/gemini/thread-1/events")) { const after = new URL(url,"http://localhost").searchParams.get("after"); body = after === null ? eventLog.slice(-500) : eventLog.filter(item => Number((item as {sequence:number}).sequence) > Number(after)).slice(0,500); }
     else if (url === "/api/workspaces") body = [{id:"workspace-1",project_name:"Project",server_name:"Production",path:"/project",status:"ready"},{id:"workspace-2",project_name:"Empty project",server_name:"Production",path:"/empty",status:"ready"}];
-    else if (url.includes("/gemini/threads?") && selected) body = [{...currentThread,model}];
-    else if (url === "/api/gemini/threads/thread-1") body = {...currentThread,model};
+    else if (url.startsWith("/api/sessions?engine=gemini")) { const q = new URL(url,"http://localhost").searchParams.get("q")?.toLowerCase(); body = {items: selected && (!q || `${currentThread.title} ${currentThread.path} ${currentThread.project_name}`.toLowerCase().includes(q)) ? [{...currentThread,model}] : [], next_cursor: null, groups: []}; }
+    else if (url === "/api/sessions/gemini/thread-1") body = {...currentThread,model};
     return new Response(JSON.stringify(body),{status:200,headers:{"Content-Type":"application/json"}});
   }));
   const onSelectThread = vi.fn();
@@ -83,11 +83,11 @@ test("switches the Gemini action between interrupting and sending a correction",
   expect(input).toHaveValue("");
   expect(screen.getByRole("button",{name:"Interrupt"})).toBeEnabled();
   expect(requests).toHaveLength(1);
-  expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/steer",body:{prompt:"Focus on the storage bug",operation_id:"op1",request_id:expect.any(String)}});
+  expect(requests[0]).toMatchObject({url:"/api/sessions/gemini/thread-1/steer",body:{prompt:"Focus on the storage bug",operation_id:"op1",request_id:expect.any(String)}});
   expect(screen.getByRole("combobox",{name:"Gemini model"})).toBeDisabled();
   await user.click(screen.getByRole("button",{name:"Interrupt"}));
   await waitFor(()=>expect(requests).toHaveLength(2));
-  expect(requests[1]).toEqual({url:"/api/gemini/threads/thread-1/interrupt",body:{}});
+  expect(requests[1]).toEqual({url:"/api/sessions/gemini/thread-1/interrupt",body:{}});
 });
 
 test("retains the draft and reuses its request ID if a correction fails", async()=>{
@@ -126,14 +126,14 @@ test("updates a lost task to interrupted and allows another turn only after stop
   expect(screen.queryByText("Gemini is working…")).not.toBeInTheDocument();
   expect(screen.getByRole("textbox", {name: "Ask Gemini to work on this project…"})).toBeDisabled();
   await user.click(screen.getByRole("button", {name: "Retry stop confirmation"}));
-  expect(requests).toContainEqual({url: "/api/gemini/threads/thread-1/interrupt", body: {}});
+  expect(requests).toContainEqual({url: "/api/sessions/gemini/thread-1/interrupt", body: {}});
   await user.click(screen.getByRole("button", {name: "I have checked the process"}));
   expect(screen.getByText(/previous Gemini CLI process and its child processes on Production/)).toBeInTheDocument();
   await user.click(screen.getByRole("button", {name: "Cancel"}));
   expect(requests).toHaveLength(1);
   await user.click(screen.getByRole("button", {name: "I have checked the process"}));
   await user.click(screen.getByRole("button", {name: "Confirm and release workspace"}));
-  await waitFor(() => expect(requests).toContainEqual({url: "/api/gemini/threads/thread-1/confirm-stopped", body: {operation_id: "op1", confirmed: true}}));
+  await waitFor(() => expect(requests).toContainEqual({url: "/api/sessions/gemini/thread-1/confirm-stopped", body: {operation_id: "op1", confirmed: true}}));
   currentThread.recovery_pending = false;
   await user.click(screen.getByRole("button", {name: "Refresh"}));
   await waitFor(() => expect(screen.getByRole("textbox", {name: "Ask Gemini to work on this project…"})).toBeEnabled());
@@ -161,7 +161,7 @@ test("keeps a draft and allows interruption when a Gemini task becomes queued", 
   expect(input).toBeDisabled();
   expect(input).toHaveValue("Keep this draft");
   await user.click(interrupt);
-  await waitFor(()=>expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/interrupt",body:{}}));
+  await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/interrupt",body:{}}));
   expect(input).toHaveValue("Keep this draft");
 });
 
@@ -296,7 +296,7 @@ test("shows only fetched models and creates a session with a selected model",asy
   expect(within(models).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a model","Upstream · gemini-upstream-current","Custom model"]);
   await user.selectOptions(models,"gemini-upstream-current");
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test("creates a session with never approve selected",async () => {
@@ -308,7 +308,7 @@ test("creates a session with never approve selected",async () => {
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Tool permissions"}),"yolo");
   expect(within(dialog).getByRole("option",{name:"Never approve"})).toBeInTheDocument();
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}}));
 });
 
 test("switches an existing session model for the next turn",async () => {
@@ -319,7 +319,7 @@ test("switches an existing session model for the next turn",async () => {
   await user.selectOptions(screen.getByRole("combobox",{name:"Tool permissions"}),"yolo");
   await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Hello");
   await user.click(screen.getByRole("button",{name:"Send"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Hello",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/turns",body:{prompt:"Hello",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}}));
 });
 
 test("preserves and edits a custom model name",async () => {
@@ -445,7 +445,7 @@ test("starts a new independent session in the current project with its model pre
   expect(within(dialog).getByRole("combobox",{name:"Workspace"})).toHaveValue("workspace-1");
   expect(await within(dialog).findByRole("textbox",{name:"Model name"})).toHaveValue("gemini-upstream-current");
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test("hides projects without sessions but allows their first session through the global new button",async () => {
@@ -459,7 +459,7 @@ test("hides projects without sessions but allows their first session through the
   await user.selectOptions(within(dialog).getByRole("combobox",{name:"Workspace"}),"workspace-2");
   await waitFor(() => expect(within(dialog).getByRole("button",{name:"New Gemini session"})).toBeEnabled());
   await user.click(within(dialog).getByRole("button",{name:"New Gemini session"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads",body:{workspace_id:"workspace-2",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini",body:{workspace_id:"workspace-2",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test.each(["button","right-click"])("creates a separate session directly from the Codex-style project menu via %s",async trigger => {
@@ -473,7 +473,7 @@ test.each(["button","right-click"])("creates a separate session directly from th
     menu.focus(); await user.keyboard("{Enter}");
   }
   await user.click(await screen.findByRole("menuitem",{name:"New session"}));
-  await waitFor(() => expect(requests).toEqual([{url:"/api/gemini/threads",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}]));
+  await waitFor(() => expect(requests).toEqual([{url:"/api/sessions/gemini",body:{workspace_id:"workspace-1",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}]));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(onSelectThread).toHaveBeenCalledWith("thread-created");
 });
@@ -543,7 +543,7 @@ test("edits and resends at the selected message and replaces the stale tail",asy
   await user.selectOptions(screen.getByRole("combobox",{name:"Tool permissions"}),"yolo");
   await user.click(screen.getByRole("button",{name:"Send"}));
   await screen.findByText("Revised answer");
-  expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/events/edit/rewrite",body:{prompt:"Updated prompt",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}});
+  expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/events/edit/rewrite",body:{prompt:"Updated prompt",model:"gemini-upstream-current",approval_mode:"yolo",thinking_level:""}});
   expect(screen.getByText("Keep this earlier prompt")).toBeInTheDocument();
   expect(screen.getByText("Updated prompt")).toBeInTheDocument();
   expect(screen.queryByText("Original prompt")).not.toBeInTheDocument();
@@ -598,7 +598,7 @@ test("branches a completed Gemini reply into an independent task",async()=>{
  const article=screen.getByText("Completed answer").closest("article")!;
  await user.click(within(article).getByRole("button",{name:"Message actions"}));
  await user.click(screen.getByRole("menuitem",{name:"Branch to new chat"}));
- await waitFor(()=>expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/fork",body:{event_id:"reply-1"}}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/fork",body:{event_id:"reply-1"}}));
  await waitFor(()=>expect(onSelectThread).toHaveBeenCalledWith("forked-thread"));
 });
 
@@ -631,7 +631,7 @@ test("sends an explicitly selected native thinking level with the next turn",asy
  await user.selectOptions(picker,"medium");
  await user.type(screen.getByRole("textbox",{name:"Ask Gemini to work on this project…"}),"Think carefully");
  await user.click(screen.getByRole("button",{name:"Send"}));
- await waitFor(()=>expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Think carefully",model:"gemini-3-flash-preview",approval_mode:"default",thinking_level:"medium"}}));
+ await waitFor(()=>expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/turns",body:{prompt:"Think carefully",model:"gemini-3-flash-preview",approval_mode:"default",thinking_level:"medium"}}));
 });
 
 const pastedImage = "data:image/png;base64,c21hbGwtcG5n";
@@ -644,7 +644,7 @@ test("pastes an image, sends it without text and keeps its history preview", asy
   await waitFor(() => expect(document.querySelector(".composer-images img")).toHaveAttribute("src", pastedImage));
   expect(compressImage).toHaveBeenCalledWith(file, expect.objectContaining({ signal: expect.any(AbortSignal) }));
   await user.click(screen.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"",images:[{data_url:pastedImage}]}}));
+  await waitFor(() => expect(requests[0]).toMatchObject({url:"/api/sessions/gemini/thread-1/turns",body:{prompt:"",images:[{data_url:pastedImage}]}}));
   expect(document.querySelector(".composer-images")).not.toBeInTheDocument();
 });
 
@@ -654,7 +654,7 @@ test("preserves image attachments when editing an earlier message", async () => 
   await user.click(await screen.findByRole("button",{name:"Edit and resend"}));
   expect(document.querySelector(".composer-images img")).toHaveAttribute("src",pastedImage);
   await user.click(screen.getByRole("button",{name:"Send"}));
-  await waitFor(()=>expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/events/with-image/rewrite",body:{images:[{data_url:pastedImage}]}}));
+  await waitFor(()=>expect(requests[0]).toMatchObject({url:"/api/sessions/gemini/thread-1/events/with-image/rewrite",body:{images:[{data_url:pastedImage}]}}));
 });
 
 test("adds an image without text to the running task and renders its queued preview", async () => {
@@ -664,7 +664,7 @@ test("adds an image without text to the running task and renders its queued prev
   fireEvent.paste(input,{clipboardData:{items:[{type:"image/png",getAsFile:()=>new File(["image"],"test.png",{type:"image/png"})}]}});
   await waitFor(()=>expect(document.querySelector(".composer-images img")).toHaveAttribute("src",pastedImage));
   await user.click(screen.getByRole("button",{name:"Send correction"}));
-  await waitFor(()=>expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/steer",body:{prompt:"",operation_id:"op1",images:[{data_url:pastedImage}],request_id:expect.any(String)}}));
+  await waitFor(()=>expect(requests[0]).toMatchObject({url:"/api/sessions/gemini/thread-1/steer",body:{prompt:"",operation_id:"op1",images:[{data_url:pastedImage}],request_id:expect.any(String)}}));
   expect(document.querySelector(".composer-images")).not.toBeInTheDocument();
   await waitFor(()=>expect(document.querySelector(".message.user img")).toHaveAttribute("src",pastedImage));
 });
@@ -697,7 +697,7 @@ test("waits for an explicit answer and confirms Agent delivery", async () => {
   const card=await screen.findByRole("region",{name:"Gemini needs your input"});
   const submit=within(card).getByRole("button",{name:"Submit answers"});expect(submit).toBeDisabled();expect(requests).toHaveLength(0);
   await user.click(within(card).getByRole("radio",{name:"Blue Ocean"}));await user.click(submit);
-  await waitFor(()=>expect(requests[0]).toEqual({url:"/api/gemini/threads/thread-1/questions/question-1/answer",body:{answers:{color:{answers:["Blue"]}}}}));
+  await waitFor(()=>expect(requests[0]).toEqual({url:"/api/sessions/gemini/thread-1/questions/question-1/answer",body:{answers:{color:{answers:["Blue"]}}}}));
   expect(await within(card).findByRole("button",{name:"Answers sent"})).toBeDisabled();
 });
 
@@ -722,7 +722,7 @@ test("opens Gemini slash actions with the keyboard and submits a plan turn", asy
   expect(screen.getByRole("combobox", { name: "Tool permissions" })).toHaveValue("plan");
   await user.type(input, "Plan this change");
   await user.click(screen.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Plan this change",model:"gemini-upstream-current",approval_mode:"plan",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/turns",body:{prompt:"Plan this change",model:"gemini-upstream-current",approval_mode:"plan",thinking_level:""}}));
 });
 
 test("reports an unsupported plan mode and lets Escape dismiss the slash menu", async () => {
@@ -762,7 +762,7 @@ test("starts a Gemini goal with configurable continuation and time limits", asyn
   await user.clear(screen.getByRole("spinbutton", {name:"Time limit (minutes)"}));
   await user.type(screen.getByRole("spinbutton", {name:"Time limit (minutes)"}), "30");
   await user.click(screen.getByRole("button", {name:"Send"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Implement and verify the feature",model:"auto",approval_mode:"default",thinking_level:"",goal:{max_continuations:5,max_seconds:1800}}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/turns",body:{prompt:"Implement and verify the feature",model:"auto",approval_mode:"default",thinking_level:"",goal:{max_continuations:5,max_seconds:1800}}}));
 });
 
 test("shows a blocked goal and resumes it with its saved limits", async () => {
@@ -773,7 +773,7 @@ test("shows a blocked goal and resumes it with its saved limits", async () => {
   await user.click(screen.getByText("Goal evidence and status"));
   expect(screen.getByText("Waiting for a decision")).toBeInTheDocument();
   await user.click(screen.getByRole("button", {name:"Resume goal"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/goals/goal-1/resume",body:{max_continuations:8,max_seconds:1200}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/goals/goal-1/resume",body:{max_continuations:8,max_seconds:1200}}));
 });
 
 test("keeps a directly typed goal draft when starting it fails", async () => {
@@ -783,7 +783,7 @@ test("keeps a directly typed goal draft when starting it fails", async () => {
   await user.click(screen.getByRole("button", {name:"Send"}));
   expect(await screen.findByText("Workspace is busy")).toBeInTheDocument();
   expect(input).toHaveValue("/goal Implement and verify");
-  expect(requests[0]).toMatchObject({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"Implement and verify",goal:{max_continuations:20,max_seconds:3600}}});
+  expect(requests[0]).toMatchObject({url:"/api/sessions/gemini/thread-1/turns",body:{prompt:"Implement and verify",goal:{max_continuations:20,max_seconds:3600}}});
 });
 
 test("explains when goal mode is unsupported", async () => {
@@ -803,7 +803,7 @@ test("pauses an active goal and does not enable resume before stop confirmation"
   const goal: GeminiGoal = {id:"goal-1",thread_id:thread.id,objective:"Fix the tests",status:"active",operation_id:"op1",continuations:1,max_continuations:8,max_seconds:1200,evidence:"",message:"",created_at:thread.created_at,updated_at:thread.updated_at};
   const {user, requests} = setup(true, "auto", "configured", [], {status:"running",goalSupported:true,goal});
   await user.click(await screen.findByRole("button", {name:"Pause goal"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/goals/goal-1/pause",body:{}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/goals/goal-1/pause",body:{}}));
 });
 
 test("holds goal controls when process ownership is unconfirmed", async () => {
@@ -847,7 +847,7 @@ test("shows discovered native Gemini commands and prepares them for explicit sen
   expect(input).toHaveValue("/help ");
   expect(requests).toHaveLength(0);
   await user.click(screen.getByRole("button", {name:"Send"}));
-  await waitFor(() => expect(requests).toContainEqual({url:"/api/gemini/threads/thread-1/turns",body:{prompt:"/help ",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
+  await waitFor(() => expect(requests).toContainEqual({url:"/api/sessions/gemini/thread-1/turns",body:{prompt:"/help ",model:"gemini-upstream-current",approval_mode:"default",thinking_level:""}}));
 });
 
 test("manages Gemini skills and confirms uninstalling from the installed scope",async()=>{

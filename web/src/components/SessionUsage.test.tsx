@@ -16,7 +16,7 @@ test.each(["gemini", "codex", "claude"] as const)("shows %s session totals and a
   expect(screen.getByText("Out 8.91K")).toHaveAttribute("title", "Output 8,910 tokens");
   expect(screen.getByText("Average output — tokens/sec")).toBeInTheDocument();
   expect(screen.getByText("Incomplete records")).toBeInTheDocument();
-  expect(fetcher).toHaveBeenCalledWith(`/api/${provider === "codex" ? "" : `${provider}/`}threads/thread-1/usage`, expect.anything());
+  expect(fetcher).toHaveBeenCalledWith(`/api/${provider === "codex" ? "threads" : `sessions/${provider}`}/thread-1/usage`, expect.anything());
 });
 
 test.each(["gemini", "codex", "claude"] as const)("shows the %s average output rate per second", async provider => {

@@ -35,7 +35,7 @@ export function SessionUsage({ provider, threadID, revision, running }: { provid
     const timer = window.setInterval(() => { if (!document.hidden) setTick(value => value + 1); }, 5000);
     return () => window.clearInterval(timer);
   }, [running]);
-  const path = provider === "claude" ? `/sessions/claude/${threadID}/usage` : provider === "codex" ? `/threads/${threadID}/usage` : `/${provider}/threads/${threadID}/usage`;
+  const path = provider === "codex" ? `/threads/${threadID}/usage` : `/sessions/${provider}/${threadID}/usage`;
   const usage = useData<Usage>(path, `${throttled}:${tick}`);
   const input = formatUsageNumber(usage.data?.input_tokens, language);
   const output = formatUsageNumber(usage.data?.output_tokens, language);
