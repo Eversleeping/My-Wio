@@ -1,48 +1,46 @@
-import { ClaudeSettings } from "../components/ClaudeSettings";
-import { GeminiSettings } from "../components/GeminiSettings";
-import { CodexModelPicker } from "../components/CodexModelPicker";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle,
-  ArrowDownToLine,
-  CalendarClock,
-  Check,
-  Clipboard,
-  Code2,
-  Database,
-  GitBranch,
-  KeyRound,
-  LoaderCircle,
-  LockKeyhole,
-  Pause,
-  Pencil,
-  Play,
-  Plus,
-  RefreshCw,
-  ShieldCheck,
-  SquareTerminal,
-  Trash2,
-  UserRound,
-  X
+AlertTriangle,
+ArrowDownToLine,
+CalendarClock,
+Check,
+Clipboard,
+Code2,
+Database,
+GitBranch,
+KeyRound,
+LoaderCircle,
+LockKeyhole,
+Pause,
+Pencil,
+Play,
+Plus,
+RefreshCw,
+ShieldCheck,
+SquareTerminal,
+Trash2,
+UserRound,
+X
 } from "lucide-react";
-import { api, post, put, remove } from "../api";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { defaultCodexComposerPreferences } from "../codexComposerPreferences";
+import { ClaudeSettings } from "../components/ClaudeSettings";
+import { CodexModelPicker } from "../components/CodexModelPicker";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
+import { GeminiSettings } from "../components/GeminiSettings";
 import { DataTable, Section, Status } from "../components/PageUI";
-import { defaultCodexComposerPreferences } from "../codexComposerPreferences";
+import { useResource } from "../data/resources";
+import { settings as settingEndpoints } from "../data/settings";
+import { useAuditList } from "../data/useAuditList";
 import { formatDate, relative, shortSHA } from "../format";
 import { useI18n } from "../i18n";
-import type { AuditEntry, CodexCLISettings, CredentialProfile, SecretSet, ScheduledTask, Thread, GeminiThread, ClaudeThread } from "../types";
-import { useData } from "../useData";
+import type { CredentialProfile, ScheduledTask, SecretSet } from "../types";
 import { ScheduledTaskDialog } from "./ScheduledTaskDialog";
 
 export interface PageProps {
-  realtime: number;
   notify: (text: string) => void;
 }
 
-type AuditListPage = { items: AuditEntry[]; has_more: boolean; next: number | null };
-const auditListPageSize = 50;
 const defaultCodexModel = defaultCodexComposerPreferences.model;
 
 
@@ -64,98 +62,21 @@ function ErrorBanner({ text }: { text: string }) {
   return <div className="error-banner"><AlertTriangle size={16} />{text}</div>;
 }
 
-function mergeAuditEntries(...pages: AuditEntry[][]) {
-  const merged: AuditEntry[] = [];
-  const seen = new Set<string>();
-  for (const page of pages) for (const entry of page) {
-    if (seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    merged.push(entry);
-  }
-  return merged;
-}
-
-function useAuditList(realtime: unknown) {
-  const firstPage = useData<AuditListPage>(`/audit?limit=${auditListPageSize}`, realtime);
-  const [tail, setTail] = useState<AuditEntry[]>([]);
-  const [tailLoaded, setTailLoaded] = useState(false);
-  const [tailNext, setTailNext] = useState<number | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const requestRef = useRef(0);
-  const tailRef = useRef(tail);
-  const tailLoadedRef = useRef(tailLoaded);
-  tailRef.current = tail;
-  tailLoadedRef.current = tailLoaded;
-  useEffect(() => () => { requestRef.current += 1; }, []);
-  const items = useMemo(() => mergeAuditEntries(firstPage.data?.items ?? [], tail), [firstPage.data?.items, tail]);
-  const next = tailLoaded ? tailNext : firstPage.data?.next ?? null;
-  const hasMore = tailLoaded ? tailNext !== null : Boolean(firstPage.data?.has_more);
-  const loadMore = useCallback(async () => {
-    if (loadingMore || next === null) return;
-    const request = ++requestRef.current;
-    setLoadingMore(true);
-    setLoadError("");
-    try {
-      const page = await api<AuditListPage>(`/audit?limit=${auditListPageSize}&offset=${next}`);
-      if (request !== requestRef.current) return;
-      setTail(current => mergeAuditEntries(current, page.items));
-      setTailLoaded(true);
-      setTailNext(page.next);
-    } catch (error) {
-      if (request === requestRef.current) setLoadError(message(error));
-    } finally {
-      if (request === requestRef.current) setLoadingMore(false);
-    }
-  }, [loadingMore, next]);
-  useEffect(() => {
-    if (!firstPage.data || !tailLoadedRef.current) return;
-    const loadedTailCount = tailRef.current.length;
-    if (loadedTailCount === 0) return;
-    const request = ++requestRef.current;
-    setLoadingMore(true);
-    setLoadError("");
-    void (async () => {
-      try {
-        const refreshed: AuditEntry[] = [];
-        let offset: number | null = auditListPageSize;
-        while (offset !== null && refreshed.length < loadedTailCount) {
-          const page: AuditListPage = await api<AuditListPage>(`/audit?limit=${auditListPageSize}&offset=${offset}`);
-          if (request !== requestRef.current) return;
-          refreshed.push(...page.items);
-          offset = page.next;
-        }
-        if (request !== requestRef.current) return;
-        setTail(mergeAuditEntries(refreshed));
-        setTailNext(offset);
-      } catch (error) {
-        if (request === requestRef.current) setLoadError(message(error));
-      } finally {
-        if (request === requestRef.current) setLoadingMore(false);
-      }
-    })();
-  }, [firstPage.data]);
-  const reload = useCallback(() => firstPage.reload(), [firstPage.reload]);
-  return { data: firstPage.data ? items : null, error: firstPage.error, loading: firstPage.loading, reload, hasMore, loadingMore, loadError, loadMore };
-}
-
-
-
 type SettingsConfirmation =
   | { type: "scheduled-task"; task: ScheduledTask }
   | { type: "credential-profile"; profile: CredentialProfile }
   | { type: "secret-set"; secret: SecretSet };
 
-export function SettingsPage({ realtime, notify }: PageProps) {
+export function SettingsPage({ notify }: PageProps) {
   const { t } = useI18n();
-  const codexSettings = useData<CodexCLISettings>("/settings/codex-cli", realtime);
-  const profiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
-  const secrets = useData<SecretSet[]>("/secret-sets", realtime);
-  const audit = useAuditList(realtime);
-  const scheduledTasks = useData<ScheduledTask[]>("/scheduled-tasks", realtime);
-  const threads = useData<Thread[]>("/threads", realtime);
-  const claudeThreads = useData<ClaudeThread[]>("/claude/threads", realtime);
-  const geminiThreads = useData<GeminiThread[]>("/gemini/threads", realtime);
+  const codexSettings = useResource(settingEndpoints.cli("codex"));
+  const profiles = useResource(settingEndpoints.profiles());
+  const secrets = useResource(settingEndpoints.secrets());
+  const audit = useAuditList();
+  const scheduledTasks = useResource(settingEndpoints.scheduledTasks());
+  const threads = useResource(settingEndpoints.codexThreads());
+  const claudeThreads = useResource(settingEndpoints.claudeThreads());
+  const geminiThreads = useResource(settingEndpoints.geminiThreads());
   const [profileDialog, setProfileDialog] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileForm, setProfileForm] = useState({ id: "", kind: "codex" as CredentialProfile["kind"], name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, commit_name: "", commit_email: "", secret: "" });
@@ -183,46 +104,46 @@ export function SettingsPage({ realtime, notify }: PageProps) {
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault(); setProfileBusy(true);
     try {
-      await post("/credential-profiles", profileForm);
-      setProfileDialog(false); profiles.reload(); notify(t("settings.profileSaved"));
+      await settingEndpoints.saveProfile(profileForm);
+      setProfileDialog(false); notify(t("settings.profileSaved"));
     } catch (err) { notify(message(err)); } finally { setProfileBusy(false); }
   };
-  const submitSecretSet = async (event: FormEvent) => { event.preventDefault(); const values: Record<string, string> = {}; for (const line of lines.split("\n")) { const index = line.indexOf("="); if (index > 0) values[line.slice(0, index).trim()] = line.slice(index + 1); } try { await post("/secret-sets", { name, values }); setSecretDialog(false); secrets.reload(); setLines(""); notify(t("settings.secretSaved")); } catch (err) { notify(message(err)); } };
-  const checkCodexUpdates = async () => { setCodexTargetBusy(true); try { const result = await post<CodexCLISettings>("/settings/codex-cli/check-updates", {}); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); codexSettings.reload(); notify(t(result.updated ? "settings.codexUpdateFound" : "settings.codexAlreadyLatest", { version: result.latest_version ?? result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
-  const applyCodexVersion = async () => { if (!selectedCodexVersion) return; setCodexTargetBusy(true); try { const result = await post<CodexCLISettings>("/settings/codex-cli/select-version", { version: selectedCodexVersion }); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); codexSettings.reload(); notify(t("settings.codexVersionApplied", { version: result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
+  const submitSecretSet = async (event: FormEvent) => { event.preventDefault(); const values: Record<string, string> = {}; for (const line of lines.split("\n")) { const index = line.indexOf("="); if (index > 0) values[line.slice(0, index).trim()] = line.slice(index + 1); } try { await settingEndpoints.createSecret(name, values); setSecretDialog(false); setLines(""); notify(t("settings.secretSaved")); } catch (err) { notify(message(err)); } };
+  const checkCodexUpdates = async () => { setCodexTargetBusy(true); try { const result = await settingEndpoints.checkUpdates("codex"); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); notify(t(result.updated ? "settings.codexUpdateFound" : "settings.codexAlreadyLatest", { version: result.latest_version ?? result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
+  const applyCodexVersion = async () => { if (!selectedCodexVersion) return; setCodexTargetBusy(true); try { const result = await settingEndpoints.selectVersion("codex", selectedCodexVersion); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); notify(t("settings.codexVersionApplied", { version: result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
   const openScheduledTask = (task?: ScheduledTask) => setScheduledTarget(task ? { task } : {});
   const toggleScheduledTask = async (task: ScheduledTask) => {
     if (scheduledBusy) return;
     setScheduledBusy(task.id);
-    try { await put(`/scheduled-tasks/${task.id}`, { enabled: !task.enabled }); scheduledTasks.reload(); } catch (err) { notify(message(err)); } finally { setScheduledBusy(""); }
+    try { await settingEndpoints.saveScheduledTask(task.id, { enabled: !task.enabled }); } catch (err) { notify(message(err)); } finally { setScheduledBusy(""); }
   };
   const deleteScheduledTask = async (task: ScheduledTask) => {
     if (scheduledBusy || settingsDeleteBusyRef.current) return;
     const busyKey = `scheduled-task:${task.id}`;
     settingsDeleteBusyRef.current = busyKey;
     setSettingsDeleteBusy(busyKey);
-    try { await remove(`/scheduled-tasks/${task.id}`); scheduledTasks.reload(); notify(t("settings.scheduledTaskDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
+    try { await settingEndpoints.removeScheduledTask(task.id); notify(t("settings.scheduledTaskDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
   };
   const deleteProfile = async (profile: CredentialProfile) => {
     if (settingsDeleteBusyRef.current) return;
     const busyKey = `credential-profile:${profile.id}`;
     settingsDeleteBusyRef.current = busyKey;
     setSettingsDeleteBusy(busyKey);
-    try { await remove(`/credential-profiles/${profile.id}`); profiles.reload(); notify(t("settings.profileDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
+    try { await settingEndpoints.removeProfile(profile.id); notify(t("settings.profileDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
   };
   const deleteSecretSet = async (secret: SecretSet) => {
     if (settingsDeleteBusyRef.current) return;
     const busyKey = `secret-set:${secret.id}`;
     settingsDeleteBusyRef.current = busyKey;
     setSettingsDeleteBusy(busyKey);
-    try { await remove(`/secret-sets/${secret.id}`); secrets.reload(); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
+    try { await settingEndpoints.removeSecret(secret.id); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
   };
   return <div className="page-stack">
     <Section title={t("settings.codexCLIManagement")} icon={<SquareTerminal size={18} />}>
       <div className="codex-version-control"><div className="codex-version-summary"><small>{t("settings.codexTargetVersion")}</small><strong>{codexSettings.data?.target_version ?? "-"}</strong><span><ShieldCheck size={14} />{t("settings.codexStableRelease")}</span></div><div className="codex-version-actions"><select aria-label={t("settings.selectCodexVersion")} value={selectedCodexVersion} disabled={codexTargetBusy || !codexVersions.length} onChange={event => setSelectedCodexVersion(event.target.value)}>{codexVersions.map((version, index) => <option key={version} value={version}>{index === 0 ? t("settings.latestCodexVersion", { version }) : version}</option>)}</select><button className="secondary-button" disabled={codexTargetBusy || !selectedCodexVersion || selectedCodexVersion === codexSettings.data?.target_version} onClick={() => void applyCodexVersion()}><Check size={16} />{t("settings.applyCodexVersion")}</button><button className="primary-button" disabled={codexTargetBusy || !codexSettings.data} onClick={() => void checkCodexUpdates()}>{codexTargetBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{t(codexTargetBusy ? "settings.checkingCodexUpdates" : "settings.checkCodexUpdates")}</button></div></div>
     </Section>
-    <GeminiSettings realtime={realtime} notify={notify} />
-    <ClaudeSettings realtime={realtime} notify={notify} />
+    <GeminiSettings notify={notify} />
+    <ClaudeSettings notify={notify} />
     <Section title={t("settings.scheduledTasks")} icon={<CalendarClock size={18} />} action={<button className="primary-button" onClick={() => openScheduledTask()}><Plus size={17} />{t("settings.newScheduledTask")}</button>}>
       <DataTable headers={[t("settings.name"), t("settings.scheduledThread"), t("settings.schedule"), t("settings.nextRun"), t("column.state"), ""]} empty={t("settings.noScheduledTasks")}>
         {(scheduledTasks.data ?? []).map(task => <tr key={task.id}><td><div className="cell-main"><strong>{task.name}</strong><small title={task.prompt}>{task.prompt}</small></div></td><td><div className="cell-main"><strong>{task.agent_kind==="claude"?"Claude":task.agent_kind==="gemini"?"Gemini":"Codex"} · {task.thread_title}</strong><small>{task.project_name} / {task.server_name}</small></div></td><td><code title={task.timezone}>{task.schedule}</code></td><td>{task.enabled ? formatDate(task.next_run_at) : t("settings.scheduleDisabled")}</td><td><div className="cell-main"><Status value={task.enabled ? "enabled" : "disabled"} />{task.last_run_status && <small title={task.last_run_message || undefined}>{t("settings.lastRun", { status: task.last_run_status })}</small>}</div></td><td><div className="row-actions"><button className="icon-button" title={t("common.edit")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => openScheduledTask(task)}><Pencil size={15} /></button><button className="icon-button" title={t(task.enabled ? "settings.disableScheduledTask" : "settings.enableScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => void toggleScheduledTask(task)}>{scheduledBusy === task.id ? <LoaderCircle className="spin" size={15} /> : task.enabled ? <Pause size={15} /> : <Play size={15} />}</button><button className="icon-button danger" title={t("settings.deleteScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "scheduled-task", task })}><Trash2 size={15} /></button></div></td></tr>)}
@@ -241,7 +162,7 @@ export function SettingsPage({ realtime, notify }: PageProps) {
       <DialogActions><button type="button" className="secondary-button" disabled={profileBusy} onClick={() => setProfileDialog(false)}>{t("common.cancel")}</button><button className="primary-button" disabled={profileBusy}>{profileBusy ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />}{t("settings.encryptSave")}</button></DialogActions>
     </form></Dialog>
     <Dialog open={secretDialog} title={t("settings.secretSetTitle")} onClose={() => setSecretDialog(false)}><form onSubmit={submitSecretSet}><Field label={t("settings.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("settings.environmentValues")}><textarea value={lines} onChange={e => setLines(e.target.value)} rows={8} placeholder={"DATABASE_URL=...\nAPI_TOKEN=..."} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setSecretDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("settings.encryptSave")}</button></DialogActions></form></Dialog>
-    <ScheduledTaskDialog open={scheduledTarget !== null} task={scheduledTarget?.task} threads={threads.data ?? []} geminiThreads={geminiThreads.data ?? []} claudeThreads={claudeThreads.data ?? []} notify={notify} onClose={() => setScheduledTarget(null)} onSaved={scheduledTasks.reload} />
+    <ScheduledTaskDialog open={scheduledTarget !== null} task={scheduledTarget?.task} threads={threads.data ?? []} geminiThreads={geminiThreads.data ?? []} claudeThreads={claudeThreads.data ?? []} notify={notify} onClose={() => setScheduledTarget(null)} onSaved={() => {}} />
     {settingsConfirmation?.type === "scheduled-task" ? <ConfirmDialog open danger title={t("settings.deleteScheduledTask")} impact={t("settings.confirmDeleteScheduledTask", { name: settingsConfirmation.task.name })} confirmLabel={t("settings.deleteScheduledTask")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteScheduledTask(settingsConfirmation.task)} /> : settingsConfirmation?.type === "credential-profile" ? <ConfirmDialog open danger title={t("settings.deleteProfile")} impact={t("settings.confirmDeleteProfile", { name: settingsConfirmation.profile.name })} confirmLabel={t("settings.deleteProfile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteProfile(settingsConfirmation.profile)} /> : settingsConfirmation?.type === "secret-set" ? <ConfirmDialog open danger title={t("settings.deleteSecretSet")} impact={t("settings.confirmDelete", { name: settingsConfirmation.secret.name })} confirmLabel={t("settings.deleteSecretSet")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteSecretSet(settingsConfirmation.secret)} /> : null}
   </div>;
 }

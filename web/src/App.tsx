@@ -137,7 +137,7 @@ export default function App() {
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><OperationsPageRoute /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute /></Suspense>,
-    settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute realtime={realtimeRevisions.settings} notify={setToast} /></Suspense>
+    settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute notify={setToast} /></Suspense>
   }[view];
 
   return (

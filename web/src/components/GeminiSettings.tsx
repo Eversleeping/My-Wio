@@ -1,16 +1,15 @@
-import { useEffect, useState } from "react";
 import { Check, LoaderCircle, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
-import { post } from "../api";
-import { useData } from "../useData";
+import { useEffect, useState } from "react";
+import { useResource } from "../data/resources";
+import { settings as settingEndpoints } from "../data/settings";
 import { useI18n } from "../i18n";
-import type { CodexCLISettings } from "../types";
 import { Section } from "./PageUI";
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function GeminiSettings({ realtime, notify }: { realtime: number; notify: (message: string) => void }) {
+export function GeminiSettings({ notify }: { notify: (message: string) => void }) {
   const { t } = useI18n();
-  const settings = useData<CodexCLISettings>("/settings/gemini-cli", realtime);
+  const settings = useResource(settingEndpoints.cli("gemini"));
   const [selectedVersion, setSelectedVersion] = useState("");
   const [versionBusy, setVersionBusy] = useState(false);
   const [versionError, setVersionError] = useState("");
@@ -19,8 +18,7 @@ export function GeminiSettings({ realtime, notify }: { realtime: number; notify:
   const updateVersion = async (check: boolean) => {
     setVersionBusy(true); setVersionError("");
     try {
-      const result = await post<CodexCLISettings>(`/settings/gemini-cli/${check ? "check-updates" : "select-version"}`, check ? {} : { version: selectedVersion });
-      settings.reload();
+      const result = await (check ? settingEndpoints.checkUpdates("gemini") : settingEndpoints.selectVersion("gemini", selectedVersion));
       notify(t("settings.geminiVersionApplied", { version: result.target_version }));
     } catch (failure) { setVersionError(errorMessage(failure)); }
     finally { setVersionBusy(false); }

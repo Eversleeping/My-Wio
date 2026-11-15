@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -37,7 +38,7 @@ function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Re
 }
 
 function renderSettings() {
-  return render(<I18nProvider><SettingsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  return render(<I18nProvider><DataProvider revisions={{}}><SettingsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
 }
 
 afterEach(() => {

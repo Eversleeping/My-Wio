@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { screen, waitFor, within, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -31,7 +32,7 @@ function setup() {
     if (url.startsWith("/api/audit")) return response({items:[],has_more:false,next:null});
     return response([]);
   }));
-  render(<I18nProvider><SettingsPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{}}><SettingsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
   return { user:userEvent.setup(), requests };
 }
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });

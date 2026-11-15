@@ -1,13 +1,11 @@
+import { Activity, ExternalLink, RefreshCw, Square } from "lucide-react";
+import { useEffect, useState } from "react";
+import { DataTable, ErrorState, Section, Status } from "../components/PageUI";
 import { operations as operationEndpoints } from "../data/operations";
 import { useResource } from "../data/resources";
-import { useEffect, useState } from "react";
-import { Activity, ExternalLink, RefreshCw, Square } from "lucide-react";
-import { post } from "../api";
-import { DataTable, ErrorState, Section, Status } from "../components/PageUI";
 import { relative } from "../format";
 import { useI18n } from "../i18n";
 import type { OperationSummary } from "../types";
-import { useData } from "../useData";
 
 export interface PageProps {
   realtime: number;

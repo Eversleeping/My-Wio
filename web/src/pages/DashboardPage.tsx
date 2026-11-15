@@ -1,11 +1,9 @@
-import { dashboard } from "../data/dashboard";
-import { useResource } from "../data/resources";
 import { AlertTriangle, BellRing, ChevronRight, GitBranch, Rocket, Server as ServerIcon, ShieldCheck } from "lucide-react";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "../components/PageUI";
+import { dashboard } from "../data/dashboard";
+import { useResource } from "../data/resources";
 import { relative, shortSHA } from "../format";
 import { useI18n } from "../i18n";
-import type { Summary } from "../types";
-import { useData, useThrottledValue } from "../useData";
 
 type DashboardDestination = "servers" | "projects" | "deployments" | "monitoring";
 

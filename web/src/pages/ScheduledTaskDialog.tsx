@@ -1,13 +1,13 @@
-import { GeminiThinkingPicker, compatibleGeminiThinking } from "../components/GeminiThinkingPicker";
-import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "../codexModels";
-import { CodexModelPicker } from "../components/CodexModelPicker";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { Check, LoaderCircle } from "lucide-react";
-import { useData } from "../useData";
-import { post, put } from "../api";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { compatibleReasoningEffort, reasoningOptionsFor, useCodexModels } from "../codexModels";
+import { CodexModelPicker } from "../components/CodexModelPicker";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
+import { GeminiThinkingPicker, compatibleGeminiThinking } from "../components/GeminiThinkingPicker";
+import { useResource } from "../data/resources";
+import { settings } from "../data/settings";
 import { useI18n } from "../i18n";
-import type { ScheduledTask, Thread, GeminiThread, ClaudeThread } from "../types";
+import type { ClaudeThread, GeminiThread, ScheduledTask, Thread } from "../types";
 
 
 function message(error: unknown) {
@@ -109,8 +109,7 @@ export function ScheduledTaskDialog({ open, task, initialThreadID, agentKind = "
     setBusy(true);
     try {
       const payload = { ...(form.agent_kind==="gemini" ? {thinking_level:form.thinking_level} : {}), agent_kind:form.agent_kind, thread_id: form.thread_id, name: form.name, prompt: form.prompt, schedule, timezone: form.timezone, enabled: form.enabled, model: form.model, reasoning_effort: form.reasoning_effort, approval_mode: form.approval_mode };
-      if (form.id) await put(`/scheduled-tasks/${form.id}`, payload);
-      else await post("/scheduled-tasks", payload);
+      await settings.saveScheduledTask(form.id, payload);
       onClose();
       onSaved();
       notify(t("settings.scheduledTaskSaved"));
@@ -125,7 +124,7 @@ export function ScheduledTaskDialog({ open, task, initialThreadID, agentKind = "
   const availableThreads = form.agent_kind==="claude" ? claudeThreads : form.agent_kind==="gemini" ? geminiThreads : threads;
   const threadAvailable = availableThreads.some(thread => thread.id === form.thread_id);
   const geminiWorkspace = geminiThreads.find(thread=>thread.id===form.thread_id)?.workspace_id;
-  const geminiModels = useData<{ models: Array<{id:string;name:string}> }>(open && form.agent_kind==="gemini" && geminiWorkspace ? `/workspaces/${geminiWorkspace}/gemini/models` : null, open);
+  const geminiModels = useResource(open && form.agent_kind==="gemini" && geminiWorkspace ? settings.geminiModels(geminiWorkspace) : null);
   const [customGeminiModel,setCustomGeminiModel]=useState(false);
   useEffect(() => { if (open) setCustomGeminiModel(false); }, [open, task?.id, form.agent_kind, form.thread_id]);
   return <Dialog open={open} title={t(form.id ? "settings.editScheduledTask" : "settings.newScheduledTask")} onClose={() => { if (!busy) onClose(); }} wide><form onSubmit={save}>

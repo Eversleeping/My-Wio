@@ -1,28 +1,26 @@
-import { monitoring } from "../data/monitoring";
-import { servers as serverEndpoints } from "../data/servers";
-import { useResource } from "../data/resources";
-import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  BellRing,
-  Check,
-  Cpu,
-  Gauge,
-  HardDrive,
-  MapPin,
-  MemoryStick,
-  MonitorDot,
-  Settings as SettingsIcon,
-  StickyNote
+AlertTriangle,
+ArrowDownToLine,
+ArrowUpFromLine,
+BellRing,
+Check,
+Cpu,
+Gauge,
+HardDrive,
+MapPin,
+MemoryStick,
+MonitorDot,
+Settings as SettingsIcon,
+StickyNote
 } from "lucide-react";
-import { post } from "../api";
+import { type ReactNode, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } from "react";
 import { DataTable, Section, Status } from "../components/PageUI";
+import { monitoring } from "../data/monitoring";
+import { useResource } from "../data/resources";
+import { servers as serverEndpoints } from "../data/servers";
 import { formatDate, relative } from "../format";
 import { currentLocale, useI18n } from "../i18n";
-import type { Alert, Metric, OperationMetrics, Server } from "../types";
-import { useData } from "../useData";
+import type { Metric, OperationMetrics, Server } from "../types";
 
 type ChartPoint = { time: string; values: number[] };
 type ChartSeries = { label: string; color: string; format: (value?: number) => string };

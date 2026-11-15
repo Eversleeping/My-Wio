@@ -1,44 +1,43 @@
-import { servers as serverEndpoints } from "../data/servers";
-import { settings } from "../data/settings";
-import { useResource } from "../data/resources";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import {
-  AlertTriangle,
-  Ban,
-  Check,
-  Database,
-  GitFork,
-  HardDrive,
-  KeyRound,
-  LoaderCircle,
-  LockKeyhole,
-  MapPin,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Server as ServerIcon,
-  Settings,
-  ShieldCheck,
-  SquareTerminal,
-  StickyNote,
-  Trash2,
-  Undo2,
-  Wifi,
-  WifiOff,
-  Wrench,
-  X
+AlertTriangle,
+Ban,
+Check,
+Database,
+GitFork,
+HardDrive,
+KeyRound,
+LoaderCircle,
+LockKeyhole,
+MapPin,
+Pencil,
+Plus,
+RefreshCw,
+Server as ServerIcon,
+Settings,
+ShieldCheck,
+SquareTerminal,
+StickyNote,
+Trash2,
+Undo2,
+Wifi,
+WifiOff,
+Wrench,
+X
 } from "lucide-react";
-import { APIError } from "../data/api";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { ServerCredentialDialog } from "../components/ServerCredentialDialog";
-import { ServerCLIManager } from "../components/ServerCLIManager";
-import { SSHCommandInput } from "../components/SSHCommandInput";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
 import { DataTable, Section, Status } from "../components/PageUI";
+import { ServerCLIManager } from "../components/ServerCLIManager";
+import { ServerCredentialDialog } from "../components/ServerCredentialDialog";
+import { SSHCommandInput } from "../components/SSHCommandInput";
+import { APIError } from "../data/api";
+import { useResource } from "../data/resources";
+import { servers as serverEndpoints } from "../data/servers";
+import { settings } from "../data/settings";
 import { formatCLIVersion, relative } from "../format";
 import { useI18n } from "../i18n";
-import type { CredentialProfile, Server, SSHBootstrapResult, SSHBootstrapStreamEvent, SSHHostKey } from "../types";
-import { useData } from "../useData";
+import type { Server, SSHBootstrapResult, SSHHostKey } from "../types";
 
 export interface ServersPageProps {
   notify: (text: string) => void;
