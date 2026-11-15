@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -48,14 +50,19 @@ func (s *Store) WorkspaceDeletionPlan(ctx context.Context, workspaceID string, f
 	if err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
+	return s.workspaceDeletionPlan(ctx, s.DB, workspace, force)
+}
+
+func (s *Store) workspaceDeletionPlan(ctx context.Context, query deletionQueryer, workspace Workspace, force bool) (WorkspaceDeletionPlan, error) {
+	workspaceID := workspace.ID
 	plan := WorkspaceDeletionPlan{WorkspaceID: workspace.ID, Path: workspace.Path, Managed: workspace.ManagementMode == "managed", Dirty: workspace.Dirty != 0, RecordBlockers: []string{}, FileBlockers: []string{}, Blockers: []string{}}
-	if err = s.DB.GetContext(ctx, &plan.ActiveOperations, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND status IN ('queued','delivered','running')"), workspaceID); err != nil {
+	if err := query.GetContext(ctx, &plan.ActiveOperations, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND status IN ('waiting','queued','delivered','running')"), workspaceID); err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
-	if err = s.DB.GetContext(ctx, &plan.ThreadCount, s.Q("SELECT (SELECT COUNT(*) FROM codex_threads WHERE workspace_id=?) + (SELECT COUNT(*) FROM gemini_threads WHERE workspace_id=?) + (SELECT COUNT(*) FROM claude_threads WHERE workspace_id=?)"), workspaceID, workspaceID, workspaceID); err != nil {
+	if err := query.GetContext(ctx, &plan.ThreadCount, s.Q("SELECT (SELECT COUNT(*) FROM codex_threads WHERE workspace_id=?) + (SELECT COUNT(*) FROM gemini_threads WHERE workspace_id=?) + (SELECT COUNT(*) FROM claude_threads WHERE workspace_id=?)"), workspaceID, workspaceID, workspaceID); err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
-	if err = s.DB.GetContext(ctx, &plan.ChildWorkspaces, s.Q("SELECT COUNT(*) FROM workspaces WHERE parent_workspace_id=?"), workspaceID); err != nil {
+	if err := query.GetContext(ctx, &plan.ChildWorkspaces, s.Q("SELECT COUNT(*) FROM workspaces WHERE parent_workspace_id=?"), workspaceID); err != nil {
 		return WorkspaceDeletionPlan{}, err
 	}
 	if plan.ActiveOperations != 0 {
@@ -69,6 +76,27 @@ func (s *Store) WorkspaceDeletionPlan(ctx context.Context, workspaceID string, f
 	}
 	plan.CanRemoveRecord = len(plan.RecordBlockers) == 0
 	plan.FileBlockers = append([]string(nil), plan.RecordBlockers...)
+	if workspace.Kind == "worktree" && plan.Managed {
+		// File deletion owns the worktree and its idle sessions. Metadata-only
+		// removal still requires the user to remove sessions separately.
+		plan.FileBlockers = []string{}
+		if plan.ActiveOperations != 0 {
+			plan.FileBlockers = append(plan.FileBlockers, "workspace has active operations")
+		}
+		if plan.ChildWorkspaces != 0 {
+			plan.FileBlockers = append(plan.FileBlockers, "workspace has linked worktrees")
+		}
+		var activeSessions int
+		if err := query.GetContext(ctx, &activeSessions, s.Q(`SELECT
+			(SELECT COUNT(*) FROM codex_threads WHERE workspace_id=? AND status IN ('queued','running','interrupting')) +
+			(SELECT COUNT(*) FROM gemini_threads WHERE workspace_id=? AND status IN ('queued','running','interrupting')) +
+			(SELECT COUNT(*) FROM claude_threads WHERE workspace_id=? AND status IN ('queued','running','interrupting'))`), workspaceID, workspaceID, workspaceID); err != nil {
+			return WorkspaceDeletionPlan{}, err
+		}
+		if activeSessions > 0 {
+			plan.FileBlockers = append(plan.FileBlockers, "workspace has active sessions")
+		}
+	}
 	if !plan.Managed {
 		plan.FileBlockers = append(plan.FileBlockers, "workspace is not managed")
 	}
@@ -161,6 +189,24 @@ func (s *Store) QueueWorkspaceLifecycle(ctx context.Context, workspace Workspace
 	}
 	if active != 0 {
 		return "", ErrWorkspaceWriteActive
+	}
+	if command.Action == "delete" && workspace.Kind == "worktree" {
+		// Read the current row under the writer lock, rather than trusting the
+		// preview (or the caller's earlier workspace snapshot).
+		var current Workspace
+		if err := tx.GetContext(ctx, &current, s.Q("SELECT id,path,management_mode,kind,dirty FROM workspaces WHERE id=?"), workspace.ID); err != nil {
+			return "", err
+		}
+		if current.Kind != command.WorkspaceKind || current.Path != command.SourcePath {
+			return "", stateConflict("workspace changed before deletion")
+		}
+		plan, err := s.workspaceDeletionPlan(ctx, tx, current, command.Force)
+		if err != nil {
+			return "", err
+		}
+		if !plan.CanDeleteFiles {
+			return "", stateConflict(strings.Join(plan.FileBlockers, "; "))
+		}
 	}
 	operationID := NewID()
 	now := time.Now().UTC()
@@ -314,6 +360,14 @@ func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operat
 		return err
 	}
 	defer tx.Rollback()
+	if command.Action == "delete" {
+		if err := s.lockWorkspaceInventory(ctx, tx, operation.ServerID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), command.WorkspaceID); err != nil {
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	if err = s.completeActiveOperation(ctx, tx, operation.ID, "succeeded", operationResult.Message, data, now); err != nil {
 		return err
@@ -337,6 +391,26 @@ func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operat
 			return err
 		}
 	case "delete":
+		if command.WorkspaceKind == "worktree" {
+			var current Workspace
+			if err := tx.GetContext(ctx, &current, s.Q("SELECT id,path,management_mode,kind,dirty FROM workspaces WHERE id=?"), command.WorkspaceID); err != nil {
+				return err
+			}
+			plan, err := s.workspaceDeletionPlan(ctx, tx, current, true)
+			if err != nil {
+				return err
+			}
+			if !plan.CanDeleteFiles {
+				return ErrWorkspaceWriteActive
+			}
+		}
+		if err := s.clearWorkspaceSessionRecords(ctx, tx, command.WorkspaceID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO workspace_inventory_exclusions(server_id,path)
+			SELECT server_id,path FROM workspaces WHERE id=? ON CONFLICT(server_id,path) DO NOTHING`), command.WorkspaceID); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, s.Q("DELETE FROM workspaces WHERE id=? AND server_id=?"), command.WorkspaceID, operation.ServerID)
 		if err != nil {
 			return err
@@ -407,4 +481,28 @@ func (s *Store) WorkspaceLifecycleCommand(ctx context.Context, operationID strin
 		return Operation{}, protocol.GitWorkspaceLifecycleCommand{}, fmt.Errorf("decode workspace lifecycle command: %w", err)
 	}
 	return operation, command, nil
+}
+
+// Clear records without foreign keys before the workspace cascade removes native
+// sessions. Keep operation and collaboration provenance for existing references.
+func (s *Store) clearWorkspaceSessionRecords(ctx context.Context, tx *sqlx.Tx, workspaceID string) error {
+	keys := `SELECT 'codex:'||id FROM codex_threads WHERE workspace_id=?
+		UNION ALL SELECT 'gemini:'||id FROM gemini_threads WHERE workspace_id=?
+		UNION ALL SELECT 'claude:'||id FROM claude_threads WHERE workspace_id=?`
+	for _, table := range []string{"session_subscriptions", "session_tool_waits"} {
+		if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM "+table+" WHERE target_key IN ("+keys+") OR source_key IN ("+keys+")"), workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_links WHERE target_key IN ("+keys+")"), workspaceID, workspaceID, workspaceID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_tool_grants WHERE source_key IN ("+keys+")"), workspaceID, workspaceID, workspaceID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, s.Q(`DELETE FROM events WHERE stream_id IN (
+		SELECT id FROM codex_threads WHERE workspace_id=?
+		UNION ALL SELECT id FROM gemini_threads WHERE workspace_id=?
+		UNION ALL SELECT id FROM claude_threads WHERE workspace_id=?)`), workspaceID, workspaceID, workspaceID)
+	return err
 }

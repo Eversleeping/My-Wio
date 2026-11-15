@@ -206,3 +206,28 @@ func TestCrossServerWorkspaceCopyBlocksDirtyAndUnpushedCommits(t *testing.T) {
 		t.Fatalf("unpushed copy returned %d: %s", response.Code, response.Body.String())
 	}
 }
+
+func TestWorktreePhysicalDeleteAllowsIdleSessionRecords(t *testing.T) {
+	db := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, db, "worktree-delete-api")
+	ctx := context.Background()
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node", ManagedRoots: []string{"/srv/managed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/managed/temp", Name: "temp"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, _ := db.ListWorkspaces(ctx)
+	workspace := workspaces[0]
+	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE workspaces SET kind='worktree',management_mode='managed' WHERE id=?"), workspace.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateClaudeThread(ctx, workspace.ID, "sonnet", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	api := resourceTestAPI(db)
+	response := workspaceResourceRequest(t, http.MethodDelete, "/api/workspaces/"+workspace.ID+"?mode=files", workspace.ID, nil, api.deleteWorkspace)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("delete worktree with idle session: %d %s", response.Code, response.Body.String())
+	}
+}

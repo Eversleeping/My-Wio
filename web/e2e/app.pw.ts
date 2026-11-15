@@ -625,6 +625,34 @@ test("an administrator renames a managed project workspace", async ({ page }, te
   await expect(dialog.getByLabel("Workspace name")).toHaveValue("web-console-main");
 });
 
+test("worktree file deletion includes its workspace and session records after confirmation", async ({ page }) => {
+  const worktree = { ...managedWorkspace, kind: "worktree", display_name: "temporary-feature" };
+  const writes: MockAPIRequest[] = [];
+  await installMockApplication(page, { configured: true, onAPIRequest: request => {
+    if (request.path === "/projects") return { body: [workspaceProject] };
+    if (request.path === "/workspaces") return { body: [worktree] };
+    if (request.path === "/servers") return { body: [workspaceServer] };
+    if (request.path.endsWith("/deletion-plan")) return { body: { workspace_id: worktree.id, managed: true, dirty: false, active_operations: 0, thread_count: 3, child_workspaces: 0, can_remove_record: false, can_delete_files: true, record_blockers: ["workspace has sessions"], file_blockers: [], blockers: [] } };
+    if (request.method === "DELETE" && request.path === `/workspaces/${worktree.id}`) { writes.push(request); return { body: { operation_id: "delete-worktree" } }; }
+    return undefined;
+  } });
+  await page.goto("/?view=projects");
+  await page.getByTitle("Manage workspace").click();
+  const dialog = page.getByRole("dialog", { name: /Manage workspace/ });
+  await dialog.getByRole("tab", { name: "Delete", exact: true }).click();
+  await expect(dialog.getByText("workspace has sessions")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+  await dialog.getByRole("tab", { name: "Delete managed files" }).click();
+  await expect(dialog.getByText("Delete this worktree directory, its workspace, and all sessions and message history in it. The source workspace is preserved.")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+  await dialog.getByRole("textbox").fill("temporary-feature");
+  expect(writes).toHaveLength(0);
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(writes).toHaveLength(1);
+  expect(writes[0].search).toBe("?mode=files&force=false");
+});
+
 test("an authenticated user creates a Codex session in a workspace", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "Codex session creation is covered at desktop width.");
   let sessionCreated = false;

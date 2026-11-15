@@ -297,7 +297,7 @@ func (a *API) lifecycleWorkspace(w http.ResponseWriter, r *http.Request, action,
 
 func (a *API) queueWorkspaceLifecycle(w http.ResponseWriter, r *http.Request, workspace store.Workspace, server store.Server, command protocol.GitWorkspaceLifecycleCommand) {
 	operationID, err := a.store.QueueWorkspaceLifecycle(r.Context(), workspace, command)
-	if errors.Is(err, store.ErrWorkspaceWriteActive) {
+	if errors.Is(err, store.ErrWorkspaceWriteActive) || errors.Is(err, store.ErrStateConflict) {
 		writeStoreError(w, err, "could not change workspace")
 		return
 	}

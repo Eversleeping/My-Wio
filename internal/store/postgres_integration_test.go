@@ -117,6 +117,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer scans.Close()
+	t.Run("worktree deletion", func(t *testing.T) { assertWorktreeDeletionCleansSessions(t, scans) })
 	assertPostgresInteractiveConnections(t, scans)
 	assertWorkspaceFileScanTimeoutAndRetry(t, scans)
 	assertOperationInterruptLifecycle(t, scans)
