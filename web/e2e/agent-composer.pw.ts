@@ -8,7 +8,7 @@ test.afterEach(({ page }) => assertMockApplication(page));
 for (const engine of ["codex", "claude", "gemini"] as const) {
   test(`${engine} keeps mobile scrolling inside panes and attaches screenshots without changing desktop paste`, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-chromium";
-    const base = engine === "codex" ? "/threads" : `/${engine}/threads`;
+    const base = `/sessions/${engine}`;
     const workspace = { id: "workspace", project_id: "project", server_id: "server", server_name: "Server", project_name: "Project", path: "/srv/project", display_name: "Project", status: "ready", kind: "primary" };
     const thread = {
       id: "screenshot-thread", workspace_id: workspace.id, project_id: workspace.project_id,
@@ -29,7 +29,7 @@ for (const engine of ["codex", "claude", "gemini"] as const) {
       onAPIRequest: request => {
         if (request.path === "/workspaces") return { body: [workspace] };
         if (request.path === "/servers") return { body: [{ id: "server", name: "Server", status: "online" }] };
-        if (request.path === base) return { body: engine === "codex" ? { items: request.search.includes("archived=true") ? [] : [thread], has_more: false, next: null } : [thread] };
+        if (request.path === "/sessions") return { body: {items: request.search.includes("archived=true") ? [] : [thread], next_cursor: null, groups: []} };
         if (request.path === `${base}/${thread.id}`) return { body: thread };
         if (request.path === `${base}/${thread.id}/events`) return { body: events };
         if (request.path === `${base}/${thread.id}/goal`) return { body: engine === "codex" ? { status: "succeeded", supported: true, data: null, error: "" } : null };

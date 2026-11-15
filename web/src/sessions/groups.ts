@@ -1,5 +1,5 @@
 import type { Workspace } from "../types";
-import type { SessionGroupSummary, SessionSummary } from "./types";
+import type { SessionGroupSummary,SessionSummary } from "./types";
 
 export type SessionGroup<T> = {
   id: string; name: string; path: string; serverName: string;

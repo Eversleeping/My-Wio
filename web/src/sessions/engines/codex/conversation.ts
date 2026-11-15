@@ -1,6 +1,6 @@
-import { type StreamEvent, type CodexGoal, type CodexSkill, type CodexMCPServer, type CodexStatusData } from "../types";
-import { extractImageSources } from "../imageContent";
-import { pretty } from "../text";
+import { extractImageSources } from "../../../imageContent";
+import { pretty } from "../../../text";
+import { type CodexGoal,type CodexMCPServer,type CodexSkill,type CodexStatusData,type StreamEvent } from "../../../types";
 
 export type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
 

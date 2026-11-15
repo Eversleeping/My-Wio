@@ -1,12 +1,12 @@
-import { type Approval } from "../types";
-import { useI18n } from "../i18n";
-import { isUserInputRequest, UserInputPrompt } from "../components/UserInputPrompt";
-import { ShieldCheck, Ban, LoaderCircle, Check } from "lucide-react";
-import { relative } from "../format";
-import { readableKind, asRecord } from "./conversation";
+import { Ban,Check,LoaderCircle,ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import { post } from "../api";
-import { message, pretty } from "../text";
+import { post } from "../../../api";
+import { isUserInputRequest,UserInputPrompt } from "../../../components/UserInputPrompt";
+import { relative } from "../../../format";
+import { useI18n } from "../../../i18n";
+import { message,pretty } from "../../../text";
+import { type Approval } from "../../../types";
+import { asRecord,readableKind } from "./conversation";
 
 export function ApprovalPrompt({ item, onDecided, notify }: { item: Approval; onDecided: () => void; notify: (text: string) => void }) {
   const { t } = useI18n();

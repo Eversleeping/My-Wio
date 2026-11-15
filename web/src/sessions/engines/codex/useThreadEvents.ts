@@ -1,10 +1,11 @@
-import { type StreamEvent } from "../types";
-import { clearFileDrafts } from "../workspaceFileEditing";
-import { clearDataCacheMatching } from "../useData";
+import { useCallback,useEffect,useRef,useState } from "react";
+import { api } from "../../../api";
+import { message } from "../../../text";
+import { type StreamEvent } from "../../../types";
+import { clearDataCacheMatching } from "../../../useData";
+import { clearFileDrafts } from "../../../workspaceFileEditing";
+import { registerSessionMemory } from "../../memory";
 import { codexScrollPositions } from "./scroll";
-import { useState, useRef, useCallback, useEffect } from "react";
-import { api } from "../api";
-import { message } from "../text";
 
 // invalidatedFrom is the lowest sequence invalidated since the entry was stored:
 // undefined when nothing changed and null when the position is unknown.
@@ -18,10 +19,10 @@ const threadEventsPageSize = 500;
 
 export function clearCodexSessionMemory(threadID?: string) {
   if (!threadID) clearFileDrafts();
-  const eventPrefix = threadID ? `/threads/${threadID}/events?` : "/threads/";
+  const eventPrefix = threadID ? `/sessions/codex/${threadID}/events?` : "/sessions/codex/";
   clearDataCacheMatching(path => path.startsWith(eventPrefix) && path.includes("/events?"));
   for (const path of threadEventsCache.keys()) {
-    if (!threadID || path.startsWith(`/threads/${threadID}/events?`)) threadEventsCache.delete(path);
+    if (!threadID || path.startsWith(`/sessions/codex/${threadID}/events?`)) threadEventsCache.delete(path);
   }
   for (const key of codexScrollPositions.keys()) {
     if (!threadID || key.startsWith(`${threadID}:`)) codexScrollPositions.delete(key);
@@ -40,7 +41,7 @@ function lowestInvalidation(current: number | null | undefined, next: number | n
  * so a view opened later must not trust only the latest batch.
  */
 export function invalidateThreadEvents(threadID: string, sequence: number | null) {
-  const prefix = `/threads/${threadID}/events?`;
+  const prefix = `/sessions/codex/${threadID}/events?`;
   for (const [path, entry] of threadEventsCache) {
     if (path.startsWith(prefix)) entry.invalidatedFrom = lowestInvalidation(entry.invalidatedFrom, sequence);
   }
@@ -90,7 +91,7 @@ function latestEventSequence(events: StreamEvent[]) {
 
 export function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown, globalRevision = 0, streamRevision = 0, invalidationSequence?: number | null) {
   const view = rawEvents ? "raw" : "conversation";
-  const path = `/threads/${threadID}/events?view=${view}`;
+  const path = `/sessions/codex/${threadID}/events?view=${view}`;
   const [state, setState] = useState<{ path: string; data: StreamEvent[] | null; error: string; loading: boolean; loadingEarlier: boolean }>({ path: "", data: null, error: "", loading: false, loadingEarlier: false });
   const [reloadNonce, setReloadNonce] = useState(0);
   const appliedReloadNonceRef = useRef(0);
@@ -191,3 +192,5 @@ export function useThreadEvents(threadID: string, rawEvents: boolean, realtime: 
   const current = state.path === path ? state : { path, data: cached?.events ?? null, error: "", loading: !cached, loadingEarlier: false };
   return { data: current.data, error: current.error, loading: current.loading, loadingEarlier: current.loadingEarlier, hasEarlier: cached?.hasEarlier ?? false, loadEarlier, reload };
 }
+
+registerSessionMemory("codex", { clear: clearCodexSessionMemory, invalidate: invalidateThreadEvents });

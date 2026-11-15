@@ -1,8 +1,8 @@
-import { act, renderHook } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
-import { sessionListPath, sessionPath } from "./api";
-import { mergeSessions, useSessionList } from "./useSessionList";
-import type { SessionFilter, SessionSummary } from "./types";
+import { act,renderHook } from "@testing-library/react";
+import { afterEach,expect,test,vi } from "vitest";
+import { sessionListPath,sessionPath } from "./api";
+import type { SessionFilter,SessionSummary } from "./types";
+import { mergeSessions,useSessionList } from "./useSessionList";
 
 const row = (id: string, engine = "claude"): SessionSummary => ({ id, engine: engine as "claude", workspace_id: "w", project_id: "p", project_name: "Project", server_id: "s", server_name: "Server", path: "/project", title: id, status: "idle", created_at: "", updated_at: "", archived_at: null });
 const groups = [{ workspace_id: "w", matched_count: 4, latest_updated_at: "now", project_pinned_at: null }];

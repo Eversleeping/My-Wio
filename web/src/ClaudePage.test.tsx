@@ -561,3 +561,12 @@ test("disables a cancelled Claude question while its task is still running",asyn
  expect(await screen.findByText("This question cannot be answered now. Check the task status.")).toBeInTheDocument();
  expect(screen.getByRole("radio",{name:"PostgreSQL SQL"})).toBeDisabled();
 });
+
+test("keeps project-wide archive on the project API when session actions use unified routes", async () => {
+  const { user, requests } = setup({ selected: true });
+  await user.click(await screen.findByRole("button", {name: /Workspace menu for/}));
+  await user.click(screen.getByRole("menuitem", {name: "Archive all project tasks"}));
+  const dialog = screen.getByRole("dialog", {name: "Archive all project tasks"});
+  await user.click(within(dialog).getByRole("button", {name: "Archive all project tasks"}));
+  await waitFor(() => expect(requests).toContainEqual({url: "/api/projects/project-1/claude/threads/archive?server_id=server-1", body: {}}));
+});

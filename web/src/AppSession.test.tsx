@@ -173,10 +173,10 @@ test("reloads an edited Codex session after switching away while realtime batche
     const path = url.pathname.replace(/^\/api/, "");
     if (path === "/setup/status") return jsonResponse({ configured: true, auth_mode: "password" });
     if (path === "/auth/session") return jsonResponse(session);
-    if (path === "/threads") return jsonResponse({ items: url.searchParams.has("archived") ? [] : [edited, other], has_more: false, next: null });
+    if (path === "/sessions") return jsonResponse({ items: url.searchParams.get("archived") === "true" ? [] : [edited, other], next_cursor: null, groups: [] });
     if (path.endsWith("/goal")) return jsonResponse({ status: "idle", supported: true, data: {} });
-    if (path === `/threads/${other.id}/events`) return jsonResponse([message(other.id, 1, "Other conversation")]);
-    if (path === `/threads/${edited.id}/events`) {
+    if (path === `/sessions/codex/${other.id}/events`) return jsonResponse([message(other.id, 1, "Other conversation")]);
+    if (path === `/sessions/codex/${edited.id}/events`) {
       eventRequests.push(`${path}${url.search}`);
       const after = Number(url.searchParams.get("after") ?? 0);
       return jsonResponse(editedEvents.filter(event => event.sequence > after));
@@ -203,7 +203,7 @@ test("reloads an edited Codex session after switching away while realtime batche
     await screen.findByText("Answer to the edit");
     expect(screen.getByText("Edited message")).toBeInTheDocument();
     expect(screen.queryByText("Pre-edit tail")).not.toBeInTheDocument();
-    expect(eventRequests).toEqual([`/threads/${edited.id}/events?view=conversation`, `/threads/${edited.id}/events?view=conversation`]);
+    expect(eventRequests).toEqual([`/sessions/codex/${edited.id}/events?view=conversation`, `/sessions/codex/${edited.id}/events?view=conversation`]);
   } finally {
     window.history.replaceState(null, "", "/");
   }

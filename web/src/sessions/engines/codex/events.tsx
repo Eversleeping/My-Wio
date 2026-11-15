@@ -1,34 +1,34 @@
-import { type StreamEvent } from "../types";
-import { type FilePreviewSelection } from "../codexContent";
-import { useI18n } from "../i18n";
-import { asRecord, errorText, extractText, toolSummary, toolDetail, readableKind } from "./conversation";
-import { readableQuestionReply, asyncQuestions } from "../asyncUserInput";
-import { extractImageSources } from "../imageContent";
-import { copyText, message, pretty } from "../text";
 import {
-  UserRound,
-  Image as ImageIcon,
-  Copy,
-  Pencil,
-  Ban,
-  AlertTriangle,
-  Minimize2,
-  MoreHorizontal,
-  GitFork,
-  Bot,
-  Users,
-  GitBranch,
-  SquareTerminal,
-  Wrench,
-  ChevronRight,
-  Braces
+AlertTriangle,
+Ban,
+Bot,
+Braces,
+ChevronRight,
+Copy,
+GitBranch,
+GitFork,
+Image as ImageIcon,
+Minimize2,
+MoreHorizontal,
+Pencil,
+SquareTerminal,
+UserRound,
+Users,
+Wrench
 } from "lucide-react";
-import { formatTime } from "../format";
-import { MarkdownContent } from "../components/LazyMarkdown";
-import { MessageImages } from "../components/MessageImages";
-import { ContextMenu } from "../ContextMenu";
-import { QuestionForm } from "../components/UserInputPrompt";
-import { Status } from "../components/PageUI";
+import { asyncQuestions,readableQuestionReply } from "../../../asyncUserInput";
+import { type FilePreviewSelection } from "../../../codexContent";
+import { MarkdownContent } from "../../../components/LazyMarkdown";
+import { MessageImages } from "../../../components/MessageImages";
+import { Status } from "../../../components/PageUI";
+import { QuestionForm } from "../../../components/UserInputPrompt";
+import { ContextMenu } from "../../../ContextMenu";
+import { formatTime } from "../../../format";
+import { useI18n } from "../../../i18n";
+import { extractImageSources } from "../../../imageContent";
+import { copyText,message,pretty } from "../../../text";
+import { type StreamEvent } from "../../../types";
+import { asRecord,errorText,extractText,readableKind,toolDetail,toolSummary } from "./conversation";
 
 export function ConversationEventItem({ event, onEdit, onFork, forkDisabled = false, notify, workspaceRoot, onOpenFile, questionAnswers = {}, onAnswer }: { event: StreamEvent; onEdit?: (eventID: string, text: string) => void; onFork?: (eventID: string) => Promise<void>; forkDisabled?: boolean; notify: (text: string) => void; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void; questionAnswers?: Record<string, string>; onAnswer?: (values: Record<string, string>) => Promise<void> }) {
   const { t } = useI18n();

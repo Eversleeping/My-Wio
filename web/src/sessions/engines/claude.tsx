@@ -1,46 +1,48 @@
-import { ComposerInput, ComposerAttachments } from "../Composer";
+import { Archive,ArchiveRestore,ArrowUp,Bot,CalendarClock,Copy,Gauge,GitFork,ListChecks,LoaderCircle,MessageSquare,MoreHorizontal,Pencil,Plus,Settings2,Square,UserRound,Workflow,X } from "lucide-react";
+import { useCallback,useEffect,useMemo,useRef,useState,type FormEvent } from "react";
+import { ContextMenu,type ContextMenuAction } from "../../ContextMenu";
+import MarkdownContent from "../../MarkdownContent";
+import { SlashCommandMenu,type SlashCommandItem } from "../../SlashCommandMenu";
+import { api,patch,post,remove } from "../../api";
+import { claudeDisplayEvents } from "../../claudeContent";
+import { useClaudeModels,type ClaudeModel } from "../../claudeModels";
+import { useClaudeSkills,validClaudeSkillName,type ClaudeSkill } from "../../claudeSkills";
+import { type FilePreviewSelection } from "../../codexContent";
+import { ClaudeCompactionEvent } from "../../components/ClaudeCompactionEvent";
+import { ClaudeModelPicker } from "../../components/ClaudeModelPicker";
+import { ClaudeQuestion } from "../../components/ClaudeQuestion";
+import { ClaudeToolGroup } from "../../components/ClaudeToolGroup";
+import { CollaborationTaskDialog,useSubmitPrompt } from "../../components/CollaborationTaskDialog";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { DialogActions } from "../../components/Dialog";
+import { Dialog,ErrorBanner,Field } from "../../components/FormUI";
+import { MessageImages } from "../../components/MessageImages";
+import { Empty,ErrorState,Status } from "../../components/PageUI";
+import { SessionUsage } from "../../components/SessionUsage";
+import { formatDate,formatTime } from "../../format";
+import { useI18n } from "../../i18n";
+import { compressImage } from "../../imageCompression";
+import { useSessionManagement } from "../useSessionManagement";
+import { ScheduledTaskDialog } from "../../pages/ScheduledTaskDialog";
+import { message } from "../../text";
+import type { ClaudeThread,Server,StreamEvent,Workspace } from "../../types";
+import { useData,useThrottledValue } from "../../useData";
+import { ComposerAttachments,ComposerInput } from "../Composer";
 import { RenameSessionDialog } from "../SessionDialogs";
 import { SessionPage } from "../SessionPage";
 import { Sidebar } from "../Sidebar";
-import { groupSessions, withSelectedSession } from "../groups";
+import { groupSessions,withSelectedSession } from "../groups";
+import type { SessionEngineProps } from "../types";
 import { useSessionList } from "../useSessionList";
-import { ClaudeQuestion } from "../../components/ClaudeQuestion";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, MoreHorizontal, Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound, Workflow } from "lucide-react";
-import { api, patch, post, remove } from "../../api";
-import { Dialog, ErrorBanner, Field } from "../../components/FormUI";
-import { message } from "../../text";
-import { type FilePreviewSelection } from "../../codexContent";
-import { SlashCommandMenu, type SlashCommandItem } from "../../SlashCommandMenu";
-import { CollaborationTaskDialog, useSubmitPrompt } from "../../components/CollaborationTaskDialog";
-import { compressImage } from "../../imageCompression";
-import { MessageImages } from "../../components/MessageImages";
-import { SessionUsage } from "../../components/SessionUsage";
-import { ClaudeModelPicker } from "../../components/ClaudeModelPicker";
-import { ClaudeToolGroup } from "../../components/ClaudeToolGroup";
-import { ClaudeCompactionEvent } from "../../components/ClaudeCompactionEvent";
-import { claudeDisplayEvents } from "../../claudeContent";
-import { useClaudeSkills, validClaudeSkillName, type ClaudeSkill } from "../../claudeSkills";
-import { useClaudeModels, type ClaudeModel } from "../../claudeModels";
-import { useClaudeManagement } from "../../pages/claudeManagement";
-import { ContextMenu, type ContextMenuAction } from "../../ContextMenu";
-import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { DialogActions } from "../../components/Dialog";
-import { Empty, ErrorState, Status } from "../../components/PageUI";
-import { useI18n } from "../../i18n";
-import { formatDate, formatTime } from "../../format";
-import MarkdownContent from "../../MarkdownContent";
-import type { ClaudeThread, Server, StreamEvent, Workspace } from "../../types";
-import { useData, useThrottledValue } from "../../useData";
+import { useSessionRevision } from "../useSessionRevision";
 
-type Props = { realtime: number; notify: (text: string) => void; selectedThreadID: string; onSelectThread: (id: string, replace?: boolean) => void };
 const modes = ["default", "acceptEdits", "plan", "bypassPermissions"];
 const activeTurn = (thread: ClaudeThread) => ["queued", "running", "interrupting"].includes(thread.status);
 
-export default function ClaudePage({ realtime, notify, selectedThreadID, onSelectThread }: Props) {
+export default function ClaudePage({ realtime, notify, selectedThreadID, onSelectThread }: SessionEngineProps) {
   const { t } = useI18n();
   const [search, setSearch] = useState("");
-  const [tick, setTick] = useState(0);
+  const { tick, refresh: bumpRevision } = useSessionRevision();
   const [archived, setArchived] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [workspaceID, setWorkspaceID] = useState("");
@@ -64,9 +66,8 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const workspaces = useData<Workspace[]>("/workspaces", dependency);
   const servers = useData<Server[]>("/servers", realtime);
   const thread = threads.data?.find(item => item.id === selectedThreadID) ?? selected.data;
-  const refresh = () => setTick(value => value + 1);
+  const refresh = bumpRevision;
 
-  useEffect(() => { const timer = window.setInterval(() => { if (!document.hidden) refresh(); }, 5000); return () => clearInterval(timer); }, []);
   useEffect(() => { if (!selectedThreadID) { const first = threads.data?.find(item => !item.project_hidden_at); if (first) onSelectThread(first.id, true); } }, [selectedThreadID, threads.data, onSelectThread]);
   useEffect(() => { if (selected.data) setArchived(Boolean(selected.data.archived_at)); }, [selected.data?.id, selected.data?.archived_at]);
 
@@ -91,7 +92,7 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   const newSession = (id = thread?.workspace_id ?? "") => { const previous = threads.data?.find(item => item.workspace_id === id); setWorkspaceID(id); updateModel(modelForWorkspace(id)); modelSelected.current = false; setEffort(previous?.effort ?? ""); setMode(previous?.permission_mode ?? "default"); setError(""); setCreateOpen(true); };
 
   const groups = useMemo(() => groupSessions(withSelectedSession(threads.data ?? [], selected.data, archived, search), workspaces.data ?? [], threads.groups), [search, archived, threads.data, threads.groups, selected.data, workspaces.data]);
-  const management = useClaudeManagement({ workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify });
+  const management = useSessionManagement<ClaudeThread>("claude", { workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify }, item => Boolean(item.input_supported), (scheduled, close) => <ScheduledTaskDialog open={Boolean(scheduled)} initialThreadID={scheduled?.id} agentKind="claude" lockThread threads={[]} claudeThreads={scheduled ? [scheduled] : []} notify={notify} onClose={close} onSaved={refresh} />);
   const threadActions = (item: ClaudeThread): ContextMenuAction[] => { const actions=management.threadActions(item); return [
     ...actions.filter(action => action.id === "pin"),
     { id: "rename", label: t("gemini.rename"), icon: Pencil, disabled: busy || activeTurn(item) || item.recovery_pending, onSelect: () => { setRenaming(item); setTitle(item.title); } },

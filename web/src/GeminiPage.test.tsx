@@ -14,7 +14,7 @@ const thread = {id:"thread-1",workspace_id:"workspace-1",project_name:"Project",
 function setup(selected = false, model = "auto", upstreamState = "configured", events: unknown[] = [], options: { rewriteSupported?: boolean; rewriteFailure?: boolean; status?: string; recoveryPending?: boolean; archived?: boolean; inputSupported?: boolean; answerFailure?: boolean; steerSupported?: boolean; steerImagesSupported?: boolean; steerReady?: boolean; steerFailure?: boolean; planSupported?: boolean; skillsSupported?: boolean; skillsManagementSupported?: boolean; skillsNetworkFailure?: boolean; goalSupported?: boolean; goal?: GeminiGoal; goalLoadFailures?: number; goalStartFailure?: boolean; strictMode?: boolean; credentialRevision?: string; modelCredentialRevision?: string; defaultModel?: string; modelIDs?: string[]; modelResponseGate?: Promise<void>; thinking?: string; } = {}) {
   window.localStorage.setItem("wio_language","en");
   let eventLog = events;
-  const currentThread = {...thread, credential_revision:options.credentialRevision, model_credential_revision:options.modelCredentialRevision, thinking_level:options.thinking ?? "", archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_images_supported:options.steerImagesSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,skills_management_supported:options.skillsManagementSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
+  const currentThread = {...thread, server_id: "server-1", credential_revision:options.credentialRevision, model_credential_revision:options.modelCredentialRevision, thinking_level:options.thinking ?? "", archived_at:options.archived ? thread.updated_at : null, recovery_pending:options.recoveryPending ?? false,steer_supported:options.steerSupported ?? false,steer_images_supported:options.steerImagesSupported ?? false,steer_ready:options.steerReady ?? false, input_supported:options.inputSupported ?? true,plan_supported:options.planSupported ?? false,skills_supported:options.skillsSupported ?? false,skills_management_supported:options.skillsManagementSupported ?? false,goal_supported:options.goalSupported ?? false,operation_id:"op1", project_id:"project-1",session_id:"native-1",fork_supported:true, rewrite_supported: options.rewriteSupported ?? true, status: options.status ?? "idle"};
   const requests: Array<{url:string; body:unknown}> = [];
   const modelRequests: string[] = [];
   let goalLoadFailures = options.goalLoadFailures ?? 0;
@@ -909,4 +909,13 @@ test("explains remote browser prerequisites before preparing a request", async (
   expect(within(dialog).getByText(/Chrome 144 or newer/)).toBeInTheDocument();
   await user.click(within(dialog).getByRole("button", {name:"Prepare browser task"}));
   expect((input as HTMLTextAreaElement).value).toContain("browser_agent");
+});
+
+test("keeps project-wide archive on the project API when session actions use unified routes", async () => {
+  const { user, requests } = setup(true);
+  await user.click(await screen.findByRole("button", {name: /Workspace menu for/}));
+  await user.click(screen.getByRole("menuitem", {name: "Archive all project tasks"}));
+  const dialog = screen.getByRole("dialog", {name: "Archive all project tasks"});
+  await user.click(within(dialog).getByRole("button", {name: "Archive all project tasks"}));
+  await waitFor(() => expect(requests).toContainEqual({url: "/api/projects/project-1/gemini/threads/archive?server_id=server-1", body: {}}));
 });

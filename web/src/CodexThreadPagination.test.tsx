@@ -57,8 +57,8 @@ function renderCodex(realtime: number, selectedThreadID = "", onSelectThread = v
 
 function auxiliaryResponse(path: string, threads: Thread[]) {
   if (path === "/api/workspaces") return jsonResponse(threads.map(workspace));
-  if (/\/api\/threads\/[^/]+\/events$/.test(path)) return jsonResponse([]);
-  if (/\/api\/threads\/[^/]+\/goal$/.test(path)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
+  if (/\/api\/sessions\/codex\/[^/]+\/events$/.test(path)) return jsonResponse([]);
+  if (/\/api\/sessions\/codex\/[^/]+\/goal$/.test(path)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
   if (/\/api\/workspaces\/[^/]+\/files$/.test(path)) return jsonResponse({ workspace_id: path.split("/")[3], files: [], truncated: false, status: "succeeded", error: "", requested_at: null, updated_at: null });
   return null;
 }
@@ -80,9 +80,9 @@ test("loads more sessions and preserves the loaded tail during a realtime first-
   let firstTitle = first.title;
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input), window.location.origin);
-    if (url.pathname === "/api/threads" && url.search === "?limit=50") return jsonResponse({ items: [{ ...first, title: firstTitle }], has_more: true, next: 50 });
-    if (url.pathname === "/api/threads" && url.search === "?limit=50&offset=50") return jsonResponse({ items: [second], has_more: false, next: null });
-    if (url.pathname === "/api/threads" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], has_more: false, next: null });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: [{ ...first, title: firstTitle }], next_cursor: "tail", groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50&cursor=tail") return jsonResponse({ items: [second], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
     return auxiliaryResponse(url.pathname, [first, second]) ?? jsonResponse({ error: `unmocked ${url.pathname}${url.search}` }, 501);
   }));
 
@@ -103,9 +103,9 @@ test("keeps a deep-linked session selected when it is outside the first page", a
   const onSelectThread = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input), window.location.origin);
-    if (url.pathname === "/api/threads" && url.search === "?limit=50") return jsonResponse({ items: [first], has_more: true, next: 50 });
-    if (url.pathname === "/api/threads" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], has_more: false, next: null });
-    if (url.pathname === `/api/threads/${deep.id}`) return jsonResponse(deep);
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: [first], next_cursor: "tail", groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
+    if (url.pathname === `/api/sessions/codex/${deep.id}`) return jsonResponse(deep);
     return auxiliaryResponse(url.pathname, [first, deep]) ?? jsonResponse({ error: `unmocked ${url.pathname}${url.search}` }, 501);
   }));
 
@@ -120,9 +120,9 @@ test("revalidates loaded tail pages after a realtime refresh removes a session",
   let secondVisible = true;
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input), window.location.origin);
-    if (url.pathname === "/api/threads" && url.search === "?limit=50") return jsonResponse({ items: [first], has_more: secondVisible, next: secondVisible ? 50 : null });
-    if (url.pathname === "/api/threads" && url.search === "?limit=50&offset=50") return jsonResponse({ items: secondVisible ? [second] : [], has_more: false, next: null });
-    if (url.pathname === "/api/threads" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], has_more: false, next: null });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: [first], next_cursor: secondVisible ? "tail" : null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50&cursor=tail") return jsonResponse({ items: secondVisible ? [second] : [], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
     return auxiliaryResponse(url.pathname, [first, second]) ?? jsonResponse({ error: `unmocked ${url.pathname}${url.search}` }, 501);
   }));
 
@@ -143,9 +143,9 @@ test("requires the accessible danger dialog before deleting a session", async ()
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), window.location.origin);
     const method = init?.method ?? "GET";
-    if (url.pathname === "/api/threads" && url.search === "?limit=50") return jsonResponse({ items: deleted ? [] : [value], has_more: false, next: null });
-    if (url.pathname === "/api/threads" && url.search === "?archived=true&limit=50") return jsonResponse({ items: [], has_more: false, next: null });
-    if (url.pathname === `/api/threads/${value.id}` && method === "DELETE") {
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=false&limit=50") return jsonResponse({ items: deleted ? [] : [value], next_cursor: null, groups: [] });
+    if (url.pathname === "/api/sessions" && url.search === "?engine=codex&archived=true&limit=50") return jsonResponse({ items: [], next_cursor: null, groups: [] });
+    if (url.pathname === `/api/sessions/codex/${value.id}` && method === "DELETE") {
       requests.push(`${method} ${url.pathname}`);
       deleted = true;
       return jsonResponse({});
@@ -161,6 +161,6 @@ test("requires the accessible danger dialog before deleting a session", async ()
   expect(requests).toHaveLength(0);
 
   await user.click(within(dialog).getByRole("button", { name: "Delete session" }));
-  await waitFor(() => expect(requests).toEqual([`DELETE /api/threads/${value.id}`]));
+  await waitFor(() => expect(requests).toEqual([`DELETE /api/sessions/codex/${value.id}`]));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete session" })).not.toBeInTheDocument());
 });

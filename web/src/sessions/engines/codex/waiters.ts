@@ -1,11 +1,11 @@
-import { type CodexSnapshot, type Thread, type Workspace } from "../types";
-import { api, APIError } from "../api";
+import { api,APIError } from "../../../api";
+import { type CodexSnapshot,type Thread,type Workspace } from "../../../types";
 import { normalizeGoal } from "./conversation";
 
 export async function waitForGoalSnapshot(threadID: string, expected?: { objective?: string; status?: string; cleared?: boolean }, signal?: AbortSignal) {
   let latest: CodexSnapshot<unknown> | undefined;
   for (let attempt = 0; attempt < 120; attempt++) {
-    latest = await api<CodexSnapshot<unknown>>(`/threads/${threadID}/goal`, { signal });
+    latest = await api<CodexSnapshot<unknown>>(`/sessions/codex/${threadID}/goal`, { signal });
     if (latest.status === "failed" || latest.status === "unsupported") return latest;
     if (latest.status !== "loading") {
       if (!expected) return latest;
@@ -22,13 +22,12 @@ export async function waitForThread(threadID: string, timeoutMessage: string, op
     if (operationID) {
       const operation = await api<{ status: string; result: string }>(`/operations/${encodeURIComponent(operationID)}`);
       if (["failed", "cancelled"].includes(operation.status)) throw new Error(operation.result || timeoutMessage);
-      if (operation.status === "succeeded") return api<Thread>(`/threads/${encodeURIComponent(threadID)}`);
+      if (operation.status === "succeeded") return api<Thread>(`/sessions/codex/${encodeURIComponent(threadID)}`);
       await waitForBackoff(attempt);
       continue;
     }
-    const threads = await api<Thread[]>("/threads");
-    const thread = threads.find(item => item.id === threadID);
-    if (thread) return thread;
+    try { return await api<Thread>(`/sessions/codex/${encodeURIComponent(threadID)}`); }
+    catch (error) { if (!(error instanceof APIError) || error.status !== 404) throw error; }
     await waitForBackoff(attempt);
   }
   throw new Error(timeoutMessage);

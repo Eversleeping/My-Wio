@@ -17,7 +17,7 @@ type Link = { source_key: string; target_key: string; relation: string; session:
 type State = { grant: Grant; supported: boolean; notifications?: { target_key: string; event_id: string }[]; links: Link[]; requests: Request[] };
 
 // Each engine keeps its own delete endpoint and refuses sessions that are still running.
-const deletePath: Record<Engine, string> = { codex: "/threads/", claude: "/sessions/claude/", gemini: "/sessions/gemini/" };
+const deletePath: Record<Engine, string> = { codex: "/sessions/codex/", claude: "/sessions/claude/", gemini: "/sessions/gemini/" };
 const activeStatuses = new Set(["queued", "running", "interrupting"]);
 // Any other request status is a result: succeeded, failed, cancelled or unknown.
 const pendingRequestStatuses = new Set(["accepted", "preparing", "queued", "running", "waiting_user"]);

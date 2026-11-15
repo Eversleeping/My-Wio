@@ -1,95 +1,95 @@
 import {
-  type Workspace,
-  type Thread,
-  type Approval,
-  type CodexSnapshot,
-  type CodexStatusData,
-  type CodexMCPServer,
-  type CodexSkill,
-  type CodexGoal,
-  type StreamEvent
-} from "../types";
-import { useI18n } from "../i18n";
-import {
-  useState,
-  useRef,
-  KeyboardEvent as ReactKeyboardEvent,
-  useMemo,
-  useEffect,
-  useLayoutEffect,
-  FormEvent
-} from "react";
-import { post, api, put, APIError, remove } from "../api";
-import { message } from "../text";
-import { ErrorBanner, Field, Dialog } from "../components/FormUI";
-import { DialogActions } from "../components/Dialog";
-import {
-  LoaderCircle,
-  Plus,
-  Cpu,
-  Gauge,
-  Activity,
-  Target,
-  Minimize2,
-  Users,
-  Network,
-  Boxes,
-  StickyNote,
-  Folder,
-  Workflow,
-  RefreshCw,
-  GitBranch,
-  Server as ServerIcon,
-  Braces,
-  ArrowUpFromLine,
-  AlertTriangle,
-  Bot,
-  Archive,
-  ChevronDown,
-  ChevronRight,
-  Pause,
-  Play,
-  Pencil,
-  Trash2,
-  X,
-  Square
+Activity,
+AlertTriangle,
+Archive,
+ArrowUpFromLine,
+Bot,
+Boxes,
+Braces,
+ChevronDown,
+ChevronRight,
+Cpu,
+Folder,
+Gauge,
+GitBranch,
+LoaderCircle,
+Minimize2,
+Network,
+Pause,
+Pencil,
+Play,
+Plus,
+RefreshCw,
+Server as ServerIcon,
+Square,
+StickyNote,
+Target,
+Trash2,
+Users,
+Workflow,
+X
 } from "lucide-react";
-import { type FilePreviewSelection } from "../codexContent";
-import { useThreadEvents } from "./useThreadEvents";
-import { CodexRequests } from "../codexRequests";
 import {
-  loadCodexComposerPreferences,
-  type CodexComposerPreferences,
-  saveCodexComposerPreferences
-} from "../codexComposerPreferences";
-import { useSubmitPrompt, CollaborationTaskDialog } from "../components/CollaborationTaskDialog";
+FormEvent,
+KeyboardEvent as ReactKeyboardEvent,
+useEffect,
+useLayoutEffect,
+useMemo,
+useRef,
+useState
+} from "react";
+import { api,APIError,post,put,remove } from "../../../api";
+import { asyncQuestions,parseQuestionReply,questionReply } from "../../../asyncUserInput";
 import {
-  asRecord,
-  extractText,
-  conversationEvents,
-  groupCommandEvents,
-  collectSubagentActivity,
-  normalizeSkills,
-  normalizeMCP,
-  normalizeStatus,
-  normalizeGoal,
-  type ConversationDisplayItem
-} from "./conversation";
-import { parseQuestionReply, asyncQuestions, questionReply } from "../asyncUserInput";
-import { messageForkTargets } from "../messageForks";
-import { waitForBackoff, waitForGoalSnapshot } from "./waiters";
-import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "../codexModels";
-import { type SlashCommandItem, SlashCommandMenu } from "../SlashCommandMenu";
-import { setScrollTopImmediately, latestScrollTop, codexScrollPositions, isNearCodexStreamBottom } from "./scroll";
-import { compressImage } from "../imageCompression";
-import { CommandEventGroup, ConversationEventItem, RawEventItem, WorkingIndicator } from "./events";
-import { Status, ErrorState, Empty } from "../components/PageUI";
-import { formatDate } from "../format";
-import { SessionUsage } from "../components/SessionUsage";
-import { VirtualizedItems } from "../components/VirtualizedList";
+loadCodexComposerPreferences,
+saveCodexComposerPreferences,
+type CodexComposerPreferences
+} from "../../../codexComposerPreferences";
+import { type FilePreviewSelection } from "../../../codexContent";
+import { compatibleReasoningEffort,reasoningOptionsFor,useCodexModels } from "../../../codexModels";
+import { CodexRequests } from "../../../codexRequests";
+import { CodexModelPicker } from "../../../components/CodexModelPicker";
+import { CollaborationTaskDialog,useSubmitPrompt } from "../../../components/CollaborationTaskDialog";
+import { ComposerImagePicker } from "../../../components/ComposerImagePicker";
+import { DialogActions } from "../../../components/Dialog";
+import { Dialog,ErrorBanner,Field } from "../../../components/FormUI";
+import { Empty,ErrorState,Status } from "../../../components/PageUI";
+import { SessionUsage } from "../../../components/SessionUsage";
+import { VirtualizedItems } from "../../../components/VirtualizedList";
+import { formatDate } from "../../../format";
+import { useI18n } from "../../../i18n";
+import { compressImage } from "../../../imageCompression";
+import { messageForkTargets } from "../../../messageForks";
+import { SlashCommandMenu,type SlashCommandItem } from "../../../SlashCommandMenu";
+import { message } from "../../../text";
+import {
+type Approval,
+type CodexGoal,
+type CodexMCPServer,
+type CodexSkill,
+type CodexSnapshot,
+type CodexStatusData,
+type StreamEvent,
+type Thread,
+type Workspace
+} from "../../../types";
 import { ApprovalPrompt } from "./approvals";
-import { ComposerImagePicker } from "../components/ComposerImagePicker";
-import { CodexModelPicker } from "../components/CodexModelPicker";
+import {
+asRecord,
+collectSubagentActivity,
+conversationEvents,
+extractText,
+groupCommandEvents,
+normalizeGoal,
+normalizeMCP,
+normalizeSkills,
+normalizeStatus,
+type ConversationDisplayItem
+} from "./conversation";
+import { CommandEventGroup,ConversationEventItem,RawEventItem,WorkingIndicator } from "./events";
+import { codexScrollPositions,isNearCodexStreamBottom,latestScrollTop,setScrollTopImmediately } from "./scroll";
+import { useThreadEvents } from "./useThreadEvents";
+import { waitForBackoff,waitForGoalSnapshot } from "./waiters";
 
 type ComposerMode = "message" | "goal";
 
@@ -100,7 +100,7 @@ export function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[
   const [workspaceID, setWorkspaceID] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/threads", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;
+  return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/sessions/codex", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;
 }
 
 export function SessionView({ thread, approvals, realtime, globalStreamRevision = 0, streamRevision = 0, invalidationSequence, reloadApprovals, notify, onOpenFile, onNewTask, onFork, forkBusy = false }: { thread: Thread; approvals: Approval[]; realtime: unknown; globalStreamRevision?: number; streamRevision?: number; invalidationSequence?: number | null; reloadApprovals: () => void; notify: (text: string) => void; onOpenFile: (selection: FilePreviewSelection) => void; onNewTask: () => void; onFork?: (eventID: string) => Promise<void>; forkBusy?: boolean }) {
@@ -197,7 +197,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     const signal = nativeRequestsRef.current?.signal;
     if (!signal || signal.aborted) return;
     const workspacePath = `/workspaces/${thread.workspace_id}/codex/${kind}`;
-    const path = kind === "status" ? `/threads/${thread.id}/codex/status` : workspacePath;
+    const path = kind === "status" ? `/sessions/codex/${thread.id}/status` : workspacePath;
     const setter = kind === "status" ? setStatusSnapshot : kind === "mcp" ? setMcpSnapshot : setSkillsSnapshot;
     setNativeBusy(kind); setNativeError("");
     try {
@@ -218,9 +218,9 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     const current = () => requestID === goalRequestRef.current && !signal.aborted;
     setNativeBusy("goal"); setNativeError("");
     try {
-      let snapshot = await api<CodexSnapshot<unknown>>(`/threads/${thread.id}/goal`, { signal });
+      let snapshot = await api<CodexSnapshot<unknown>>(`/sessions/codex/${thread.id}/goal`, { signal });
       if (refresh) {
-        await post(`/threads/${thread.id}/goal/refresh`, {}, { signal });
+        await post(`/sessions/codex/${thread.id}/goal/refresh`, {}, { signal });
         snapshot = await waitForGoalSnapshot(thread.id, undefined, signal) ?? snapshot;
       }
       if (!current()) return;
@@ -253,7 +253,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   };
   const queueGoalTurn = async (objective: string) => {
     const content = { prompt: objective, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode };
-    await codexRequests.current.send("goal", [thread.id, content], `/threads/${thread.id}/turns`, content);
+    await codexRequests.current.send("goal", [thread.id, content], `/sessions/codex/${thread.id}/turns`, content);
   };
   const saveGoal = async (objective: string, status: string, tokenBudget: number | null, resume = false) => {
     ++goalRequestRef.current;
@@ -261,7 +261,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     const needsInitialTurn = creating && status === "active";
     const initialCodexThreadID = thread.codex_thread_id;
     if (creating && !initialCodexThreadID && status !== "active") throw new Error(t("codex.goalNeedsActive"));
-    await put(`/threads/${thread.id}/goal`, { objective, status, token_budget: tokenBudget });
+    await put(`/sessions/codex/${thread.id}/goal`, { objective, status, token_budget: tokenBudget });
     if (needsInitialTurn || (resume && status === "active" && !activeTurn)) await queueGoalTurn(objective);
     const optimistic: CodexGoal = { thread_id: initialCodexThreadID, objective, status, token_budget: tokenBudget, tokens_used: goal?.tokens_used ?? 0, time_used_seconds: goal?.time_used_seconds ?? 0, created_at: goal?.created_at ?? Math.floor(Date.now() / 1000), updated_at: Math.floor(Date.now() / 1000) };
     setGoal(optimistic);
@@ -272,7 +272,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     if (activeTurn) { notify(t("codex.waitForTurn")); return; }
     setCompactBusy(true);
     try {
-      await post(`/threads/${thread.id}/compact`, {});
+      await post(`/sessions/codex/${thread.id}/compact`, {});
       notify(t("codex.compactQueued"));
     } catch (error) {
       notify(message(error));
@@ -286,7 +286,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     try {
       if (status === "paused" && activeTurn) {
         try {
-          await post(`/threads/${thread.id}/interrupt`, {});
+          await post(`/sessions/codex/${thread.id}/interrupt`, {});
         } catch (error) {
           if (!(error instanceof APIError && error.status === 409)) throw error;
         }
@@ -306,12 +306,12 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     try {
       if (activeTurn) {
         try {
-          await post(`/threads/${thread.id}/interrupt`, {});
+          await post(`/sessions/codex/${thread.id}/interrupt`, {});
         } catch (error) {
           if (!(error instanceof APIError && error.status === 409)) throw error;
         }
       }
-      await remove(`/threads/${thread.id}/goal`);
+      await remove(`/sessions/codex/${thread.id}/goal`);
       setGoal(null);
       if (composerMode === "goal") leaveGoalMode();
       void syncGoalSnapshot({ cleared: true });
@@ -468,7 +468,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
         notify(t(creating ? "codex.goalStarted" : "codex.goalSaved"));
         return;
       }
-      const turnPath = steering ? `/threads/${thread.id}/steer` : editingEventID ? `/threads/${thread.id}/events/${editingEventID}/rewrite` : `/threads/${thread.id}/turns`;
+      const turnPath = steering ? `/sessions/codex/${thread.id}/steer` : editingEventID ? `/sessions/codex/${thread.id}/events/${editingEventID}/rewrite` : `/sessions/codex/${thread.id}/turns`;
       const content = { prompt, images: images.map(image => ({ data_url: image.dataURL })) };
       const options = { ...content, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode };
       if (editingEventID) await post(turnPath, options);
@@ -495,7 +495,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     if (interrupting) return;
     setInterrupting(true);
     try {
-      await post(`/threads/${thread.id}/interrupt`, {});
+      await post(`/sessions/codex/${thread.id}/interrupt`, {});
       notify(t("codex.interruptQueued"));
     } catch (error) {
       notify(message(error));
@@ -506,12 +506,12 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const answerQuestion = async (event: StreamEvent, answers: Record<string, string>) => {
     const questions = asyncQuestions(asRecord(asRecord(event.payload)?.item));
     const content = { prompt: questionReply(questions, answers), images: [] };
-    const current = await api<Thread>(`/threads/${thread.id}`);
+    const current = await api<Thread>(`/sessions/codex/${thread.id}`);
     const options = { ...content, model, reasoning_effort: reasoningEffort, approval_mode: approvalMode };
     const sendAnswer = (path: string, body: Record<string, unknown>) => codexRequests.current.send(`question:${event.event_id}`, [thread.id, options], path, body);
-    const start = () => sendAnswer(`/threads/${thread.id}/turns`, options);
+    const start = () => sendAnswer(`/sessions/codex/${thread.id}/turns`, options);
     if (current.status === "running") {
-      try { await sendAnswer(`/threads/${thread.id}/steer`, content); }
+      try { await sendAnswer(`/sessions/codex/${thread.id}/steer`, content); }
       catch (error) {
         // Only retry a request explicitly rejected before it was queued.
         if (!(error instanceof APIError) || error.code !== "steer_inactive") throw error;

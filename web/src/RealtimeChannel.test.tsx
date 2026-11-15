@@ -6,7 +6,7 @@ import { I18nProvider } from "./i18n";
 
 vi.mock("./pages/DashboardPage", () => ({ default: ({ realtime }: { realtime: number }) => <div data-testid="dashboard">{realtime}</div> }));
 vi.mock("./pages/ServersPage", () => ({ default: ({ realtime }: { realtime: number }) => <div data-testid="servers">{realtime}</div> }));
-vi.mock("./pages/CodexPage", () => ({ default: ({ selectedThreadID }: { selectedThreadID: string }) => <div data-testid="codex">{selectedThreadID}</div> }));
+vi.mock("./sessions/engines/codex", () => ({ default: ({ selectedThreadID }: { selectedThreadID: string }) => <div data-testid="codex">{selectedThreadID}</div> }));
 
 class Socket {
   static instances: Socket[] = [];

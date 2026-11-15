@@ -5,7 +5,7 @@ import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
 import { type Session, type Approval } from "./types";
 import { useRealtime } from "./realtime/useRealtime";
 import { useData } from "./useData";
-import { clearCodexSessionMemory, invalidateThreadEvents } from "./codex/useThreadEvents";
+import { clearSessionMemory, invalidateSessionMemory } from "./sessions/memory";
 import { setSession, api, APIError, onUnauthorized } from "./api";
 import { LoadingScreen, LanguageSwitch } from "./components/FormUI";
 import { PageLoading } from "./components/PageUI";
@@ -46,7 +46,7 @@ export default function App() {
   const approvals = useData<Approval[]>(auth === "authenticated" ? "/approvals" : null, realtimeRevisions.approvals);
 
   const authenticate = useCallback((value: Session | null) => {
-    if (!value) clearCodexSessionMemory();
+    if (!value) clearSessionMemory();
     setSession(value);
     setCurrentSession(value);
     setAuth(value ? "authenticated" : "login");
@@ -86,7 +86,7 @@ export default function App() {
   }, [auth, authenticate]);
 
   useEffect(() => subscribe((streamID, minimumSequence) => {
-    if (streamID !== "*") invalidateThreadEvents(streamID, minimumSequence);
+    if (streamID !== "*") invalidateSessionMemory(streamID, minimumSequence);
   }), [subscribe]);
 
   useEffect(() => {

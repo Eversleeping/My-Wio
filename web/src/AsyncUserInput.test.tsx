@@ -1,8 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SessionView } from "./codex/SessionView";
-import { clearCodexSessionMemory } from "./codex/useThreadEvents";
+import { SessionView } from "./sessions/engines/codex/SessionView";
+import { clearCodexSessionMemory } from "./sessions/engines/codex/useThreadEvents";
 import { I18nProvider } from "./i18n";
 import type { StreamEvent, Thread } from "./types";
 
@@ -37,7 +37,7 @@ beforeEach(() => {
       history = [...history, { event_id: "reply", stream_id: thread.id, sequence: 2, kind: "user.message", occurred_at: "2026-10-17T06:00:00Z", payload: { text: body.prompt } }];
       return new Response("{}", { status: 202 });
     }
-    const body = path.includes("/events") ? history : path === `/api/threads/${thread.id}` ? current : path.endsWith("/codex/models") ? { supported: true, status: "succeeded", data: [] } : [];
+    const body = path.includes("/events") ? history : path === `/api/sessions/codex/${thread.id}` ? current : path.endsWith("/codex/models") ? { supported: true, status: "succeeded", data: [] } : [];
     return new Response(JSON.stringify(body), { status: 200 });
   }));
 });
@@ -57,7 +57,7 @@ test("renders the actual async message, selects an answer, and persists its repl
   await user.click(screen.getByRole("button", { name: "Submit answers" }));
   await waitFor(() => expect(requests).toHaveLength(1));
   const reply = [{ questionItemId: JSON.stringify(["request_user_input_async", callID, 0]), question: title, answer: "秋天" }];
-  expect(requests[0]).toEqual({ path: `/api/threads/${thread.id}/steer`, body: { prompt: `<send_user_message_question_reply>\n${JSON.stringify(reply)}\n</send_user_message_question_reply>`, images: [], request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) } });
+  expect(requests[0]).toEqual({ path: `/api/sessions/codex/${thread.id}/steer`, body: { prompt: `<send_user_message_question_reply>\n${JSON.stringify(reply)}\n</send_user_message_question_reply>`, images: [], request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) } });
   expect(await screen.findByRole("button", { name: "Answers sent" })).toBeDisabled();
   unmount(); clearCodexSessionMemory(); render(view());
   expect(await screen.findByRole("radio", { name: "秋天" })).toBeChecked();
@@ -78,7 +78,7 @@ test("retains a custom answer after a failure and starts a new turn when the ses
   rejectSubmit = false;
   await user.click(screen.getByRole("button", { name: "Submit answers" }));
   expect(await screen.findByRole("button", { name: "Answers sent" })).toBeDisabled();
-  expect(requests[1].path).toBe(`/api/threads/${thread.id}/turns`);
+  expect(requests[1].path).toBe(`/api/sessions/codex/${thread.id}/turns`);
   expect(requests[1].body.prompt).toContain('"answer":"雨季"');
   expect(requests[1].body.request_id).toBe(requests[0].body.request_id);
 });
@@ -89,7 +89,7 @@ test("handles a turn ending between status lookup and submitting the answer", as
   await user.click(await screen.findByRole("radio", { name: "夏天" }));
   await user.click(screen.getByRole("button", { name: "Submit answers" }));
   expect(await screen.findByRole("button", { name: "Answers sent" })).toBeDisabled();
-  expect(requests.map(request => request.path)).toEqual([`/api/threads/${thread.id}/steer`, `/api/threads/${thread.id}/turns`]);
+  expect(requests.map(request => request.path)).toEqual([`/api/sessions/codex/${thread.id}/steer`, `/api/sessions/codex/${thread.id}/turns`]);
   expect(requests[1].body.request_id).not.toBe(requests[0].body.request_id);
 });
 

@@ -1,43 +1,45 @@
-import { ComposerInput, ComposerAttachments } from "../Composer";
+import { Archive,ArchiveRestore,ArrowUp,Bot,Boxes,CalendarClock,Copy,Download,GitFork,Globe,Lightbulb,ListChecks,LoaderCircle,MessageSquare,MoreHorizontal,Pause,Pencil,Play,Plus,RefreshCw,Sparkles,Square,Target,UserRound,Users,Workflow,X } from "lucide-react";
+import { FormEvent,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
+import { ContextMenu,type ContextMenuAction } from "../../ContextMenu";
+import MarkdownContent from "../../MarkdownContent";
+import { SlashCommandMenu,type SlashCommandItem } from "../../SlashCommandMenu";
+import { api,patch,post,remove } from "../../api";
+import { type FilePreviewSelection } from "../../codexContent";
+import { CollaborationTaskDialog,useSubmitPrompt } from "../../components/CollaborationTaskDialog";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { DialogActions } from "../../components/Dialog";
+import { Dialog,ErrorBanner,Field } from "../../components/FormUI";
+import { GeminiQuestion } from "../../components/GeminiQuestion";
+import { GeminiSkillsDialog } from "../../components/GeminiSkillsDialog";
+import { GeminiThinkingPicker,compatibleGeminiThinking } from "../../components/GeminiThinkingPicker";
+import { GeminiTool,GeminiToolGroup } from "../../components/GeminiTool";
+import { MessageImages } from "../../components/MessageImages";
+import { Empty,ErrorState,Status } from "../../components/PageUI";
+import { SessionUsage,formatUsageNumber } from "../../components/SessionUsage";
+import { formatTime } from "../../format";
+import { geminiForkTargets,geminiMessages,groupGeminiMessages } from "../../geminiContent";
+import { useGeminiModels } from "../../geminiModels";
+import { useI18n } from "../../i18n";
+import { compressImage } from "../../imageCompression";
+import { useSessionManagement } from "../useSessionManagement";
+import { ScheduledTaskDialog } from "../../pages/ScheduledTaskDialog";
+import { message } from "../../text";
+import type { GeminiGoal,GeminiThread,StreamEvent,Workspace } from "../../types";
+import { useData } from "../../useData";
+import { ComposerAttachments,ComposerInput } from "../Composer";
 import { RenameSessionDialog } from "../SessionDialogs";
 import { SessionPage } from "../SessionPage";
 import { Sidebar } from "../Sidebar";
-import { groupSessions, withSelectedSession } from "../groups";
+import { groupSessions,withSelectedSession } from "../groups";
+import type { SessionEngineProps } from "../types";
 import { useSessionList } from "../useSessionList";
-import { SessionUsage, formatUsageNumber } from "../../components/SessionUsage";
-import { GeminiTool, GeminiToolGroup } from "../../components/GeminiTool";
-import { MessageImages } from "../../components/MessageImages";
-import { compressImage } from "../../imageCompression";
-import { GeminiQuestion } from "../../components/GeminiQuestion";
-import { GeminiSkillsDialog } from "../../components/GeminiSkillsDialog";
-import { GeminiThinkingPicker, compatibleGeminiThinking } from "../../components/GeminiThinkingPicker";
-import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, Boxes, CalendarClock, GitFork, Globe, Lightbulb, ListChecks, MoreHorizontal, Pin, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, Folder, LoaderCircle, MessageSquare, Pause, Pencil, Play, Plus, RefreshCw, Sparkles, Square, Target, Trash2, UserRound, Users, Workflow, X } from "lucide-react";
-import { api, patch, post, remove } from "../../api";
-import { Dialog, ErrorBanner, Field } from "../../components/FormUI";
-import { message } from "../../text";
-import { type FilePreviewSelection } from "../../codexContent";
-import { useGeminiManagement } from "../../pages/geminiManagement";
-import { ContextMenu, type ContextMenuAction } from "../../ContextMenu";
-import { SlashCommandMenu, type SlashCommandItem } from "../../SlashCommandMenu";
-import { CollaborationTaskDialog, useSubmitPrompt } from "../../components/CollaborationTaskDialog";
-import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { DialogActions } from "../../components/Dialog";
-import { Empty, ErrorState, Status } from "../../components/PageUI";
-import { geminiForkTargets, geminiMessages, groupGeminiMessages } from "../../geminiContent";
-import { formatTime } from "../../format";
-import { useI18n } from "../../i18n";
-import MarkdownContent from "../../MarkdownContent";
-import type { GeminiGoal, GeminiThread, StreamEvent, Workspace } from "../../types";
-import { useData } from "../../useData";
-import { useGeminiModels } from "../../geminiModels";
+import { useSessionRevision } from "../useSessionRevision";
 
-type Props = { realtime: number; notify: (text: string) => void; selectedThreadID: string; onSelectThread: (id: string, replace?: boolean) => void };
 const isActive = (thread?: GeminiThread) => Boolean(thread && ["queued", "running", "interrupting"].includes(thread.status));
 
-export default function GeminiPage({ realtime, notify, selectedThreadID, onSelectThread }: Props) {
+export default function GeminiPage({ realtime, notify, selectedThreadID, onSelectThread }: SessionEngineProps) {
   const { t } = useI18n();
-  const [tick, setTick] = useState(0);
+  const { tick, refresh: bumpRevision } = useSessionRevision();
   const [archived, setArchived] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newWorkspaceID, setNewWorkspaceID] = useState("");
@@ -54,7 +56,6 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
   const workspaces = useData<Workspace[]>("/workspaces", realtime);
   const selected = useData<GeminiThread>(selectedThreadID ? `/sessions/gemini/${selectedThreadID}` : null, dependency);
   const active = threads.data?.find(thread => thread.id === selectedThreadID) ?? selected.data;
-  useEffect(() => { const timer = window.setInterval(() => { if (!document.hidden) setTick(value => value + 1); }, 5000); return () => clearInterval(timer); }, []);
   useEffect(() => { if (!selectedThreadID) { const first=threads.data?.find(thread=>!thread.project_hidden_at);if(first) onSelectThread(first.id,true); } }, [onSelectThread, selectedThreadID, threads.data]);
   useEffect(() => { if (selected.data) setArchived(Boolean(selected.data.archived_at)); }, [selected.data?.id, selected.data?.archived_at]);
   const groups = useMemo(() => groupSessions(withSelectedSession(threads.data ?? [], selected.data, archived, search), workspaces.data ?? [], threads.groups), [archived, search, threads.data, threads.groups, selected.data, workspaces.data]);
@@ -62,8 +63,8 @@ export default function GeminiPage({ realtime, notify, selectedThreadID, onSelec
     const previous = active?.workspace_id === workspaceID ? active : threads.data?.find(thread => thread.workspace_id === workspaceID);
     setNewWorkspaceID(workspaceID); setNewModel(previous?.model ?? ""); setNewThinking(previous?.thinking_level ?? ""); setNewMode(previous?.approval_mode === "plan" ? "default" : previous?.approval_mode ?? "default"); setCreateOpen(true);
   };
-  const refresh = () => { threads.reload(); selected.reload(); setTick(value => value + 1); };
-  const management = useGeminiManagement({ workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify });
+  const refresh = () => { threads.reload(); selected.reload(); bumpRevision(); };
+  const management = useSessionManagement<GeminiThread>("gemini", { workspaces: workspaces.data ?? [], busy, setBusy, refresh, select: onSelectThread, notify }, item => Boolean(item.fork_supported), (scheduled, close) => <ScheduledTaskDialog open={Boolean(scheduled)} initialThreadID={scheduled?.id} agentKind="gemini" lockThread threads={[]} geminiThreads={scheduled ? [scheduled] : []} notify={notify} onClose={close} onSaved={refresh} />);
   const mutate = async (thread: GeminiThread, values: unknown) => {
     setBusy(true);
     try { await patch(`/sessions/gemini/${thread.id}`, values); setRename(null); refresh(); }

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SessionView } from "./codex/SessionView";
+import { SessionView } from "./sessions/engines/codex/SessionView";
 import { ScheduledTaskDialog } from "./pages/ScheduledTaskDialog";
 import { I18nProvider } from "./i18n";
 import type { StreamEvent, Thread } from "./types";
@@ -59,13 +59,13 @@ test("starts the first turn after a new goal is persisted", async () => {
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
     requests.push({ url, method, body });
-    if (url.includes(`/threads/${value.id}/events`)) return jsonResponse([]);
-    if (url.includes(`/threads/${value.id}/goal`)) {
+    if (url.includes(`/sessions/codex/${value.id}/events`)) return jsonResponse([]);
+    if (url.includes(`/sessions/codex/${value.id}/goal`)) {
       if (method === "PUT") { goalSaved = true; return jsonResponse({ operation_id: "goal-op" }, 202); }
       if (method === "POST") return jsonResponse({ operation_id: "refresh-op" }, 202);
       return jsonResponse({ status: goalSaved ? "succeeded" : "idle", supported: true, reason: "", error: "", data: goalSaved ? { thread_id: value.codex_thread_id, objective: "Ship the release", status: "active", token_budget: null, tokens_used: 0, time_used_seconds: 0 } : {}, updated_at: null });
     }
-    if (url.includes(`/threads/${value.id}/turns`) && method === "POST") return jsonResponse({ operation_id: "turn-op" }, 202);
+    if (url.includes(`/sessions/codex/${value.id}/turns`) && method === "POST") return jsonResponse({ operation_id: "turn-op" }, 202);
     if (url.includes("/codex/skills")) return jsonResponse({ status: "succeeded", supported: true, data: [], error: "", reason: "", updated_at: null });
     return jsonResponse([]);
   }));
@@ -83,10 +83,10 @@ test("starts the first turn after a new goal is persisted", async () => {
   await waitFor(() => expect(send).toBeEnabled());
   await user.click(send);
 
-  await waitFor(() => expect(requests.some(request => request.url.includes(`/threads/${value.id}/turns`) && request.method === "POST")).toBe(true));
+  await waitFor(() => expect(requests.some(request => request.url.includes(`/sessions/codex/${value.id}/turns`) && request.method === "POST")).toBe(true));
   await screen.findByPlaceholderText("Message Codex");
-  const goalIndex = requests.findIndex(request => request.url.endsWith(`/threads/${value.id}/goal`) && request.method === "PUT");
-  const turnIndex = requests.findIndex(request => request.url.endsWith(`/threads/${value.id}/turns`) && request.method === "POST");
+  const goalIndex = requests.findIndex(request => request.url.endsWith(`/sessions/codex/${value.id}/goal`) && request.method === "PUT");
+  const turnIndex = requests.findIndex(request => request.url.endsWith(`/sessions/codex/${value.id}/turns`) && request.method === "POST");
   expect(goalIndex).toBeGreaterThanOrEqual(0);
   expect(turnIndex).toBeGreaterThan(goalIndex);
   expect(requests[turnIndex].body?.prompt).toBe("Ship the release");
@@ -173,9 +173,9 @@ test("shows task status directly above the composer", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     requests.push({ url, method: init?.method ?? "GET" });
-    if (url.includes(`/threads/${value.id}/events`)) return jsonResponse([]);
-    if (url.includes(`/threads/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
-    if (url.includes(`/threads/${value.id}/codex/status`)) return jsonResponse({ status: "succeeded", supported: true, data: { model: "gpt-5.6-sol", reasoning_effort: "high", approval_policy: "on-request" }, error: "", reason: "", updated_at: "2026-07-23T01:00:00Z" });
+    if (url.includes(`/sessions/codex/${value.id}/events`)) return jsonResponse([]);
+    if (url.includes(`/sessions/codex/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
+    if (url.includes(`/sessions/codex/${value.id}/status`)) return jsonResponse({ status: "succeeded", supported: true, data: { model: "gpt-5.6-sol", reasoning_effort: "high", approval_policy: "on-request" }, error: "", reason: "", updated_at: "2026-07-23T01:00:00Z" });
     if (url.includes("/codex/skills")) return jsonResponse({ status: "succeeded", supported: true, data: [], error: "", reason: "", updated_at: null });
     return jsonResponse([]);
   }));
@@ -190,7 +190,7 @@ test("shows task status directly above the composer", async () => {
   expect(within(statusCard).getByText("gpt-5.6-sol")).toBeInTheDocument();
   expect(statusCard).toHaveTextContent(value.codex_thread_id);
   expect(container.querySelector(".composer-stack > .composer-status-panel + .composer")).not.toBeNull();
-  expect(requests.some(request => request.url.endsWith(`/threads/${value.id}/codex/status/refresh`) && request.method === "POST")).toBe(true);
+  expect(requests.some(request => request.url.endsWith(`/sessions/codex/${value.id}/status/refresh`) && request.method === "POST")).toBe(true);
 
   await user.type(composer, "/goal");
   await user.click(await screen.findByRole("option", { name: /\/goal/ }));
@@ -211,8 +211,8 @@ test("shows subagent activity above the composer and in the subagent dialog", as
   }];
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = String(input);
-    if (url.includes(`/threads/${value.id}/events`)) return jsonResponse(events);
-    if (url.includes(`/threads/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
+    if (url.includes(`/sessions/codex/${value.id}/events`)) return jsonResponse(events);
+    if (url.includes(`/sessions/codex/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
     return jsonResponse([]);
   }));
 
@@ -233,9 +233,9 @@ test("queues context compaction from the slash command", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if ((init?.method ?? "GET") === "POST") requests.push(url);
-    if (url.includes(`/threads/${value.id}/events`)) return jsonResponse([]);
-    if (url.includes(`/threads/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
-    if (url.includes(`/threads/${value.id}/compact`)) return jsonResponse({ operation_id: "compact-op" }, 202);
+    if (url.includes(`/sessions/codex/${value.id}/events`)) return jsonResponse([]);
+    if (url.includes(`/sessions/codex/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, data: {}, error: "", reason: "", updated_at: null });
+    if (url.includes(`/sessions/codex/${value.id}/compact`)) return jsonResponse({ operation_id: "compact-op" }, 202);
     if (url.includes("/codex/skills")) return jsonResponse({ status: "succeeded", supported: true, data: [], error: "", reason: "", updated_at: null });
     return jsonResponse([]);
   }));
@@ -244,7 +244,7 @@ test("queues context compaction from the slash command", async () => {
   const composer = await screen.findByPlaceholderText("Message Codex");
   await user.type(composer, "/compact");
   await user.click(await screen.findByRole("option", { name: /\/compact/ }));
-  await waitFor(() => expect(requests.some(url => url.endsWith(`/threads/${value.id}/compact`))).toBe(true));
+  await waitFor(() => expect(requests.some(url => url.endsWith(`/sessions/codex/${value.id}/compact`))).toBe(true));
 });
 
 test("builds a weekly scheduled task from time and weekday selectors", async () => {
@@ -286,8 +286,8 @@ test("stops native snapshot polling when the session view closes", async () => {
   const snapshotSignals: AbortSignal[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes(`/threads/${value.id}/events`)) return jsonResponse([]);
-    if (url.includes(`/threads/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, reason: "", error: "", data: {}, updated_at: null });
+    if (url.includes(`/sessions/codex/${value.id}/events`)) return jsonResponse([]);
+    if (url.includes(`/sessions/codex/${value.id}/goal`)) return jsonResponse({ status: "idle", supported: true, reason: "", error: "", data: {}, updated_at: null });
     if (url.includes("/codex/skills")) {
       if (init?.method === "POST") return jsonResponse({ operation_id: "skills-refresh" }, 202);
       snapshotSignals.push(init?.signal as AbortSignal);

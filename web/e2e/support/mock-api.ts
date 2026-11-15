@@ -59,7 +59,7 @@ function defaultResponse(path: string, method: string, configured: boolean): Moc
   if (path === "/summary" && method === "GET") return { body: summary };
   if (path === "/approvals" && method === "GET") return { body: [] };
   if (path === "/projects/hidden" && method === "GET") return { body: [] };
-  if (/^\/(threads|claude\/threads|gemini\/threads)\/[^/]+\/usage$/.test(path) && method === "GET") return { body: { input_tokens: null, output_tokens: null, output_per_second: null, partial: false } };
+  if (/^\/sessions\/(codex|claude|gemini)\/[^/]+\/usage$/.test(path) && method === "GET") return { body: { input_tokens: null, output_tokens: null, output_per_second: null, partial: false } };
   if (/^\/workspaces\/[^/]+\/codex\/models\/refresh$/.test(path) && method === "POST") return { body: {} };
   if (/^\/workspaces\/[^/]+\/codex\/models$/.test(path) && method === "GET") return { body: { status: "succeeded", supported: true, data: [], error: "" } };
   if (path === "/settings/codex-cli" && method === "GET") return { body: { target_version: "1.0.0", versions: ["1.0.0"] } };

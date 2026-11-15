@@ -1,4 +1,4 @@
-import type { ClaudeThread, GeminiThread, Thread } from "../types";
+import type { ClaudeThread,GeminiThread,Thread } from "../types";
 
 export type Engine = "codex" | "gemini" | "claude";
 export type SessionRef = { engine: Engine; id: string };
@@ -20,3 +20,5 @@ export type SessionListPage<T = AISession> = { items: T[]; next_cursor: string |
 export type SessionFilter = { engine?: Engine; archived?: boolean | "all"; q?: string; limit?: number; cursor?: string | null };
 
 export function sessionKey(ref: SessionRef) { return `${ref.engine}:${ref.id}`; }
+
+export type SessionEngineProps = { realtime: number; notify: (text: string) => void; selectedThreadID: string; onSelectThread: (id: string, replace?: boolean) => void };

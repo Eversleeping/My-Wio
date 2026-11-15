@@ -3,8 +3,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CodexPage } from "./pages/lazyRoutes";
-import { SessionView } from "./codex/SessionView";
-import { waitForThread } from "./codex/waiters";
+import { SessionView } from "./sessions/engines/codex/SessionView";
+import { waitForThread } from "./sessions/engines/codex/waiters";
 import { I18nProvider } from "./i18n";
 import { messageForkTargets } from "./messageForks";
 import { loadCodexComposerPreferences, saveCodexComposerPreferences } from "./codexComposerPreferences";
@@ -36,8 +36,8 @@ test("branches from the selected reply and opens the finished chat with inherite
     const url = new URL(String(input),location.origin);
     if (url.pathname.endsWith("/fork") && init?.method==="POST") { posts.push(JSON.parse(String(init.body)));created=true;return response({operation_id:"fork-op",target_thread_id:branch.id},202); }
     if (url.pathname==="/api/operations/fork-op") return response({status:"succeeded",result:""});
-    if (url.pathname===`/api/threads/${branch.id}`) return response(branch);
-    if (url.pathname==="/api/threads") return response({items:url.searchParams.has("archived")?[]:created?[branch,source]:[source],has_more:false,next:null});
+    if (url.pathname===`/api/sessions/codex/${branch.id}`) return response(branch);
+    if (url.pathname==="/api/sessions") return response({items:url.searchParams.get("archived")==="true"?[]:created?[branch,source]:[source],next_cursor:null,groups:[]});
     if (url.pathname==="/api/workspaces") return response([{id:source.workspace_id,project_id:source.project_id,server_id:source.server_id,path:source.path,display_name:"Project",management_mode:"managed",project_name:"Project",server_name:"Server"}]);
     if (url.pathname.endsWith("/events")) return response(url.pathname.includes(branch.id)?events.slice(0,4):events);
     if (url.pathname.endsWith("/goal")) return response({status:"idle",supported:true,data:{}});

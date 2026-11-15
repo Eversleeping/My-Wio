@@ -1,8 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { invalidateThreadEvents } from "./codex/useThreadEvents";
-import { SessionView } from "./codex/SessionView";
+import { invalidateThreadEvents } from "./sessions/engines/codex/useThreadEvents";
+import { SessionView } from "./sessions/engines/codex/SessionView";
 import { I18nProvider } from "./i18n";
 import type { StreamEvent, Thread } from "./types";
 
@@ -107,7 +107,7 @@ test("loads the first session view from its recent window without a cursor", asy
   render(session(value));
 
   await waitFor(() => expect(screen.getByText("Recent window message")).toBeInTheDocument());
-  expect(eventRequests).toEqual([`/api/threads/${value.id}/events?view=conversation`]);
+  expect(eventRequests).toEqual([`/api/sessions/codex/${value.id}/events?view=conversation`]);
 });
 
 test("loads earlier events with a before cursor and preserves the reading anchor", async () => {
@@ -139,8 +139,8 @@ test("loads earlier events with a before cursor and preserves the reading anchor
   expect(stream.scrollTop).toBe(420);
   expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation&before=501&limit=500`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation&before=501&limit=500`
   ]);
 });
 
@@ -167,8 +167,8 @@ test("uses an incremental cursor and deduplicates replayed event IDs and sequenc
   expect(screen.getAllByText("Second event")).toHaveLength(1);
   expect(screen.queryByText("Conflicting sequence")).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation&after=2&limit=1000`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation&after=2&limit=1000`
   ]);
 });
 
@@ -193,8 +193,8 @@ test("reloads the recent window and replaces a stale tail when a stream rewinds"
   expect(await screen.findByText("Replacement tail")).toBeInTheDocument();
   expect(screen.queryByText("Stale tail")).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`
   ]);
 });
 
@@ -217,8 +217,8 @@ test("reloads the recent window when a stream revision has no positive sequence"
   expect(await screen.findByText("Safe reset window")).toBeInTheDocument();
   expect(screen.queryByText("Old cached event")).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`
   ]);
 });
 
@@ -241,8 +241,8 @@ test("reloads the recent window after a global stream resynchronization", async 
   expect(await screen.findByText("Reconnected window")).toBeInTheDocument();
   expect(screen.queryByText("Cached window")).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`
   ]);
 });
 
@@ -266,8 +266,8 @@ test("retries an initial load as a fresh window when recovery starts without cac
 
   expect(await screen.findByText("Recovered window event")).toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`
   ]);
 });
 
@@ -291,9 +291,9 @@ test("continues incremental requests when a page reaches the maximum size", asyn
 
   expect(await screen.findByText("Caught up event")).toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation&after=1&limit=1000`,
-    `/api/threads/${value.id}/events?view=conversation&after=1001&limit=1000`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation&after=1&limit=1000`,
+    `/api/sessions/codex/${value.id}/events?view=conversation&after=1001&limit=1000`
   ]);
 });
 
@@ -328,7 +328,7 @@ test("keeps thread and view changes isolated from events already shown", async (
 function serveEvents(value: Thread, eventRequests: string[], current: () => StreamEvent[]) {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (!url.includes(`/threads/${value.id}/events`)) return response([]);
+    if (!url.includes(`/sessions/codex/${value.id}/events`)) return response([]);
     eventRequests.push(url);
     const after = Number(new URL(url, "http://localhost").searchParams.get("after") ?? 0);
     return response(current().filter(item => item.sequence > after));
@@ -355,8 +355,8 @@ test("reloads the window after an edit rewound a stream while another session wa
   expect(screen.getByText("Edited message")).toBeInTheDocument();
   expect(screen.queryByText("Pre-edit tail")).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`
   ]);
 });
 
@@ -367,7 +367,7 @@ test("keeps an earlier rewind when a newer batch interrupts the reload", async (
   let holdNextRequest = false;
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (!url.includes(`/threads/${value.id}/events`)) return Promise.resolve(response([]));
+    if (!url.includes(`/sessions/codex/${value.id}/events`)) return Promise.resolve(response([]));
     eventRequests.push(url);
     if (holdNextRequest) {
       holdNextRequest = false;
@@ -391,9 +391,9 @@ test("keeps an earlier rewind when a newer batch interrupts the reload", async (
   await screen.findByText("Answer to the edit");
   expect(screen.queryByText("Pre-edit tail")).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`
   ]);
 });
 
@@ -416,9 +416,9 @@ test("loads only newer events once a rewind has been consumed", async () => {
 
   await screen.findByText("Streaming answer");
   expect(eventRequests).toEqual([
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation`,
-    `/api/threads/${value.id}/events?view=conversation&after=4&limit=1000`
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation`,
+    `/api/sessions/codex/${value.id}/events?view=conversation&after=4&limit=1000`
   ]);
 });
 
@@ -428,7 +428,7 @@ test("keeps recently used sessions cached and evicts the least recently used", a
     const url = String(input);
     if (!url.includes("/events")) return response([]);
     eventRequests.push(url);
-    const threadID = url.split("/")[3];
+    const threadID = url.split("/")[4];
     return response([event(threadID, 1, `Message in ${threadID}`)]);
   }));
   const threads = Array.from({ length: 10 }, (_, index) => thread(`lru-${index}`));
@@ -447,5 +447,5 @@ test("keeps recently used sessions cached and evicts the least recently used", a
   await visit(threads[9]);
 
   // lru-0 was revisited, so lru-1 and lru-2 were evicted by lru-8 and lru-9.
-  expect(eventRequests).toEqual([`/api/threads/${threads[1].id}/events?view=conversation`]);
+  expect(eventRequests).toEqual([`/api/sessions/codex/${threads[1].id}/events?view=conversation`]);
 });

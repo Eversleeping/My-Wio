@@ -4,7 +4,7 @@ import { PageLoading } from "../components/PageUI";
 
 const ServersPageRoute = lazy(() => import("./ServersPage"));
 
-export const CodexPageRoute = lazy(() => import("./CodexPage"));
+export const CodexPageRoute = lazy(() => import("../sessions/engines/codex"));
 
 export function ServersPage({ realtime, notify }: PageProps) {
   return <Suspense fallback={<PageLoading />}><ServersPageRoute realtime={realtime} notify={notify} /></Suspense>;

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SessionView } from "./codex/SessionView";
+import { SessionView } from "./sessions/engines/codex/SessionView";
 import { I18nProvider } from "./i18n";
 import type { Thread } from "./types";
 
@@ -132,7 +132,7 @@ test("restores the saved position after invalidated events finish loading", asyn
   const fetchCounts = new Map<string, number>();
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1000);
   vi.mocked(fetch).mockImplementation(async input => {
-    const threadID = String(input).match(/\/threads\/([^/]+)\/events/)?.[1] ?? "";
+    const threadID = String(input).match(/\/sessions\/codex\/([^/]+)\/events/)?.[1] ?? "";
     const count = (fetchCounts.get(threadID) ?? 0) + 1;
     fetchCounts.set(threadID, count);
     const messages = threadID === first.id
@@ -167,7 +167,7 @@ test("keeps the current position and offers a jump button when new events arrive
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? streamHeight : 0; });
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? 400 : 0; });
   vi.mocked(fetch).mockImplementation(async input => {
-    if (!String(input).includes(`/threads/${value.id}/events`)) return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    if (!String(input).includes(`/sessions/codex/${value.id}/events`)) return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
     return new Response(JSON.stringify([
       { event_id: "history-1", stream_id: value.id, sequence: 1, kind: "user.message", occurred_at: "2026-07-23T00:00:00Z", payload: { text: "Earlier message" } },
       ...(includeNewEvent ? [{ event_id: "history-2", stream_id: value.id, sequence: 2, kind: "user.message", occurred_at: "2026-07-23T00:01:00Z", payload: { text: "Incoming message" } }] : [])
@@ -199,7 +199,7 @@ test("follows new events when the reader remains close to the bottom", async () 
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? streamHeight : 0; });
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("event-stream") ? 400 : 0; });
   vi.mocked(fetch).mockImplementation(async input => {
-    if (!String(input).includes(`/threads/${value.id}/events`)) return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    if (!String(input).includes(`/sessions/codex/${value.id}/events`)) return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
     return new Response(JSON.stringify([
       { event_id: "follow-1", stream_id: value.id, sequence: 1, kind: "user.message", occurred_at: "2026-07-23T00:00:00Z", payload: { text: "Current message" } },
       ...(includeNewEvent ? [{ event_id: "follow-2", stream_id: value.id, sequence: 2, kind: "user.message", occurred_at: "2026-07-23T00:01:00Z", payload: { text: "Latest message" } }] : [])
