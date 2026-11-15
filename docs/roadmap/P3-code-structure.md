@@ -484,3 +484,11 @@ web/src/
 - 机械提取：Agent 的 46 个分支、网关的 18 个资源分支与提取前的 Go token 序列逐一比对一致（仅扣除参数引用所需的解引用、局部 `err` 声明与收尾返回）。两个 worktree 源会话释放分支仍按原顺序运行，通用完成、重复回执和取消判断留在原函数。
 - 三个目标函数当前行数：`Gateway.handleOperationResult` 115、`Client.handleOperation` 117、`Client.execute` 46。两包非测试文件最大分别为 557 / 443 行；Agent 版本升级至 `0.3.18`。
 - 最终验收：通用五项、Go 构建、格式、空白、`make staticcheck`、`make version-check` 全部通过；未经修改的会话并发及跨进程测试通过；真实浏览器完成初始化、登录、内置 Agent 与三引擎回复，1 个端到端用例通过。P3-04 完成。
+
+### 2026-11-15 · P3-05 · Codex
+
+- 公共组件、文本函数、预览面板及其钩子按修订后的计划移动，保留翻译 Dialog 包装和原有底层 Dialog；页面属性归 `types.ts`，预览选择类型由调用方直接导入原定义。
+- 拆分前入口块为 321.86 kB，未预加载 `vendor-markdown`；以本次拆分前的声明逐段比对，仅允许 import / export 调整。
+- 声明内容比对：123 个原有顶层声明均保持一致（忽略 export 和相对 import 的调整），并审阅移动差异。入口块现为 308,875 字节（308.88 kB），bundle 检查通过且不预加载 Markdown。
+- `pages/` / `components/` 剩余从 `App` 导入的文件：`ClaudePage.tsx`、`GeminiPage.tsx` 只取 `WorkspaceFilesPanel`；`claudeManagement.tsx`、`geminiManagement.tsx` 只取 `locationFor`；`CodexPage.tsx` 取会话、线程列表、缓存、等待、分组和文件面板等后续拆分符号。公共组件、文本函数、`PageProps` 与预览选择类型均已改指向新模块或原定义。
+- 验收：通用五项、Go 构建、格式与空白检查全部通过；Vitest 449 / 449；桌面和移动端 Playwright 33 通过、11 按现有配置跳过、0 失败。P3-05 完成。

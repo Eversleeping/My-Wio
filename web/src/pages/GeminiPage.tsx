@@ -10,7 +10,10 @@ import { GeminiThinkingPicker, compatibleGeminiThinking } from "../components/Ge
 import { FormEvent, type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ArchiveRestore, Boxes, CalendarClock, GitFork, Globe, Lightbulb, ListChecks, MoreHorizontal, Pin, ArrowUp, Bot, ChevronDown, ChevronRight, Copy, Download, Folder, LoaderCircle, MessageSquare, Pause, Pencil, Play, Plus, RefreshCw, Sparkles, Square, Target, Trash2, UserRound, Users, Workflow, X } from "lucide-react";
 import { api, patch, post, remove } from "../api";
-import { Dialog, ErrorBanner, Field, message, WorkspaceFilesPanel, type FilePreviewSelection } from "../App";
+import { Dialog, ErrorBanner, Field } from "../components/FormUI";
+import { message } from "../text";
+import { WorkspaceFilesPanel } from "../App";
+import { type FilePreviewSelection } from "../codexContent";
 import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "../components/SessionPreviews";
 import { useGeminiManagement } from "./geminiManagement";
 import { ContextMenu, type ContextMenuAction } from "../ContextMenu";

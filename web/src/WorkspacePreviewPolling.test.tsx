@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { FileDiffPane, FilePreviewPane } from "./App";
+import { FileDiffPane, FilePreviewPane } from "./components/FilePanes";
 import { I18nProvider } from "./i18n";
 
 function response(value: unknown) {

@@ -1,7 +1,8 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import { ChangedFilesView, FileDiffPane, WorkspaceFilesPanel } from "./App";
+import { ChangedFilesView, WorkspaceFilesPanel } from "./App";
+import { FileDiffPane } from "./components/FilePanes";
 import { I18nProvider } from "./i18n";
 import type { WorkspaceChangesSnapshot, WorkspaceGitSnapshot } from "./types";
 

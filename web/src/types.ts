@@ -93,3 +93,6 @@ export interface OperationMetricAggregate { count: number; average_ms: number; p
 export interface OperationMetrics { server_id: string; since: string; updated_at: string; total: number; queued: number; delivered: number; running: number; succeeded: number; failed: number; cancelled: number; queue_wait: OperationMetricAggregate; delivery: OperationMetricAggregate; execution: OperationMetricAggregate }
 export interface AuditEntry { id: string; action: string; resource_type: string; resource_id: string; detail: unknown; ip_address: string; occurred_at: string }
 export interface Summary { counts: Record<string, number>; deployments: Deployment[]; alerts: Alert[] }
+
+
+export interface PageProps { realtime: number; notify: (text: string) => void }

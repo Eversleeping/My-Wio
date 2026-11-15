@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FileCode2, FileDiff, MessageSquare, X } from "lucide-react";
-import { FileDiffPane, FilePreviewPane } from "../App";
+import { FileDiffPane, FilePreviewPane } from "./FilePanes";
 import type { FilePreviewSelection } from "../codexContent";
 import { useI18n } from "../i18n";
 import { hasFileDraft } from "../workspaceFileEditing";

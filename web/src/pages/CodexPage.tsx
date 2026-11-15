@@ -41,27 +41,10 @@ import { relative } from "../format";
 import { useI18n } from "../i18n";
 import { useData } from "../useData";
 import type { Approval, Project, Thread, Workspace } from "../types";
-import {
-  ApprovalActions,
-  clearCodexSessionMemory,
-  copyText,
-  CreateThread,
-  Dialog,
-  ErrorBanner,
-  Field,
-  groupThreadsByWorkspace,
-  locationFor,
-  mergeThreads,
-  message,
-  SessionView,
-  useThreadList,
-  waitForThread,
-  waitForWorkspace,
-  WorkspaceFilesPanel,
-  type CodexPageProps,
-  type FilePreviewSelection,
-  type ThreadGroup
-} from "../App";
+import { ApprovalActions, clearCodexSessionMemory, CreateThread, groupThreadsByWorkspace, locationFor, mergeThreads, SessionView, useThreadList, waitForThread, waitForWorkspace, WorkspaceFilesPanel, type CodexPageProps, type ThreadGroup } from "../App";
+import { copyText, message } from "../text";
+import { Dialog, ErrorBanner, Field } from "../components/FormUI";
+import { type FilePreviewSelection } from "../codexContent";
 import { ScheduledTaskDialog } from "./ScheduledTaskDialog";
 import { UserInputPrompt, isUserInputRequest } from "../components/UserInputPrompt";
 import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "../components/SessionPreviews";

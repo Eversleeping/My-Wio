@@ -1,188 +1,106 @@
-import { CodexRequests } from "./codexRequests";
-import { SessionUsage } from "./components/SessionUsage";
-import { ThemeSwitch } from "./theme";
-import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
-import { CodexModelPicker } from "./components/CodexModelPicker";
-import { UserInputPrompt, QuestionForm, isUserInputRequest } from "./components/UserInputPrompt";
-import { MessageImages } from "./components/MessageImages";
-import { ComposerImagePicker } from "./components/ComposerImagePicker";
-import { messageForkTargets } from "./messageForks";
-import { asyncQuestions, parseQuestionReply, questionReply, readableQuestionReply } from "./asyncUserInput";
-import { AddWorkspaceFileDialog, clearFileDrafts, useFileEditor } from "./workspaceFileEditing";
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, lazy, PointerEvent as ReactPointerEvent, ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  Activity,
-  Archive,
-  ArchiveRestore,
-  AlertTriangle,
-  ArrowDownToLine,
-  ArrowRightLeft,
-  ArrowUpFromLine,
-  Ban,
-  BellRing,
-  Bot,
-  Boxes,
-  Braces,
-  CalendarClock,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Clipboard,
-  Code2,
-  Copy,
-  Cpu,
-  Database,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  File as FileIcon,
-  FileCode2,
-  FileDiff,
-  FilePlus2,
-  Folder,
-  FolderOpen,
-  FolderTree,
-  GitFork,
-  GitBranch,
-  GitCommit,
-  Gauge,
-  HardDrive,
-  History,
-  Image as ImageIcon,
-  KeyRound,
-  LayoutDashboard,
-  Link,
-  ListChecks,
-  LoaderCircle,
-  LockKeyhole,
-  LogOut,
-  MapPin,
-  Menu,
-  MemoryStick,
-  MessageSquare,
-  Minimize2,
-  MoreHorizontal,
-  MonitorDot,
-  Network,
-  Pause,
-  Pencil,
-  Pin,
-  PinOff,
-  Play,
-  Plus,
-  RefreshCw,
-  Rocket,
-  RotateCcw,
-  Search,
-  Server as ServerIcon,
-  Settings,
-  Sparkles,
-  ShieldCheck,
-  Square,
-  SquareTerminal,
-  StickyNote,
-  Target,
-  Trash2,
-  Undo2,
-  UserRound,
-  Users,
-  Wrench,
-  Wifi,
-  WifiOff,
-  Workflow,
-  X
-} from "lucide-react";
-import { api, APIError, onUnauthorized, patch, post, put, remove, setSession, socketURL } from "./api";
-import { LoginScreen, SetupScreen, type AuthMode } from "./AuthScreens";
-import { ContextMenu, type ContextMenuAction } from "./ContextMenu";
-import { SlashCommandMenu, type SlashCommandItem } from "./SlashCommandMenu";
-import { CollaborationTaskDialog, useSubmitPrompt } from "./components/CollaborationTaskDialog";
-import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "./components/Dialog";
-import { ConfirmDialog } from "./components/ConfirmDialog";
-import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "./components/PageUI";
-import { VirtualizedItems, VirtualizedList } from "./components/VirtualizedList";
-import { clearCodexComposerPreferences, loadCodexComposerPreferences, saveCodexComposerPreferences, type CodexComposerPreferences } from "./codexComposerPreferences";
-import { type FilePreviewSelection } from "./codexContent";
-import { extractImageSources, previewImageSource } from "./imageContent";
-import { ImageViewer } from "./components/ImageViewer";
-import { formatDate, formatTime, relative, shortSHA } from "./format";
-import { currentLocale, useI18n } from "./i18n";
-import { compressImage } from "./imageCompression";
+import { type StreamEvent, type Thread, type AuditEntry, type Session, type Approval, type PageProps, type Workspace, type WorkspaceFile, type WorkspaceFilesSnapshot, type WorkspaceChangesSnapshot, type WorkspaceGitSnapshot, type CodexSnapshot, type CodexStatusData, type CodexMCPServer, type CodexSkill, type CodexGoal } from "./types";
+import { lazy, useMemo, useState, useCallback, useEffect, Suspense, useRef, KeyboardEvent as ReactKeyboardEvent, useLayoutEffect, FormEvent } from "react";
+import { clearFileDrafts, AddWorkspaceFileDialog } from "./workspaceFileEditing";
 import { clearDataCacheMatching, useData } from "./useData";
-import type {
-  Alert,
-  Approval,
-  AuditEntry,
-  CodexCLISettings,
-  CodexGoal,
-  CodexMCPServer,
-  CodexSkill,
-  CodexSnapshot,
-  CodexStatusData,
-  CredentialProfile,
-  Deployment,
-  DeploymentDetail,
-  DeploymentTarget,
-  Metric,
-  OperationMetrics,
-  Project,
-  SecretSet,
-  Server,
-  Session,
-  ScheduledTask,
-  StreamEvent,
-  Thread,
-  Workspace,
-  WorkspaceChange,
-  WorkspaceChangesSnapshot,
-  WorkspaceDiffPreview,
-  WorkspaceGitSnapshot,
-  WorkspaceFile,
-  WorkspaceFilePreview,
-  WorkspaceFilesSnapshot
-} from "./types";
+import { LayoutDashboard, Server as ServerIcon, GitBranch, Code2, Sparkles, Bot, Rocket, ListChecks, Activity, Settings, UserRound, LogOut, Menu, Wifi, WifiOff, ShieldCheck, Check, FileDiff, FolderTree, FilePlus2, LoaderCircle, RefreshCw, AlertTriangle, Folder, GitCommit, ArrowRightLeft, ArrowUpFromLine, ChevronDown, ChevronRight, FolderOpen, File as FileIcon, Plus, Cpu, Gauge, Target, Minimize2, Users, Network, Boxes, StickyNote, Workflow, Braces, Archive, Pause, Play, Pencil, Trash2, X, Square, Ban, Image as ImageIcon, Copy, MoreHorizontal, GitFork, SquareTerminal, Wrench } from "lucide-react";
+import { useI18n } from "./i18n";
+import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
+import { setSession, api, APIError, onUnauthorized, socketURL, post, put, remove } from "./api";
+import { LoadingScreen, LanguageSwitch, ErrorBanner, Field, Dialog } from "./components/FormUI";
+import { PageLoading, Empty, Status, ErrorState } from "./components/PageUI";
+import { ThemeSwitch } from "./theme";
+import { message, copyText, pretty } from "./text";
+import { type FilePreviewSelection } from "./codexContent";
+import { VirtualizedList, VirtualizedItems } from "./components/VirtualizedList";
+import { DialogActions } from "./components/Dialog";
+import { CodexRequests } from "./codexRequests";
+import { loadCodexComposerPreferences, type CodexComposerPreferences, saveCodexComposerPreferences } from "./codexComposerPreferences";
+import { useSubmitPrompt, CollaborationTaskDialog } from "./components/CollaborationTaskDialog";
+import { parseQuestionReply, asyncQuestions, questionReply, readableQuestionReply } from "./asyncUserInput";
+import { messageForkTargets } from "./messageForks";
+import { useCodexModels, reasoningOptionsFor, compatibleReasoningEffort } from "./codexModels";
+import { type SlashCommandItem, SlashCommandMenu } from "./SlashCommandMenu";
+import { compressImage } from "./imageCompression";
+import { formatDate, relative, formatTime } from "./format";
+import { SessionUsage } from "./components/SessionUsage";
+import { ComposerImagePicker } from "./components/ComposerImagePicker";
+import { CodexModelPicker } from "./components/CodexModelPicker";
+import { isUserInputRequest, UserInputPrompt, QuestionForm } from "./components/UserInputPrompt";
+import { extractImageSources } from "./imageContent";
+import { MarkdownContent } from "./components/LazyMarkdown";
+import { MessageImages } from "./components/MessageImages";
+import { ContextMenu } from "./ContextMenu";
 
 type View = "dashboard" | "servers" | "projects" | "codex" | "gemini" | "claude" | "deployments" | "operations" | "monitoring" | "settings";
+
 type RealtimeScope = View | "approvals";
+
 type RealtimeRevisions = Record<RealtimeScope, number>;
+
 type ConversationDisplayItem = { type: "event"; event: StreamEvent } | { type: "commandGroup"; events: StreamEvent[] };
+
 type ComposerMode = "message" | "goal";
+
 type AuthState = "loading" | "setup" | "login" | "authenticated";
+
 type ComposerImage = { id: string; dataURL: string };
-export type { FilePreviewSelection } from "./codexContent";
+
 type SubagentActivity = { threadID: string; path: string; status: string; message: string; prompt: string; model: string; reasoningEffort: string; updatedAt: string };
+
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+
 const ServersPageRoute = lazy(() => import("./pages/ServersPage"));
+
 const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
+
 const CodexPageRoute = lazy(() => import("./pages/CodexPage"));
+
 const GeminiPageRoute = lazy(() => import("./pages/GeminiPage"));
+
 const ClaudePageRoute = lazy(() => import("./pages/ClaudePage"));
+
 const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
+
 const OperationsPageRoute = lazy(() => import("./pages/OperationsPage"));
+
 const MonitoringPageRoute = lazy(() => import("./pages/MonitoringPage"));
+
 const SettingsPageRoute = lazy(() => import("./pages/SettingsPage"));
-const MarkdownContentRenderer = lazy(() => import("./MarkdownContent"));
-const HighlightedFile = lazy(() => import("./FilePreviewCode"));
-const HighlightedDiff = lazy(() => import("./FileDiffCode"));
+
 type StreamRevision = { revision: number; minimumSequence: number | null };
+
 type StreamRevisions = Record<string, StreamRevision>;
+
 // invalidatedFrom is the lowest sequence invalidated since the entry was stored:
 // undefined when nothing changed and null when the position is unknown.
 type ThreadEventsCacheEntry = { events: StreamEvent[]; dependency: unknown; globalRevision: number; streamRevision: number; hasEarlier: boolean; invalidatedFrom?: number | null };
+
 type ThreadListPage = { items: Thread[]; has_more: boolean; next: number | null };
+
 type AuditListPage = { items: AuditEntry[]; has_more: boolean; next: number | null };
 
 const threadEventsCache = new Map<string, ThreadEventsCacheEntry>();
+
 const threadEventsCacheThreadLimit = 8;
+
 const codexScrollPositions = new Map<string, number>();
+
 const codexAutoFollowThreshold = 96;
+
 const threadEventsPageSize = 500;
+
 const threadListPageSize = 50;
+
 const auditListPageSize = 50;
+
 const websocketReconnectBaseDelay = 1_000;
+
 const websocketReconnectMaximumDelay = 30_000;
+
 const websocketStableConnectionDelay = 30_000;
+
 const allRealtimeScopes: RealtimeScope[] = ["dashboard", "servers", "projects", "codex", "gemini", "claude", "deployments", "operations", "monitoring", "settings", "approvals"];
+
 const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0, servers: 0, projects: 0, codex: 0, gemini: 0, claude: 0, deployments: 0, operations: 0, monitoring: 0, settings: 0, approvals: 0 });
 
 export function realtimeScopesForEvent(event: Pick<Partial<StreamEvent>, "kind">): RealtimeScope[] {
@@ -273,7 +191,6 @@ export function websocketReconnectDelay(attempt: number, random = Math.random) {
   const ceiling = Math.min(websocketReconnectMaximumDelay, websocketReconnectBaseDelay * 2 ** Math.max(0, attempt));
   return Math.round(ceiling / 2 + random() * ceiling / 2);
 }
-
 
 const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboard }> = [
   { id: "dashboard", labelKey: "nav.overview", icon: LayoutDashboard },
@@ -530,15 +447,9 @@ export default function App() {
   );
 }
 
-function LoadingScreen() {
-  const { t } = useI18n();
-  return <div className="auth-layout"><div className="auth-brand"><span className="brand-mark">W</span><strong>{t("app.name")}</strong></div><LoaderCircle className="spin" size={28} /></div>;
-}
-
 export function ServersPage({ realtime, notify }: PageProps) {
   return <Suspense fallback={<PageLoading />}><ServersPageRoute realtime={realtime} notify={notify} /></Suspense>;
 }
-
 
 export function mergeThreads(...pages: Thread[][]) {
   const merged: Thread[] = [];
@@ -692,7 +603,6 @@ function useAuditList(realtime: unknown) {
   const reload = useCallback(() => firstPage.reload(), [firstPage.reload]);
   return { data: firstPage.data ? items : null, error: firstPage.error, loading: firstPage.loading, reload, hasMore, loadingMore, loadError, loadMore };
 }
-
 
 export type CodexPageProps = PageProps & {
   streamRevisions: Record<string, { revision: number; minimumSequence: number | null }>;
@@ -884,6 +794,7 @@ export function WorkspaceFilesPanel({ workspaceID, taskID, taskStatus, realtime,
 }
 
 const changeStatusKeys: Record<string, string> = { modified: "codex.changeModified", added: "codex.changeAdded", deleted: "codex.changeDeleted", renamed: "codex.changeRenamed", copied: "codex.changeCopied", untracked: "codex.changeAdded", conflicted: "codex.changeConflicted" };
+
 const changeStatusCodes: Record<string, string> = { modified: "M", added: "A", deleted: "D", renamed: "R", copied: "C", untracked: "?", conflicted: "!" };
 
 export function ChangedFilesView({ workspaceID, snapshot, loading, activePath, onOpenFile }: { workspaceID: string | null; snapshot: WorkspaceChangesSnapshot | null; loading: boolean; activePath: string; onOpenFile: (path: string) => void }) {
@@ -1599,74 +1510,6 @@ function ConversationEventItem({ event, onEdit, onFork, forkDisabled = false, no
   return <ToolEvent event={event} item={item} />;
 }
 
-function MarkdownContent({ text, workspaceRoot, onOpenFile }: { text: string; workspaceRoot: string; onOpenFile: (selection: FilePreviewSelection) => void }) {
-  return <Suspense fallback={<div className="message-content">{text}</div>}><MarkdownContentRenderer text={text} workspaceRoot={workspaceRoot} onOpenFile={onOpenFile} /></Suspense>;
-}
-
-type FilePreviewPaneProps = { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable?: boolean; workspaceRoot?: string; enabled?: boolean; closeRequest?: number; onOpenFile?: (selection: FilePreviewSelection) => void; onClose: () => void };
-export function FilePreviewPane(props: FilePreviewPaneProps) { return <EditableFilePreviewPane key={`${props.workspaceID}:${props.selection.path}`} {...props} />; }
-function EditableFilePreviewPane({ workspaceID, selection, realtime, writable = false, workspaceRoot = "", enabled = true, closeRequest = 0, onOpenFile, onClose }: FilePreviewPaneProps) {
-  const { t } = useI18n();
-  const preview = useWorkspacePreview<WorkspaceFilePreview>(workspaceID, selection.path, "file-preview", realtime, t("codex.previewTimedOut"), enabled);
-  const edit = useFileEditor(workspaceID, selection.path, preview.data, writable, preview.retry, onClose);
-  useEffect(() => { if (closeRequest) edit.close(); }, [closeRequest]);
-  const [showSource, setShowSource] = useState(Boolean(selection.line));
-  useEffect(() => { setShowSource(Boolean(selection.line)); }, [selection.line]);
-  const data = preview.data;
-  const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
-  const rawError = preview.error || data?.error || "";
-  const error = rawError === "image preview exceeds the 4 MB limit" ? t("codex.imagePreviewTooLarge") : rawError;
-  const showData = data?.status === "succeeded";
-  const updatedText = data?.updated_at ? t("codex.previewUpdated", { time: formatDate(data.updated_at) }) : "";
-  const language = previewLanguage(selection.path);
-  const fileName = selection.path.split("/").pop() || selection.path;
-  const image = Boolean(data?.encoding);
-  return <><section className={`file-preview-panel ${edit.editing ? "editing" : ""} ${image ? "image-preview-panel" : ""}`}>
-    <header className="file-preview-header"><div><FileCode2 size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="file-language">{image ? data.mime_type?.replace("image/", "").toUpperCase() : language.label}</span><span className="file-size">{formatFileSize(data.size)}</span></>}{!image && language.id === "markdown" && !edit.editing && <button type="button" className={`icon-button ${showSource ? "active" : ""}`} aria-pressed={showSource} title={t(showSource ? "codex.viewMarkdown" : "codex.viewSource")} aria-label={t(showSource ? "codex.viewMarkdown" : "codex.viewSource")} onClick={() => setShowSource(value => !value)}>{showSource ? <Eye size={15} /> : <Code2 size={15} />}</button>}<button type="button" className={`icon-button ${edit.editing ? "active" : ""}`} aria-pressed={edit.editing} disabled={edit.saving || (!edit.editing && (!writable || !showData || image || data.truncated || !data.hash || preview.loading))} title={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} aria-label={t(edit.editing ? "codex.finishEditing" : "codex.editFile")} onClick={edit.editing ? edit.finish : edit.begin}><Pencil size={15} /></button><button type="button" className="icon-button" disabled={preview.requesting || edit.editing} title={t("codex.refreshPreview")} aria-label={t("codex.refreshPreview")} onClick={preview.retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closePreview")} aria-label={t("codex.closePreview")} disabled={edit.saving} onClick={edit.close}><X size={16} /></button></div></header>
-    <div className="file-preview-body">
-      {showData && (error || preview.loading) && <PreviewStatusNote messageText={error ? t("codex.previewStale", { error }) : t("codex.previewRefreshing")} updatedText={updatedText} loading={preview.loading} retry={preview.retry} retryLabel={t("common.retry")} />}
-      {edit.editing ? edit.editor : error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.previewFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={preview.retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div> : showData && image ? <ImageViewer src={previewImageSource(data)} alt={fileName} /> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.previewTruncated", { size: formatFileSize(data.size) })}</div>}<Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingPreview")}</span></div>}>{language.id === "markdown" && !showSource ? <div className="file-markdown"><MarkdownContentRenderer text={data.content} workspaceRoot={workspaceRoot} filePath={selection.path} onOpenFile={onOpenFile} /></div> : <HighlightedFile content={data.content} language={language.id} targetLine={selection.line} />}</Suspense></> : null}
-    </div>
-  </section>{edit.dialog}</>;
-}
-
-export function FileDiffPane({ workspaceID, selection, realtime, writable, notify, onOpenFile, onClose, enabled = true }: { workspaceID: string; selection: FilePreviewSelection; realtime: number; writable: boolean; notify: (text: string) => void; onOpenFile?: (selection: FilePreviewSelection) => void; onClose: () => void; enabled?: boolean }) {
-  const { t } = useI18n();
-  const [discarding, setDiscarding] = useState(false);
-  const [discardConfirmation, setDiscardConfirmation] = useState(false);
-  const previewBodyRef = useRef<HTMLDivElement>(null);
-  const preview = useWorkspacePreview<WorkspaceDiffPreview>(workspaceID, selection.path, "diff-preview", realtime, t("codex.diffTimedOut"), enabled);
-  const data = preview.data;
-  const loading = preview.loading || !data || data.status === "idle" || data.status === "loading";
-  const error = preview.error || data?.error || "";
-  const showData = data?.status === "succeeded";
-  const updatedText = data?.updated_at ? t("codex.diffUpdated", { time: formatDate(data.updated_at) }) : "";
-  const language = previewLanguage(selection.path);
-  const fileName = selection.path.split("/").pop() || selection.path;
-  const retry = preview.retry;
-  const discard = async () => {
-    if (!writable || discarding) return;
-    setDiscarding(true);
-    try {
-      await post(`/workspaces/${workspaceID}/git/discard`, { paths: [selection.path], all: false, include_staged: true });
-      notify(t("codex.discardFileQueued"));
-      setDiscardConfirmation(false);
-      onClose();
-    } catch (error) {
-      notify(message(error));
-    } finally {
-      setDiscarding(false);
-    }
-  };
-  return <><section className="file-preview-panel file-diff-panel">
-    <header className="file-preview-header"><div><FileDiff size={17} /><span><h2>{fileName}</h2><small title={selection.path}>{selection.path}</small></span></div><div className="file-preview-actions">{showData && <><span className="diff-stat additions">+{data.additions}</span><span className="diff-stat deletions">-{data.deletions}</span></>}{language.id === "markdown" && onOpenFile && <button type="button" className="icon-button" title={t("codex.viewMarkdown")} aria-label={t("codex.viewMarkdown")} onClick={() => onOpenFile({ path: selection.path, mode: "file" })}><Eye size={15} /></button>}<button type="button" className="icon-button danger" disabled={!writable || discarding} title={t(writable ? "codex.discardFile" : "project.gitReadOnly")} aria-label={t("codex.discardFile")} onClick={() => setDiscardConfirmation(true)}>{discarding ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}</button><button type="button" className="icon-button" disabled={preview.requesting || discarding} title={t("codex.refreshDiff")} aria-label={t("codex.refreshDiff")} onClick={retry}>{preview.requesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button><button type="button" className="icon-button" title={t("codex.closeDiff")} aria-label={t("codex.closeDiff")} onClick={onClose}><X size={16} /></button></div></header>
-    <div className="file-preview-body" ref={previewBodyRef}>
-      {showData && (error || preview.loading) && <PreviewStatusNote messageText={error ? t("codex.diffStale", { error }) : t("codex.diffRefreshing")} updatedText={updatedText} loading={preview.loading} retry={retry} retryLabel={t("common.retry")} />}
-      {error && !showData ? <div className="file-preview-error"><AlertTriangle size={22} /><strong>{t("codex.diffFailed")}</strong><span>{error}</span><button type="button" className="secondary-button" onClick={retry}>{t("common.retry")}</button></div> : !showData && loading ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div> : showData ? <>{data.truncated && <div className="file-preview-note"><AlertTriangle size={14} />{t("codex.diffTruncated")}</div>}{data.binary ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.binaryDiff")}</span></div> : !data.content ? <div className="file-preview-empty"><FileDiff size={24} /><span>{t("codex.noTextDiff")}</span></div> : <Suspense fallback={<div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{t("codex.loadingDiff")}</span></div>}><HighlightedDiff content={data.content} language={language.id} unchangedLabel={count => t("codex.unchangedLines", { count })} scrollRef={previewBodyRef} /></Suspense>}</> : null}
-    </div>
-  </section><ConfirmDialog open={discardConfirmation} danger title={t("codex.discardFile")} impact={t("codex.discardFileConfirm", { path: selection.path })} confirmLabel={t("codex.discardFile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={discarding} onClose={() => setDiscardConfirmation(false)} onConfirm={discard} /></>;
-}
-
 function SubagentEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> }) {
   const { t } = useI18n();
   const activity = item.type === "subAgentActivity";
@@ -1676,31 +1519,6 @@ function SubagentEvent({ event, item }: { event: StreamEvent; item: Record<strin
   const states = asRecord(item.agentsStates) ?? {};
   const summary = activity ? String(item.agentPath ?? item.agentThreadId ?? "") : `${String(item.tool ?? "spawnAgent")} · ${receiverIDs.length || Object.keys(states).length} ${t("codex.subagentThreads")}`;
   return <article className="subagent-event"><header><Users size={15} /><strong>{t(activity ? "codex.subagentActivity" : "codex.subagentToolCall")}</strong><Status value={status} /><time>{formatTime(event.occurred_at)}</time></header><div className="message-content">{summary}</div>{typeof item.prompt === "string" && item.prompt && <p>{item.prompt}</p>}{receiverIDs.length > 0 && <code>{receiverIDs.join(", ")}</code>}</article>;
-}
-
-function previewLanguage(path: string) {
-  const fileName = path.split("/").pop()?.toLowerCase() ?? "";
-  const extension = fileName.includes(".") ? fileName.split(".").pop() ?? "" : "";
-  const special: Record<string, { id: string; label: string }> = {
-    dockerfile: { id: "docker", label: "Dockerfile" }, makefile: { id: "makefile", label: "Makefile" },
-    ".env": { id: "bash", label: "Environment" }, "go.mod": { id: "go", label: "Go module" }, "go.sum": { id: "plain", label: "Go checksum" }
-  };
-  if (special[fileName]) return special[fileName];
-  const languages: Record<string, { id: string; label: string }> = {
-    js: { id: "javascript", label: "JavaScript" }, jsx: { id: "jsx", label: "JSX" }, ts: { id: "typescript", label: "TypeScript" }, tsx: { id: "tsx", label: "TSX" },
-    css: { id: "css", label: "CSS" }, scss: { id: "css", label: "SCSS" }, html: { id: "markup", label: "HTML" }, xml: { id: "markup", label: "XML" }, svg: { id: "markup", label: "SVG" },
-    go: { id: "go", label: "Go" }, py: { id: "python", label: "Python" }, java: { id: "java", label: "Java" }, c: { id: "c", label: "C" }, h: { id: "c", label: "C header" }, cpp: { id: "cpp", label: "C++" }, cc: { id: "cpp", label: "C++" }, rs: { id: "rust", label: "Rust" }, swift: { id: "swift", label: "Swift" },
-    sh: { id: "bash", label: "Shell" }, bash: { id: "bash", label: "Bash" }, ps1: { id: "powershell", label: "PowerShell" }, sql: { id: "sql", label: "SQL" },
-    json: { id: "json", label: "JSON" }, jsonc: { id: "json", label: "JSON" }, yaml: { id: "yaml", label: "YAML" }, yml: { id: "yaml", label: "YAML" }, toml: { id: "toml", label: "TOML" }, ini: { id: "plain", label: "INI" },
-    md: { id: "markdown", label: "Markdown" }, mdx: { id: "markdown", label: "MDX" }, txt: { id: "plain", label: "Text" }
-  };
-  return languages[extension] ?? { id: "plain", label: extension ? extension.toUpperCase() : "Text" };
-}
-
-function formatFileSize(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function ToolEvent({ event, item }: { event: StreamEvent; item: Record<string, unknown> | null }) {
@@ -1731,144 +1549,6 @@ function WorkingIndicator({ events }: { events: StreamEvent[] }) {
     if (event.kind === "codex.item.completed" && item?.type === "agentMessage" && item.phase === "final_answer" && item.delivery !== "async") { label = "codex.awaitingCompletion"; break; }
   }
   return <div className="working-indicator" role="status"><Bot size={15} /><span>{t(label)}</span><i /><i /><i /></div>;
-}
-
-
-
-
-
-
-
-
-function LanguageSwitch() {
-  const { language, setLanguage, t } = useI18n();
-  return <div className="language-switch" role="group" aria-label={t("auth.language")}><button aria-pressed={language === "zh-CN"} className={language === "zh-CN" ? "active" : ""} onClick={() => setLanguage("zh-CN")} type="button">中文</button><button aria-pressed={language === "en"} className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")} type="button">EN</button></div>;
-}
-
-export function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
-export function Dialog(props: Omit<DialogProps, "closeLabel">) { const { t } = useI18n(); return <AccessibleDialog {...props} closeLabel={t("common.close")} />; }
-export function ErrorBanner({ text }: { text: string }) { return <div className="error-banner"><AlertTriangle size={16} />{text}</div>; }
-
-function PreviewStatusNote({ messageText, updatedText, loading, retry, retryLabel }: { messageText: string; updatedText: string; loading: boolean; retry: () => void; retryLabel: string }) {
-  return <div className={`file-preview-note preview-status-note ${loading ? "loading" : "warning"}`} role="status"><span className="preview-status-message">{loading ? <LoaderCircle className="spin" size={14} /> : <AlertTriangle size={14} />}<strong>{messageText}</strong></span>{updatedText && <small>{updatedText}</small>}<button type="button" className="text-button" disabled={loading} onClick={retry}>{retryLabel}</button></div>;
-}
-
-export interface PageProps { realtime: number; notify: (text: string) => void }
-const previewPollDelays = [750, 1_500, 3_000, 6_000];
-const previewPollTimeout = 20_000;
-type WorkspacePreviewSnapshot = { path: string; status: string; error: string };
-
-function useWorkspacePreview<T extends WorkspacePreviewSnapshot>(workspaceID: string, path: string, kind: "file-preview" | "diff-preview", realtime: number, timeoutMessage: string, enabled = true) {
-  const key = `${workspaceID}:${kind}:${path}`;
-  const endpoint = `/workspaces/${workspaceID}/${kind}?path=${encodeURIComponent(path)}`;
-  const [requestNonce, setRequestNonce] = useState(0);
-  const [state, setState] = useState<{ key: string; data: T | null; error: string; loading: boolean; requesting: boolean }>({ key: "", data: null, error: "", loading: false, requesting: false });
-  const dataRef = useRef<T | null>(null);
-  const confirmRef = useRef<(() => void) | null>(null);
-  const lastRealtimeRef = useRef(realtime);
-  const retry = useCallback(() => setRequestNonce(value => value + 1), []);
-
-  useEffect(() => {
-    if (!enabled) return;
-    const controller = new AbortController();
-    let active = true;
-    let started = false;
-    let checking = false;
-    let waitingForTerminalState = true;
-    let pollAttempt = 0;
-    let timer = 0;
-    let startedAt = 0;
-    let hiddenAt = document.hidden ? Date.now() : 0;
-    let hiddenDuration = 0;
-    const clearTimer = () => { if (timer) { window.clearTimeout(timer); timer = 0; } };
-    const visibleElapsed = () => startedAt ? Date.now() - startedAt - hiddenDuration - (hiddenAt ? Date.now() - hiddenAt : 0) : 0;
-    const fail = (error: string) => {
-      if (!active) return;
-      waitingForTerminalState = false;
-      clearTimer();
-      setState(current => current.key === key ? { ...current, error, loading: false, requesting: false } : current);
-    };
-    const scheduleConfirmation = () => {
-      if (!active || !waitingForTerminalState || document.hidden) return;
-      const remaining = previewPollTimeout - visibleElapsed();
-      if (remaining <= 0) { fail(timeoutMessage); return; }
-      const delay = previewPollDelays[Math.min(pollAttempt, previewPollDelays.length - 1)];
-      pollAttempt += 1;
-      timer = window.setTimeout(() => {
-        timer = 0;
-        if (!document.hidden) void confirm();
-      }, Math.min(delay, remaining));
-    };
-    const confirm = async () => {
-      if (!active || !waitingForTerminalState || checking || document.hidden) return;
-      checking = true;
-      try {
-        const snapshot = await api<T>(endpoint, { signal: controller.signal });
-        if (!active) return;
-        const terminal = snapshot.status === "succeeded" || snapshot.status === "failed";
-        if (terminal) {
-          waitingForTerminalState = false;
-          clearTimer();
-        }
-        if (snapshot.status === "succeeded") dataRef.current = snapshot;
-        const displayData = snapshot.status === "succeeded" ? snapshot : dataRef.current ?? snapshot;
-        setState({ key, data: displayData, error: snapshot.status === "failed" ? snapshot.error : "", loading: !terminal, requesting: false });
-        if (!terminal) scheduleConfirmation();
-      } catch (error) {
-        if (!active || controller.signal.aborted) return;
-        fail(message(error));
-      } finally {
-        checking = false;
-      }
-    };
-    const start = async () => {
-      if (!active || started || document.hidden) return;
-      started = true;
-      if (dataRef.current?.path !== path) dataRef.current = state.key === key ? state.data : null;
-      startedAt = Date.now();
-      setState(current => current.key === key ? { ...current, error: "", loading: true, requesting: true } : { key, data: null, error: "", loading: true, requesting: true });
-      try {
-        await api(`/workspaces/${workspaceID}/${kind}`, { method: "POST", body: JSON.stringify({ path }), signal: controller.signal });
-        if (!active) return;
-        setState(current => current.key === key ? { ...current, requesting: false } : current);
-        await confirm();
-      } catch (error) {
-        if (!active || controller.signal.aborted) return;
-        fail(message(error));
-      }
-    };
-    const confirmCurrent = () => { void confirm(); };
-    confirmRef.current = confirmCurrent;
-    const visibilityChanged = () => {
-      if (document.hidden) {
-        if (!hiddenAt) hiddenAt = Date.now();
-        clearTimer();
-        return;
-      }
-      if (hiddenAt) { hiddenDuration += Date.now() - hiddenAt; hiddenAt = 0; }
-      if (!started) void start();
-      else void confirm();
-    };
-    document.addEventListener("visibilitychange", visibilityChanged);
-    if (!document.hidden) void start();
-    else setState(current => current.key === key ? { ...current, error: "", loading: true, requesting: false } : { key, data: null, error: "", loading: true, requesting: false });
-    return () => {
-      active = false;
-      clearTimer();
-      controller.abort();
-      document.removeEventListener("visibilitychange", visibilityChanged);
-      if (confirmRef.current === confirmCurrent) confirmRef.current = null;
-    };
-  }, [enabled, endpoint, key, kind, path, requestNonce, timeoutMessage, workspaceID]);
-
-  useEffect(() => {
-    if (lastRealtimeRef.current === realtime) return;
-    lastRealtimeRef.current = realtime;
-    confirmRef.current?.();
-  }, [realtime]);
-
-  const current = state.key === key ? state : { key, data: null, error: "", loading: true, requesting: false };
-  return { ...current, retry };
 }
 
 function mergeThreadEvents(existing: StreamEvent[], incoming: StreamEvent[]) {
@@ -1992,24 +1672,8 @@ function useThreadEvents(threadID: string, rawEvents: boolean, realtime: unknown
   return { data: current.data, error: current.error, loading: current.loading, loadingEarlier: current.loadingEarlier, hasEarlier: cached?.hasEarlier ?? false, loadEarlier, reload };
 }
 
-export function message(error: unknown) { return error instanceof Error ? error.message : "Request failed"; }
-function pretty(value: unknown) { try { return JSON.stringify(value, null, 2); } catch { return String(value); } }
 function approvalDetail(detail: unknown) { const value = asRecord(detail); if (!value) return pretty(detail); for (const key of ["command", "reason", "message", "question"]) if (typeof value[key] === "string" && value[key]) return value[key] as string; return pretty(detail); }
-export async function copyText(value: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) throw new Error("Could not copy message");
-}
+
 function conversationEvents(events: StreamEvent[]) {
   const completedTypes = new Set(["agentMessage", "plan", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabToolCall", "collabAgentToolCall", "subAgentActivity", "contextCompaction", "webSearch"]);
   const result: StreamEvent[] = [];
@@ -2078,6 +1742,7 @@ function conversationEvents(events: StreamEvent[]) {
   }
   return result;
 }
+
 function groupCommandEvents(events: StreamEvent[]): ConversationDisplayItem[] {
   const result: ConversationDisplayItem[] = [];
   for (let index = 0; index < events.length;) {
@@ -2093,12 +1758,15 @@ function groupCommandEvents(events: StreamEvent[]): ConversationDisplayItem[] {
   }
   return result;
 }
+
 function isCommandEvent(event: StreamEvent) {
   if (event.kind !== "codex.item.completed") return false;
   const payload = asRecord(event.payload);
   return asRecord(payload?.item)?.type === "commandExecution";
 }
+
 function asRecord(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
+
 function extractText(payload: unknown): string {
   if (typeof payload === "string") return payload;
   if (Array.isArray(payload)) return payload.map(extractText).filter(Boolean).join("\n");
@@ -2108,7 +1776,9 @@ function extractText(payload: unknown): string {
   for (const key of ["content", "item", "error"]) { const text = extractText(value[key]); if (text) return text; }
   return "";
 }
+
 function errorText(payload: Record<string, unknown> | null) { return extractText(payload?.error) || extractText(payload); }
+
 function toolSummary(item: Record<string, unknown> | null, translate: (key: string, values?: Record<string, string | number>) => string) {
   if (!item) return "";
   const type = String(item.type ?? "");
@@ -2118,6 +1788,7 @@ function toolSummary(item: Record<string, unknown> | null, translate: (key: stri
   const exitCode = type === "commandExecution" && typeof item.exitCode === "number" ? translate("codex.exitCode", { code: item.exitCode }) : "";
   return [primary, statusLabel, exitCode].filter(Boolean).join(" · ");
 }
+
 function toolDetail(item: Record<string, unknown> | null, translate: (key: string, values?: Record<string, string | number>) => string) {
   if (!item) return "";
   const type = String(item.type ?? "");
@@ -2130,4 +1801,5 @@ function toolDetail(item: Record<string, unknown> | null, translate: (key: strin
   if (type === "webSearch") return String(item.query ?? "");
   return pretty({ arguments: item.arguments, result: item.result, error: item.error });
 }
+
 function readableKind(kind: string) { return kind.replace(/^codex\./, "").replaceAll(".", " / ").replaceAll("/", " / "); }

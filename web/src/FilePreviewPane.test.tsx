@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { FileDiffPane, FilePreviewPane } from "./App";
+import { FileDiffPane, FilePreviewPane } from "./components/FilePanes";
 import { I18nProvider } from "./i18n";
 
 const content = "# Getting started\n\nA **formatted** paragraph.\n\n- [x] Ready\n\n| Name | Value |\n| --- | --- |\n| Demo | 1 |\n\n```sh\nnpm start\n```\n\n[Next](./guide.md) [Source](../src/main.ts#L12)\n";
