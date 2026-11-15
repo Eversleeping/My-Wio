@@ -1,3 +1,4 @@
+import { useVisibleClock } from "../../hooks/useVisibleInterval";
 import { Archive,ArchiveRestore,ArrowUp,Bot,Boxes,CalendarClock,Copy,Download,GitFork,Globe,Lightbulb,ListChecks,LoaderCircle,MessageSquare,MoreHorizontal,Pause,Pencil,Play,Plus,RefreshCw,Sparkles,Square,Target,UserRound,Users,Workflow,X } from "lucide-react";
 import { FormEvent,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
 import { ContextMenu,type ContextMenuAction } from "../../ContextMenu";
@@ -215,13 +216,7 @@ function GeminiSession({ thread, realtime, notify, onChanged, onNewSession, onOp
   const follow = useRef(true);
   const running = isActive(thread);
   const recoveryPending = Boolean(thread.recovery_pending);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!running) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 15000);
-    return () => window.clearInterval(timer);
-  }, [running, thread.operation_id]);
+  const now = useVisibleClock(running, 15000);
   const lastActivity = [...events].reverse().find(event =>
     (event.payload as {operation_id?: string})?.operation_id === thread.operation_id &&
     ["gemini.user.message", "gemini.init", "gemini.message", "gemini.activity", "gemini.tool_use", "gemini.tool_result", "gemini.question", "gemini.question.answered", "gemini.steer.applied", "gemini.goal.progress"].includes(event.kind)
