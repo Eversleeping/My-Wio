@@ -95,9 +95,9 @@ type ComposerMode = "message" | "goal";
 
 type ComposerImage = { id: string; dataURL: string };
 
-export function CreateThread({ workspaces, onCreated }: { workspaces: Workspace[]; onCreated: (thread: Thread) => void }) {
+export function CreateThread({ workspaces, onCreated, initialWorkspaceID = "" }: { workspaces: Workspace[]; initialWorkspaceID?: string; onCreated: (thread: Thread) => void }) {
   const { t } = useI18n();
-  const [workspaceID, setWorkspaceID] = useState("");
+  const [workspaceID, setWorkspaceID] = useState(initialWorkspaceID);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   return <form onSubmit={async e => { e.preventDefault(); if (busy) return; setBusy(true); setError(""); try { onCreated(await post<Thread>("/sessions/codex", { workspace_id: workspaceID })); } catch (requestError) { setError(message(requestError)); } finally { setBusy(false); } }}>{error && <ErrorBanner text={error} />}<Field label={t("codex.workspace")}><select value={workspaceID} disabled={busy} onChange={e => setWorkspaceID(e.target.value)} required><option value="">{t("codex.selectWorkspaceOption")}</option>{workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.project_name} · {workspace.server_name} · {workspace.path}</option>)}</select></Field><DialogActions><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{t("codex.createSession")}</button></DialogActions></form>;

@@ -16,15 +16,25 @@ type Props = {
   sidebar: (select: (id: string) => void) => ReactNode;
   children: (openFile: (selection: FilePreviewSelection) => void) => ReactNode;
   welcome: ReactNode; dialogs?: ReactNode; error?: string; reload: () => void;
-  writable?: boolean;
+  writable?: boolean; unified?: boolean;
 };
 
-export function SessionPage({ engine, thread, selectedID, onSelect, revision, collaborationRevision, notify, sidebar, children, welcome, dialogs, error, reload, writable = true }: Props) {
+export function readUnifiedSidebarHeight(engine: Engine) {
+  try {
+    for (const key of ["wio_sessions_sidebar_height", ...[engine, ...["codex", "gemini", "claude"].filter(item => item !== engine)].map(item => `wio_${item}_sidebar_height`)]) {
+      const value = localStorage.getItem(key);
+      if (value !== null && value.trim() && Number.isFinite(Number(value))) return readSidebarHeight(key);
+    }
+  } catch { /* Storage may be unavailable. */ }
+  return 38;
+}
+
+export function SessionPage({ engine, thread, selectedID, onSelect, revision, collaborationRevision, notify, sidebar, children, welcome, dialogs, error, reload, writable = true, unified = false }: Props) {
   const { t } = useI18n();
   const codex = engine === "codex";
   const [mobile, setMobile] = useState(selectedID && codex ? "conversation" : "sessions");
-  const key = `wio_${engine}_sidebar_height`;
-  const [height, setHeight] = useState(() => readSidebarHeight(key));
+  const key = unified ? "wio_sessions_sidebar_height" : `wio_${engine}_sidebar_height`;
+  const [height, setHeight] = useState(() => unified ? readUnifiedSidebarHeight(engine) : readSidebarHeight(key));
   useEffect(() => { try { localStorage.setItem(key, String(height)); } catch { /* Resizing remains available without storage. */ } }, [key, height]);
   useEffect(() => { if (selectedID) setMobile("conversation"); }, [selectedID]);
   useEffect(() => { if (codex && thread) setMobile("conversation"); }, [codex, thread?.workspace_id]);

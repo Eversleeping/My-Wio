@@ -1,7 +1,7 @@
 import { type View } from "../navigation";
 import { type StreamEvent } from "../types";
 
-export type RealtimeScope = View | "approvals";
+export type RealtimeScope = Exclude<View, "sessions"> | "approvals";
 
 export type RealtimeRevisions = Record<RealtimeScope, number>;
 

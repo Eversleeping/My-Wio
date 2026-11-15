@@ -8,16 +8,18 @@
 
 ## 现状
 
-- **三个并列的导航入口。** `web/src/App.tsx` 的导航里 `codex`、`gemini`、`claude` 是三个独立的视图，各自对应 `pages/CodexPage.tsx`、`pages/GeminiPage.tsx`、`pages/ClaudePage.tsx`。同一个工作区的会话要到三个页面分别查看。
-- **三个侧栏其实已经按工作区分组。** 分组函数有三份：`App.tsx` 的 `groupThreadsByWorkspace`、`GeminiPage.tsx` 里的内联分组、`ClaudePage.tsx` 的 `groupClaudeThreads`。分组标题的拼法相同（项目名加工作区名、分支或目录名），都只显示有会话的工作区，都把置顶的项目排在前面。
-- **置顶有两层。** 项目的置顶和隐藏存在 `projects`、`project_server_preferences`，三种引擎共用。会话的置顶各存各的：`codex_threads.pinned_at`、`gemini_threads.pinned_at`、`claude_thread_management.pinned_at`。
-- **会话列表是三个请求。** `/threads`、`/gemini/threads?archived=`、`/claude/threads?archived=`。设置页为了统计已经同时请求这三个。
-- **新建会话有三个对话框**，字段不同：Codex 只选工作区；Gemini 选工作区、模型、审批模式、思考程度；Claude 选工作区和模型等。三个侧栏的工作区右键菜单里都有“在此新建会话”。
-- **协作已经跨引擎。** `components/CollaborationTaskDialog.tsx` 发起协作任务时可以选择目标引擎、模型和目录方式（共享目录或独立 worktree），接口是 `/sessions/{engine}/{id}/collaboration`。
-- **定时任务按引擎分开。** 入口在 `CodexPage.tsx`、`pages/claudeManagement.tsx`、`pages/geminiManagement.tsx`，另有设置页里的汇总。
-- **链接形式。** 地址栏是 `/?view=<engine>&thread=<id>`。控制面在协作结果里生成并持久化这种链接（`store/session_collaboration.go`、`store/session_collaboration_actions.go`）。
-- **按引擎命名的本地偏好。** 侧栏高度有三个键：`wio_codex_sidebar_height`、`wio_gemini_sidebar_height`、`wio_claude_sidebar_height`。
-- **首页的会话数只算 Codex。** `httpapi/resources.go` 的 `summary` 里 `threads` 是 `SELECT COUNT(*) FROM codex_threads`，前端文案键是 `dashboard.codexSessions`。
+P6-02 开工基线更新为 `e1adb26`（2026-11-15，M4 已完成）；下方“入口差异清单”保留原盘点基线，仅用于追溯已确认交互，不再作为文件路径依据。
+
+- 导航与地址解析位于 `web/src/navigation.ts`，页面装配位于 `web/src/App.tsx`；三个入口分别懒加载 `sessions/engines/{codex,gemini,claude}.tsx`。
+- 公共外壳、侧栏、分组和游标列表已在 `web/src/sessions/`，统一列表来自 `/api/sessions`，原生对话区仍留在各引擎模块。统一页面复用公共外壳和原生对话区，不嵌套旧页面及其列表请求。
+- P6-02 数据补充：现有 `/workspaces` 缺少服务器范围的项目名称、置顶、隐藏偏好，完整列表摘要也只有匹配计数。为分页窗口外与空工作区正确显示，在工作区列表响应中追加 `project_display_name`、`project_pinned_at`、`project_hidden_at`；保留原 `project_name` 及其他字段语义。
+- 项目置顶/隐藏仍为跨引擎共享偏好；完整工作区摘要由混合列表提供。显示全部工作区时用工作区与项目偏好补充空组，不能以分页窗口判空。
+- 新建入口仍是三个原生表单，P6-02 先提供引擎选择与原生表单，P6-03 再统一公共字段及默认值重算。
+- 实时断线兜底已由 P3-09 数据层完成；新页面订阅三引擎 revision 的并集，不新增页面轮询。
+- 定时任务已由 P2-07 合表，设置页与原生会话菜单入口仍保留；P6-06 补工作区入口。
+- 历史链接仍为 `/?view=<engine>&thread=<id>`，不改控制面生成方式；P6-02 新增规范地址，P6-04 才转换旧地址。
+- 三个旧侧栏高度键仍由 `sessions/SessionPage.tsx` 读取；新页面使用共享键并按当前引擎优先迁移。
+- 首页统计位于 `internal/httpapi/summary.go`，当前 `counts.threads` 仅统计 Codex；P6-05 再改统计范围。
 
 ## 目标
 
@@ -346,3 +348,7 @@
 - 2026-11-13，P6-01，11-13 Codex：逐项盘点 Codex、Gemini、Claude 的侧栏、分组与排序、搜索、置顶和归档、工作区和会话菜单、空状态、移动端、新建流程、本地偏好、深链选中与刷新机制，以及三个列表处理器和 Store 查询；记录 28 处差异（23 处偶然、5 处有意），列出 5 项待用户确认取舍和 4 项建议登记问题。验收：清单覆盖 P6-01 指定维度，每处差异均有代码出处，偶然差异均给出合并建议；复核确认 `revoked_at` 条件仅用于旧库防御，不构成用户可见取舍；同步修正移动端三态设计，并更新 P2-05 的混合列表筛选、搜索、分组摘要与游标分页要求和 P2-06 的公共侧栏约束；仅修改路线图文档，按纯文档步骤未运行构建测试。遗留：T1–T5 由协调者转交用户，确认后补进“已确认事项”；在此之前 P6-01 保持 `进行中`。四项疑点由协调者登记到总览。
 - 2026-11-13，P6-01，11-13 Codex：用户确认 T1=A、T2=B、T3=A、T4=A、T5=A；将结论补入“已确认事项”Q7 至 Q11，并按结论固化 P6-02 和 P2-05 的分组顺序、搜索字段、工作区范围、归档操作、会话级游标与分页前分组摘要契约。验收：P6-01 的取舍均已确认，清单、设计、后续步骤和 P2-05 契约已同步，验收项满足；按纯文档步骤未运行构建测试。遗留：无，由协调者更新总表并提交。
 - 2026-11-14，方向同步，11-14 Codex：将 D10 从待决策更新为已确认并链接 P7；明确任务页复用统一会话能力，普通会话与旧深链继续保留。Q5 仅补充 P7 的任务内待处理事项归属，不改变首页或 P6 已确认的交互方案。仅更新计划，未实现 P6 步骤；文档验证统一记录在 P7-00。
+
+- 2026-11-15，P6-02，11-15 Codex：以 `e1adb26` 更新开工基线并领取任务；新增附加“会话”导航、规范深链、按 `(engine,id)` 选择的工作区混合侧栏，复用公共文件/协作外壳与三引擎原生对话区，保留三个旧入口与旧地址。筛选存本地、搜索走服务端，完整分组摘要支持分页窗口外工作区，选中详情可补入对应组；提供显示全部工作区，统一归档管理和共享高度偏好迁移；工作区响应追加服务器范围项目偏好。验收：前端 70 文件/489 项、构建（含 TypeScript 与 `check:bundle`）、Go vet/全量测试、PostgreSQL 集成、完整 E2E（35 通过/11 项既有跳过）均通过，三个旧入口的测试无需修改；最终构建、统一页面与 Codex 审批共 8 项定向测试、版本护栏再次通过。审批展示直接复用原有解释函数并保留原生信息。隔离 SQLite 合成库 9,001 会话/120 工作区，完整认证路由每项 7 次：混合首页 50 条中位 174.66 ms、最大 194.87 ms；分页前搜索中位 152.78 ms、最大 155.12 ms（测量的是 API 请求，不含公网延迟和浏览器绘制；临时探测文件及数据库已清理）。构建 raw/gzip：应用入口 211.03/65.22 kB，另一共享 index 块 86.10/26.71 kB，统一页面 15.69/5.51 kB，Codex 引擎及对话 67.14/19.51 kB、Gemini 43.79/13.51 kB、Claude 34.95/11.34 kB；适配模块分别 2.60/1.23、1.49/0.77、2.78/1.37 kB，继续动态导入。Agent 依赖检查确认 Store 不在 `cmd/agent` 依赖内，本步骤无需升级 Agent 版本。
+
+  P6-02 已完成；后继为 P6-03。尚未推送或部署，P6-04 的实际体验确认仍未满足。

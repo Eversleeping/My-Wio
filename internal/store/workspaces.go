@@ -11,23 +11,26 @@ import (
 )
 
 type Workspace struct {
-	ID                string     `db:"id" json:"id"`
-	ProjectID         string     `db:"project_id" json:"project_id"`
-	ServerID          string     `db:"server_id" json:"server_id"`
-	Path              string     `db:"path" json:"path"`
-	DisplayName       string     `db:"display_name" json:"display_name"`
-	ManagementMode    string     `db:"management_mode" json:"management_mode"`
-	Status            string     `db:"status" json:"status"`
-	Kind              string     `db:"kind" json:"kind"`
-	ParentWorkspaceID *string    `db:"parent_workspace_id" json:"parent_workspace_id"`
-	Branch            string     `db:"branch" json:"branch"`
-	CommitSHA         string     `db:"commit_sha" json:"commit_sha"`
-	Dirty             int        `db:"dirty" json:"dirty"`
-	LastGitRefreshAt  *time.Time `db:"last_git_refresh_at" json:"last_git_refresh_at"`
-	GitError          string     `db:"git_error" json:"git_error"`
-	LastScannedAt     time.Time  `db:"last_scanned_at" json:"last_scanned_at"`
-	ServerName        string     `db:"server_name" json:"server_name"`
-	ProjectName       string     `db:"project_name" json:"project_name"`
+	ProjectDisplayName string     `db:"project_display_name" json:"project_display_name"`
+	ProjectPinnedAt    *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
+	ProjectHiddenAt    *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
+	ID                 string     `db:"id" json:"id"`
+	ProjectID          string     `db:"project_id" json:"project_id"`
+	ServerID           string     `db:"server_id" json:"server_id"`
+	Path               string     `db:"path" json:"path"`
+	DisplayName        string     `db:"display_name" json:"display_name"`
+	ManagementMode     string     `db:"management_mode" json:"management_mode"`
+	Status             string     `db:"status" json:"status"`
+	Kind               string     `db:"kind" json:"kind"`
+	ParentWorkspaceID  *string    `db:"parent_workspace_id" json:"parent_workspace_id"`
+	Branch             string     `db:"branch" json:"branch"`
+	CommitSHA          string     `db:"commit_sha" json:"commit_sha"`
+	Dirty              int        `db:"dirty" json:"dirty"`
+	LastGitRefreshAt   *time.Time `db:"last_git_refresh_at" json:"last_git_refresh_at"`
+	GitError           string     `db:"git_error" json:"git_error"`
+	LastScannedAt      time.Time  `db:"last_scanned_at" json:"last_scanned_at"`
+	ServerName         string     `db:"server_name" json:"server_name"`
+	ProjectName        string     `db:"project_name" json:"project_name"`
 }
 
 func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
@@ -63,7 +66,7 @@ func (s *Store) ListWorkspacesFiltered(ctx context.Context, path, serverID, gitS
 		where = " WHERE " + strings.Join(filters, " AND ")
 	}
 	var out []Workspace
-	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.display_name,w.management_mode,w.status,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,w.last_git_refresh_at,w.git_error,w.last_scanned_at,s.name server_name,p.name project_name FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id`+where+` ORDER BY p.name,s.name`), args...)
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT w.id,w.project_id,w.server_id,w.path,w.display_name,w.management_mode,w.status,w.kind,w.parent_workspace_id,w.branch,w.commit_sha,w.dirty,w.last_git_refresh_at,w.git_error,w.last_scanned_at,s.name server_name,p.name project_name,`+projectServerName+` AS project_display_name,ps.pinned_at AS project_pinned_at,ps.hidden_at AS project_hidden_at FROM workspaces w JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id`+projectServerJoin+where+` ORDER BY p.name,s.name`), args...)
 	return out, err
 }
 

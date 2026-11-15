@@ -2602,3 +2602,10 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 
 .collaboration-read { font-size: inherit; text-align: left; max-width: 100%; white-space: normal; }
 .status-tag.waiting-user, .status-tag.accepted { color: var(--amber); border-color: var(--amber-border); background: var(--amber-soft); }
+
+.session-filters { padding: 0 12px 8px; display: grid; gap: 8px; }
+.session-filters .field { margin: 0; }
+.session-filters > label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.session-filters input[type="checkbox"] { width: auto; }
+.session-engine { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 3px; margin-right: 5px; }
+.session-engine-choices { display: flex; flex-wrap: wrap; gap: 10px; }

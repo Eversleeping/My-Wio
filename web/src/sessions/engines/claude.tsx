@@ -121,7 +121,7 @@ export default function ClaudePage({ realtime, notify, selectedThreadID, onSelec
   </SessionPage>;
 }
 
-function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disabled, compact = false, effortSupported = true, availableModels = [], requestCustom = 0 }: { model: string; mode: string; effort: string; setModel: (value: string) => void; setMode: (value: string) => void; setEffort: (value: string) => void; disabled: boolean; compact?: boolean; effortSupported?: boolean; availableModels?: ClaudeModel[]; requestCustom?: number }) {
+export function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disabled, compact = false, effortSupported = true, availableModels = [], requestCustom = 0 }: { model: string; mode: string; effort: string; setModel: (value: string) => void; setMode: (value: string) => void; setEffort: (value: string) => void; disabled: boolean; compact?: boolean; effortSupported?: boolean; availableModels?: ClaudeModel[]; requestCustom?: number }) {
   const { t } = useI18n();
   const controls = [
     <ClaudeModelPicker key="model" value={model} onChange={setModel} models={availableModels} disabled={disabled} requestCustom={requestCustom} />,
@@ -131,7 +131,7 @@ function ClaudeOptions({ model, mode, effort, setModel, setMode, setEffort, disa
   return compact ? <div className="claude-composer-options">{controls}</div> : <div className="claude-options">{controls.map((control, index) => <Field key={control.key} label={t(["claude.model", "claude.effort", "claude.permission"][index])}>{control}</Field>)}</div>;
 }
 
-function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onSchedule, onFork, onNew, notify }: { thread: ClaudeThread; revision: string; onChanged: () => void; onOpenFile: (selection: FilePreviewSelection) => void; onArchive: () => void; onSchedule: () => void; onFork: (eventID?: string) => void; onNew: () => void; notify: (text: string) => void }) {
+export function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchive, onSchedule, onFork, onNew, notify }: { thread: ClaudeThread; revision: string; onChanged: () => void; onOpenFile: (selection: FilePreviewSelection) => void; onArchive: () => void; onSchedule: () => void; onFork: (eventID?: string) => void; onNew: () => void; notify: (text: string) => void }) {
   const { t } = useI18n();
   const availableModels = useClaudeModels(thread.workspace_id, thread.id);
   const skillDiscovery = useClaudeSkills(thread.workspace_id, thread.id, Boolean(thread.skills_supported) && thread.server_status === "online");

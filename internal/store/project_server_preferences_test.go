@@ -95,6 +95,21 @@ func assertProjectServerPreferencesIsolation(t *testing.T, database *Store) {
 			t.Fatalf("server rename/hide leaked: %#v %#v %v %v", c, g, err, gerr)
 		}
 	}
+	// The unified sidebar also needs scoped preferences for workspaces whose
+	// sessions are beyond the loaded cursor window, including empty groups.
+	listedWorkspaces, err := database.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, workspace := range listedWorkspaces {
+		if workspace.ProjectID != projectID {
+			continue
+		}
+		first := workspace.ServerID == servers[0].ID
+		if (workspace.ProjectDisplayName == name) != first || (workspace.ProjectHiddenAt != nil) != first || (workspace.ProjectPinnedAt != nil) == first || workspace.ProjectName == name {
+			t.Fatalf("workspace preferences leaked or changed legacy name: %#v", workspace)
+		}
+	}
 	if _, err := database.UpdateProject(ctx, projectID, nil, nil, &no); err != nil {
 		t.Fatal(err)
 	}

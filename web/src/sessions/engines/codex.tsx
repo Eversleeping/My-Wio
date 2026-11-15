@@ -55,7 +55,7 @@ function pretty(value: unknown) {
   }
 }
 
-function approvalDetail(detail: unknown) {
+export function approvalDetail(detail: unknown) {
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return pretty(detail);
   const value = detail as Record<string, unknown>;
   for (const key of ["command", "reason", "message", "question"]) {
@@ -64,7 +64,7 @@ function approvalDetail(detail: unknown) {
   return pretty(detail);
 }
 
-function readableKind(kind: string) {
+export function readableKind(kind: string) {
   return kind.replace(/^codex\./, "").replaceAll(".", " / ").replaceAll("/", " / ");
 }
 
