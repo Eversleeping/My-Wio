@@ -1,15 +1,11 @@
 import { Activity, ExternalLink, RefreshCw, Square } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { DataTable, ErrorState, Section, Status } from "../components/PageUI";
 import { operations as operationEndpoints } from "../data/operations";
 import { useResource } from "../data/resources";
 import { relative } from "../format";
 import { useI18n } from "../i18n";
 import type { OperationSummary } from "../types";
-
-export interface PageProps {
-  realtime: number;
-}
 
 const statuses = ["queued", "waiting", "delivered", "running", "succeeded", "failed", "canceled", "superseded"] as const;
 const activeStatuses = new Set(["queued", "delivered", "running"]);
@@ -49,12 +45,6 @@ export default function OperationsPage() {
   const [submitting, setSubmitting] = useState<string[]>([]);
   const [interruptError, setInterruptError] = useState("");
   const operations = useResource(operationEndpoints.list(status));
-  const hasActive = (operations.data ?? []).some(operation => activeStatuses.has(operation.status));
-  useEffect(() => {
-    if (!hasActive) return;
-    const timer = window.setInterval(operations.reload, 3000);
-    return () => window.clearInterval(timer);
-  }, [hasActive, operations.reload]);
 
   async function interrupt(operation: OperationSummary) {
     setSubmitting(current => [...current, operation.id]);
