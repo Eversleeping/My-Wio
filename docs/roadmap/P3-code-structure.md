@@ -281,6 +281,7 @@ web/src/
 **做法**
 
 1. 把不依赖应用状态的小组件和函数搬出 `App.tsx`：`Field`、`ErrorBanner`、`LanguageSwitch`、`LoadingScreen`、带翻译的 `Dialog` 包装、懒加载 Markdown 渲染器的 `MarkdownContent` 包装、`message`、`pretty`、`copyText`、`FilePreviewPane`、`EditableFilePreviewPane`、`FileDiffPane`、`PreviewStatusNote`。目标位置见“前端目标布局”。
+   当前依赖核对补充（2026-11-15）：预览面板直接使用 `useWorkspacePreview`，该钩子及其私有类型、轮询常量提前随面板移到 `workspace/useWorkspacePreview.ts`；`previewLanguage`、`formatFileSize` 随面板移动，避免公共组件再从 `App` 导入。
 2. 导出名保持不变，调用方只改导入路径。`components/Dialog.tsx` 里已经有一个同名的 `Dialog`，`App.tsx` 里的是给它补上翻译后的关闭按钮文案的包装；两者继续并存，不要合并。
 3. `PageProps` 接口被六个页面使用，搬到 `types.ts`。`FilePreviewSelection` 类型本来就定义在 `codexContent.ts`，`App.tsx` 只是转手导出；调用方改为直接从 `codexContent` 导入。
 4. 更新六个页面和组件文件以及相关测试文件的导入。
@@ -323,6 +324,7 @@ web/src/
 
 1. 把工作区文件面板搬到 `web/src/workspace/`：`WorkspaceFilesPanel`、`ChangedFilesView`、`FileTreeItem`、`buildFileTree`、`useWorkspacePreview`、`FilePreviewSelection` 类型。`ClaudePage.tsx` 和 `GeminiPage.tsx` 的导入随之更新。
 2. 把 Codex 会话的实现搬到 `web/src/codex/`，分组见“前端目标布局”。`pages/CodexPage.tsx` 的多行导入改指向新位置。
+   当前依赖核对补充（2026-11-15）：预览钩子已在 P3-05 搬走；供现有测试使用的 `ServersPage` / `CodexPage` 懒加载包装及对应路由声明搬到 `pages/lazyRoutes.tsx`，`CodexPageProps` 放进 `types.ts`；滚动位置与滚动辅助函数放入 `codex/scroll.ts`，避免缓存与会话组件互相依赖。
 3. `clearCodexSessionMemory` 随线程事件缓存一起搬走。外壳在退出登录时会调用它，所以 `App.tsx` 保留对它的一处导入；这是外壳对引擎代码仅剩的直接依赖，P2-06 再把它换成与引擎无关的清理入口。
 4. `App.tsx` 第 632 行的 `useAuditList` 在基线提交里没有任何调用方，`pages/SettingsPage.tsx` 第 78 行有一份同名实现在用。动手时再确认一次，确认后删除 `App.tsx` 里的这一份，单独提交，不算在移动的提交里。
 5. `App.tsx` 里剩下的应当只有：`App` 组件、懒加载路由的声明、布局和导航。
@@ -475,3 +477,5 @@ web/src/
 
 - 网关纯移动：前后校验和均为 `3775a855abfcc96fa85892a532cad4654b71687da15e5483f10af494e31b1159`；`gateway.go` 为 459 行，最大文件 `operation_results.go` 为 619 行。
 - 网关纯移动验收：通用五项、Go 构建、格式与空白检查全部通过，449 个前端用例通过；先提交这一份可独立回滚的移动。
+- Agent 纯移动：前后校验和均为 `bf194bd15b146d905cffb7142f062ab9d0205c5ce18e87471ef1651fb0799174`。`client.go` 为 299 行，最大文件 `operations.go` 为 725 行；Agent 版本升级至 `0.3.17`。
+- Agent 纯移动验收：前端构建（含 bundle）、`go vet ./...`、`go test ./...`、449 个 Vitest 用例、类型检查、Go 构建、格式与空白检查全部通过；将这一份移动独立提交后再检查分支覆盖。
