@@ -1,3 +1,4 @@
+import { waitForBackoff, waitForResult } from "../data/waitFor";
 import { type ReactNode, useState } from "react";
 import { Archive, CalendarClock, Copy, ExternalLink, EyeOff, FolderOpen, GitBranch, GitFork, Link, LoaderCircle, Pencil, Pin, PinOff } from "lucide-react";
 import { api, patch, post } from "../api";
@@ -26,15 +27,12 @@ export function useSessionManagement<T extends ClaudeThread | GeminiThread>(engi
  };
  const copy = (value: string, label: string) => { void navigator.clipboard.writeText(value).then(() => notify(t(label))).catch(e => notify(message(e))); };
  const link = (thread: T) => `${window.location.origin}${locationFor(engine, thread.id)}`;
- const wait = async (operationID: string) => {
-  for (let i = 0; i < 180; i++) {
+ const wait = (operationID: string) => waitForResult(async () => {
    const op = await api<Operation>(`/operations/${operationID}`);
-   if (op.status === "succeeded") return;
+   if (op.status === "succeeded") return true;
    if (["failed", "cancelled"].includes(op.status)) throw new Error(op.result || t("gemini.actionFailed"));
-   await new Promise(resolve => setTimeout(resolve, 1000));
-  }
-  throw new Error(t("codex.worktreeTimeout"));
- };
+ }, {attempts: 180, pause: attempt => waitForBackoff(attempt, 1000, 1000), onTimeout: () => { throw new Error(t("codex.worktreeTimeout")); }});
+
  const fork = (thread: T, eventID?: string) => action(async () => {
   const result = await post<{ operation_id: string; target_thread_id: string }>(`/sessions/${engine}/${thread.id}/fork`, eventID ? { event_id: eventID } : {});
   await wait(result.operation_id); select(result.target_thread_id); notify(t("codex.continueInNewTask"));
