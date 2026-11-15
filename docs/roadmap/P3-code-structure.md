@@ -325,7 +325,7 @@ web/src/
 1. 把工作区文件面板搬到 `web/src/workspace/`：`WorkspaceFilesPanel`、`ChangedFilesView`、`FileTreeItem`、`buildFileTree`、`useWorkspacePreview`、`FilePreviewSelection` 类型。`ClaudePage.tsx` 和 `GeminiPage.tsx` 的导入随之更新。
 2. 把 Codex 会话的实现搬到 `web/src/codex/`，分组见“前端目标布局”。`pages/CodexPage.tsx` 的多行导入改指向新位置。
    当前依赖核对补充（2026-11-15）：预览钩子已在 P3-05 搬走；供现有测试使用的 `ServersPage` / `CodexPage` 懒加载包装及对应路由声明搬到 `pages/lazyRoutes.tsx`，`CodexPageProps` 放进 `types.ts`；滚动位置与滚动辅助函数放入 `codex/scroll.ts`，避免缓存与会话组件互相依赖。
-3. `clearCodexSessionMemory` 随线程事件缓存一起搬走。外壳在退出登录时会调用它，所以 `App.tsx` 保留对它的一处导入；这是外壳对引擎代码仅剩的直接依赖，P2-06 再把它换成与引擎无关的清理入口。
+3. `clearCodexSessionMemory` 随线程事件缓存一起搬走。外壳在退出登录时会调用它；P3-06 的通用实时钩子通过订阅接入缓存失效，所以 `App.tsx` 保留对同一缓存模块的一处导入（`clearCodexSessionMemory`、`invalidateThreadEvents`）。这是外壳对 Codex 代码仅剩的模块依赖，P2-06 再把清理与订阅都换成引擎无关的入口。
 4. `App.tsx` 第 632 行的 `useAuditList` 在基线提交里没有任何调用方，`pages/SettingsPage.tsx` 第 78 行有一份同名实现在用。动手时再确认一次，确认后删除 `App.tsx` 里的这一份，单独提交，不算在移动的提交里。
 5. `App.tsx` 里剩下的应当只有：`App` 组件、懒加载路由的声明、布局和导航。
 
@@ -481,3 +481,6 @@ web/src/
 - Agent 纯移动验收：前端构建（含 bundle）、`go vet ./...`、`go test ./...`、449 个 Vitest 用例、类型检查、Go 构建、格式与空白检查全部通过；将这一份移动独立提交后再检查分支覆盖。
 - 提取前覆盖核对：两个包原有全部测试通过；新增 5 个特性测试、60 个分项，覆盖损坏命令拒绝与重复投递回执一致性、清单发布、无 ID 命令拒绝、损坏资源结果不完成操作。新增测试单独执行通过，补充覆盖与原有覆盖合并后，所有准备提取的操作分支均有入口覆盖；未提取的通用错误/竞态护栏保持原位。
 - 新测试先独立提交；Agent 只有测试文件变化，没有修改编译进 Agent 的代码，因此本份测试提交不升级版本号。
+- 机械提取：Agent 的 46 个分支、网关的 18 个资源分支与提取前的 Go token 序列逐一比对一致（仅扣除参数引用所需的解引用、局部 `err` 声明与收尾返回）。两个 worktree 源会话释放分支仍按原顺序运行，通用完成、重复回执和取消判断留在原函数。
+- 三个目标函数当前行数：`Gateway.handleOperationResult` 115、`Client.handleOperation` 117、`Client.execute` 46。两包非测试文件最大分别为 557 / 443 行；Agent 版本升级至 `0.3.18`。
+- 最终验收：通用五项、Go 构建、格式、空白、`make staticcheck`、`make version-check` 全部通过；未经修改的会话并发及跨进程测试通过；真实浏览器完成初始化、登录、内置 Agent 与三引擎回复，1 个端到端用例通过。P3-04 完成。
