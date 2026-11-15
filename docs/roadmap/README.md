@@ -211,7 +211,7 @@ npm --prefix web run typecheck
 | P3-04 | 拆分 `agentgateway/gateway.go` 与 `agent/client.go` | M | P0-07 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 7ada51c、a36bdca、b0195f1、ebaa35d |
 | P3-05 | `App.tsx` 拆分一：公共组件 | S | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 0558ab7 |
 | P3-06 | `App.tsx` 拆分二：实时通道与路由 | M | P3-05 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 8a265d6、69ffc1a |
-| P3-07 | `App.tsx` 拆分三：Codex 会话与工作区文件面板 | M | P3-06 | 进行中 | 11-15 Codex |  | |
+| P3-07 | `App.tsx` 拆分三：Codex 会话与工作区文件面板 | M | P3-06 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（见执行记录） |
 | P3-08 | 前端数据层收敛 | M | P3-06 | 待开始 | |  | |
 | P3-09 | 轮询收敛 | M | P3-08 | 待开始 | |  | |
 | P3-10 | 拆分 `styles.css` 与 `i18n.tsx` | M | P3-07 | 待开始 | |  | |
@@ -275,7 +275,7 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 
 | 日期 | 发现于 | 描述 | 处理 |
 | --- | --- | --- | --- |
-| 2026-11-13 | 制定路线图 | `web/src/App.tsx` 第 632 行的 `useAuditList` 没有调用方，`web/src/pages/SettingsPage.tsx` 第 78 行有同名实现在用。`web/tsconfig.app.json` 开了 `strict` 但没开 `noUnusedLocals`、`noUnusedParameters`，这类残留不会让类型检查失败 | P3-07 删除；开关在 P0-04 评估 |
+| 2026-11-13 | 制定路线图 | `web/src/App.tsx` 第 632 行的 `useAuditList` 没有调用方，`web/src/pages/SettingsPage.tsx` 第 78 行有同名实现在用。`web/tsconfig.app.json` 开了 `strict` 但没开 `noUnusedLocals`、`noUnusedParameters`，这类残留不会让类型检查失败 | P3-07 已删除孤立实现（f2413cf）；未使用项开关按 P0-04 后续评估 |
 | 2026-11-13 | 制定路线图 | 按代码阅读、尚未实测：内置控制机的 Agent 运行在控制面进程内，AI CLI 子进程会继承 `WIO_MASTER_KEY`、`WIO_DATABASE_URL`、`WIO_SETUP_TOKEN` | P5-01 实测确认，P5-02 处理 |
 | 2026-11-13 | 制定路线图 | 协作用的回环 MCP 令牌出现在 Claude 和 Codex 的进程参数里，同账号的其他进程可以读到 | P5-02 评估能否改用其他传递方式 |
 | 2026-11-13 | 制定路线图 | 网关 `flush` 的“未下发即失败”路径只有部署和凭据类操作的测试（`agentgateway/decryption_failure_test.go`），没有覆盖会话轮次、Git 和工作区操作 | P4-03 第 2 步补测试 |

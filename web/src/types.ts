@@ -96,3 +96,13 @@ export interface Summary { counts: Record<string, number>; deployments: Deployme
 
 
 export interface PageProps { realtime: number; notify: (text: string) => void }
+
+
+export type CodexPageProps = PageProps & {
+  streamRevisions: Record<string, { revision: number; minimumSequence: number | null }>;
+  approvals: Approval[];
+  approvalSignal: number;
+  reloadApprovals: () => void;
+  selectedThreadID: string;
+  onSelectThread: (threadID: string, replace?: boolean) => void;
+};

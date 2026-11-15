@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import { ServersPage } from "./App";
+import { ServersPage } from "./pages/lazyRoutes";
 import { I18nProvider } from "./i18n";
 
 const server = {

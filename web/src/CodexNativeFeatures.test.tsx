@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SessionView } from "./App";
+import { SessionView } from "./codex/SessionView";
 import { ScheduledTaskDialog } from "./pages/ScheduledTaskDialog";
 import { I18nProvider } from "./i18n";
 import type { StreamEvent, Thread } from "./types";

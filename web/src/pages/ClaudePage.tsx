@@ -4,7 +4,7 @@ import { type CSSProperties, type FormEvent, useCallback, useEffect, useMemo, us
 import { Copy, MoreHorizontal, Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, Pin, ArrowUp, Bot, CalendarClock, GitFork, ListChecks, Settings2, Gauge, X, LoaderCircle, MessageSquare, Pencil, Plus, Square, Trash2, UserRound, Workflow } from "lucide-react";
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field } from "../components/FormUI";
-import { WorkspaceFilesPanel } from "../App";
+import { WorkspaceFilesPanel } from "../workspace/WorkspaceFilesPanel";
 import { message } from "../text";
 import { type FilePreviewSelection } from "../codexContent";
 import { SlashCommandMenu, type SlashCommandItem } from "../SlashCommandMenu";

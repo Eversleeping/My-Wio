@@ -507,3 +507,27 @@ web/src/
 
 - 引用搜索再次确认：`App` 中的 `useAuditList` 只有定义，连同仅被它使用的 `AuditListPage`、`auditListPageSize`、`mergeAuditEntries` 一起删除；`SettingsPage` 的实际审计实现继续使用。按计划先单独提交删除，再移动会话与文件面板。
 - 删除校验：类型检查通过，保留的 80 个声明内容比对一致；只有孤立审计声明及 import 调整发生变化。拆会话前入口块为 309,178 字节（309.18 kB）。
+
+- 移动校验：删除孤立代码后的 80 个原有声明全部保持原样，仅改 import / export；工作区文件树、预览钩子、Codex 线程缓存、滚动状态、会话、事件、审批、等待函数各归独立模块，懒加载包装归 `pages/lazyRoutes.tsx`。
+- `App.tsx` 现为 167 行；全库从 `App` 导入的结果只剩 `main.tsx` 与整体测试 `AppStartup.test.tsx`、`AppSession.test.tsx`、`RealtimeChannel.test.tsx`。页面与组件反向依赖已清除。
+- 入口块从 309,178 字节降为 210,853 字节（减少 31.8%；相对 M2 开始时 321.86 kB 约减少 34.5%）。构建源映射确认 `SessionView.tsx` 只在 Codex 页面的懒加载块中，不在入口；所有 JS 块低于 500 kB，入口无 Markdown 预加载。
+- 最终验收：前端构建（含 bundle）、`go vet ./...`、`go test ./...`、Vitest 451 / 451、类型检查、Go 构建、格式与空白检查全部通过；桌面和移动端 Playwright 33 通过、11 既有跳过、0 失败；真实浏览器的初始化、登录、内置 Agent 与三引擎回复复验通过。P3-07 完成。
+
+### 2026-11-15 · M2 完成核对 · Codex
+
+M2 的 P3-01 至 P3-07 全部完成，各步骤及必要测试基线均已本地提交。P3-08 / P3-09 属于后续 M4，P3-10 未领取；本轮没有推送、发布或部署。
+
+| 文件 | 总览原始基线 | 当前 |
+| --- | --- | --- |
+| `internal/httpapi/api.go` | 851 | 732 |
+| `internal/httpapi/resources.go` | 3258 | 已删除，按领域拆分 |
+| `internal/store/store.go` | 2641 | 103 |
+| `internal/store/resources.go` | 1384 | 已删除，按领域拆分 |
+| `internal/agentgateway/gateway.go` | 1516 | 459 |
+| `internal/agent/client.go` | 1428 | 299 |
+| `web/src/App.tsx` | 2133 | 167 |
+
+- 四个目标 Go 包的最大非测试文件行数：HTTP API 732、Store 987、网关 557、Agent 443，均不超过 1000；Store 入口不超过 300、App 不超过 400、三个目标分发函数均不超过 150。
+- Go 纯移动前后校验和全部一致；路由快照保持 191 条及公开/私有中间件边界；Agent 当前版本 `0.3.18`。
+- 数据库专项验收已在 P3-03 通过（含 PostgreSQL 及结构一致性），静态检查与版本护栏已在 P3-04 通过；此后只改前端及文档。最终通用验收与两套浏览器测试结果见 P3-07。
+- 无未提交交接事项；已部署环境的人工实时刷新回归仍见 P3-06 的记录。

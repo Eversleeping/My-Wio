@@ -2,7 +2,7 @@ import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { CodexPage } from "./App";
+import { CodexPage } from "./pages/lazyRoutes";
 import { I18nProvider } from "./i18n";
 import type { Approval } from "./types";
 

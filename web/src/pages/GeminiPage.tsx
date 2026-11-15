@@ -12,7 +12,7 @@ import { Archive, ArchiveRestore, Boxes, CalendarClock, GitFork, Globe, Lightbul
 import { api, patch, post, remove } from "../api";
 import { Dialog, ErrorBanner, Field } from "../components/FormUI";
 import { message } from "../text";
-import { WorkspaceFilesPanel } from "../App";
+import { WorkspaceFilesPanel } from "../workspace/WorkspaceFilesPanel";
 import { type FilePreviewSelection } from "../codexContent";
 import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "../components/SessionPreviews";
 import { useGeminiManagement } from "./geminiManagement";

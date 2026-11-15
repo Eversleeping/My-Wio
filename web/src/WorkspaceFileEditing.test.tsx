@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { FilePreviewPane } from "./components/FilePanes";
-import { WorkspaceFilesPanel } from "./App";
+import { WorkspaceFilesPanel } from "./workspace/WorkspaceFilesPanel";
 import { I18nProvider } from "./i18n";
 import { clearFileDrafts } from "./workspaceFileEditing";
 import { SessionPreviewPanels, SessionPreviewTabs, useSessionPreviews } from "./components/SessionPreviews";

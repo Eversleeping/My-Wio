@@ -1,7 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { invalidateThreadEvents, SessionView } from "./App";
+import { invalidateThreadEvents } from "./codex/useThreadEvents";
+import { SessionView } from "./codex/SessionView";
 import { I18nProvider } from "./i18n";
 import type { StreamEvent, Thread } from "./types";
 

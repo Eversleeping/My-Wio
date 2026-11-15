@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { groupThreadsByWorkspace } from "./App";
+import { groupThreadsByWorkspace } from "./codex/useThreadList";
 import type { Thread, Workspace } from "./types";
 
 const thread = (id: string, workspaceID: string, path: string): Thread => ({
