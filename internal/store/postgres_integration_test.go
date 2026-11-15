@@ -51,6 +51,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		assertPostgresFixtureSchemaConsistency(t, databaseURL)
 	})
 	t.Run("versioned migrations", func(t *testing.T) { assertPostgresMigrationRunner(t, databaseURL) })
+	t.Run("scheduled migration", func(t *testing.T) { assertPostgresScheduledTaskMigration(t, databaseURL) })
 	createLegacyPostgresSchema(t, databaseURL)
 
 	for attempt := 1; attempt <= 2; attempt++ {

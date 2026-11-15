@@ -130,7 +130,7 @@ func TestDisableScheduledTaskTurnsOffOnlyStillDueTasks(t *testing.T) {
 		t.Fatalf("fixed task lost its enabled flag: %#v", current)
 	}
 
-	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE codex_scheduled_tasks SET timezone='Mars/Olympus',next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
+	if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE scheduled_tasks SET timezone='Mars/Olympus',next_run_at=? WHERE engine='codex' AND id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
 		t.Fatal(err)
 	}
 	read, _ = database.ScheduledTask(ctx, task.ID)
@@ -296,5 +296,33 @@ func TestDeleteSessionRemovesScheduledTasks(t *testing.T) {
 				t.Fatalf("task after delete: %v", err)
 			}
 		})
+	}
+}
+
+func TestProjectDeletionRemovesScheduledTasks(t *testing.T) {
+	db := testStore(t)
+	ctx := context.Background()
+	_, workspace := scheduledTaskFixture(t, db, "project-schedule-delete")
+	codex, err := db.CreateThread(ctx, workspace.ID, "scheduled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gemini, err := db.CreateGeminiThread(ctx, workspace.ID, "auto", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude, err := db.CreateClaudeThread(ctx, workspace.ID, "sonnet", "default", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for engine, id := range map[string]string{"codex": codex.ID, "gemini": gemini.ID, "claude": claude.ID} {
+		createTestScheduledTask(t, db, engine, id, time.Now().UTC())
+	}
+	if deleted, err := db.DeleteProjectMetadata(ctx, workspace.ProjectID); err != nil || !deleted {
+		t.Fatalf("delete project: %v %v", deleted, err)
+	}
+	var count int
+	if err := db.DB.Get(&count, "SELECT COUNT(*) FROM scheduled_tasks"); err != nil || count != 0 {
+		t.Fatalf("orphan tasks=%d: %v", count, err)
 	}
 }

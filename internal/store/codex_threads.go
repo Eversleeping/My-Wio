@@ -373,6 +373,9 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 		}
 		return ErrThreadActive
 	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM scheduled_tasks WHERE engine='codex' AND thread_id=?"), id); err != nil {
+		return err
+	}
 	key := "codex:" + id
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {
 		return err

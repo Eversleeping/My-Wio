@@ -112,7 +112,7 @@ func (s *Store) QueueClaudeTurn(ctx context.Context, thread ClaudeThread, prompt
 // QueueScheduledClaudeTurn queues a scheduled task's turn and records the run
 // as queued on the task in the same transaction. It returns the operation ID.
 func (s *Store) QueueScheduledClaudeTurn(ctx context.Context, taskID string, thread ClaudeThread, prompt, model, mode, effort string, at time.Time) (string, error) {
-	run := &scheduledRun{table: "claude_scheduled_tasks", taskID: taskID, at: at}
+	run := &scheduledRun{engine: "claude", taskID: taskID, at: at}
 	if _, err := s.queueClaudeInput(ctx, thread, "", prompt, model, mode, effort, run); err != nil {
 		return "", err
 	}
@@ -264,7 +264,7 @@ func (s *Store) interruptClaudeTurnTx(ctx context.Context, tx *sqlx.Tx, thread C
 	status := "interrupting"
 	if count == 1 {
 		status = "interrupted"
-		if _, err := tx.ExecContext(ctx, s.Q("UPDATE claude_scheduled_tasks SET last_run_status='cancelled',last_run_message='Cancelled before dispatch',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE scheduled_tasks SET last_run_status='cancelled',last_run_message='Cancelled before dispatch',updated_at=? WHERE engine='claude' AND last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
 			return "", err
 		}
 	}
@@ -309,7 +309,7 @@ func (s *Store) ConfirmClaudeStopped(ctx context.Context, threadID, operationID 
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',result=?,completed_at=? WHERE id=?"), "Process exit confirmed by user", time.Now().UTC(), operationID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, s.Q("UPDATE claude_scheduled_tasks SET last_run_status='cancelled',last_run_message='Process exit confirmed by user',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), operationID); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE scheduled_tasks SET last_run_status='cancelled',last_run_message='Process exit confirmed by user',updated_at=? WHERE engine='claude' AND last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), operationID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -343,6 +343,9 @@ func (s *Store) DeleteClaudeThread(ctx context.Context, id string) error {
 	}
 	if n, err := result.RowsAffected(); err != nil || n != 1 {
 		return ErrThreadActive
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM scheduled_tasks WHERE engine='claude' AND thread_id=?"), id); err != nil {
+		return err
 	}
 	key := "claude:" + id
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {

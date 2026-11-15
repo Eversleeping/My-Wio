@@ -158,7 +158,7 @@ func (s *Store) QueueGeminiInput(ctx context.Context, thread GeminiThread, event
 // QueueScheduledGeminiTurn queues a scheduled task's turn and records the run
 // as queued on the task in the same transaction. It returns the operation ID.
 func (s *Store) QueueScheduledGeminiTurn(ctx context.Context, taskID string, thread GeminiThread, prompt, model, mode, thinking string, at time.Time) (string, error) {
-	run := &scheduledRun{table: "gemini_scheduled_tasks", taskID: taskID, at: at}
+	run := &scheduledRun{engine: "gemini", taskID: taskID, at: at}
 	if _, err := s.queueGeminiRun(ctx, run, thread, prompt, model, mode, "", nil, nil, thinking); err != nil {
 		return "", err
 	}
@@ -348,7 +348,7 @@ func (s *Store) interruptGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread G
 	}
 	status := "interrupting"
 	if count == 1 {
-		if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE engine='gemini' AND last_operation_id=? AND last_run_status IN ('queued','running')"), time.Now().UTC(), thread.OperationID); err != nil {
 			return "", err
 		}
 		status = "interrupted"
@@ -435,7 +435,7 @@ func (s *Store) ConfirmGeminiStopped(ctx context.Context, threadID, operationID 
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_goals SET status='blocked',message=?,updated_at=? WHERE thread_id=? AND operation_id=? AND status='active'"), "The previous process was confirmed stopped; resume the goal when ready.", now, threadID, operationID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
-	if _, err := tx.ExecContext(ctx, s.Q("UPDATE gemini_scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE last_operation_id=? AND last_run_status IN ('queued','running')"), now, operationID); err != nil {
+	if _, err := tx.ExecContext(ctx, s.Q("UPDATE scheduled_tasks SET last_run_status='cancelled',updated_at=? WHERE engine='gemini' AND last_operation_id=? AND last_run_status IN ('queued','running')"), now, operationID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"status": "interrupted", "operation_id": operationID})
@@ -466,6 +466,9 @@ func (s *Store) DeleteGeminiThread(ctx context.Context, id string) error {
 	}
 	if count != 1 {
 		return ErrThreadActive
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM scheduled_tasks WHERE engine='gemini' AND thread_id=?"), id); err != nil {
+		return err
 	}
 	key := "gemini:" + id
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {

@@ -141,3 +141,29 @@ func assertPostgresMigrationRunner(t *testing.T, databaseURL string) {
 		t.Fatalf("migration lock leaked after cancellation: %v", err)
 	}
 }
+
+func assertPostgresScheduledTaskMigration(t *testing.T, databaseURL string) {
+	admin, err := sqlx.Connect("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	for index, conflict := range []bool{false, true} {
+		schema := "scheduled_preserved"
+		if index == 1 {
+			schema = "scheduled_conflict"
+		}
+		t.Run(schema, func(t *testing.T) {
+			if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
+				t.Fatal(err)
+			}
+			db, err := sqlx.Connect("pgx", postgresSchemaURL(t, databaseURL, schema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			db.SetMaxOpenConns(1)
+			assertScheduledTaskMigration(t, db, "pgx", conflict)
+		})
+	}
+}

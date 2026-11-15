@@ -90,7 +90,7 @@ func (s *Store) PruneRetainedData(ctx context.Context, now time.Time, policy Ret
 		statements = append(statements, struct {
 			query  string
 			cutoff time.Time
-		}{`DELETE FROM agent_operations WHERE id IN (SELECT o.id FROM agent_operations o WHERE o.completed_at<? AND o.status IN ('succeeded','failed','cancelled') AND o.thread_id IS NULL AND o.kind NOT LIKE 'codex.%' AND o.kind NOT LIKE 'claude.%' AND o.kind NOT LIKE 'gemini.%' AND NOT EXISTS (SELECT 1 FROM session_tool_requests r WHERE r.operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM deployments d WHERE d.operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM deployment_container_state d WHERE d.operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM codex_scheduled_tasks t WHERE t.last_operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM claude_scheduled_tasks t WHERE t.last_operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM gemini_scheduled_tasks t WHERE t.last_operation_id=o.id) LIMIT 1000)`, now.Add(-policy.OperationHistory)})
+		}{`DELETE FROM agent_operations WHERE id IN (SELECT o.id FROM agent_operations o WHERE o.completed_at<? AND o.status IN ('succeeded','failed','cancelled') AND o.thread_id IS NULL AND o.kind NOT LIKE 'codex.%' AND o.kind NOT LIKE 'claude.%' AND o.kind NOT LIKE 'gemini.%' AND NOT EXISTS (SELECT 1 FROM session_tool_requests r WHERE r.operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM deployments d WHERE d.operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM deployment_container_state d WHERE d.operation_id=o.id) AND NOT EXISTS (SELECT 1 FROM scheduled_tasks t WHERE t.last_operation_id=o.id) LIMIT 1000)`, now.Add(-policy.OperationHistory)})
 	}
 	for _, statement := range statements {
 		for batch := 0; batch < 10; batch++ {

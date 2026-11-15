@@ -212,7 +212,7 @@ func (s *Store) collaborationCodexControl(ctx context.Context, tx *sqlx.Tx, t Co
 			if _, err = tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='idle',updated_at=? WHERE id=?"), time.Now().UTC(), t.ID); err != nil {
 				return "", err
 			}
-			if _, err = tx.ExecContext(ctx, s.Q("UPDATE codex_scheduled_tasks SET last_run_status='cancelled',last_run_message='cancelled before Codex turn started',updated_at=? WHERE last_operation_id=?"), time.Now().UTC(), t.OperationID); err != nil {
+			if _, err = tx.ExecContext(ctx, s.Q("UPDATE scheduled_tasks SET last_run_status='cancelled',last_run_message='cancelled before Codex turn started',updated_at=? WHERE engine='codex' AND last_operation_id=?"), time.Now().UTC(), t.OperationID); err != nil {
 				return "", err
 			}
 			return t.OperationID, s.addCollaborationEvent(ctx, tx, t.ID, protocol.EventCodexTurnCancelled, map[string]string{"operation_id": t.OperationID, "source": "control"})

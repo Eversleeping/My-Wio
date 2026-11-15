@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -78,6 +79,11 @@ func TestWorkspaceLifecycleStoreMoveCopyAndSerialization(t *testing.T) {
 	if err != nil || copied.Path != copyCommand.TargetPath || copied.ManagementMode != "managed" || copied.ServerID != workspace.ServerID {
 		t.Fatalf("copy was not committed: %#v %v", copied, err)
 	}
+	thread, err := database.CreateThread(ctx, copied.ID, "scheduled deletion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	createTestScheduledTask(t, database, "codex", thread.ID, time.Now().UTC())
 	deleteCommand := protocol.GitWorkspaceLifecycleCommand{WorkspaceID: copied.ID, ProjectID: copied.ProjectID, Action: "delete", SourcePath: copied.Path, WorkspaceKind: copied.Kind}
 	deleteID, err := database.QueueWorkspaceLifecycle(ctx, copied, deleteCommand)
 	if err != nil {
@@ -93,6 +99,11 @@ func TestWorkspaceLifecycleStoreMoveCopyAndSerialization(t *testing.T) {
 	if err := database.CompleteWorkspaceLifecycle(ctx, deleteOperation, deleteCommand, deleteResult, protocol.OperationResult{OperationID: deleteID, Status: "succeeded", Data: deleteData}); err != nil {
 		t.Fatal(err)
 	}
+	var scheduled int
+	if err := database.DB.Get(&scheduled, "SELECT COUNT(*) FROM scheduled_tasks"); err != nil || scheduled != 0 {
+		t.Fatalf("orphan schedules=%d: %v", scheduled, err)
+	}
+
 	if _, err := database.Workspace(ctx, copied.ID); !IsNotFound(err) {
 		t.Fatalf("physically deleted workspace record remains: %v", err)
 	}

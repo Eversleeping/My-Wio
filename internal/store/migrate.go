@@ -22,6 +22,7 @@ type migration struct {
 // Append new migrations. Published entries and the baseline are immutable.
 var schemaMigrations = []migration{
 	{version: 1, name: "baseline", baseline: migrateBaseline},
+	{version: 2, name: "unified_scheduled_tasks", up: migrateScheduledTasks},
 }
 
 // PostgreSQL advisory locks are scoped to a database. All Wio schemas in one

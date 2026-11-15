@@ -167,6 +167,9 @@ func (s *Store) DeleteProjectMetadata(ctx context.Context, projectID string) (bo
 	if err != nil {
 		return false, err
 	}
+	if err := s.pruneOrphanScheduledTasks(ctx, tx); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
@@ -295,6 +298,9 @@ func (s *Store) CompleteProjectDeletion(ctx context.Context, operation Operation
 		if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM workspaces WHERE id=? AND project_id=? AND management_mode='managed'`), operation.WorkspaceID, operation.ProjectID); err != nil {
 			return err
 		}
+	}
+	if err := s.pruneOrphanScheduledTasks(ctx, tx); err != nil {
+		return err
 	}
 	var active int
 	if err := tx.GetContext(ctx, &active, s.Q(`SELECT COUNT(*) FROM agent_operations WHERE project_id=? AND kind=? AND status IN ('queued','delivered','running')`), operation.ProjectID, ProjectDeleteOperationKind); err != nil {

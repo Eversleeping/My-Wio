@@ -347,6 +347,11 @@ func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operat
 	default:
 		return errors.New("unsupported workspace lifecycle action")
 	}
+	if command.Action == "delete" {
+		if err := s.pruneOrphanScheduledTasks(ctx, tx); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 

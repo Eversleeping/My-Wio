@@ -136,7 +136,7 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 				if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.72"}); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE gemini_scheduled_tasks SET next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
+				if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE scheduled_tasks SET next_run_at=? WHERE engine='gemini' AND id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -178,7 +178,7 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				database.DB.ExecContext(ctx, database.Q("UPDATE gemini_scheduled_tasks SET next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID)
+				database.DB.ExecContext(ctx, database.Q("UPDATE scheduled_tasks SET next_run_at=? WHERE engine='gemini' AND id=?"), time.Now().UTC().Add(-time.Minute), task.ID)
 				(&Runner{store: database, gateway: gateway, log: slog.New(slog.NewTextHandler(io.Discard, nil))}).tick(ctx)
 				skipped, err := database.ScheduledTask(ctx, task.ID)
 				if err != nil || skipped.LastRunStatus != "skipped" {
@@ -256,7 +256,7 @@ func TestTickQueuesClaudeAndSkipsUnsafeStates(t *testing.T) {
 		if state == "old-agent" {
 			_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.92"})
 		}
-		if _, err = db.DB.ExecContext(ctx, db.Q("UPDATE claude_scheduled_tasks SET next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
+		if _, err = db.DB.ExecContext(ctx, db.Q("UPDATE scheduled_tasks SET next_run_at=? WHERE engine='claude' AND id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
 			t.Fatal(err)
 		}
 		runner.tick(ctx)
@@ -412,7 +412,7 @@ func TestTickAttributesResultsThatArriveBeforeTheRunIsRecorded(t *testing.T) {
 			// attributed to whichever task references the operation.
 			trigger := `CREATE TRIGGER agent_fails_fast AFTER INSERT ON events WHEN NEW.kind='` + userMessage + `' BEGIN
 				UPDATE agent_operations SET status='failed',result='Agent is updating' WHERE status='queued' AND kind IN ('codex.turn.start','claude.turn.start','gemini.turn.start');
-				UPDATE ` + kind + `_scheduled_tasks SET last_run_status='failed',last_run_message='Agent is updating' WHERE last_operation_id IN (SELECT id FROM agent_operations WHERE result='Agent is updating') AND last_run_status IN ('queued','running');
+				UPDATE scheduled_tasks SET last_run_status='failed',last_run_message='Agent is updating' WHERE engine='` + kind + `' AND last_operation_id IN (SELECT id FROM agent_operations WHERE result='Agent is updating') AND last_run_status IN ('queued','running');
 			END`
 			if _, err := database.DB.ExecContext(ctx, trigger); err != nil {
 				t.Fatal(err)
@@ -465,7 +465,7 @@ func TestTickSeparatesBusyWorkspacesFromQueueFailures(t *testing.T) {
 			if _, err := database.DB.ExecContext(ctx, `CREATE TRIGGER database_fails BEFORE INSERT ON agent_operations WHEN NEW.kind='`+kind+`.turn.start' BEGIN SELECT RAISE(ABORT,'simulated database failure'); END`); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE "+kind+"_scheduled_tasks SET next_run_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
+			if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE scheduled_tasks SET next_run_at=? WHERE engine=? AND id=?"), time.Now().UTC().Add(-time.Minute), kind, task.ID); err != nil {
 				t.Fatal(err)
 			}
 			runner.tick(ctx)
