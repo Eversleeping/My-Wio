@@ -211,7 +211,7 @@ npm --prefix web run typecheck
 | P3-04 | 拆分 `agentgateway/gateway.go` 与 `agent/client.go` | M | P0-07 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 7ada51c、a36bdca、b0195f1、ebaa35d |
 | P3-05 | `App.tsx` 拆分一：公共组件 | S | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 0558ab7 |
 | P3-06 | `App.tsx` 拆分二：实时通道与路由 | M | P3-05 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 8a265d6、69ffc1a |
-| P3-07 | `App.tsx` 拆分三：Codex 会话与工作区文件面板 | M | P3-06 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（见执行记录） |
+| P3-07 | `App.tsx` 拆分三：Codex 会话与工作区文件面板 | M | P3-06 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | f2413cf、6f51ba1 |
 | P3-08 | 前端数据层收敛 | M | P3-06 | 待开始 | |  | |
 | P3-09 | 轮询收敛 | M | P3-08 | 待开始 | |  | |
 | P3-10 | 拆分 `styles.css` 与 `i18n.tsx` | M | P3-07 | 待开始 | |  | |
