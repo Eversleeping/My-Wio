@@ -128,7 +128,7 @@ export default function App() {
     navigateToLocation(next, nextThreadID, replace);
   };
   const page = {
-    dashboard: <Suspense fallback={<PageLoading />}><DashboardPage realtime={realtimeRevisions.dashboard} onNavigate={selectView} /></Suspense>,
+    dashboard: <Suspense fallback={<PageLoading />}><DashboardPage onNavigate={selectView} /></Suspense>,
     servers: <ServersPage realtime={realtimeRevisions.servers} notify={setToast} />,
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute realtime={realtimeRevisions.projects} notify={setToast} /></Suspense>,
     codex: <Suspense fallback={<PageLoading />}><CodexPageRoute realtime={realtimeRevisions.codex} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selectedThreadID={codexThreadID} onSelectThread={(threadID, replace) => selectView("codex", threadID, replace)} /></Suspense>,

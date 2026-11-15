@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { act, render } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { realtimeScopesForEvent } from "./realtime/scopes";
@@ -36,7 +37,7 @@ test("throttles dashboard summary reloads during an event burst", async () => {
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
 
-  const view = (realtime: number) => <I18nProvider><DashboardPage realtime={realtime} onNavigate={vi.fn()} /></I18nProvider>;
+  const view = (realtime: number) => <I18nProvider><DataProvider revisions={{dashboard: realtime}}><DashboardPage  onNavigate={vi.fn()} /></DataProvider></I18nProvider>;
   const rendered = render(view(0));
   await act(async () => { await Promise.resolve(); });
   expect(requests.filter(url => url === "/api/summary")).toHaveLength(1);

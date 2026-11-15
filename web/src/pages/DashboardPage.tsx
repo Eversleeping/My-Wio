@@ -1,3 +1,5 @@
+import { dashboard } from "../data/dashboard";
+import { useResource } from "../data/resources";
 import { AlertTriangle, BellRing, ChevronRight, GitBranch, Rocket, Server as ServerIcon, ShieldCheck } from "lucide-react";
 import { DataTable, Empty, ErrorState, PageLoading, Section, Status } from "../components/PageUI";
 import { relative, shortSHA } from "../format";
@@ -7,10 +9,9 @@ import { useData, useThrottledValue } from "../useData";
 
 type DashboardDestination = "servers" | "projects" | "deployments" | "monitoring";
 
-export function DashboardPage({ realtime, onNavigate }: { realtime: number; onNavigate: (view: DashboardDestination) => void }) {
+export function DashboardPage({ onNavigate }: { onNavigate: (view: DashboardDestination) => void }) {
   const { t } = useI18n();
-  const summaryRealtime = useThrottledValue(realtime, 1_000);
-  const summary = useData<Summary>("/summary", summaryRealtime);
+  const summary = useResource(dashboard.summary());
   if (summary.loading) return <PageLoading />;
   if (!summary.data) return <ErrorState error={summary.error} reload={summary.reload} />;
   const stats = [
