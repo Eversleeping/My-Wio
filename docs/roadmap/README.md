@@ -207,8 +207,8 @@ npm --prefix web run typecheck
 | P2-10 | 清理旧路由、旧表、旧类型 | M | P2-06、P2-08 | 待开始 | |  | |
 | P3-01 | 路由表按领域拆分 | S | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 2653b52 |
 | P3-02 | 拆分 `httpapi/resources.go` | M | P3-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 8a0b175 |
-| P3-03 | 拆分 `store/store.go` 与 `store/resources.go` | M | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（见执行记录） |
-| P3-04 | 拆分 `agentgateway/gateway.go` 与 `agent/client.go` | M | P0-07 | 待开始 | |  | |
+| P3-03 | 拆分 `store/store.go` 与 `store/resources.go` | M | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 216b418 |
+| P3-04 | 拆分 `agentgateway/gateway.go` 与 `agent/client.go` | M | P0-07 | 进行中 | 11-15 Codex |  | |
 | P3-05 | `App.tsx` 拆分一：公共组件 | S | P0-02 | 待开始 | |  | |
 | P3-06 | `App.tsx` 拆分二：实时通道与路由 | M | P3-05 | 待开始 | |  | |
 | P3-07 | `App.tsx` 拆分三：Codex 会话与工作区文件面板 | M | P3-06 | 待开始 | |  | |

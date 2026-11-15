@@ -467,3 +467,11 @@ web/src/
 - 补充当前布局：`Setting` / `SetSetting` 归 `settings.go`；操作指标聚合与指标读取归 `metrics.go`；已有 `codex_snapshots.go` 接收快照声明。`store.go` 保留连接、公共 ID / Token 辅助函数及类型。
 - 校验差异来自 `gofmt` 对三个相邻单行辅助函数的对齐；恢复相邻布局后，拆分前后校验和均为 `b586c2471fe4b01d6b2a496356258beb6a0d28ef76dd966735d47f68fd2ed712`。`resources.go` 删除，`store.go` 为 103 行；迁移内容与顺序未变。
 - 验收：前端构建（含 bundle）、`go vet ./...`、`go test ./...`（含 P1 结构一致性）、`make test-postgres`、449 个 Vitest 用例、类型检查、Go 构建、格式与空白检查全部通过。所有 Store 非测试文件均不足 1000 行；P3-03 完成。
+
+### 2026-11-15 · P3-04 · Codex
+
+- 当前版本已使用 P4-01 操作常量，沿用它们，保持持久化值不变。网关新增的 `noActiveCodexTurn` / `isCodexTurnOperation` 随 Codex 函数移动；Agent 的运行期去重类型随操作调度移动，命令探测辅助函数随遥测移动。
+- 按三份提交执行；移动提交先分别校验包内代码，机械提取前检查两个包的分支覆盖，缺失先补特性测试。跨进程测试保持原样。
+
+- 网关纯移动：前后校验和均为 `3775a855abfcc96fa85892a532cad4654b71687da15e5483f10af494e31b1159`；`gateway.go` 为 459 行，最大文件 `operation_results.go` 为 619 行。
+- 网关纯移动验收：通用五项、Go 构建、格式与空白检查全部通过，449 个前端用例通过；先提交这一份可独立回滚的移动。
