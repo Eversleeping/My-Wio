@@ -63,9 +63,9 @@ func (s *Store) CompleteGeminiCredentialUpdate(ctx context.Context, result proto
 		return err
 	}
 	if count != 0 && result.Status == "succeeded" {
-		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_gemini_credential_profiles(server_id,profile_id,updated_at,profile_revision)
-		 SELECT server_id,profile_id,?,profile_revision FROM server_gemini_credential_updates WHERE operation_id=?
-		 ON CONFLICT(server_id) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at,profile_revision=excluded.profile_revision`), time.Now().UTC(), result.OperationID)
+		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_engines(server_id,engine,credential_profile_id,updated_at,profile_revision)
+		 SELECT server_id,'gemini',profile_id,?,profile_revision FROM server_gemini_credential_updates WHERE operation_id=?
+		 ON CONFLICT(server_id,engine) DO UPDATE SET credential_profile_id=excluded.credential_profile_id,updated_at=excluded.updated_at,profile_revision=excluded.profile_revision`), time.Now().UTC(), result.OperationID)
 		if err != nil {
 			return err
 		}

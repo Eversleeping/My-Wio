@@ -10,7 +10,7 @@ import (
 // unrelated preset metadata does not. No credential material is exposed.
 const claudeModelRevision = `CASE WHEN ccp.profile_id IS NULL THEN '' ELSE ccp.profile_id || ':' || CAST(ccp.updated_at AS TEXT) || ':' || COALESCE(claude.model,'') END`
 
-const claudeWorkspaceModelRevision = `COALESCE((SELECT ` + claudeModelRevision + ` FROM workspaces w LEFT JOIN server_claude_credential_profiles ccp ON ccp.server_id=w.server_id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE w.id=claude_threads.workspace_id),'')`
+const claudeWorkspaceModelRevision = `COALESCE((SELECT ` + claudeModelRevision + ` FROM workspaces w LEFT JOIN ` + claudeEngineBinding + ` ccp ON ccp.server_id=w.server_id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE w.id=claude_threads.workspace_id),'')`
 
 func migrateClaudeModelConfig(ctx context.Context, db *sqlx.DB, driver string) error {
 	tx, err := db.BeginTxx(ctx, nil)

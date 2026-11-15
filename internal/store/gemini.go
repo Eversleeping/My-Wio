@@ -55,8 +55,8 @@ type GeminiThread struct {
 	ServerStatus              string               `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,` + geminiCredentialRevision + ` AS credential_revision,CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending,s.agent_version,s.gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
- FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN server_gemini_credential_profiles gcp ON gcp.server_id=s.id` + projectServerJoin
+const geminiThreadSelect = `SELECT t.*,` + geminiCredentialRevision + ` AS credential_revision,CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending,s.agent_version,` + geminiEngineVersion + ` AS gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+ FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN ` + geminiEngineBinding + ` gcp ON gcp.server_id=s.id` + projectServerJoin
 
 // Check running turns and deliveries whose start acknowledgement may have been
 // lost. Never replay a delivered turn: it may still have a live CLI process.
@@ -206,7 +206,7 @@ func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 		return protocol.StreamEvent{}, ErrWorkspaceWriteActive
 	}
 	opID, now := NewID(), time.Now().UTC()
-	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET model_credential_revision=COALESCE((SELECT `+geminiCredentialRevision+` FROM workspaces w JOIN server_gemini_credential_profiles gcp ON gcp.server_id=w.server_id WHERE w.id=gemini_threads.workspace_id),''),status='queued',operation_id=?,model=?,approval_mode=?,thinking_level=?,updated_at=?,title=CASE WHEN title='Gemini' THEN ? ELSE title END
+	result, err := tx.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET model_credential_revision=COALESCE((SELECT `+geminiCredentialRevision+` FROM workspaces w JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=w.server_id WHERE w.id=gemini_threads.workspace_id),''),status='queued',operation_id=?,model=?,approval_mode=?,thinking_level=?,updated_at=?,title=CASE WHEN title='Gemini' THEN ? ELSE title END
  WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))`), opID, model, mode, level, now, truncateGeminiTitle(prompt), thread.ID)
 	if err != nil {
 		return protocol.StreamEvent{}, err

@@ -32,7 +32,7 @@ type CredentialProfile struct {
 // it is never replaced by this bootstrap default.
 func (s *Store) DefaultControlPlaneCredentialProfiles(ctx context.Context) (CredentialProfile, *CredentialProfile, bool, error) {
 	var bindings int
-	if err := s.DB.GetContext(ctx, &bindings, s.Q("SELECT COUNT(*) FROM server_credential_profiles WHERE server_id=?"), ControlPlaneServerID); err != nil {
+	if err := s.DB.GetContext(ctx, &bindings, s.Q("SELECT COUNT(*) FROM servers WHERE id=? AND (EXISTS (SELECT 1 FROM server_credential_profiles cp WHERE cp.server_id=servers.id) OR EXISTS (SELECT 1 FROM server_engines e WHERE e.server_id=servers.id AND e.engine='codex' AND e.updated_at IS NOT NULL))"), ControlPlaneServerID); err != nil {
 		return CredentialProfile{}, nil, false, err
 	}
 	if bindings != 0 {
@@ -57,17 +57,19 @@ func (s *Store) DefaultControlPlaneCredentialProfiles(ctx context.Context) (Cred
 
 func (s *Store) preferredCredentialProfile(ctx context.Context, kind string) (CredentialProfile, error) {
 	profile := CredentialProfile{}
-	profileColumn := "codex_profile_id"
+	binding := "server_engines cp"
+	boundProfile := "cp.credential_profile_id=p.id AND cp.engine='codex'"
 	if kind == "git" {
-		profileColumn = "git_profile_id"
+		binding = "server_credential_profiles cp"
+		boundProfile = "cp.git_profile_id=p.id"
 	}
 	query := `SELECT p.id,p.kind,p.name,p.endpoint,p.username,p.model,p.commit_name,p.commit_email,p.ciphertext,p.updated_at
 		FROM credential_profiles p
 		WHERE p.kind=? AND p.ciphertext<>''
 		ORDER BY CASE WHEN EXISTS (
-			SELECT 1 FROM server_credential_profiles cp
+			SELECT 1 FROM ` + binding + `
 			JOIN servers bound_server ON bound_server.id=cp.server_id
-			WHERE bound_server.revoked_at IS NULL AND bound_server.is_control_plane=0 AND cp.` + profileColumn + `=p.id
+			WHERE bound_server.revoked_at IS NULL AND bound_server.is_control_plane=0 AND ` + boundProfile + `
 		) THEN 0 ELSE 1 END,lower(p.name),p.id
 		LIMIT 1`
 	err := s.DB.GetContext(ctx, &profile, s.Q(query), kind)
@@ -100,18 +102,17 @@ func (s *Store) setServerCredentialProfileIDs(ctx context.Context, tx *sqlx.Tx, 
 	if len(gitProfileIDs) > 0 {
 		primaryGitProfileID = gitProfileIDs[0]
 	}
-	query := `INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,NULLIF(?,''),NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`
-	if scope == "codex" {
-		query = `INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,NULLIF(?,''),NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET codex_profile_id=excluded.codex_profile_id,updated_at=excluded.updated_at`
-	}
-	if scope == "git" {
-		query = `INSERT INTO server_credential_profiles(server_id,codex_profile_id,git_profile_id,updated_at) VALUES(?,NULLIF(?,''),NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`
-	}
-	if _, err := tx.ExecContext(ctx, s.Q(query), serverID, codexProfileID, primaryGitProfileID, time.Now().UTC()); err != nil {
-		return err
+	now := time.Now().UTC()
+	if scope != "git" {
+		if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO server_engines(server_id,engine,credential_profile_id,updated_at) VALUES(?,'codex',NULLIF(?,''),?) ON CONFLICT(server_id,engine) DO UPDATE SET credential_profile_id=excluded.credential_profile_id,updated_at=excluded.updated_at`), serverID, codexProfileID, now); err != nil {
+			return err
+		}
 	}
 	if scope == "codex" {
 		return nil
+	}
+	if _, err := tx.ExecContext(ctx, s.Q(`INSERT INTO server_credential_profiles(server_id,git_profile_id,updated_at) VALUES(?,NULLIF(?,''),?) ON CONFLICT(server_id) DO UPDATE SET git_profile_id=excluded.git_profile_id,updated_at=excluded.updated_at`), serverID, primaryGitProfileID, now); err != nil {
+		return err
 	}
 
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM server_git_credential_profiles WHERE server_id=?"), serverID); err != nil {

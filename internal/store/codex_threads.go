@@ -270,7 +270,7 @@ type ThreadPage struct {
 	HasMore bool
 }
 
-const codexThreadSelect = `SELECT s.agent_version,s.codex_version,t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,` + projectServerName + ` project_name,t.pinned_at,t.archived_at,` + projectServerPin + ` project_pinned_at,` + projectServerHidden + ` project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id` + projectServerJoin
+const codexThreadSelect = `SELECT s.agent_version,` + codexEngineVersion + ` AS codex_version,t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,` + projectServerName + ` project_name,t.pinned_at,t.archived_at,` + projectServerPin + ` project_pinned_at,` + projectServerHidden + ` project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id` + projectServerJoin
 
 func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Thread, error) {
 	var out []Thread

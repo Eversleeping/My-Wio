@@ -3,6 +3,10 @@ package store
 import (
 	"context"
 	"testing"
+
+	"github.com/jmoiron/sqlx"
+
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 func TestDefaultControlPlaneCredentialProfilesUsesExistingProfilesOnce(t *testing.T) {
@@ -23,6 +27,9 @@ func TestDefaultControlPlaneCredentialProfilesUsesExistingProfilesOnce(t *testin
 	if err := database.SetServerCredentialProfiles(ctx, regular.ID, codex.ID, git.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.Heartbeat(ctx, ControlPlaneServerID, protocol.Heartbeat{CodexReady: true}); err != nil {
+		t.Fatal(err)
+	}
 	selectedCodex, selectedGit, initialize, err := database.DefaultControlPlaneCredentialProfiles(ctx)
 	if err != nil || !initialize || selectedCodex.ID != codex.ID || selectedGit == nil || selectedGit.ID != git.ID {
 		t.Fatalf("unexpected default profiles: codex=%#v git=%#v initialize=%v err=%v", selectedCodex, selectedGit, initialize, err)
@@ -33,6 +40,26 @@ func TestDefaultControlPlaneCredentialProfilesUsesExistingProfilesOnce(t *testin
 	_, _, initialize, err = database.DefaultControlPlaneCredentialProfiles(ctx)
 	if err != nil || initialize {
 		t.Fatalf("explicit control-plane binding should not be replaced: initialize=%v err=%v", initialize, err)
+	}
+}
+
+func TestDefaultControlPlaneCredentialProfilesPreservesEmptyCodexChoice(t *testing.T) {
+	database := testStore(t)
+	ctx := context.Background()
+	if _, err := database.EnsureControlPlaneServer(ctx, "control-host", "control-token"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SaveCredentialProfile(ctx, CredentialProfile{Kind: "codex", Name: "Available"}, "v1:synthetic"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.inTx(ctx, nil, func(tx *sqlx.Tx) error {
+		return database.setServerCredentialProfileIDs(ctx, tx, ControlPlaneServerID, "", nil, "codex")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, initialize, err := database.DefaultControlPlaneCredentialProfiles(ctx)
+	if err != nil || initialize {
+		t.Fatalf("explicit empty Codex choice replaced: initialize=%v err=%v", initialize, err)
 	}
 }
 

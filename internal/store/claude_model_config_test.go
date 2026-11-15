@@ -75,6 +75,11 @@ func assertClaudeModelConfigRevision(t *testing.T, db *Store) {
 		t.Fatalf("send did not acknowledge configuration: %+v %v", thread, err)
 	}
 
+	// The historical migration intentionally still reads its immutable legacy
+	// binding table. Seed that old snapshot explicitly after runtime moved on.
+	if _, err := db.DB.ExecContext(ctx, db.Q(`INSERT INTO server_claude_credential_profiles(server_id,profile_id,profile_revision,model,updated_at) SELECT server_id,credential_profile_id,profile_revision,model,updated_at FROM server_engines WHERE server_id=? AND engine='claude'`), server.ID); err != nil {
+		t.Fatal(err)
+	}
 	// Exercise the legacy backfill twice: later metadata updates must not cause
 	// a restart to bless a stale choice or reset a newer intentional choice.
 	before, err := db.CreateClaudeThread(ctx, workspaceID, "legacy-old", "default", "")

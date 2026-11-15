@@ -52,6 +52,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	})
 	t.Run("versioned migrations", func(t *testing.T) { assertPostgresMigrationRunner(t, databaseURL) })
 	t.Run("scheduled migration", func(t *testing.T) { assertPostgresScheduledTaskMigration(t, databaseURL) })
+	t.Run("server engine migration", func(t *testing.T) { assertPostgresServerEngineMigration(t, databaseURL) })
 	createLegacyPostgresSchema(t, databaseURL)
 
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -570,7 +571,7 @@ func createLegacyPostgresSchema(t *testing.T, databaseURL string) {
 	}
 	defer legacy.Close()
 	_, err = legacy.Exec(`
-		CREATE TABLE servers (id TEXT PRIMARY KEY,name TEXT NOT NULL);
+		CREATE TABLE servers (id TEXT PRIMARY KEY,name TEXT NOT NULL,codex_version TEXT NOT NULL DEFAULT '',codex_ready INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE projects (
 			id TEXT PRIMARY KEY,name TEXT NOT NULL,remote_url TEXT NOT NULL DEFAULT '',normalized_remote TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP

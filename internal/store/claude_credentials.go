@@ -22,7 +22,7 @@ type ClaudeModelConfig struct {
 
 func (s *Store) ClaudeModelConfiguration(ctx context.Context, serverID string) (ClaudeModelConfig, error) {
 	var config ClaudeModelConfig
-	err := s.DB.GetContext(ctx, &config, s.Q(`SELECT `+claudeModelRevision+` AS revision,COALESCE(ccp.profile_id,'') AS profile_id,ccp.profile_revision,ccp.updated_at FROM server_claude_credential_profiles ccp LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE ccp.server_id=?`), serverID)
+	err := s.DB.GetContext(ctx, &config, s.Q(`SELECT `+claudeModelRevision+` AS revision,COALESCE(ccp.profile_id,'') AS profile_id,ccp.profile_revision,ccp.updated_at FROM `+claudeEngineBinding+` ccp LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE ccp.server_id=?`), serverID)
 	return config, err
 }
 
@@ -89,9 +89,9 @@ func (s *Store) CompleteClaudeCredentialUpdate(ctx context.Context, result proto
 		return err
 	}
 	if count != 0 && result.Status == "succeeded" {
-		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_claude_credential_profiles(server_id,profile_id,updated_at,profile_revision,model)
-		 SELECT server_id,profile_id,?,profile_revision,model FROM server_claude_credential_updates WHERE operation_id=?
-		 ON CONFLICT(server_id) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at,profile_revision=excluded.profile_revision,model=excluded.model`), time.Now().UTC(), result.OperationID)
+		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_engines(server_id,engine,credential_profile_id,updated_at,profile_revision,model)
+		 SELECT server_id,'claude',profile_id,?,profile_revision,model FROM server_claude_credential_updates WHERE operation_id=?
+		 ON CONFLICT(server_id,engine) DO UPDATE SET credential_profile_id=excluded.credential_profile_id,updated_at=excluded.updated_at,profile_revision=excluded.profile_revision,model=excluded.model`), time.Now().UTC(), result.OperationID)
 		if err != nil {
 			return err
 		}

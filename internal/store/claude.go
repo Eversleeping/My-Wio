@@ -55,7 +55,7 @@ const claudeThreadSelect = `SELECT t.*,cm.pinned_at,COALESCE(cm.fork_snapshot_id
  w.server_id,s.name AS server_name,s.agent_version,COALESCE(ccli.version,'') AS claude_version,
  COALESCE((SELECT payload FROM events WHERE stream_id=t.id AND kind IN ('claude.steer.ready','claude.steer.closed') ORDER BY sequence DESC LIMIT 1),'') AS steer_state,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status,
  CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending
- FROM claude_threads t LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN server_claude_cli ccli ON ccli.server_id=s.id` + projectServerJoin
+ FROM claude_threads t LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN ` + claudeEngineCLI + ` ccli ON ccli.server_id=s.id` + projectServerJoin
 
 func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThread, error) {
 	condition := "t.archived_at IS NULL"

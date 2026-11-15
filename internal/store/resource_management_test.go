@@ -21,7 +21,7 @@ func TestOpenMigratesLegacyResourceManagementSchemaIdempotently(t *testing.T) {
 	}
 	_, err = legacy.Exec(`
 		PRAGMA foreign_keys=ON;
-		CREATE TABLE servers (id TEXT PRIMARY KEY,name TEXT NOT NULL);
+		CREATE TABLE servers (id TEXT PRIMARY KEY,name TEXT NOT NULL,codex_version TEXT NOT NULL DEFAULT '',codex_ready INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE projects (
 			id TEXT PRIMARY KEY,name TEXT NOT NULL,remote_url TEXT NOT NULL DEFAULT '',normalized_remote TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP

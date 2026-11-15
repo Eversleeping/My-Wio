@@ -189,7 +189,7 @@ func (s *Store) collaborationDefaults(ctx context.Context, tx *sqlx.Tx, source C
 	case "claude":
 		model = "sonnet"
 		var configured string
-		err := tx.GetContext(ctx, &configured, s.Q("SELECT COALESCE(NULLIF(b.model,''),p.model,'') FROM workspaces w LEFT JOIN server_claude_credential_profiles b ON b.server_id=w.server_id LEFT JOIN credential_profiles p ON p.id=b.profile_id WHERE w.id=?"), workspace)
+		err := tx.GetContext(ctx, &configured, s.Q("SELECT COALESCE(NULLIF(b.model,''),p.model,'') FROM workspaces w LEFT JOIN "+claudeEngineBinding+" b ON b.server_id=w.server_id LEFT JOIN credential_profiles p ON p.id=b.profile_id WHERE w.id=?"), workspace)
 		if err != nil {
 			return "", "", "", err
 		}

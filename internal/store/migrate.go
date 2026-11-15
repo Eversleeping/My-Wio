@@ -23,6 +23,7 @@ type migration struct {
 var schemaMigrations = []migration{
 	{version: 1, name: "baseline", baseline: migrateBaseline},
 	{version: 2, name: "unified_scheduled_tasks", up: migrateScheduledTasks},
+	{version: 3, name: "unified_server_engines", up: migrateServerEngines},
 }
 
 // PostgreSQL advisory locks are scoped to a database. All Wio schemas in one

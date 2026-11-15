@@ -110,6 +110,11 @@ func assertGeminiModelConfigMigration(t *testing.T, db *Store) {
 	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO server_gemini_credential_profiles(server_id,profile_id,updated_at) VALUES(?,?,?)"), server.ID, profile.ID, now); err != nil {
 		t.Fatal(err)
 	}
+	// Runtime uses the new binding while the legacy backfill below still
+	// exercises its original source and original column migration.
+	if _, err := db.DB.ExecContext(ctx, db.Q(`INSERT INTO server_engines(server_id,engine,credential_profile_id,updated_at) VALUES(?,'gemini',?,?)`), server.ID, profile.ID, now); err != nil {
+		t.Fatal(err)
+	}
 	before, err := db.CreateGeminiThread(ctx, workspaceID, "old-model", "default")
 	if err != nil {
 		t.Fatal(err)

@@ -25,12 +25,12 @@ var aiSessionRows = buildAISessionRows()
 
 func buildAISessionRows() string {
 	sources := []struct{ engine, native, model, mode, effort, pin, cli, operation, execution, join string }{
-		{engine: session.Codex, native: "t.codex_thread_id", model: "''", mode: "'on-request'", effort: "''", pin: "t.pinned_at", cli: "s.codex_version",
+		{engine: session.Codex, native: "t.codex_thread_id", model: "''", mode: "'on-request'", effort: "''", pin: "t.pinned_at", cli: codexEngineVersion,
 			operation: "COALESCE((SELECT o.id FROM agent_operations o WHERE o.thread_id=t.id AND o.kind IN ('codex.turn.start','codex.turn.rewrite') ORDER BY o.created_at DESC LIMIT 1),'')",
 			execution: "COALESCE((SELECT o.payload FROM agent_operations o WHERE o.thread_id=t.id AND o.kind IN ('codex.turn.start','codex.turn.rewrite') ORDER BY o.created_at DESC LIMIT 1),(SELECT execution_json FROM session_tool_requests WHERE target_engine='codex' AND target_id=t.id AND tool IN ('wio_create_session','wio_fork_session') ORDER BY created_at LIMIT 1),'')"},
 		{engine: session.Claude, native: "t.session_id", model: "t.model", mode: "t.permission_mode", effort: "COALESCE(cto.effort,'')", pin: "cm.pinned_at", cli: "COALESCE(ccli.version,'')", operation: "t.operation_id", execution: "''",
-			join: " LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN server_claude_cli ccli ON ccli.server_id=s.id"},
-		{engine: session.Gemini, native: "t.session_id", model: "t.model", mode: "t.approval_mode", effort: "t.thinking_level", pin: "t.pinned_at", cli: "s.gemini_version", operation: "t.operation_id", execution: "''"},
+			join: " LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN " + claudeEngineCLI + " ccli ON ccli.server_id=s.id"},
+		{engine: session.Gemini, native: "t.session_id", model: "t.model", mode: "t.approval_mode", effort: "t.thinking_level", pin: "t.pinned_at", cli: geminiEngineVersion, operation: "t.operation_id", execution: "''"},
 	}
 	var queries []string
 	for _, source := range sources {

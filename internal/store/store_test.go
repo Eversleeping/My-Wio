@@ -854,6 +854,9 @@ func TestRepairEnrollmentPreservesServerAndWorkspace(t *testing.T) {
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/app", Name: "app", RemoteURL: "https://example.com/app.git", Branch: "main", CommitSHA: "abc"}}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{CodexVersion: "codex-before", CodexReady: true, GeminiVersion: "gemini-before", GeminiReady: true, ClaudeVersion: "claude-before", ClaudeReady: true}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.CreateRepairEnrollment(ctx, server.ID, "repair-enrollment", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -864,6 +867,10 @@ func TestRepairEnrollmentPreservesServerAndWorkspace(t *testing.T) {
 	repaired, err := database.EnrollServer(ctx, repair, "repair-node-new.local", "new-agent-token")
 	if err != nil {
 		t.Fatal(err)
+	}
+	current, err := database.Server(ctx, server.ID)
+	if err != nil || current.CodexVersion != "" || current.CodexReady != 0 || current.GeminiVersion != "" || current.GeminiReady != 0 || current.ClaudeVersion != "claude-before" || current.ClaudeReady != 1 {
+		t.Fatalf("repair changed CLI reset semantics: %+v %v", current, err)
 	}
 	if repaired.ID != server.ID {
 		t.Fatalf("repair changed server ID: %s != %s", repaired.ID, server.ID)

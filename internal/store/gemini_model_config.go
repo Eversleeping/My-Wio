@@ -19,7 +19,7 @@ type GeminiModelConfig struct {
 
 func (s *Store) GeminiModelConfiguration(ctx context.Context, serverID string) (GeminiModelConfig, error) {
 	var config GeminiModelConfig
-	err := s.DB.GetContext(ctx, &config, s.Q(`SELECT `+geminiCredentialRevision+` AS revision,COALESCE(gcp.profile_id,'') AS profile_id,gcp.updated_at,gcp.profile_revision FROM server_gemini_credential_profiles gcp WHERE gcp.server_id=?`), serverID)
+	err := s.DB.GetContext(ctx, &config, s.Q(`SELECT `+geminiCredentialRevision+` AS revision,COALESCE(gcp.profile_id,'') AS profile_id,gcp.updated_at,gcp.profile_revision FROM `+geminiEngineBinding+` gcp WHERE gcp.server_id=?`), serverID)
 	return config, err
 }
 

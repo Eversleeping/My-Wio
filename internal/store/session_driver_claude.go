@@ -19,7 +19,7 @@ func (s claudeCollaborationDriver) Create(ctx context.Context, tx *sqlx.Tx, ref 
 	now := time.Now().UTC()
 	var result sql.Result
 	var err error
-	result, err = tx.ExecContext(ctx, s.Q(`INSERT INTO claude_threads(id,workspace_id,title,model,permission_mode,created_at,updated_at,model_credential_revision) SELECT ?,w.id,?,?,?,?,?,`+claudeModelRevision+` FROM workspaces w JOIN servers s ON s.id=w.server_id LEFT JOIN server_claude_credential_profiles ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), ref.ID, title, model, mode, now, now, workspaceID)
+	result, err = tx.ExecContext(ctx, s.Q(`INSERT INTO claude_threads(id,workspace_id,title,model,permission_mode,created_at,updated_at,model_credential_revision) SELECT ?,w.id,?,?,?,?,?,`+claudeModelRevision+` FROM workspaces w JOIN servers s ON s.id=w.server_id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id WHERE w.id=? AND w.status='ready' AND s.revoked_at IS NULL`), ref.ID, title, model, mode, now, now, workspaceID)
 	if err != nil {
 		return err
 	}

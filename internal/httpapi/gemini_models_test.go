@@ -112,7 +112,7 @@ func TestWorkspaceGeminiModelsUsesBoundProfileAndHandlesMissingConfig(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO server_gemini_credential_profiles(server_id,profile_id,updated_at) VALUES(?,?,?)"), server.ID, profile.ID, time.Now().UTC()); err != nil {
+	if _, err := db.DB.ExecContext(ctx, db.Q("INSERT INTO server_engines(server_id,engine,credential_profile_id,updated_at) VALUES(?,'gemini',?,?)"), server.ID, profile.ID, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	result = request()

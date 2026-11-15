@@ -167,3 +167,23 @@ func assertPostgresScheduledTaskMigration(t *testing.T, databaseURL string) {
 		})
 	}
 }
+
+func assertPostgresServerEngineMigration(t *testing.T, databaseURL string) {
+	t.Helper()
+	admin, err := sqlx.Connect("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	if _, err := admin.Exec("CREATE SCHEMA server_engine_migration"); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sqlx.Connect("pgx", postgresSchemaURL(t, databaseURL, "server_engine_migration"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	assertServerEngineMigration(t, db, "pgx")
+	assertHeartbeatPreservesAppliedEngineConfiguration(t, &Store{DB: db, driver: "pgx"})
+}
