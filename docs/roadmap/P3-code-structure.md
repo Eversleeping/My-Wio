@@ -460,3 +460,10 @@ web/src/
 
 - 拆分前后 `internal/httpapi` 校验和均为 `5cd3161aff43d14948f0f2308804208f8fcd1d7ddd3b9f48dc32b31833f04ba5`。14 个目标文件逐个移动、逐个编译通过，`resources.go` 删除；所有非测试文件均不足 1000 行。
 - 验收：前端构建（含 bundle）、`go vet ./...`、`go test ./...`（含路由快照）、449 个 Vitest 用例、类型检查、Go 构建、格式与差异空白检查全部通过。P3-02 完成。
+
+### 2026-11-15 · P3-03 · Codex
+
+- M1 已将启动编排放入 `migrate.go` / `migrate_baseline.go`；本步保持原调用链与被冻结的迁移内容，仅将 `store.go` 的旧迁移及其专属路径辅助函数搬入 `migrations_legacy.go`。
+- 补充当前布局：`Setting` / `SetSetting` 归 `settings.go`；操作指标聚合与指标读取归 `metrics.go`；已有 `codex_snapshots.go` 接收快照声明。`store.go` 保留连接、公共 ID / Token 辅助函数及类型。
+- 校验差异来自 `gofmt` 对三个相邻单行辅助函数的对齐；恢复相邻布局后，拆分前后校验和均为 `b586c2471fe4b01d6b2a496356258beb6a0d28ef76dd966735d47f68fd2ed712`。`resources.go` 删除，`store.go` 为 103 行；迁移内容与顺序未变。
+- 验收：前端构建（含 bundle）、`go vet ./...`、`go test ./...`（含 P1 结构一致性）、`make test-postgres`、449 个 Vitest 用例、类型检查、Go 构建、格式与空白检查全部通过。所有 Store 非测试文件均不足 1000 行；P3-03 完成。
