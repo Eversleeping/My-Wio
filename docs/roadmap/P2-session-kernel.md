@@ -142,7 +142,7 @@ type Driver interface {
 
 引擎独有的功能（Codex 的审批和状态快照、Gemini 的目标模式、Claude 的技能发现）不进公共接口。它们通过可选的小接口暴露，处理器用类型断言判断是否支持，例如 `type GoalDriver interface { ... }`。这样公共接口保持精简，不会被某一种引擎的概念污染。
 
-驱动的第一版实现只是对现有 Store 方法的薄包装：`QueueTurn` 在 Claude 驱动里调用 `Store.QueueClaudeTurn` 或 `QueueClaudeRewrite`。底下仍然是三张表，直到 P2-08。
+驱动的第一版实现只是对现有 Store 方法的薄包装：`QueueTurn` 在 Claude 驱动里调用 `Store.QueueClaudeTurn` 或 `QueueClaudeRewrite`。底下保留三张原生线程表，由驱动封装。2026-11-15依据D8的取消条件评估后，不再实施P2-08物理合表。
 
 ### HTTP 路由
 
@@ -188,29 +188,15 @@ web/src/sessions/
 
 按总览的决策 D9，三个引擎页面最终会合并成按项目和工作区组织的一个入口。所以外壳不要假定“一个页面只有一种引擎”：列表、置顶、分组、选中状态都用（引擎，会话 ID）标识会话，引擎差异只通过引擎模块表达。
 
-### 数据表（P2-07、P2-08）
+### 数据表（P2-07；P2-08按D8取消）
 
-```sql
-CREATE TABLE ai_sessions (
-  id TEXT PRIMARY KEY,
-  engine TEXT NOT NULL,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  native_id TEXT NOT NULL DEFAULT '',
-  title TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'idle',
-  model TEXT NOT NULL DEFAULT '',
-  mode TEXT NOT NULL DEFAULT '',
-  effort TEXT NOT NULL DEFAULT '',
-  operation_id TEXT NOT NULL DEFAULT '',
-  engine_state TEXT NOT NULL DEFAULT '{}',
-  pinned_at TIMESTAMP,
-  archived_at TIMESTAMP,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-```
+M4使用schema2/3的扩展迁移，已发布基线与原生线程结构保留：
 
-原则：会出现在 SQL 条件里或需要原子更新的引擎私有字段保留为真实列，其余放进 `engine_state`。哪些字段属于前一类，由 P2-01 的盘点确定。例如 `gemini_threads.model_credential_revision` 在入队事务里用子查询原子更新，应当保留为列。
+- `scheduled_tasks`：三引擎共用任务结构，以`engine`区分原生线程；保留原任务字段和server外键。
+- `server_engines`：以`(server_id,engine)`为主键，合并CLI状态与已应用凭据绑定；绑定时间不随心跳改变，Git绑定继续独立。
+- `codex_threads`、`gemini_threads`、`claude_threads`及其原生附表继续由驱动读写。公共列表通过[AISession统一读模型](../../internal/store/ai_sessions.go)读取，以`(engine,id)`标识会话。
+
+原先的`ai_sessions`物理表及`engine_state`草案不实施。会出现在SQL条件或原子更新中的原生字段继续保留为真实列；原生会话ID、配置修订、问题和分叉快照等差异仍属于驱动。定时任务没有跨三张线程表的数据库外键，创建/改绑定必须在同一事务内锁定原生线程，线程和父级删除必须在同一事务内清理任务；这些约束在取消物理合表后继续有效。
 
 ## 步骤
 
@@ -367,8 +353,8 @@ P1降级护栏已部署：旧控制面会拒绝较新的schema，不能直接指
 **做法**
 
 1. 新迁移：建立 `scheduled_tasks` 表，在现有结构上增加 `engine` 列；把三张旧表的数据复制进去。复制前断言三张表的 `id` 没有重复，有重复则迁移失败并报出冲突的 ID。
-2. 线程表合并之前，`scheduled_tasks.thread_id` 无法声明指向三张表的外键。在这期间，删除线程时由驱动的 `Delete` 负责删除对应的定时任务，并为此补测试。P2-08 完成后再加外键。
-3. `store/scheduled_tasks.go` 改为读写新表，去掉 `strings.ReplaceAll` 生成查询的做法和 `scheduledTaskTable`。
+2. `scheduled_tasks.thread_id`无法声明指向三张原生表的外键。创建/改绑定时在事务内锁定目标线程；驱动删除以及项目/工作区父级删除在同一事务内清理对应任务，并用SQLite/PostgreSQL及并发测试保障。P2-08按D8取消后继续保留这些约束，不再安排添加统一线程外键。
+3. `store/scheduled_tasks.go`改为读写新表，移除`scheduledTable`等旧物理表选择辅助函数；保留原生线程查找和事务锁适配。
 4. 旧表保留不删，不再写入。清理在 P2-10。
 5. 同样的方式处理服务器级的引擎配置：建立 `server_engines(server_id, engine, cli_version, ready, credential_profile_id, profile_revision, model, updated_at)`，合并 `servers` 表的四个引擎列、`server_claude_cli` 和三组凭据绑定表。这一部分可以拆成单独的提交。
 
@@ -384,7 +370,21 @@ P1降级护栏已部署：旧控制面会拒绝较新的schema，不能直接指
 
 ### P2-08 线程表合并
 
-受决策 D8 约束。开始前先确认是否仍然需要做。
+2026-11-15，P2-07验收完成后，依据D8预先允许的取消条件，将本步标记为`已取消`。不新增物理线程合表迁移。
+
+**评估证据与边界**
+
+| 检查 | 结果 |
+| --- | --- |
+| 公共生命周期、协作和调度 | 通过session驱动/注册表和统一读模型访问；sessionservice及scheduler非测试代码没有三张物理线程表名 |
+| HTTP与前端 | `/api/sessions`走统一读取和引擎传输适配器；前端公共外壳/列表按`(engine,id)`工作，非测试代码不引用物理线程表 |
+| 剩余原生HTTP查询 | approvals.go有两条Codex审批查询，summary.go有一条Codex历史计数；均属于原生兼容行为，不构成三套通用生命周期实现 |
+| 行为和数据验证 | 新旧路由契约、混合列表、协作和调度测试、SQLite/PostgreSQL及race通过；真实副本65项原生会话关键字段摘要未变，三引擎真实进程浏览器冒烟通过 |
+| 定时任务引用完整性 | P2-07已覆盖同名跨引擎线程、并发创建/删除和父级级联清理；保留事务锁与清理约束 |
+
+公共调用方已经能复用同一会话接口，物理合表不会再消除一层公共分支，却会重写原生原子更新和多张表的外键。当前保留驱动和原生结构，M5统一入口与P7任务编排继续依赖会话接口。P2-10的前置改为P2-06/P2-07发布并运行一个版本周期，清理范围排除仍在使用的原生表及凭据追溯结构。
+
+以下为取消前的迁移方案、验收和风险，仅保留历史说明，不继续执行。
 
 **做法**
 
@@ -430,13 +430,13 @@ P1降级护栏已部署：旧控制面会拒绝较新的schema，不能直接指
 
 ### P2-10 清理旧路由、旧表、旧类型
 
-前置：P2-06 和 P2-08 已经随某个版本发布，并且在生产运行过至少一个版本周期。
+前置：P2-06和P2-07已经随某个版本发布，并且在生产运行过至少一个版本周期。P2-08按D8取消，不再作为前置；不能删除仍在驱动中使用的原生线程表。
 
 **做法**
 
 1. 删除旧 HTTP 路由和响应里的旧能力字段。
-2. 新迁移：删除三张旧线程表、三张旧定时任务表、旧的服务器引擎配置表和列。
-3. 删除前端的 `Thread`、`GeminiThread`、`ClaudeThread` 类型和旧请求路径。
+2. 新迁移：只删除P2-07已经停用的三张旧定时任务表及服务器引擎配置表/列。三张原生线程表及附表、仍服务Git绑定的结构和仍用于已应用密文快照追溯的操作记录继续保留；逐项审计运行期引用后才能收缩。
+3. 删除不再使用的前端旧响应类型和旧请求路径；引擎模块仍依赖的原生字段类型继续保留，不以统一外壳为由直接删除。
 4. 更新 `docs/USER_GUIDE.md` 第 7 节的能力对照、`docs/SESSION_COLLABORATION.md`、`README.md` 的仓库结构。
 
 **验收**
@@ -569,3 +569,5 @@ internal/store/session_driver_collaboration.go:319:	if t.Engine == "codex" {
 - 2026-11-15，用户授权的独立测试同步修正，Codex：AppSession只新增waitFor导入，并等待WebSocket.closed变为true后断言，未修改产品代码或放宽超时。定向6项通过；临时阻止WebSocket关闭时该用例仍按预期失败，反向探测文件已删除。完整Vitest 68文件478项全部通过（142.42秒），前端构建/体积护栏20.39秒、typecheck13.28秒通过。此改动单独提交；此前等待授权的事项已解除，继续P2-07和M4验收收尾。Go/Store/浏览器产品源码与df004c4相同，沿用已通过的对应验收，不重复运行无关重任务。
 
 - 2026-11-15，P2-07验收关闭，Codex：定时任务迁移91404fa、服务器引擎迁移df004c4及心跳特性测试54c15f2均完成。独立AppSession测试修正f9bf855后，通用验收全部通过；SQLite/PostgreSQL结构与数据迁移、调度/新旧HTTP契约、协作并发及race、真实备份隔离恢复与逐字段比对、重复启动、降级拒绝、真实三引擎浏览器冒烟均通过，实际命令和结果见前述记录。总表改为已完成，验收GPT-6（Codex，自验）。未更改Agent依赖或版本，未推送、发布或部署。继续执行D8的P2-08必要性评估。
+
+- 2026-11-15，D8 / P2-08评估完成，Codex：P2-07前置已在a795faa关闭，按既定取消条件将P2-08标记已取消，证据和剩余原生兼容查询列于本步。统一会话服务、协作、调度及前端不再依赖物理线程合表；保留原子写入、原生附表及P2-07的应用级引用完整性约束。同步M4交付目标、数据设计与P2-10前置/清理范围，未改产品代码、未新增迁移。本次只做文档调整，验证链接、步骤依赖、表格列位与git diff --check，沿用已通过的实现验收，不重复构建测试。M4四项实现全部完成，一项按D8取消；未启动M5。
