@@ -4,6 +4,8 @@
 
 ## 安装与兼容版本
 
+会话能力的版本门槛以 [`internal/session/capabilities_test.go`](../internal/session/capabilities_test.go) 的边界表为准；HTTP 同时返回 `capabilities` 和兼容旧客户端的 `*_supported` 字段。能力表示版本支持，在线状态与当前轮次是否就绪仍单独判断。
+
 SSH 注册/修复会安装最新正式版；已有服务器可在 **设置 → Gemini CLI 版本管理** 选择目标版本，再到 **服务器 → 管理 AI Agent** 安装。网页安装依赖 Node.js/npm，校验后才切换受管版本，失败保留旧选择。
 
 官方控制面镜像已内置 Gemini CLI，但当前 [Dockerfile](../deploy/controlplane.Dockerfile) 基线为 **0.65.0**，使用需要 0.66.0 的能力前须单独更新。Wio 控制面、目标 Agent 和 CLI 三者都应满足门槛。

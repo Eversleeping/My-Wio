@@ -11,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -241,22 +242,25 @@ var ErrThreadActive = errors.New("Codex session is active")
 var ErrInvalidEditTarget = errors.New("invalid Codex message edit target")
 
 type Thread struct {
-	ID              string     `db:"id" json:"id"`
-	WorkspaceID     string     `db:"workspace_id" json:"workspace_id"`
-	ProjectID       string     `db:"project_id" json:"project_id"`
-	CodexThreadID   string     `db:"codex_thread_id" json:"codex_thread_id"`
-	Title           string     `db:"title" json:"title"`
-	Status          string     `db:"status" json:"status"`
-	Path            string     `db:"path" json:"path"`
-	ServerID        string     `db:"server_id" json:"server_id"`
-	ServerName      string     `db:"server_name" json:"server_name"`
-	ProjectName     string     `db:"project_name" json:"project_name"`
-	PinnedAt        *time.Time `db:"pinned_at" json:"pinned_at"`
-	ArchivedAt      *time.Time `db:"archived_at" json:"archived_at"`
-	ProjectPinnedAt *time.Time `db:"project_pinned_at" json:"project_pinned_at"`
-	ProjectHiddenAt *time.Time `db:"project_hidden_at" json:"project_hidden_at"`
-	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
+	Capabilities    session.Capabilities `db:"-" json:"capabilities"`
+	AgentVersion    string               `db:"agent_version" json:"-"`
+	CLIVersion      string               `db:"codex_version" json:"-"`
+	ID              string               `db:"id" json:"id"`
+	WorkspaceID     string               `db:"workspace_id" json:"workspace_id"`
+	ProjectID       string               `db:"project_id" json:"project_id"`
+	CodexThreadID   string               `db:"codex_thread_id" json:"codex_thread_id"`
+	Title           string               `db:"title" json:"title"`
+	Status          string               `db:"status" json:"status"`
+	Path            string               `db:"path" json:"path"`
+	ServerID        string               `db:"server_id" json:"server_id"`
+	ServerName      string               `db:"server_name" json:"server_name"`
+	ProjectName     string               `db:"project_name" json:"project_name"`
+	PinnedAt        *time.Time           `db:"pinned_at" json:"pinned_at"`
+	ArchivedAt      *time.Time           `db:"archived_at" json:"archived_at"`
+	ProjectPinnedAt *time.Time           `db:"project_pinned_at" json:"project_pinned_at"`
+	ProjectHiddenAt *time.Time           `db:"project_hidden_at" json:"project_hidden_at"`
+	CreatedAt       time.Time            `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time            `db:"updated_at" json:"updated_at"`
 }
 
 // ThreadPage is a bounded window of Codex sessions. The API layer turns this
@@ -266,7 +270,7 @@ type ThreadPage struct {
 	HasMore bool
 }
 
-const codexThreadSelect = `SELECT t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,` + projectServerName + ` project_name,t.pinned_at,t.archived_at,` + projectServerPin + ` project_pinned_at,` + projectServerHidden + ` project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id` + projectServerJoin
+const codexThreadSelect = `SELECT s.agent_version,s.codex_version,t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,` + projectServerName + ` project_name,t.pinned_at,t.archived_at,` + projectServerPin + ` project_pinned_at,` + projectServerHidden + ` project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id` + projectServerJoin
 
 func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Thread, error) {
 	var out []Thread
@@ -281,6 +285,9 @@ func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Th
 		filter = ""
 	}
 	err := s.DB.SelectContext(ctx, &out, codexThreadSelect+filter+` ORDER BY CASE WHEN (`+projectServerPin+`) IS NULL THEN 1 ELSE 0 END,project_pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC`)
+	for i := range out {
+		out[i].setCapabilities()
+	}
 	return out, err
 }
 
@@ -305,6 +312,9 @@ func (s *Store) ListThreadsPage(ctx context.Context, archived string, limit, off
 	if err != nil {
 		return ThreadPage{}, err
 	}
+	for i := range items {
+		items[i].setCapabilities()
+	}
 	page := ThreadPage{Items: items}
 	if len(page.Items) > limit {
 		page.Items = page.Items[:limit]
@@ -316,6 +326,7 @@ func (s *Store) ListThreadsPage(ctx context.Context, archived string, limit, off
 func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
 	var out Thread
 	err := s.DB.GetContext(ctx, &out, s.Q(codexThreadSelect+` WHERE t.id=?`), id)
+	out.setCapabilities()
 	return out, err
 }
 
@@ -604,4 +615,8 @@ func (s *Store) CommitGitWorktree(ctx context.Context, command protocol.GitWorkt
 func (s *Store) SetThreadTitleIfDefault(ctx context.Context, id, title string) error {
 	_, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET title=?,updated_at=? WHERE id=? AND title='New session'"), title, time.Now().UTC(), id)
 	return err
+}
+
+func (thread *Thread) setCapabilities() {
+	thread.Capabilities = session.ResolveCapabilities(session.Codex, thread.AgentVersion, thread.CLIVersion)
 }

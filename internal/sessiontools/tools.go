@@ -4,18 +4,12 @@ package sessiontools
 import (
 	"context"
 	"encoding/json"
+	"github.com/wio-platform/wio/internal/session"
 	"strings"
 )
 
-type Ref struct {
-	Engine string `json:"engine"`
-	ID     string `json:"id"`
-}
-
-func (r Ref) Valid() bool {
-	return (r.Engine == "codex" || r.Engine == "claude" || r.Engine == "gemini") && r.ID != ""
-}
-func (r Ref) Key() string { return r.Engine + ":" + r.ID }
+// Ref is retained for source and wire compatibility with collaboration callers.
+type Ref = session.Ref
 
 type Call struct {
 	ID          string          `json:"id"`

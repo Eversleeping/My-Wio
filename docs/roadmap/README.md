@@ -197,8 +197,8 @@ npm --prefix web run typecheck
 | P1-02 | 迁移运行器与 `schema_migrations` | M | P1-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 962262e |
 | P1-03 | 降级保护 | S | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 24cd12c |
 | P1-04 | 迁移编写规范与升级文档 | S | P1-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | d89ca2a |
-| P2-01 | 引擎行为盘点与契约测试 | M | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（见执行记录） |
-| P2-02 | `internal/session` 包与统一能力解析 | M | P2-01 | 待开始 | |  | |
+| P2-01 | 引擎行为盘点与契约测试 | M | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | ed2e491 |
+| P2-02 | `internal/session` 包与统一能力解析 | M | P2-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 本步骤提交（见执行记录） |
 | P2-03 | 合并近乎相同的处理器 | S | P2-02、P3-02 | 待开始 | |  | |
 | P2-04 | 统一读模型与控制面驱动接口 | L | P2-02、P0-07 | 待开始 | |  | |
 | P2-05 | 统一 HTTP 路由 | L | P2-04、P3-01 | 待开始 | |  | |

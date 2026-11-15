@@ -26,6 +26,8 @@ Agent 将配置保存在受保护的状态文件，启动模型进程时注入 `
 
 ## 兼容版本
 
+会话能力的版本门槛以 [`internal/session/capabilities_test.go`](../internal/session/capabilities_test.go) 的边界表为准；HTTP 同时返回 `capabilities` 和兼容旧客户端的 `*_supported` 字段。能力表示版本支持，在线状态与当前轮次是否就绪仍单独判断。
+
 | 能力 | 最低 Wio Agent | CLI 要求 |
 | --- | --- | --- |
 | 基础 Claude 会话 | 0.2.90 | 可用的 Claude Code CLI |

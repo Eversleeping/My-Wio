@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type ClaudeThread struct {
-	ModelCredentialRevision string `db:"model_credential_revision" json:"model_credential_revision"`
+	Capabilities            session.Capabilities `db:"-" json:"capabilities"`
+	ModelCredentialRevision string               `db:"model_credential_revision" json:"model_credential_revision"`
 
 	QuestionsSupported bool       `db:"-" json:"questions_supported"`
 	RewriteSupported   bool       `db:"-" json:"rewrite_supported"`
@@ -64,12 +65,12 @@ func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThrea
 	threads := []ClaudeThread{}
 	err := s.DB.SelectContext(ctx, &threads, s.Q(claudeThreadSelect+" WHERE s.revoked_at IS NULL AND "+condition+" ORDER BY CASE WHEN cm.pinned_at IS NULL THEN 1 ELSE 0 END,cm.pinned_at DESC,t.updated_at DESC LIMIT 200"), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	for i := range threads {
-		threads[i].RewriteSupported = buildinfo.SupportsClaudeRewrite(threads[i].AgentVersion)
 		threads[i].setSteerCapability()
-		threads[i].QuestionsSupported = buildinfo.SupportsClaudeQuestions(threads[i].AgentVersion, threads[i].ClaudeVersion)
-		threads[i].EffortSupported = buildinfo.SupportsClaudeEffort(threads[i].AgentVersion)
-		threads[i].SkillsSupported = buildinfo.SupportsClaudeSkills(threads[i].AgentVersion)
-		threads[i].InputSupported = buildinfo.SupportsClaudeInput(threads[i].AgentVersion)
+		threads[i].RewriteSupported = threads[i].Capabilities.Rewrite
+		threads[i].QuestionsSupported = threads[i].Capabilities.Questions
+		threads[i].EffortSupported = threads[i].Capabilities.Effort
+		threads[i].SkillsSupported = threads[i].Capabilities.Skills
+		threads[i].InputSupported = threads[i].Capabilities.Images
 	}
 	return threads, err
 }
@@ -78,11 +79,11 @@ func (s *Store) ClaudeThread(ctx context.Context, id string) (ClaudeThread, erro
 	var thread ClaudeThread
 	err := s.DB.GetContext(ctx, &thread, s.Q(claudeThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	thread.setSteerCapability()
-	thread.QuestionsSupported = buildinfo.SupportsClaudeQuestions(thread.AgentVersion, thread.ClaudeVersion)
-	thread.RewriteSupported = buildinfo.SupportsClaudeRewrite(thread.AgentVersion)
-	thread.EffortSupported = buildinfo.SupportsClaudeEffort(thread.AgentVersion)
-	thread.SkillsSupported = buildinfo.SupportsClaudeSkills(thread.AgentVersion)
-	thread.InputSupported = buildinfo.SupportsClaudeInput(thread.AgentVersion)
+	thread.QuestionsSupported = thread.Capabilities.Questions
+	thread.RewriteSupported = thread.Capabilities.Rewrite
+	thread.EffortSupported = thread.Capabilities.Effort
+	thread.SkillsSupported = thread.Capabilities.Skills
+	thread.InputSupported = thread.Capabilities.Images
 	return thread, err
 }
 
@@ -363,10 +364,15 @@ func (s *Store) UnfinishedClaudeOperations(ctx context.Context, serverID string)
 }
 
 func (thread *ClaudeThread) setSteerCapability() {
-	thread.SteerSupported = buildinfo.SupportsClaudeSteering(thread.AgentVersion, thread.ClaudeVersion)
+	thread.setCapabilities()
+	thread.SteerSupported = thread.Capabilities.Steer
 	var state struct {
 		OperationID string `json:"operation_id"`
 		Ready       bool   `json:"ready"`
 	}
 	thread.SteerReady = thread.SteerSupported && thread.Status == "running" && json.Unmarshal([]byte(thread.SteerState), &state) == nil && state.OperationID == thread.OperationID && state.Ready
+}
+
+func (thread *ClaudeThread) setCapabilities() {
+	thread.Capabilities = session.ResolveCapabilities(session.Claude, thread.AgentVersion, thread.ClaudeVersion)
 }

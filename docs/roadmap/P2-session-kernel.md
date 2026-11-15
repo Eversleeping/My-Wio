@@ -455,3 +455,8 @@ CREATE TABLE ai_sessions (
 - 2026-11-15，M3 / P2-01，Codex：从 `be2c2d1` 干净工作区领取；先盘点并锁定旧路由契约。本轮逐任务自动本地提交授权见总览。
 
 - 2026-11-15，P2-01，Codex：完成行为/版本/物理列盘点和显式错误索引（`P2-engine-contracts.md`）；新增真实认证路由的三引擎表驱动契约，覆盖创建/详情/更新/列表、轮次入队与完成、写锁、重发、追加、队列取消、确认停止、归档/删除、事件游标、用量、两类分叉；保存六份逐字段响应快照。36 个矩阵用例，Codex 不支持确认停止明确跳过。未改产品代码，偶然差异登记总览。`npm --prefix web run build`、`go vet ./...`、`go test ./...`（199.65 秒）、`npm --prefix web test`（451 项）、`npm --prefix web run typecheck`、Go 双入口构建、格式、差异检查与路线图本地链接检查均通过；无需 PostgreSQL/页面 E2E（未改 Store 或交互）。按授权本地提交，随后继续 P2-02。
+
+- 2026-11-15，P2-02 开工修订：`Engine` 采用 string 类型别名并定义三个常量，保持现有协作构造器给 Ref.Engine 传普通 string 的源码兼容性。能力对象区分完整续聊 `fork` 和消息边界 `fork_messages`，增加现有 Gemini thinking/yolo 与协作版本能力；它只表达版本支持，不代表在线、已初始化或运行中就绪。边界测试覆盖会话相关门槛；自更新、部署回滚等非会话门槛继续由 buildinfo 原有测试覆盖。
+
+- 2026-11-15，P2-02，Codex：新增不依赖 Store 的 `internal/session` 契约包；Ref 迁为别名，统一 20 个能力位及版本解析。三种线程读取增加 capabilities；Gemini/Claude 旧 Supported 字段全部从同一结果赋值，动态 ready 判定不变；Codex 只多查版本列（不公开）以解析能力。新增 Ref 线上格式、全部会话版本边界（含 CLI 双门槛、无效版本和描述后缀）、高版本引擎能力形状，以及详情/列表的旧字段与新对象一致性测试；更新兼容版本文档。`go list -deps ./cmd/agent` 确认 session/sessiontools 为 Agent 依赖，同步版本 0.3.19。
+  - 验收：前端构建、go vet、全部 Go 测试（275.92 秒）、PostgreSQL（26.76 秒）、前端类型检查、双入口构建、fmt/diff、staticcheck 与 version-check 均通过；旧路由 36 项矩阵保持通过。首次 Vitest 为 450 通过/1 失败，失败为总览已登记的 AppSession WebSocket 清理时序断言；源码不变的文件复验 6 项通过，完整复验 451 项通过。未改页面交互，不要求额外 E2E。本地提交后继续 P2-03。
