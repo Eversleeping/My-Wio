@@ -160,7 +160,7 @@ export default function App() {
           <div><p className="eyebrow">{t("app.controlPlane")}</p><h1>{t(navigation.find(item => item.id === view)?.labelKey ?? "nav.overview")}</h1></div>
           <div className="topbar-actions"><ThemeSwitch /><LanguageSwitch /><span className={`connection ${socketConnected ? "" : "offline"}`} role="status" aria-live="polite">{socketConnected ? <Wifi size={15} /> : <WifiOff size={15} />} {t(socketConnected ? "app.live" : "app.reconnecting")}</span>{(approvals.data?.length ?? 0) > 0 && <button className="approval-pill" onClick={() => { selectView("codex"); setApprovalSignal(value => value + 1); }}><ShieldCheck size={15} />{t("codex.approvalCount", { count: approvals.data?.length ?? 0 })}</button>}</div>
         </header>
-        <div className="page-content"><DataProvider revisions={realtimeRevisions}>{page}</DataProvider></div>
+        <div className="page-content"><DataProvider revisions={realtimeRevisions} connected={socketConnected}>{page}</DataProvider></div>
       </main>
       {toast && <div className="toast" role="status" aria-live="polite"><Check size={17} />{toast}</div>}
     </div>

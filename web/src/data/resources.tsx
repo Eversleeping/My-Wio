@@ -1,3 +1,4 @@
+import { RealtimeFallback } from "./RealtimeFallback";
 import { createContext, useContext, useSyncExternalStore, type ReactNode } from "react";
 import type { RealtimeRevisions, RealtimeScope } from "../realtime/scopes";
 import { api, type APIOptions } from "./api";
@@ -12,7 +13,7 @@ const Revisions = createContext<Partial<RealtimeRevisions>>({});
 const localRevisions = new Map<RealtimeScope, number>();
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
-export function DataProvider({ revisions, children }: { revisions: Partial<RealtimeRevisions>; children: ReactNode }) { return <Revisions.Provider value={revisions}>{children}</Revisions.Provider>; }
+export function DataProvider({ revisions, connected = true, children }: { revisions: Partial<RealtimeRevisions>; connected?: boolean; children: ReactNode }) { return <Revisions.Provider value={revisions}><RealtimeFallback connected={connected}>{children}</RealtimeFallback></Revisions.Provider>; }
 
 export function invalidateResources(scopes: readonly RealtimeScope[]) {
   for (const scope of new Set(scopes)) localRevisions.set(scope, (localRevisions.get(scope) ?? 0) + 1);

@@ -1,3 +1,4 @@
+import { useFallbackRefresh } from "./RealtimeFallback";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { acquireDataRequest } from "./requests";
 
@@ -34,6 +35,7 @@ export function useData<T>(path: string | null, dependency: unknown, cache = fal
   const [settledPath, setSettledPath] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion(value => value + 1), []);
+  useFallbackRefresh(reload, Boolean(path));
   const request = useRef<((dependency: unknown, force: boolean) => void) | null>(null);
 
   useEffect(() => {
