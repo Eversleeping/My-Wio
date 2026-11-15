@@ -60,9 +60,10 @@ function setup(selected = false, model = "auto", upstreamState = "configured", e
   }));
   const onSelectThread = vi.fn();
   const notify = vi.fn();
-  const page = <I18nProvider><GeminiPage realtime={0} notify={notify} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
-  const view = render(options.strictMode ? <StrictMode>{page}</StrictMode> : page);
-  return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread,notify,unmount:view.unmount};
+  let realtime = 0;
+  const page = () => <I18nProvider><GeminiPage realtime={realtime} notify={notify} selectedThreadID={selected ? thread.id : ""} onSelectThread={onSelectThread} /></I18nProvider>;
+  const view = render(options.strictMode ? <StrictMode>{page()}</StrictMode> : page());
+  return {user:userEvent.setup(),requests,modelRequests,onSelectThread,currentThread,notify,unmount:view.unmount,refresh:()=>{ realtime++; view.rerender(options.strictMode ? <StrictMode>{page()}</StrictMode> : page()); }};
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
@@ -918,4 +919,14 @@ test("keeps project-wide archive on the project API when session actions use uni
   const dialog = screen.getByRole("dialog", {name: "Archive all project tasks"});
   await user.click(within(dialog).getByRole("button", {name: "Archive all project tasks"}));
   await waitFor(() => expect(requests).toContainEqual({url: "/api/projects/project-1/gemini/threads/archive?server_id=server-1", body: {}}));
+});
+
+
+test("receives new Gemini history through the page realtime revision", async () => {
+  const events: unknown[] = [];
+  const {refresh} = setup(true, "auto", "configured", events);
+  await screen.findByRole("textbox", {name: "Ask Gemini to work on this project…"});
+  events.push({event_id: "live-reply", stream_id: "thread-1", sequence: 1, kind: "gemini.message", occurred_at: thread.updated_at, payload: {role: "assistant", content: "Realtime Gemini reply"}});
+  refresh();
+  expect(await screen.findByText("Realtime Gemini reply")).toBeInTheDocument();
 });
