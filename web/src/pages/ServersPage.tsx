@@ -1,3 +1,6 @@
+import { servers as serverEndpoints } from "../data/servers";
+import { settings } from "../data/settings";
+import { useResource } from "../data/resources";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import {
   AlertTriangle,
@@ -25,7 +28,7 @@ import {
   Wrench,
   X
 } from "lucide-react";
-import { api, APIError, patch, post, postStream, remove } from "../api";
+import { APIError } from "../data/api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ServerCredentialDialog } from "../components/ServerCredentialDialog";
 import { ServerCLIManager } from "../components/ServerCLIManager";
@@ -38,7 +41,6 @@ import type { CredentialProfile, Server, SSHBootstrapResult, SSHBootstrapStreamE
 import { useData } from "../useData";
 
 export interface ServersPageProps {
-  realtime: number;
   notify: (text: string) => void;
 }
 
@@ -54,10 +56,10 @@ type ServerConfirmation =
   | { type: "force-revoke"; server: Server }
   | { type: "agent-update"; server: Server };
 
-export function ServersPage({ realtime, notify }: ServersPageProps) {
+export function ServersPage({ notify }: ServersPageProps) {
   const { t } = useI18n();
-  const servers = useData<Server[]>("/servers", realtime);
-  const credentialProfiles = useData<CredentialProfile[]>("/credential-profiles", realtime);
+  const servers = useResource(serverEndpoints.list());
+  const credentialProfiles = useResource(settings.profiles());
   const codexProfiles = (credentialProfiles.data ?? []).filter(profile => profile.kind === "codex");
   const gitProfiles = (credentialProfiles.data ?? []).filter(profile => profile.kind === "git");
   const [dialog, setDialog] = useState(false);
@@ -107,7 +109,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     if (!result || busy) return;
     setBusy(true);
     try {
-      const server = (await api<Server[]>("/servers")).find(item => item.id === result.server_id);
+      const server = (await serverEndpoints.read()).find(item => item.id === result.server_id);
       if (server) repair(server);
       else throw new Error(t("server.error.server_not_found"));
     } catch (failure) { notify(enrollmentMessage(failure, t)); }
@@ -117,7 +119,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     event.preventDefault();
     setBusy(true); setError("");
     try {
-      setHostKey(await post<SSHHostKey>("/servers/ssh/probe", { host: form.host.trim(), port: Number(form.port) }));
+      setHostKey(await serverEndpoints.probe( { host: form.host.trim(), port: Number(form.port) }));
       setStep("fingerprint");
     } catch (err) { setError(enrollmentMessage(err, t)); } finally { setBusy(false); }
   };
@@ -127,8 +129,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     try {
       let installed: SSHBootstrapResult | null = null;
       let streamedFailure: APIError | null = null;
-      const installPath = repairingServer ? `/servers/${repairingServer.id}/ssh/repair-stream` : "/servers/ssh/bootstrap-stream";
-      await postStream<SSHBootstrapStreamEvent>(installPath, {
+      await serverEndpoints.install(repairingServer?.id, {
         name: form.name.trim(), scan_roots: form.roots.split(",").map(value => value.trim()).filter(Boolean),
         host: form.host.trim(), port: Number(form.port), user: form.user.trim(), auth_method: form.authMethod,
         password: form.authMethod === "password" ? form.password : "",
@@ -154,7 +155,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
       });
       if (streamedFailure) throw streamedFailure;
       if (!installed) throw new APIError(502, t("server.error.stream_incomplete"), "stream_incomplete");
-      setResult(installed); setStep("complete"); servers.reload(); notify(t(repairingServer ? "server.repaired" : "server.installed"));
+      setResult(installed); setStep("complete"); notify(t(repairingServer ? "server.repaired" : "server.installed"));
       setForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "" }));
     } catch (err) { setError(enrollmentMessage(err, t)); } finally { setBusy(false); }
   };
@@ -178,7 +179,7 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     if (!retiringServer || retireForm.confirmation !== retiringServer.name) return;
     setRetireBusy(true); setRetireError("");
     try {
-      setRetireHostKey(await post<SSHHostKey>("/servers/ssh/probe", { host: retireForm.host.trim(), port: Number(retireForm.port) }));
+      setRetireHostKey(await serverEndpoints.probe( { host: retireForm.host.trim(), port: Number(retireForm.port) }));
       setRetireStep("fingerprint");
     } catch (err) { setRetireError(enrollmentMessage(err, t)); } finally { setRetireBusy(false); }
   };
@@ -186,14 +187,14 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     if (!retiringServer || !retireHostKey || retireForm.confirmation !== retiringServer.name) return;
     setRetireBusy(true); setRetireError("");
     try {
-      await post(`/servers/${retiringServer.id}/ssh/uninstall`, {
+      await serverEndpoints.uninstall(retiringServer.id, {
         host: retireForm.host.trim(), port: Number(retireForm.port), user: retireForm.user.trim(), auth_method: retireForm.authMethod,
         password: retireForm.authMethod === "password" ? retireForm.password : "",
         private_key: retireForm.authMethod === "private_key" ? retireForm.privateKey : "",
         private_key_passphrase: retireForm.authMethod === "private_key" ? retireForm.privateKeyPassphrase : "",
         host_key_fingerprint: retireHostKey.fingerprint, confirmation: retireForm.confirmation
       });
-      setRetiringServer(null); setRetireHostKey(null); servers.reload(); notify(t("server.retired"));
+      setRetiringServer(null); setRetireHostKey(null); notify(t("server.retired"));
       setRetireForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" }));
     } catch (err) { setRetireError(enrollmentMessage(err, t)); } finally { setRetireBusy(false); }
   };
@@ -202,8 +203,8 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     if (!retiringServer || !target || target.id !== retiringServer.id || retireForm.confirmation !== retiringServer.name) return;
     setRetireBusy(true); setRetireError("");
     try {
-      await remove(`/servers/${target.id}`);
-      setServerConfirmation(null); setServerConfirmationError(""); setRetiringServer(null); servers.reload(); notify(t("server.revoked"));
+      await serverEndpoints.revoke(target.id);
+      setServerConfirmation(null); setServerConfirmationError(""); setRetiringServer(null); notify(t("server.revoked"));
       setRetireForm(current => ({ ...current, password: "", privateKey: "", privateKeyPassphrase: "", confirmation: "" }));
     } catch (err) { const detail = message(err); setRetireError(detail); setServerConfirmationError(detail); } finally { setRetireBusy(false); }
   };
@@ -222,15 +223,15 @@ export function ServersPage({ realtime, notify }: ServersPageProps) {
     if (!editingServer) return;
     setMetadataBusy(true); setMetadataError("");
     try {
-      await patch(`/servers/${editingServer.id}`, metadataForm);
-      setEditingServer(null); servers.reload(); notify(t("server.informationSaved"));
+      await serverEndpoints.update(editingServer.id, metadataForm);
+      setEditingServer(null); notify(t("server.informationSaved"));
     } catch (err) { setMetadataError(message(err)); } finally { setMetadataBusy(false); }
   };
   const updateAgent = async (server: Server) => {
     if (!server.agent_update_available || serverConfirmation?.type !== "agent-update" || serverConfirmation.server.id !== server.id) return;
     setUpdatingServer(`agent:${server.id}`);
     try {
-      await post(`/servers/${server.id}/agent-update`, {});
+      await serverEndpoints.updateAgent(server.id);
       setServerConfirmation(null); setServerConfirmationError("");
       notify(t("server.updateQueued", { version: server.agent_target_version }));
     } catch (err) { const detail = message(err); setServerConfirmationError(detail); notify(detail); } finally { setUpdatingServer(""); }

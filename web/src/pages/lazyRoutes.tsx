@@ -6,8 +6,8 @@ const ServersPageRoute = lazy(() => import("./ServersPage"));
 
 export const CodexPageRoute = lazy(() => import("../sessions/engines/codex"));
 
-export function ServersPage({ realtime, notify }: PageProps) {
-  return <Suspense fallback={<PageLoading />}><ServersPageRoute realtime={realtime} notify={notify} /></Suspense>;
+export function ServersPage({ notify }: Pick<PageProps, "notify">) {
+  return <Suspense fallback={<PageLoading />}><ServersPageRoute notify={notify} /></Suspense>;
 }
 
 export function CodexPage(props: CodexPageProps) {

@@ -5,7 +5,7 @@ import App from "./App";
 import { I18nProvider } from "./i18n";
 
 vi.mock("./pages/DashboardPage", async () => { const {useResourceRevision} = await import("./data/resources"); return { default: () => <div data-testid="dashboard">{useResourceRevision(["dashboard"]).split("|")[0]}</div> }; });
-vi.mock("./pages/ServersPage", () => ({ default: ({ realtime }: { realtime: number }) => <div data-testid="servers">{realtime}</div> }));
+vi.mock("./pages/ServersPage", async () => { const {useResourceRevision} = await import("./data/resources"); return { default: () => <div data-testid="servers">{useResourceRevision(["servers"]).split("|")[0]}</div> }; });
 vi.mock("./sessions/engines/codex", () => ({ default: ({ selectedThreadID }: { selectedThreadID: string }) => <div data-testid="codex">{selectedThreadID}</div> }));
 
 class Socket {

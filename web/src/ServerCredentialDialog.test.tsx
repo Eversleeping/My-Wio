@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -22,7 +23,7 @@ function setup(result = "success", supported = true, geminiOnly = false, options
     if (url === "/api/operations/apply-1") return response({id:"apply-1",status:result === "failed" ? "failed" : result === "pending" ? "running" : "succeeded",result:result === "failed" ? "Gemini configuration failed" : result === "pending" ? "" : "Gemini credentials configured"});
     return response([]);
   }));
-  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   return {user:userEvent.setup(),requests};
 }
 afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });

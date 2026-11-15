@@ -1,3 +1,4 @@
+import { DataProvider } from "./data/resources";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -38,7 +39,7 @@ afterEach(() => {
 test("displays the Codex version without the CLI prefix", async () => {
   window.localStorage.setItem("wio_language", "en");
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === "/api/servers" ? [{ ...server, codex_version: "codex-cli 0.165.0" }] : []))));
-  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   expect(await screen.findByText("0.165.0")).toBeInTheDocument();
   expect(screen.queryByText("codex-cli 0.165.0")).not.toBeInTheDocument();
 });
@@ -53,7 +54,7 @@ test("enrolls a pre-authorized SSH command through the existing fingerprint flow
     const data = url.endsWith("/ssh/probe") ? { fingerprint: "SHA256:test", key_type: "ssh-ed25519" } : url === "/api/servers" ? [server] : url === "/api/credential-profiles" ? [{ id: "codex", kind: "codex", name: "Codex", model: "gpt-6.1-sol" }] : [];
     return new Response(JSON.stringify(data));
   }));
-  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
   const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
@@ -83,7 +84,7 @@ test("keeps manual credentials and fields editable and leaves them untouched whe
     if (init.method === "POST") posts.push(String(input));
     return new Response("[]");
   }));
-  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
   const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
@@ -129,7 +130,7 @@ test("shows automatic dependency setup and retries an incomplete enrollment as S
     return new Response(JSON.stringify(payload), { status: 200 });
   }));
   const user = userEvent.setup();
-  render(<I18nProvider><ServersPage realtime={0} notify={vi.fn()} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
   const form = screen.getByRole("dialog", { name: "Enroll Linux server" });
   expect(within(form).getByText(/will be installed and checked automatically/)).toBeInTheDocument();
@@ -173,7 +174,7 @@ test("verifies the host fingerprint before completely retiring a server", async 
   }));
 
   const user = userEvent.setup();
-  render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={notify} /></DataProvider></I18nProvider>);
   await user.click(await screen.findByRole("button", { name: "Retire server" }));
 
   let dialog = screen.getByRole("dialog", { name: "Retire retire-node" });
@@ -224,7 +225,7 @@ test("uses a managed confirmation before force revoking a server record", async 
   }));
 
   const user = userEvent.setup();
-  render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={notify} /></DataProvider></I18nProvider>);
   await user.click(await screen.findByRole("button", { name: "Retire server" }));
   const retirement = screen.getByRole("dialog", { name: "Retire retire-node" });
   await user.type(within(retirement).getByRole("textbox", { name: "Type retire-node to confirm" }), server.name);
@@ -256,7 +257,7 @@ test("locks the Agent update confirmation while it is being queued", async () =>
   }));
 
   const user = userEvent.setup();
-  render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={notify} /></DataProvider></I18nProvider>);
   await user.click(await screen.findByTitle("Update Agent to 0.3.0"));
   const confirmation = await screen.findByRole("dialog", { name: "Update Agent to 0.3.0" });
   expect(within(confirmation).getByText("Update Agent on retire-node to 0.3.0?")).toBeInTheDocument();
@@ -293,7 +294,7 @@ test("manages Codex updates through the shared AI Agent dialog and keeps failure
     return new Response(JSON.stringify(body),{status,headers:{"Content-Type":"application/json"}});
   }));
   const user = userEvent.setup();
-  render(<I18nProvider><ServersPage realtime={0} notify={notify} /></I18nProvider>);
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={notify} /></DataProvider></I18nProvider>);
   const manager = await screen.findByTitle("Manage AI Agents");
   expect(screen.getByText("Gemini Studio")).toBeInTheDocument();
   expect(screen.queryByText("Gemini · Gemini Studio")).not.toBeInTheDocument();
