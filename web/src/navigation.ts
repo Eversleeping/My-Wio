@@ -23,13 +23,21 @@ export const navigation: Array<{ id: View; labelKey: string; icon: typeof Layout
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];
 
-export function readLocationState(): { view: View; threadID: string; engine?: Engine; initialFilter?: Engine } {
+export type SessionEntry = { workspaceID: string; create: boolean };
+
+export function workspaceSessionsLocation(workspaceID: string, create = false) {
+  const params = new URLSearchParams({view:"sessions",workspace:workspaceID});
+  if (create) params.set("create", "1");
+  return `${window.location.pathname}?${params}${window.location.hash}`;
+}
+
+export function readLocationState(): { view: View; threadID: string; engine?: Engine; initialFilter?: Engine; entry?: SessionEntry } {
   const params = new URLSearchParams(window.location.search);
   const requestedView = params.get("view");
   if (isEngine(requestedView)) return { view: "sessions", engine: requestedView, threadID: params.get("thread") ?? "", ...(!params.get("thread") ? { initialFilter: requestedView } : {}) };
   const view = navigation.some(item => item.id === requestedView) ? requestedView as View : "dashboard";
   const engine = params.get("engine");
-  if (view === "sessions") return { view, engine: isEngine(engine) ? engine : undefined, threadID: isEngine(engine) ? params.get("thread") ?? "" : "" };
+  if (view === "sessions") return { view, ...(params.get("workspace") ? {entry:{workspaceID:params.get("workspace")!,create:params.get("create")==="1"}} : {}), engine: isEngine(engine) ? engine : undefined, threadID: isEngine(engine) ? params.get("thread") ?? "" : "" };
   return { view, threadID: "" };
 }
 

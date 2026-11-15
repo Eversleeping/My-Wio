@@ -39,6 +39,7 @@ export default function App() {
   const [view, setView] = useState<View>(initialLocation.view);
   const [sessionThreadID, setSessionThreadID] = useState(initialLocation.threadID);
   const [sessionEngine, setSessionEngine] = useState(initialLocation.engine);
+  const [sessionEntry, setSessionEntry] = useState(initialLocation.entry);
   const [initialFilter, setInitialFilter] = useState(() => initialLocation.initialFilter ? {engine: initialLocation.initialFilter} : undefined);
   const [mobileNav, setMobileNav] = useState(false);
   const { realtimeRevisions, streamRevisions, socketConnected, subscribe } = useRealtime(auth === "authenticated");
@@ -102,6 +103,7 @@ export default function App() {
       setView(location.view);
       setSessionThreadID(location.threadID);
       setSessionEngine(location.engine);
+      setSessionEntry(location.entry);
       setInitialFilter(location.initialFilter ? {engine:location.initialFilter} : undefined);
       if (isEngine(new URLSearchParams(window.location.search).get("view"))) navigateToLocation(location.view, location.threadID, true, location.engine);
       setMobileNav(false);
@@ -126,7 +128,7 @@ export default function App() {
   };
   const selectView = (next: View, threadID = "", replace = false) => {
     const nextThreadID = next === "sessions" ? threadID : "";
-    setSessionEngine(undefined); setInitialFilter(undefined);
+    setSessionEngine(undefined); setInitialFilter(undefined); setSessionEntry(undefined);
     setView(next);
     setSessionThreadID(nextThreadID);
     setMobileNav(false);
@@ -140,7 +142,7 @@ export default function App() {
     dashboard: <Suspense fallback={<PageLoading />}><DashboardPage onNavigate={selectView} /></Suspense>,
     servers: <ServersPage notify={setToast} />,
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute notify={setToast} /></Suspense>,
-    sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage initialFilter={initialFilter} realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && sessionThreadID ? { engine: sessionEngine, id: sessionThreadID } : undefined} onSelect={selectSession} /></Suspense>,
+    sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage entry={sessionEntry} onEntryConsumed={() => navigateToLocation("sessions", sessionThreadID, true, sessionEngine)} initialFilter={initialFilter} realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && sessionThreadID ? { engine: sessionEngine, id: sessionThreadID } : undefined} onSelect={selectSession} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><OperationsPageRoute /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute /></Suspense>,

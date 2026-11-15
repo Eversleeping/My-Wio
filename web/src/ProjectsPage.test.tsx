@@ -74,3 +74,12 @@ test("keeps the workspace restore action available when restoration fails", asyn
   expect(requests).toEqual([{ url: "/api/projects/shared-project", body: { server_id: "server-b", hidden: false } }]);
   expect(notify).not.toHaveBeenCalledWith("Project restored");
 });
+
+test("links each workspace to unified viewing and creation", async () => {
+  setup();
+  await screen.findAllByRole("link",{name:"View sessions"});
+  for (const workspace of workspaces) {
+    expect(row(workspace.id).getByRole("link",{name:"View sessions"})).toHaveAttribute("href",`/?view=sessions&workspace=${workspace.id}`);
+    expect(row(workspace.id).getByRole("link",{name:"New session"})).toHaveAttribute("href",`/?view=sessions&workspace=${workspace.id}&create=1`);
+  }
+});

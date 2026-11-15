@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "vitest";
-import { locationFor, navigation, readLocationState } from "./navigation";
+import { locationFor, navigation, readLocationState, workspaceSessionsLocation } from "./navigation";
 afterEach(() => window.history.replaceState(null, "", "/"));
 for (const engine of ["codex", "gemini", "claude"] as const) {
   test(`keeps persisted ${engine} result/notification URLs compatible`, () => {
@@ -15,4 +15,10 @@ test("offers a single session navigation entry and preserves subpaths and fragme
   expect(navigation.map(item => item.id)).toEqual(["dashboard","servers","projects","sessions","deployments","operations","monitoring","settings"]);
   window.history.replaceState(null,"","/console?view=claude&thread=old#reply");
   expect(locationFor("sessions","old","claude")).toBe("/console?view=sessions&engine=claude&thread=old#reply");
+});
+
+test("encodes and reads a one-time project workspace intent", () => {
+  expect(workspaceSessionsLocation("w / one",true)).toBe("/?view=sessions&workspace=w+%2F+one&create=1");
+  window.history.replaceState(null,"",workspaceSessionsLocation("w / one",true));
+  expect(readLocationState().entry).toEqual({workspaceID:"w / one",create:true});
 });

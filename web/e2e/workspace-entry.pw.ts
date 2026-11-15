@@ -1,0 +1,35 @@
+import { expect, test } from "@playwright/test";
+import { assertMockApplication, installMockApplication } from "./support/mock-api";
+test.afterEach(({page}) => assertMockApplication(page));
+test("project workspace links locate its sessions and open unified creation once", async ({page}, testInfo) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror",error => pageErrors.push(error.message));
+  const workspace = {id:"empty-workspace",project_id:"project",server_id:"server",project_name:"Project",server_name:"Server",path:"/srv/empty-project",display_name:"Empty",status:"ready",management_mode:"managed",branch:"main"};
+  await installMockApplication(page,{configured:true,onAPIRequest:request => {
+    if (request.path === "/projects") return {body:[{id:"project",name:"Project",status:"ready",workspace_count:1,remote_url:"",updated_at:"2026-11-16T00:00:00Z",import_status:"",import_message:"",provision_error:""}]};
+    if (request.path === "/workspaces") return {body:[workspace]};
+    if (request.path === "/servers") return {body:[{id:"server",name:"Server",status:"online"}]};
+    if (request.path === "/sessions") return {body:{items:[],next_cursor:null,groups:[]}};
+    if (request.path === `/workspaces/${workspace.id}/session-engines`) return {body:{engines:["codex","gemini","claude"].map(engine => ({engine,available:true}))}};
+    return undefined;
+  }});
+  await page.goto("/?view=projects");
+  const row = page.getByTitle(workspace.path).locator("xpath=ancestor::tr");
+  await row.getByRole("link",{name:"View sessions"}).click();
+  await expect(page).toHaveURL("/?view=sessions");
+  await expect(page.getByRole("searchbox")).toHaveValue(workspace.path);
+  await expect(page.getByRole("button",{name:/Project · Empty.*0/})).toBeFocused();
+  await expect(page.getByLabel("Engine",{exact:true})).toHaveValue("");
+  await page.goBack();
+  await row.getByRole("link",{name:"New session"}).click();
+  const dialog = page.getByRole("dialog",{name:"New session"});
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Workspace")).toHaveValue(workspace.id);
+  await expect(dialog.getByLabel("Engine",{exact:true})).toBeEnabled();
+  await expect(dialog.getByLabel("Engine",{exact:true}).locator("option")).toHaveText(["Codex","Gemini","Claude"]);
+  await page.screenshot({path:testInfo.outputPath("workspace-create.png"),fullPage:true});
+  await dialog.getByRole("button",{name:"Close",exact:true}).click();
+  await page.reload();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});

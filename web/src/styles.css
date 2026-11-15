@@ -2609,3 +2609,5 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .session-filters input[type="checkbox"] { width: auto; }
 .session-engine { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 3px; margin-right: 5px; }
 .session-engine-choices { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.thread-project-toggle.workspace-focused { box-shadow: inset 3px 0 var(--cyan, #22d3ee); }

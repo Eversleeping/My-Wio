@@ -14,7 +14,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (view: DashboardDest
   if (!summary.data) return <ErrorState error={summary.error} reload={summary.reload} />;
   const stats = [
     [t("nav.servers"), summary.data.counts.online, t("dashboard.registered", { count: summary.data.counts.servers }), ServerIcon, "green", "servers"],
-    [t("nav.projects"), summary.data.counts.projects, t("dashboard.codexSessions", { count: summary.data.counts.threads }), GitBranch, "cyan", "projects"],
+    [t("nav.projects"), summary.data.counts.projects, t("dashboard.sessions", { count: summary.data.counts.threads }), GitBranch, "cyan", "projects"],
     [t("dashboard.inProgress"), summary.data.counts.deployments, t("nav.deployments"), Rocket, "amber", "deployments"],
     [t("dashboard.openAlerts"), summary.data.counts.alerts, t("dashboard.requiresAttention"), BellRing, "red", "monitoring"]
   ] as const;

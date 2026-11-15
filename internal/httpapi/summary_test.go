@@ -23,7 +23,7 @@ func TestSummarySessionCount(t *testing.T) {
 	f.call("PATCH", f.path(""), `{"archived":true}`, 200)
 	result := f.call("GET", "/api/summary", "", 200)
 	counts, ok := result["counts"].(map[string]any)
-	if !ok || counts["threads"] != float64(1) {
+	if !ok || counts["threads"] != float64(6) {
 		t.Fatalf("counts: %#v", result)
 	}
 	for _, key := range []string{"servers", "online", "projects", "deployments", "alerts"} {

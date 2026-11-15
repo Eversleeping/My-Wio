@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { DataProvider } from "../data/resources";
 import { I18nProvider } from "../i18n";
-import { locationFor, readLocationState } from "../navigation";
+import { locationFor, readLocationState, type SessionEntry } from "../navigation";
 import type { SessionRef } from "./types";
 import { readUnifiedSidebarHeight } from "./SessionPage";
 import UnifiedSessionsPage from "./UnifiedSessionsPage";
@@ -16,7 +16,7 @@ vi.mock("../components/SessionCollaboration", () => ({ SessionCollaboration: () 
 vi.mock("../workspace/WorkspaceFilesPanel", () => ({ WorkspaceFilesPanel: () => null }));
 const workspace = { id: "w", project_id: "p", project_name: "Project", server_id: "s", server_name: "Server", path: "/srv/project", display_name: "Feature", status: "ready", management_mode: "managed" };
 const rows = ["codex", "gemini", "claude"].map((engine, index) => ({ id: "same", engine, native_id: `native-${engine}`, workspace_id: "w", project_id: "p", project_name: "Project", server_id: "s", server_name: "Server", server_status: "online", path: workspace.path, title: `${engine} title`, status: "idle", updated_at: `2026-11-15T00:00:0${index}Z`, archived_at: null, capabilities: {} }));
-function setup(initial?: SessionRef) {
+function setup(initial?: SessionRef, entry?: SessionEntry) {
   localStorage.setItem("wio_language", "en");
   const requests: { path: string; method: string; body: unknown }[] = [];
   const data = rows.map(row => ({ ...row }));
@@ -32,12 +32,13 @@ function setup(initial?: SessionRef) {
     else if (/^\/sessions\/[^/]+\/same$/.test(path)) body = data.find(row => path === `/sessions/${row.engine}/${row.id}`);
     return new Response(JSON.stringify(body ?? {}), { status: 200 });
   }));
+  const consumed = vi.fn();
   function Harness({ revision = 0 }) {
     const [selected, select] = useState(initial);
-    return <I18nProvider><DataProvider revisions={{ codex: revision }}><UnifiedSessionsPage realtime={0} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={() => undefined} notify={() => undefined} selected={selected} onSelect={ref => select(ref ?? undefined)} /></DataProvider></I18nProvider>;
+    return <I18nProvider><DataProvider revisions={{ codex: revision }}><UnifiedSessionsPage entry={entry} onEntryConsumed={consumed} realtime={0} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={() => undefined} notify={() => undefined} selected={selected} onSelect={ref => select(ref ?? undefined)} /></DataProvider></I18nProvider>;
   }
   const rendered = render(<Harness />);
-  return { user: userEvent.setup(), requests, data, rendered, refresh: () => rendered.rerender(<Harness revision={1} />) };
+  return { consumed, user: userEvent.setup(), requests, data, rendered, refresh: () => rendered.rerender(<Harness revision={1} />) };
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, "", "/"); });
 
@@ -132,4 +133,27 @@ test("collapses a workspace without losing its selected conversation", async () 
   expect(screen.getByText("Gemini conversation")).toBeInTheDocument();
   await user.click(group);
   expect(screen.getByText("gemini title")).toBeInTheDocument();
+});
+
+test("locates an empty workspace from a project link and consumes its intent once", async () => {
+  localStorage.setItem("wio_sessions_engine","claude");
+  const {consumed, requests, refresh} = setup(undefined,{workspaceID:"empty",create:false});
+  const group = await screen.findByRole("button",{name:/Project · Empty.*0/});
+  await waitFor(() => expect(group).toHaveFocus());
+  expect(screen.getByRole("searchbox")).toHaveValue("/srv/empty");
+  expect(screen.getByLabelText("Engine")).toHaveValue("");
+  expect(screen.getByLabelText("Show all workspaces")).toBeChecked();
+  await waitFor(() => expect(requests.some(request => request.path.includes("q=%2Fsrv%2Fempty"))).toBe(true));
+  refresh();
+  expect(consumed).toHaveBeenCalledTimes(1);
+});
+
+test("opens unified creation with the requested workspace and keeps focus inside the dialog", async () => {
+  const {consumed,user} = setup(undefined,{workspaceID:"empty",create:true});
+  const dialog = await screen.findByRole("dialog",{name:"New session"});
+  expect(within(dialog).getByLabelText("Workspace")).toHaveValue("empty");
+  expect(dialog.contains(document.activeElement)).toBe(true);
+  expect(consumed).toHaveBeenCalledTimes(1);
+  await user.click(within(dialog).getByRole("button",{name:"Close"}));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });

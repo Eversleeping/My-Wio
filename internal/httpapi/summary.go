@@ -12,7 +12,7 @@ func (a *API) summary(w http.ResponseWriter, r *http.Request) {
 		"servers":     "SELECT COUNT(*) FROM servers WHERE revoked_at IS NULL",
 		"online":      "SELECT COUNT(*) FROM servers WHERE revoked_at IS NULL AND status='online' AND last_seen_at>?",
 		"projects":    "SELECT COUNT(*) FROM projects",
-		"threads":     "SELECT COUNT(*) FROM codex_threads",
+		"threads":     "SELECT (SELECT COUNT(*) FROM codex_threads) + (SELECT COUNT(*) FROM gemini_threads) + (SELECT COUNT(*) FROM claude_threads)",
 		"deployments": "SELECT COUNT(*) FROM deployments WHERE status IN ('queued','preparing','running')",
 		"alerts":      "SELECT COUNT(*) FROM alerts WHERE status='open'",
 	}
