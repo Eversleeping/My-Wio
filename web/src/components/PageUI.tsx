@@ -30,3 +30,8 @@ export function ErrorState({ error, reload }: { error: string; reload: () => voi
   const { t } = useI18n();
   return <div className="error-state"><AlertTriangle size={25} /><strong>{t("error.load")}</strong><span>{error}</span><button className="secondary-button" onClick={reload}><RefreshCw size={16} />{t("common.retry")}</button></div>;
 }
+
+export function RefreshWarning({ error, reload }: { error: string; reload: () => void }) {
+  const { t } = useI18n();
+  return <div className="refresh-warning" role="status" title={error}><AlertTriangle size={14} /><span>{t("error.refresh")}</span><button type="button" className="secondary-button small" onClick={reload}>{t("common.retry")}</button></div>;
+}

@@ -65,5 +65,5 @@ export function useSessionList<T extends SessionSummary = AISession>(filter: Omi
       } finally { if (request === requestRef.current) setLoadingMore(false); }
     })();
   }, [firstPage.data, path]);
-  return { data: firstPage.data ? items : null, groups: firstPage.data?.groups ?? [], error: firstPage.error, loading: firstPage.loading, reload: firstPage.reload, hasMore: next !== null, loadingMore, loadError, loadMore };
+  return { data: firstPage.data ? items : null, groups: firstPage.data?.groups ?? [], error: firstPage.error, retrying: firstPage.retrying, loading: firstPage.loading, reload: firstPage.reload, hasMore: next !== null, loadingMore, loadError, loadMore };
 }

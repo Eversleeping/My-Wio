@@ -19,11 +19,13 @@ const workspace = { id: "w", project_id: "p", project_name: "Project", server_id
 const rows = ["codex", "gemini", "claude"].map((engine, index) => ({ id: "same", engine, native_id: `native-${engine}`, workspace_id: "w", project_id: "p", project_name: "Project", server_id: "s", server_name: "Server", server_status: "online", path: workspace.path, title: `${engine} title`, status: "idle", updated_at: `2026-11-15T00:00:0${index}Z`, archived_at: null, capabilities: {} }));
 function setup(initial?: SessionRef, entry?: SessionEntry, isolation?: SessionIsolationStatus) {
   localStorage.setItem("wio_language", "en");
+  const failures = new Map<string, number>();
   const requests: { path: string; method: string; body: unknown }[] = [];
   const data = rows.map(row => ({ ...row }));
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
     const parsed = new URL(url, "http://localhost"), path = parsed.pathname.replace(/^\/api/, "");
     requests.push({ path: path + parsed.search, method: init.method ?? "GET", body: init.body ? JSON.parse(String(init.body)) : null });
+    if (failures.get(path)) { failures.set(path, failures.get(path)! - 1); throw new TypeError("Failed to fetch"); }
     if (init.method === "PATCH") { const item = data.find(row => path === `/sessions/${row.engine}/${row.id}`); if (item) Object.assign(item, JSON.parse(String(init.body))); }
     if (init.method === "DELETE") { const index = data.findIndex(row => path === `/sessions/${row.engine}/${row.id}`); if (index >= 0) data.splice(index, 1); }
     let body: unknown = {};
@@ -39,7 +41,7 @@ function setup(initial?: SessionRef, entry?: SessionEntry, isolation?: SessionIs
     return <I18nProvider><DataProvider revisions={{ codex: revision }}><UnifiedSessionsPage entry={entry} onEntryConsumed={consumed} realtime={0} streamRevisions={{}} approvals={[]} approvalSignal={0} reloadApprovals={() => undefined} notify={() => undefined} selected={selected} onSelect={ref => select(ref ?? undefined)} /></DataProvider></I18nProvider>;
   }
   const rendered = render(<Harness />);
-  return { consumed, user: userEvent.setup(), requests, data, rendered, refresh: () => rendered.rerender(<Harness revision={1} />) };
+  return { failures, consumed, user: userEvent.setup(), requests, data, rendered, refresh: () => rendered.rerender(<Harness revision={1} />) };
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, "", "/"); });
 
@@ -186,4 +188,34 @@ test("collapses engine groups independently while keeping the selected conversat
   await user.click(screen.getByRole("button", { name: "Codex sessions" }));
   expect(screen.getByText("second codex")).toBeInTheDocument();
   expect(document.querySelectorAll(".thread.active")).toHaveLength(1);
+});
+
+
+test("keeps the session list and selected conversation usable when background reads fail", async () => {
+  const { failures, refresh, user } = setup({ engine: "codex", id: "same" });
+  await screen.findByText("codex title");
+  await screen.findByText("Codex conversation");
+  failures.set("/sessions", 1);
+  failures.set("/workspaces", 1);
+  refresh();
+  await screen.findAllByText("Refresh failed. Showing previous results; retrying automatically.");
+  expect(screen.queryByText("Unable to load data")).not.toBeInTheDocument();
+  expect(document.querySelector(".thread.active")).toHaveTextContent("codex title");
+  await user.click(screen.getByText("gemini title").closest("button")!);
+  await screen.findByText("Gemini conversation");
+  for (const button of screen.getAllByRole("button", { name: /^Retry$/ })) await user.click(button);
+  await waitFor(() => expect(screen.queryByText("Refresh failed. Showing previous results; retrying automatically.")).not.toBeInTheDocument());
+  expect(screen.getByText("claude title")).toBeInTheDocument();
+});
+
+test("does not show results from another filter when its first request fails", async () => {
+  const { failures, user } = setup();
+  await screen.findByText("codex title");
+  failures.set("/sessions", 1);
+  await user.selectOptions(screen.getByLabelText("Engine"), "gemini");
+  await screen.findByText("Failed to fetch");
+  expect(screen.queryByText("codex title")).not.toBeInTheDocument();
+  expect(screen.queryByText("Refresh failed. Showing previous results; retrying automatically.")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /^Retry$/ }));
+  await screen.findByText("gemini title");
 });

@@ -2,7 +2,7 @@ import { Archive, ArrowDownToLine, ChevronDown, ChevronRight, Folder, LoaderCirc
 import { useState } from "react";
 import { ContextMenu, type ContextMenuAction } from "../ContextMenu";
 import { HiddenProjectsButton } from "../components/HiddenProjectsButton";
-import { Empty, ErrorState } from "../components/PageUI";
+import { Empty, ErrorState, RefreshWarning } from "../components/PageUI";
 import { useI18n } from "../i18n";
 import { engines } from "./engineModules";
 import type { SessionGroup } from "./groups";
@@ -13,7 +13,7 @@ type Props<T extends SessionSummary> = {
   search: string; onSearch: (value: string) => void; revision: unknown;
   refresh: () => void; notify: (text: string) => void;
   focusWorkspaceID?: string; groups: SessionGroup<T>[]; selectedID?: string; selectedEngine?: Engine; controls?: React.ReactNode;
-  source: { data?: T[] | null; error: string; loading: boolean; reload: () => void; hasMore: boolean; loadingMore: boolean; loadError: string; loadMore: () => Promise<void> };
+  source: { data?: T[] | null; error: string; retrying?: boolean; loading: boolean; reload: () => void; hasMore: boolean; loadingMore: boolean; loadError: string; loadMore: () => Promise<void> };
   onNew: (workspaceID?: string) => void;
   groupActions: (group: SessionGroup<T>) => ContextMenuAction[];
   renderRow: (item: T) => React.ReactNode;
@@ -32,7 +32,7 @@ export function Sidebar<T extends SessionSummary>({ icon: Icon, archived, onArch
     </div></div>
     <input className="gemini-session-search" type="search" aria-label={t("gemini.searchSessions")} placeholder={t("gemini.searchSessions")} value={search} onChange={event => onSearch(event.target.value)} />
     {controls}
-    <div className="thread-items">{source.error ? <ErrorState error={source.error} reload={source.reload} /> : source.loading ? <p className="gemini-hint">{t("common.loading")}</p> : <>{groups.length ? groups.map(group => {
+    <div className="thread-items">{source.error && !(source.data != null && source.retrying) ? <ErrorState error={source.error} reload={source.reload} /> : source.loading ? <p className="gemini-hint">{t("common.loading")}</p> : <>{source.error && <RefreshWarning error={source.error} reload={source.reload} />}{groups.length ? groups.map(group => {
       const heading = <button id={`session-workspace-${group.id}`} type="button" className={`thread-project-toggle${focusWorkspaceID === group.id ? " workspace-focused" : ""}`} aria-expanded={!collapsed.has(group.id)} title={`${t(collapsed.has(group.id) ? "codex.expandWorkspace" : "codex.collapseWorkspace")} · ${group.serverName} · ${group.path}`} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next; })}>{collapsed.has(group.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<Folder size={15} /><strong><span>{group.name}</span><small>{group.serverName}</small></strong>{group.pinnedAt && <Pin className="pinned-icon" size={12} />}<span>{group.count}</span></button>;
       return <section className="thread-project" key={group.id}>
         <ContextMenu className="thread-project-heading" label={t("codex.workspaceMenu", { name: group.name })} actions={groupActions(group)}>{heading}</ContextMenu>

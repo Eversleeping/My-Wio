@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { APIError } from "./data/api";
 import { clearDataCacheMatching, useData } from "./useData";
 
 function requests() {
@@ -10,7 +11,7 @@ function requests() {
   return pending;
 }
 
-afterEach(() => { vi.unstubAllGlobals(); clearDataCacheMatching(() => true); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); clearDataCacheMatching(() => true); });
 
 test("renders a slow first response during an event burst and coalesces catch-up requests", async () => {
   const pending = requests();
@@ -103,4 +104,48 @@ test("cancels a shared request only after its last reader leaves and does not re
   await act(async () => pending[0].resolve(["abandoned"]));
   await act(async () => pending[1].resolve(["fresh"]));
   expect(replacement.result.current.data).toEqual(["fresh"]);
+});
+
+
+test("retains loaded data and retries transient failures without another realtime event", async () => {
+  vi.useFakeTimers();
+  const pending = requests();
+  const hook = renderHook(() => useData<string[]>("/retry", 0));
+  await act(async () => pending[0].resolve(["previous"]));
+  act(() => hook.result.current.reload());
+  await act(async () => pending[1].reject(new TypeError("Failed to fetch")));
+  expect(hook.result.current).toMatchObject({ data: ["previous"], error: "Failed to fetch", retrying: true, loading: false });
+  await act(async () => vi.advanceTimersByTime(5000));
+  expect(pending).toHaveLength(3);
+  await act(async () => pending[2].resolve(["recovered"]));
+  expect(hook.result.current).toMatchObject({ data: ["recovered"], error: "", retrying: false });
+  await act(async () => vi.advanceTimersByTime(15000));
+  expect(pending).toHaveLength(3);
+});
+
+test("recovers an initial server failure on reconnect and cancels retry after navigation", async () => {
+  vi.useFakeTimers();
+  const pending = requests();
+  const hook = renderHook(({ path }) => useData<string[]>(path, 0), { initialProps: { path: "/unavailable" } });
+  await act(async () => pending[0].reject(new APIError(503, "Unavailable")));
+  expect(hook.result.current).toMatchObject({ data: null, error: "Unavailable", retrying: true, loading: false });
+  act(() => window.dispatchEvent(new Event("online")));
+  expect(pending).toHaveLength(2);
+  hook.rerender({ path: "/new-filter" });
+  expect(pending[1].signal.aborted).toBe(true);
+  expect(hook.result.current).toMatchObject({ data: null, error: "", retrying: false });
+  await act(async () => pending[2].resolve([]));
+  await act(async () => vi.advanceTimersByTime(15000));
+  expect(pending).toHaveLength(3);
+});
+
+test.each([401, 403, 404])("does not automatically retry HTTP %s", async status => {
+  vi.useFakeTimers();
+  const pending = requests();
+  const hook = renderHook(() => useData("/denied", 0));
+  await act(async () => pending[0].reject(new APIError(status, "Denied")));
+  expect(hook.result.current).toMatchObject({ error: "Denied", retrying: false });
+  await act(async () => vi.advanceTimersByTime(15000));
+  act(() => window.dispatchEvent(new Event("online")));
+  expect(pending).toHaveLength(1);
 });

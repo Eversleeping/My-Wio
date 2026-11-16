@@ -1,6 +1,8 @@
 import { useFallbackRefresh } from "./RealtimeFallback";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { acquireDataRequest } from "./requests";
+import { APIError } from "./api";
+import { useVisibleInterval } from "../hooks/useVisibleInterval";
 
 type DataCacheEntry = { data: unknown; dependency: unknown };
 
@@ -31,10 +33,19 @@ export function clearDataCacheMatching(matches: (path: string) => boolean) {
 
 export function useData<T>(path: string | null, dependency: unknown, cache = false) {
   const [result, setResult] = useState<{ path: string | null; data: T | null }>({ path: null, data: null });
-  const [failure, setFailure] = useState<{ path: string | null; text: string }>({ path: null, text: "" });
+  const [failure, setFailure] = useState<{ path: string | null; text: string; retryable?: boolean }>({ path: null, text: "" });
   const [settledPath, setSettledPath] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion(value => value + 1), []);
+  const retrying = Boolean(path && failure.path === path && failure.retryable);
+  // A healthy realtime socket does not guarantee that an HTTP read succeeded.
+  // Recover failed reads even when no further resource events arrive.
+  useVisibleInterval(reload, retrying ? 5000 : null);
+  useEffect(() => {
+    if (!retrying) return;
+    window.addEventListener("online", reload);
+    return () => window.removeEventListener("online", reload);
+  }, [retrying, reload]);
   useFallbackRefresh(reload, Boolean(path));
   const request = useRef<((dependency: unknown, force: boolean) => void) | null>(null);
 
@@ -64,7 +75,9 @@ export function useData<T>(path: string | null, dependency: unknown, cache = fal
         setFailure({ path, text: "" });
       }).catch(error => {
         if (stopped) return;
-        setFailure({ path, text: error instanceof Error ? error.message : "Request failed" });
+        const retryable = error instanceof TypeError || (error instanceof APIError &&
+          (error.status === 408 || error.status === 429 || error.status >= 500));
+        setFailure({ path, text: error instanceof Error ? error.message : "Request failed", retryable });
       }).finally(() => {
         if (stopped) return;
         running = false;
@@ -90,5 +103,5 @@ export function useData<T>(path: string | null, dependency: unknown, cache = fal
   const cachedData = cached && Object.is(cached.dependency, dependency) ? cached.data as T : null;
   const data = result.path === path ? result.data : cachedData;
   const error = failure.path === path ? failure.text : "";
-  return { data, error, loading: Boolean(path) && data === null && settledPath !== path, reload };
+  return { data, error, retrying, loading: Boolean(path) && data === null && settledPath !== path, reload };
 }

@@ -3,7 +3,7 @@ import { assertMockApplication, installMockApplication } from "./support/mock-ap
 
 test.afterEach(({ page }) => assertMockApplication(page));
 
-test("shows unavailable isolation and enrolls with sudo mutually exclusive", async ({ page }) => {
+test("shows unavailable isolation and enrolls with sudo mutually exclusive", async ({ page }, testInfo) => {
   const server = { id: "isolated-node", name: "Isolated node", hostname: "node.example.test", status: "online", agent_version: "0.3.31", agent_target_version: "0.3.31", codex_ready: 1, codex_version: "1.0.0", codex_target_version: "1.0.0", address: "node.example.test", configuration: "", notes: "", session_isolation: { mode: "unsupported", reason: "Required namespaces are unavailable" } };
   await installMockApplication(page, {
     configured: true,
@@ -24,6 +24,14 @@ test("shows unavailable isolation and enrolls with sudo mutually exclusive", asy
   const isolation = dialog.getByRole("checkbox", { name: /Enable session isolation/ });
   const sudo = dialog.getByRole("checkbox", { name: /Allow passwordless sudo/ });
   await expect(isolation).not.toBeChecked();
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate(theme => {
+      document.documentElement.setAttribute("data-theme", theme);
+      document.body.setAttribute("data-theme", theme);
+    }, theme);
+    await isolation.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`enrollment-options-${theme}.png`) });
+  }
   await isolation.check();
   await expect(sudo).toBeDisabled();
   await isolation.uncheck();

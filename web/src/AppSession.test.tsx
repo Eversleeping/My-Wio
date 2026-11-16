@@ -189,7 +189,8 @@ test("reloads an edited Codex session after switching away while realtime batche
   const user = userEvent.setup();
   try {
     renderApp();
-    await screen.findByText("Pre-edit tail");
+    // The first conversation also waits for the lazy engine module to load.
+    await screen.findByText("Pre-edit tail", {}, { timeout: 5000 });
     await user.click(screen.getByRole("button", { name: /Codex.*Other session.*Server/ }));
     await screen.findByText("Other conversation");
 

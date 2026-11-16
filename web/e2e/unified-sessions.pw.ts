@@ -25,9 +25,27 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
     if (/\/workspaces\/workspace\/(gemini|claude)\/models$/.test(request.path)) return { body: { configured: true, models: [{ id: "test-model", name: "Test model" }], default_model: "test-model" } };
     return undefined;
   } });
+  let refresh = () => {};
+  await page.routeWebSocket("**/api/ws", socket => {
+    refresh = () => socket.send(JSON.stringify({ kind: "codex.turn.completed" }));
+  });
   await page.goto("/?view=sessions");
   await expect(page.locator(".thread-project")).toHaveCount(1);
   await expect(page.locator(".session-engine")).toHaveText(["Codex", "Gemini", "Claude"]);
+  // Simulate one HTTP read failing while the realtime connection stays healthy.
+  await expect.poll(() => listRequests.length).toBeGreaterThanOrEqual(2);
+  let failNext = true;
+  await page.route("**/api/sessions?**", async route => {
+    if (failNext) { failNext = false; await route.abort("failed"); }
+    else await route.fallback();
+  });
+  refresh();
+  await expect(page.locator(".refresh-warning")).toBeVisible();
+  await expect(page.locator(".thread-select")).toHaveCount(3);
+  await expect(page.locator(".thread-items .error-state")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("session-refresh-warning.png") });
+  await expect(page.locator(".refresh-warning")).toHaveCount(0);
+  await expect(page.locator(".thread-select")).toHaveCount(3);
   const codexGroup = page.getByRole("button", { name: "Codex sessions", exact: true });
   await codexGroup.click();
   await expect(codexGroup).toHaveAttribute("aria-expanded", "false");
