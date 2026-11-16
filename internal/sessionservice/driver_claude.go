@@ -32,7 +32,7 @@ func (r *claudeDriver) EnqueueScheduled(ctx context.Context, task store.Schedule
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Claude session is offline, archived or active", "", now)
 		return
 	}
-	if !buildinfo.SupportsClaudeInput(t.AgentVersion) {
+	if !t.Capabilities.Images {
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Claude Agent to "+buildinfo.MinimumClaudeInputVersion, "", now)
 		return
 	}
@@ -67,7 +67,7 @@ func (r *claudeDriver) ValidateSchedule(ctx context.Context, input session.Sched
 	if err != nil {
 		return session.LookupError{Err: err}
 	}
-	if !buildinfo.SupportsClaudeInput(thread.AgentVersion) {
+	if !thread.Capabilities.Images {
 		return errors.New("update Claude Agent to " + buildinfo.MinimumClaudeInputVersion + " or newer")
 	}
 	selectedModel := model

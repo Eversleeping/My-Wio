@@ -7,7 +7,6 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/sessionservice/core"
 	"github.com/wio-platform/wio/internal/sessiontools"
@@ -106,14 +105,10 @@ func (b transactionPort) ReadyWorkspace(ctx context.Context, id, project string)
 	return core.Workspace{ID: w.ID, ProjectID: w.ProjectID, ServerID: w.ServerID, Path: w.Path}, err
 }
 
-func (b transactionPort) AgentVersion(ctx context.Context, id string) (string, error) {
-	var v string
-	err := b.tx.GetContext(ctx, &v, b.store.Q("SELECT agent_version FROM servers WHERE id=? AND revoked_at IS NULL"), id)
-	return v, err
-}
-
-func (b transactionPort) SupportsCollaboration(version string) bool {
-	return buildinfo.SupportsSessionCollaboration(version)
+func (b transactionPort) SupportsCollaboration(ctx context.Context, id string) (bool, error) {
+	var server Server
+	err := b.tx.GetContext(ctx, &server, b.store.Q("SELECT s.agent_version,"+serverCapabilitySelect+" FROM servers s WHERE s.id=? AND s.revoked_at IS NULL"), id)
+	return server.Supports(protocol.CapabilitySessionCollaboration), err
 }
 
 func (b transactionPort) LockServer(ctx context.Context, id string) error {

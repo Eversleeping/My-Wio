@@ -1,8 +1,14 @@
 package session
 
-import "time"
+import (
+	"time"
+
+	"github.com/wio-platform/wio/internal/capabilities"
+)
 
 type Record struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+
 	Engine          string       `db:"engine" json:"engine"`
 	ID              string       `db:"id" json:"id"`
 	WorkspaceID     string       `db:"workspace_id" json:"workspace_id"`

@@ -11,7 +11,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessionservice/core"
@@ -20,7 +20,7 @@ import (
 
 type CollaborationSession = core.CollaborationSession
 
-var collaborationSessions = "SELECT engine,id,title,status,workspace_id,project_id,server_id,path,model,mode,effort,native_id,operation_id,agent_version,archived_at,updated_at FROM (" + aiSessionRows + ") session_rows WHERE server_revoked_at IS NULL"
+var collaborationSessions = "SELECT engine,id,title,status,workspace_id,project_id,server_id,path,model,mode,effort,native_id,operation_id,agent_version,declared_capabilities,archived_at,updated_at FROM (" + aiSessionRows + ") session_rows WHERE server_revoked_at IS NULL"
 
 func (s *Store) CollaborationSession(ctx context.Context, ref sessiontools.Ref) (CollaborationSession, error) {
 	t, err := s.collaborationSession(ctx, s.DB, ref)
@@ -486,7 +486,7 @@ func (s *Store) ReadCollaborationState(ctx context.Context, ref sessiontools.Ref
 	if err = s.DB.SelectContext(ctx, &notifications, s.Q("SELECT target_key,unread_event_id FROM session_subscriptions WHERE source_key=? AND unread_event_id<>''"), ref.Key()); err != nil {
 		return nil, err
 	}
-	return map[string]any{"session": source, "grant": grant, "requests": requests, "links": items, "notifications": notifications, "supported": buildinfo.SupportsSessionCollaboration(source.AgentVersion)}, nil
+	return map[string]any{"session": source, "grant": grant, "requests": requests, "links": items, "notifications": notifications, "supported": capabilities.Supports(protocol.CapabilitySessionCollaboration, source.AgentVersion, "", source.DeclaredCapabilities)}, nil
 }
 
 // Acknowledge only the displayed event, preserving notifications arriving while

@@ -46,8 +46,7 @@ type Port interface {
 	WorkspaceBusyError() error
 	ModelOverride(string, string, string, sessiontools.Params) (string, string, error)
 	ReadyWorkspace(context.Context, string, string) (Workspace, error)
-	AgentVersion(context.Context, string) (string, error)
-	SupportsCollaboration(string) bool
+	SupportsCollaboration(context.Context, string) (bool, error)
 	LockServer(context.Context, string) error
 	TurnWritesWorkspace(string) bool
 	Interrupt(context.Context, CollaborationSession) (string, error)
@@ -105,11 +104,11 @@ func Mutate(s Port, ctx context.Context, source CollaborationSession, grant sess
 		}
 		execution, _ := json.Marshal(map[string]string{"model": model, "mode": mode, "effort": effort})
 		r.Execution = string(execution)
-		version, e := s.AgentVersion(ctx, w.ServerID)
+		supported, e := s.SupportsCollaboration(ctx, w.ServerID)
 		if err = e; err != nil {
 			return reply, err
 		}
-		if !s.SupportsCollaboration(version) {
+		if !supported {
 			return reply, sessiontools.Fail("CAPABILITY_UNSUPPORTED", "update the target Agent for Wio collaboration")
 		}
 		r.TargetEngine = engine

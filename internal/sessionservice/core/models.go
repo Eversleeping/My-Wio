@@ -3,10 +3,13 @@ package core
 import (
 	"time"
 
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type CollaborationSession struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+
 	Engine           string     `db:"engine" json:"engine"`
 	ID               string     `db:"id" json:"id"`
 	Title            string     `db:"title" json:"title"`

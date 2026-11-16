@@ -6,12 +6,15 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type ClaudeThread struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+
 	Capabilities            session.Capabilities `db:"-" json:"capabilities"`
 	ModelCredentialRevision string               `db:"model_credential_revision" json:"model_credential_revision"`
 
@@ -52,7 +55,7 @@ type ClaudeThread struct {
 }
 
 const claudeThreadSelect = `SELECT t.*,cm.pinned_at,COALESCE(cm.fork_snapshot_id,'') AS fork_snapshot_id,COALESCE(cm.fork_session_id,'') AS fork_session_id,COALESCE(cto.effort,'') AS effort,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,
- w.server_id,s.name AS server_name,s.agent_version,COALESCE(ccli.version,'') AS claude_version,
+ w.server_id,s.name AS server_name,s.agent_version,` + serverCapabilitySelect + `,COALESCE(ccli.version,'') AS claude_version,
  COALESCE((SELECT payload FROM events WHERE stream_id=t.id AND kind IN ('claude.steer.ready','claude.steer.closed') ORDER BY sequence DESC LIMIT 1),'') AS steer_state,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status,
  CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending
  FROM claude_threads t LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN ` + claudeEngineCLI + ` ccli ON ccli.server_id=s.id` + projectServerJoin
@@ -377,5 +380,5 @@ func (thread *ClaudeThread) setSteerCapability() {
 }
 
 func (thread *ClaudeThread) setCapabilities() {
-	thread.Capabilities = session.ResolveCapabilities(session.Claude, thread.AgentVersion, thread.ClaudeVersion)
+	thread.Capabilities = session.ResolveCapabilities(session.Claude, thread.AgentVersion, thread.ClaudeVersion, thread.DeclaredCapabilities)
 }

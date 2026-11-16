@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -62,7 +61,7 @@ func (a *API) controlGeminiGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "resume":
-		if thread.ServerStatus != "online" || thread.ArchivedAt != nil || !buildinfo.SupportsGeminiGoal(thread.AgentVersion, thread.CLIVersion) {
+		if thread.ServerStatus != "online" || thread.ArchivedAt != nil || !thread.Capabilities.Goal {
 			writeError(w, 409, "Gemini goal requires an online, compatible Agent and an unarchived session")
 			return
 		}

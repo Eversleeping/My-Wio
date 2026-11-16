@@ -45,11 +45,11 @@ func (a *API) serverCLIs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not load server")
 		return
 	}
-	supported := buildinfo.SupportsCLIManagement(server.AgentVersion)
+	supported := server.Supports(protocol.CapabilityCLIManage)
 	items := []serverCLI{
 		{Kind: "codex", Version: server.CodexVersion, Ready: server.CodexReady != 0, Supported: supported},
 		{Kind: "gemini", Version: server.GeminiVersion, Ready: server.GeminiReady != 0, Supported: supported},
-		{Kind: "claude", Version: server.ClaudeVersion, Ready: server.ClaudeReady != 0, Supported: buildinfo.SupportsClaudeManagement(server.AgentVersion)},
+		{Kind: "claude", Version: server.ClaudeVersion, Ready: server.ClaudeReady != 0, Supported: server.Supports(protocol.CapabilityClaudeManage)},
 	}
 	for i := range items {
 		items[i].CLIInstallBlockers, err = a.store.CLIInstallBlockers(r.Context(), server.ID, items[i].Kind)
@@ -112,11 +112,11 @@ func (a *API) installServerCLI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "server is offline")
 		return
 	}
-	if kind == "claude" && !buildinfo.SupportsClaudeManagement(server.AgentVersion) {
+	if kind == "claude" && !server.Supports(protocol.CapabilityClaudeManage) {
 		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumClaudeManagementVersion+" or newer first")
 		return
 	}
-	if kind != "claude" && !buildinfo.SupportsCLIManagement(server.AgentVersion) {
+	if kind != "claude" && !server.Supports(protocol.CapabilityCLIManage) {
 		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumCLIManagementVersion+" or newer first")
 		return
 	}

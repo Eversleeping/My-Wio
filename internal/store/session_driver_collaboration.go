@@ -12,7 +12,6 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/geminiapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
@@ -91,14 +90,15 @@ func (s *Store) collaborationClaude(ctx context.Context, tx *sqlx.Tx, id string)
 	var t ClaudeThread
 	err := tx.GetContext(ctx, &t, s.Q(claudeThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	t.setSteerCapability()
-	t.QuestionsSupported = buildinfo.SupportsClaudeQuestions(t.AgentVersion, t.ClaudeVersion)
+	t.QuestionsSupported = t.Capabilities.Questions
 	return t, err
 }
 
 func (s *Store) collaborationGemini(ctx context.Context, tx *sqlx.Tx, id string) (GeminiThread, error) {
 	var t GeminiThread
 	err := tx.GetContext(ctx, &t, s.Q(geminiThreadSelect+" WHERE t.id=? AND s.revoked_at IS NULL"), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
-	t.SteerSupported = buildinfo.SupportsGeminiSteering(t.AgentVersion, t.CLIVersion)
+	t.setCapabilities()
+	t.SteerSupported = t.Capabilities.Steer
 	return t, err
 }
 

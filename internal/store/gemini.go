@@ -8,13 +8,15 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
 type GeminiThread struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+
 	Capabilities              session.Capabilities `db:"-" json:"capabilities"`
 	CredentialRevision        string               `db:"credential_revision" json:"credential_revision"`
 	ModelCredentialRevision   string               `db:"model_credential_revision" json:"model_credential_revision"`
@@ -55,7 +57,7 @@ type GeminiThread struct {
 	ServerStatus              string               `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,` + geminiCredentialRevision + ` AS credential_revision,CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending,s.agent_version,` + geminiEngineVersion + ` AS gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+const geminiThreadSelect = `SELECT t.*,` + geminiCredentialRevision + ` AS credential_revision,CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending,s.agent_version,` + serverCapabilitySelect + `,` + geminiEngineVersion + ` AS gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
  FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN ` + geminiEngineBinding + ` gcp ON gcp.server_id=s.id` + projectServerJoin
 
 // Check running turns and deliveries whose start acknowledgement may have been
@@ -228,11 +230,11 @@ func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 	if err := tx.GetContext(ctx, &command.SessionID, s.Q("SELECT session_id FROM gemini_threads WHERE id=?"), thread.ID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
-	var agentVersion string
-	if err := tx.GetContext(ctx, &agentVersion, s.Q("SELECT agent_version FROM servers WHERE id=?"), thread.ServerID); err != nil {
+	var server Server
+	if err := tx.GetContext(ctx, &server, s.Q("SELECT s.agent_version,"+serverCapabilitySelect+" FROM servers s WHERE s.id=?"), thread.ServerID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
-	command.Interactive = buildinfo.SupportsGeminiInput(agentVersion)
+	command.Interactive = server.Supports(protocol.CapabilityGeminiInput)
 	if command.Goal != nil && !command.Interactive {
 		return protocol.StreamEvent{}, stateConflict("Gemini goal requires the interactive ACP protocol")
 	}
@@ -640,5 +642,5 @@ func (s *Store) CommitGeminiRewrite(ctx context.Context, threadID, operationID, 
 }
 
 func (thread *GeminiThread) setCapabilities() {
-	thread.Capabilities = session.ResolveCapabilities(session.Gemini, thread.AgentVersion, thread.CLIVersion)
+	thread.Capabilities = session.ResolveCapabilities(session.Gemini, thread.AgentVersion, thread.CLIVersion, thread.DeclaredCapabilities)
 }

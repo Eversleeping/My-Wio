@@ -28,6 +28,8 @@ Agent 将配置保存在受保护的状态文件，启动模型进程时注入 `
 
 ## 兼容版本
 
+从 Agent 0.3.22 起，控制面以心跳声明的能力为准，CLI 相关能力随探测版本声明；未上报能力的旧 Agent 继续按下表推断。安装状态、凭据和运行中就绪状态仍分别检查。
+
 会话能力的版本门槛以 [`internal/session/capabilities_test.go`](../internal/session/capabilities_test.go) 的边界表为准；HTTP 同时返回 `capabilities` 和兼容旧客户端的 `*_supported` 字段。能力表示版本支持，在线状态与当前轮次是否就绪仍单独判断。
 
 | 能力 | 最低 Wio Agent | CLI 要求 |

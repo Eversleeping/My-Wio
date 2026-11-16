@@ -32,7 +32,7 @@ func (r *geminiDriver) EnqueueScheduled(ctx context.Context, task store.Schedule
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Gemini session is offline, archived or active", "", now)
 		return
 	}
-	if !buildinfo.SupportsGemini(thread.AgentVersion) {
+	if !thread.Capabilities.Turns {
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent first", "", now)
 		return
 	}
@@ -44,7 +44,7 @@ func (r *geminiDriver) EnqueueScheduled(ctx context.Context, task store.Schedule
 	if mode == "" {
 		mode = thread.ApprovalMode
 	}
-	if mode == "yolo" && !buildinfo.SupportsGeminiYolo(thread.AgentVersion) {
+	if mode == "yolo" && !thread.Capabilities.Yolo {
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals", "", now)
 		return
 	}
@@ -55,7 +55,7 @@ func (r *geminiDriver) EnqueueScheduled(ctx context.Context, task store.Schedule
 			level = ""
 		}
 	}
-	if level != "" && !buildinfo.SupportsGeminiThinking(thread.AgentVersion) {
+	if level != "" && !thread.Capabilities.Thinking {
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent to configure thinking", "", now)
 		return
 	}
@@ -86,7 +86,7 @@ func (r *geminiDriver) ValidateSchedule(ctx context.Context, input session.Sched
 	if err != nil {
 		return session.LookupError{Err: err}
 	}
-	if approval == "yolo" && !buildinfo.SupportsGeminiYolo(thread.AgentVersion) {
+	if approval == "yolo" && !thread.Capabilities.Yolo {
 		return errors.New("update Gemini Agent to " + buildinfo.MinimumGeminiYoloVersion + " or newer to use Gemini without approvals")
 	}
 	selectedModel := model
@@ -101,7 +101,7 @@ func (r *geminiDriver) ValidateSchedule(ctx context.Context, input session.Sched
 		if e != nil {
 			return session.LookupError{Err: e}
 		}
-		if !buildinfo.SupportsGeminiThinking(server.AgentVersion) {
+		if !server.Supports(protocol.CapabilityGeminiThinking) {
 			return errors.New("update Gemini Agent to configure thinking")
 		}
 	}

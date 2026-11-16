@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/store"
@@ -48,7 +47,7 @@ func (a *API) manageWorkspaceGeminiSkill(w http.ResponseWriter, r *http.Request)
 		writeError(w, 409, "server is offline")
 		return
 	}
-	if !buildinfo.SupportsGeminiSkillManagement(server.AgentVersion, server.GeminiVersion) {
+	if !server.Supports(protocol.CapabilityGeminiSkillsManage) {
 		writeError(w, 409, "skill management requires Agent 0.2.88 and Gemini CLI 0.66.0 or newer")
 		return
 	}
@@ -81,7 +80,7 @@ func (a *API) refreshWorkspaceGeminiSkills(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	if !buildinfo.SupportsGeminiSkills(server.AgentVersion, server.GeminiVersion) {
+	if !server.Supports(protocol.CapabilityGeminiSkills) {
 		writeError(w, http.StatusConflict, "Gemini skills require Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
 		return
 	}

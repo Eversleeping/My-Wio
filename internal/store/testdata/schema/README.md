@@ -20,6 +20,8 @@
    VALUES (1, 'baseline', '2000-01-01 00:00:00');
    ```
 
+同一 Agent 版本可以跨多个控制面 schema；`0.3.21.3` 标识版本 0.3.21 / schema 3，保留已发布的 `0.3.21` / schema 1 夹具不变。
+
 4. 两份文件头记录来源发布版本、完整提交号、导出方法及“不含业务数据”。在
    `schemaFixtureVersions` 末尾加上同一个版本标识。文件名用点分数字版本，供
    PostgreSQL 测试安全生成临时 schema 名。
@@ -30,12 +32,12 @@
 
 ## 示例（仅演练，不加入产品清单）
 
-在独立临时源码副本的清单末尾追加以下条目。编号用当时最大编号加一；当前最大编号为 3，所以下例使用 4。
+在独立临时源码副本的清单末尾追加以下条目。编号用当时最大编号加一；当前最大编号为 4，所以下例使用 5。
 此例使用两种数据库均支持的 SQL，在已有 `events` 行上自动提供默认值。
 
 ```go
 {
-    version: 4,
+    version: 5,
     name: "example_event_source",
     up: func(ctx context.Context, tx *sqlx.Tx, driver string) error {
         _, err := tx.ExecContext(ctx,
@@ -46,8 +48,8 @@
 ```
 
 演练至少覆盖空库、全部历史结构夹具、重复打开、已有行读取到 `legacy`、新写入行默认值
-和版本 4 只记录一次。追加示例迁移后，可在测试中用
-`runMigrations(..., schemaMigrations[:3])`
+和版本 5 只记录一次。追加示例迁移后，可在测试中用
+`runMigrations(..., schemaMigrations[:4])`
 准备迁移前的隔离库并写一条事件，再执行完整清单；两个方言共用断言，PostgreSQL
 入口挂在 `TestPostgresMigrationAndStorage` 下，确保 `make test-postgres` 选中。
 框架的事务失败、数据/结构回滚与重试断言已由 `assertMigrationRunner` 共用覆盖。

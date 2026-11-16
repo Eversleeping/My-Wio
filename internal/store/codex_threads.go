@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessiontools"
@@ -242,6 +243,8 @@ var ErrThreadActive = errors.New("Codex session is active")
 var ErrInvalidEditTarget = errors.New("invalid Codex message edit target")
 
 type Thread struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+
 	Capabilities    session.Capabilities `db:"-" json:"capabilities"`
 	AgentVersion    string               `db:"agent_version" json:"-"`
 	CLIVersion      string               `db:"codex_version" json:"-"`
@@ -270,7 +273,7 @@ type ThreadPage struct {
 	HasMore bool
 }
 
-const codexThreadSelect = `SELECT s.agent_version,` + codexEngineVersion + ` AS codex_version,t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,` + projectServerName + ` project_name,t.pinned_at,t.archived_at,` + projectServerPin + ` project_pinned_at,` + projectServerHidden + ` project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id` + projectServerJoin
+const codexThreadSelect = `SELECT s.agent_version,` + serverCapabilitySelect + `,` + codexEngineVersion + ` AS codex_version,t.id,t.workspace_id,w.project_id,t.codex_thread_id,t.title,t.status,w.path,w.server_id,s.name server_name,` + projectServerName + ` project_name,t.pinned_at,t.archived_at,` + projectServerPin + ` project_pinned_at,` + projectServerHidden + ` project_hidden_at,t.created_at,t.updated_at FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id` + projectServerJoin
 
 func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Thread, error) {
 	var out []Thread
@@ -621,5 +624,5 @@ func (s *Store) SetThreadTitleIfDefault(ctx context.Context, id, title string) e
 }
 
 func (thread *Thread) setCapabilities() {
-	thread.Capabilities = session.ResolveCapabilities(session.Codex, thread.AgentVersion, thread.CLIVersion)
+	thread.Capabilities = session.ResolveCapabilities(session.Codex, thread.AgentVersion, thread.CLIVersion, thread.DeclaredCapabilities)
 }

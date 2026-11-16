@@ -14,6 +14,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	gnet "github.com/shirou/gopsutil/v4/net"
 
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -38,6 +39,7 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	claudePath := effectiveClaudePath(c.config.StateDir)
 	heartbeat.ClaudeVersion = c.currentClaudeVersion(ctx, claudePath)
 	heartbeat.ClaudeReady = commandAvailable(claudePath)
+	heartbeat.Capabilities = capabilities.AgentDeclaration(heartbeat.GeminiVersion, heartbeat.ClaudeVersion)
 	return c.queue(protocol.AgentKindHeartbeat, heartbeat, false)
 }
 

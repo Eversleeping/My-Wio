@@ -34,7 +34,7 @@ func buildAISessionRows() string {
 	}
 	var queries []string
 	for _, source := range sources {
-		queries = append(queries, "SELECT '"+source.engine+"' AS engine,t.id,t.title,t.status,t.workspace_id,w.project_id,w.server_id,w.path,w.display_name AS workspace_name,"+projectServerName+" AS project_name,s.name AS server_name,"+source.native+" AS native_id,"+source.model+" AS model,"+source.mode+" AS mode,"+source.effort+" AS effort,"+source.operation+" AS operation_id,"+source.pin+" AS pinned_at,t.archived_at,"+projectServerPin+" AS project_pinned_at,"+projectServerHidden+" AS project_hidden_at,t.created_at,t.updated_at,s.agent_version,"+source.cli+" AS cli_version,s.last_seen_at,s.revoked_at AS server_revoked_at,"+source.execution+" AS execution_json FROM "+source.engine+"_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id"+projectServerJoin+source.join)
+		queries = append(queries, "SELECT '"+source.engine+"' AS engine,t.id,t.title,t.status,t.workspace_id,w.project_id,w.server_id,w.path,w.display_name AS workspace_name,"+projectServerName+" AS project_name,s.name AS server_name,"+source.native+" AS native_id,"+source.model+" AS model,"+source.mode+" AS mode,"+source.effort+" AS effort,"+source.operation+" AS operation_id,"+source.pin+" AS pinned_at,t.archived_at,"+projectServerPin+" AS project_pinned_at,"+projectServerHidden+" AS project_hidden_at,t.created_at,t.updated_at,s.agent_version,"+serverCapabilitySelect+","+source.cli+" AS cli_version,s.last_seen_at,s.revoked_at AS server_revoked_at,"+source.execution+" AS execution_json FROM "+source.engine+"_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN servers s ON s.id=w.server_id JOIN projects p ON p.id=w.project_id"+projectServerJoin+source.join)
 	}
 	return strings.Join(queries, " UNION ALL ")
 }
@@ -44,7 +44,7 @@ func decorateAISession(t *AISession) {
 	if t.ServerRevokedAt == nil && t.LastSeenAt != nil && t.LastSeenAt.After(time.Now().UTC().Add(-ServerOnlineGracePeriod)) {
 		t.ServerStatus = "online"
 	}
-	t.Capabilities = session.ResolveCapabilities(t.Engine, t.AgentVersion, t.CLIVersion)
+	t.Capabilities = session.ResolveCapabilities(t.Engine, t.AgentVersion, t.CLIVersion, t.DeclaredCapabilities)
 	if t.Engine == session.Codex && t.ExecutionJSON != "" {
 		if t.OperationID == "" {
 			var execution struct{ Model, Mode, Effort string }

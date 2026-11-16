@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/store"
 	"net/http"
@@ -34,17 +35,17 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 	}
 	for index := range servers {
 		servers[index].AgentTargetVersion = buildinfo.Version
-		servers[index].AgentUpdateSupported = buildinfo.SupportsSelfUpdate(servers[index].AgentVersion)
-		servers[index].AgentUpdateAvailable = packagesAvailable && buildinfo.UpdateAvailable(servers[index].AgentVersion, buildinfo.Version)
+		servers[index].AgentUpdateSupported = servers[index].Supports(protocol.CapabilityAgentSelfUpdate)
+		servers[index].AgentUpdateAvailable = packagesAvailable && servers[index].AgentUpdateSupported && buildinfo.UpdateAvailable(servers[index].AgentVersion, buildinfo.Version)
 		servers[index].CodexTargetVersion = codexTarget
-		servers[index].CodexUpdateSupported = buildinfo.SupportsCodexUpdate(servers[index].AgentVersion)
-		servers[index].GeminiCredentialsSupported = buildinfo.SupportsGeminiCredentials(servers[index].AgentVersion)
-		servers[index].ScopedCredentialsSupported = buildinfo.SupportsScopedCredentials(servers[index].AgentVersion)
-		servers[index].ClaudeEffortSupported = buildinfo.SupportsClaudeEffort(servers[index].AgentVersion)
-		servers[index].ClaudeCredentialsSupported = buildinfo.SupportsClaudeManagement(servers[index].AgentVersion)
-		servers[index].CLIManagementSupported = buildinfo.SupportsCLIManagement(servers[index].AgentVersion)
+		servers[index].CodexUpdateSupported = servers[index].Supports(protocol.CapabilityCodexCLIUpdate)
+		servers[index].GeminiCredentialsSupported = servers[index].Supports(protocol.CapabilityGeminiCredentials)
+		servers[index].ScopedCredentialsSupported = servers[index].Supports(protocol.CapabilityCredentialsScoped)
+		servers[index].ClaudeEffortSupported = servers[index].Supports(protocol.CapabilityClaudeEffort)
+		servers[index].ClaudeCredentialsSupported = servers[index].Supports(protocol.CapabilityClaudeManage)
+		servers[index].CLIManagementSupported = servers[index].Supports(protocol.CapabilityCLIManage)
 		servers[index].CodexUpdateAvailable = servers[index].CodexUpdateSupported && (servers[index].CodexVersion == "" || codexcli.UpdateAvailable(servers[index].CodexVersion, codexTarget))
-		servers[index].ExactRollbackSupported = buildinfo.SupportsExactDeploymentRollback(servers[index].AgentVersion)
+		servers[index].ExactRollbackSupported = servers[index].Supports(protocol.CapabilityDeployRollbackExact)
 	}
 	writeJSON(w, http.StatusOK, servers)
 }

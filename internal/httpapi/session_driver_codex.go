@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
@@ -256,7 +255,7 @@ func (a *codexHTTPDriver) forkThread(w http.ResponseWriter, r *http.Request) {
 	targetID := store.NewID()
 	command := protocol.ForkThreadCommand{SourceThreadID: thread.ID, TargetThreadID: targetID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Title: thread.Title + " (continued)"}
 	if input.EventID != "" {
-		if !buildinfo.SupportsMessageFork(server.AgentVersion) {
+		if !server.Supports(protocol.CapabilityCodexForkAtMessage) {
 			writeJSON(w, http.StatusConflict, map[string]string{"code": "fork_agent_update", "error": "Branching from a message requires Agent 0.2.59 or newer"})
 			return
 		}
@@ -468,7 +467,7 @@ func (a *codexHTTPDriver) steerTurn(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_offline", "error": "Agent must be online to steer a running turn"})
 		return
 	}
-	if !buildinfo.SupportsCodexSteer(server.AgentVersion) {
+	if !server.Supports(protocol.CapabilityCodexSteer) {
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_agent_update", "error": "Steering requires Agent 0.2.51 or newer; update it after the current task finishes"})
 		return
 	}

@@ -18,7 +18,7 @@ import (
 //go:embed testdata/schema/sqlite/*.sql testdata/schema/postgres/*.sql
 var schemaFixtures embed.FS
 
-var schemaFixtureVersions = []string{"0.2.45", "0.2.58", "0.3.12", "0.3.21"}
+var schemaFixtureVersions = []string{"0.2.45", "0.2.58", "0.3.12", "0.3.21", "0.3.21.3"}
 
 type inspectedSchema struct {
 	Tables      map[string]inspectedTable

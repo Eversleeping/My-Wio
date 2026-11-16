@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -86,7 +85,7 @@ func (a *API) writeWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	if !buildinfo.SupportsWorkspaceFileWrite(server.AgentVersion) {
+	if !server.Supports(protocol.CapabilityWorkspaceFileWrite) {
 		writeError(w, http.StatusConflict, "upgrade the server Agent to 0.2.56 or later to add or edit files")
 		return
 	}

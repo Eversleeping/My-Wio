@@ -37,7 +37,7 @@ func ResolveEngineAvailability(workspace store.Workspace, server store.Server) [
 		{session.Gemini, server.GeminiVersion, server.GeminiProfileID, server.GeminiReady},
 		{session.Claude, server.ClaudeVersion, server.ClaudeProfileID, server.ClaudeReady},
 	} {
-		item := EngineAvailability{Engine: spec.engine, Capabilities: session.ResolveCapabilities(spec.engine, server.AgentVersion, spec.version)}
+		item := EngineAvailability{Engine: spec.engine, Capabilities: session.ResolveCapabilities(spec.engine, server.AgentVersion, spec.version, server.DeclaredCapabilities)}
 		switch {
 		case workspace.Status != "ready":
 			item.Reason = "workspace_not_ready"

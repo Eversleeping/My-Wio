@@ -15,7 +15,7 @@ import (
 
 type credentialSpec struct {
 	kind, name, minimum string
-	supported           func(string) bool
+	capability          string
 	busy                error
 	command             func(store.CredentialProfile, string) any
 	queue               func(context.Context, string, store.CredentialProfile, string) (string, error)
@@ -23,7 +23,7 @@ type credentialSpec struct {
 
 func (a *API) updateServerClaudeCredentialProfile(w http.ResponseWriter, r *http.Request) {
 	a.updateServerEngineCredentialProfile(w, r, credentialSpec{
-		kind: "claude", name: "Claude", minimum: buildinfo.MinimumClaudeManagementVersion, supported: buildinfo.SupportsClaudeManagement, busy: store.ErrClaudeCredentialsBusy,
+		kind: "claude", name: "Claude", minimum: buildinfo.MinimumClaudeManagementVersion, capability: protocol.CapabilityClaudeManage, busy: store.ErrClaudeCredentialsBusy,
 		command: func(p store.CredentialProfile, key string) any {
 			return protocol.ConfigureClaudeCredentialsCommand{Endpoint: p.Endpoint, APIKey: key, Model: p.Model}
 		},
@@ -34,7 +34,7 @@ func (a *API) updateServerClaudeCredentialProfile(w http.ResponseWriter, r *http
 }
 func (a *API) updateServerGeminiCredentialProfile(w http.ResponseWriter, r *http.Request) {
 	a.updateServerEngineCredentialProfile(w, r, credentialSpec{
-		kind: "gemini", name: "Gemini", minimum: buildinfo.MinimumGeminiCredentialsVersion, supported: buildinfo.SupportsGeminiCredentials, busy: store.ErrGeminiCredentialsBusy,
+		kind: "gemini", name: "Gemini", minimum: buildinfo.MinimumGeminiCredentialsVersion, capability: protocol.CapabilityGeminiCredentials, busy: store.ErrGeminiCredentialsBusy,
 		command: func(p store.CredentialProfile, key string) any {
 			return protocol.ConfigureGeminiCredentialsCommand{Endpoint: p.Endpoint, APIKey: key, Model: p.Model}
 		},
@@ -63,7 +63,7 @@ func (a *API) updateServerEngineCredentialProfile(w http.ResponseWriter, r *http
 		writeError(w, 409, "server must be online to update "+cfg.name+" credentials")
 		return
 	}
-	if !cfg.supported(server.AgentVersion) {
+	if !server.Supports(cfg.capability) {
 		writeError(w, 409, "update Wio Agent to "+cfg.minimum+" or newer first")
 		return
 	}

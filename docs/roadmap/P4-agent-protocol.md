@@ -227,7 +227,7 @@ grep -rnoE '"[a-z_]+(\.[a-zA-Z_]+)+"' internal cmd --include=*.go --exclude=*_te
 
 **风险与回滚**
 
-- 迁移只新增表，属于“扩展”。控制面回滚到旧版本后，旧版本不读这张表，行为等同于改动前。
+- 迁移只新增表，属于“扩展”，旧查询不依赖新表。但 P1 的 schema 版本护栏会拒绝 schema 4 上运行只认识 schema 3 的旧控制面；回滚必须恢复升级前备份或使用明确支持 schema 4 的回滚构建，不能直接切回旧二进制。
 - 新控制面遇到旧 Agent 走版本推断，旧控制面遇到新 Agent 会忽略未知的心跳字段。两个方向都兼容。
 - 风险集中在等价性：某个能力在 Agent 的声明逻辑和控制面的版本推断之间不一致，会让功能入口意外出现或消失。等价性测试必须覆盖清单里的每一行。
 
@@ -330,9 +330,9 @@ grep -rnoE '"[a-z_]+(\.[a-zA-Z_]+)+"' internal cmd --include=*.go --exclude=*_te
 
 ## 能力名清单
 
-由 P4-02 核对并冻结。下表是基线提交里全部 31 个门槛和建议的能力名；“CLI 要求”非空的由 Agent 按实际 CLI 版本决定是否声明。
+P4-02 已按 `25596d0` 核对并冻结为 `internal/protocol/capabilities.go` 常量。下表是全部 31 个门槛和能力名；“CLI 要求”非空的由 Agent 按实际 CLI 版本决定是否声明。
 
-| 建议能力名 | 现有门槛函数 | 最低 Agent | CLI 要求 |
+| 冻结能力名 | 现有门槛函数 | 最低 Agent | CLI 要求 |
 | --- | --- | --- | --- |
 | `agent.self_update` | `SupportsSelfUpdate` | 0.2.0 | |
 | `codex.cli_update` | `SupportsCodexUpdate` | 0.2.9 | |
@@ -442,3 +442,32 @@ grep -rnoE '"[a-z_]+(\.[a-zA-Z_]+)+"' internal cmd --include=*.go --exclude=*_te
 - 当前线上 Agent 尚未具备能力声明；本轮保留旧版本推断。P4-03 的发布和全量升级前置继续生效。
 
 - P4-02 前置特性测试：以独立的 31 项门槛表覆盖最低版本、前一版本、无效版本、构建后缀及 8 项 CLI 条件；`go test ./internal/buildinfo ./internal/session` 通过。仅测试和计划更新，先单独提交。
+
+### 2026-11-16 P4-02 本地完成
+
+- GPT-6（Codex）验收，main。冻结 31 个能力名；新增 `capabilities` 解析包，以非 nil 声明为准、缺失声明回退原版本规则、未知名字不授予支持。固定 23 项与 CLI 相关 8 项从真实探测版本计算；保留 Claude 版本描述后缀解析。
+- 心跳及 keepalive 增加可选能力字段（控制面列表暂空）；Agent 版本同步 0.3.22。schema 4 新增 `server_capabilities` 附属表，服务器、三种 CLI 状态和声明在同一事务写入；降级心跳清除声明，服务器删除级联清除。旧接口 JSON、原有能力字段、事件和操作取值保持不变。
+- 服务器管理、会话、工作区引擎可用性、文件写入、操作中断、定时任务、凭据和协作的门槛全部接入统一解析。协作目标能力在原事务内读取，避免只看目标版本遗漏声明。
+- 从已发布 `25596d0` 的独立源码和空 SQLite / PostgreSQL 16 数据库导出 schema 3 结构夹具 `0.3.21.3`，不改旧 schema 1 的 `0.3.21` 夹具，不含业务数据。两种数据库均验证历史升级、新建一致、重复启动稳定以及声明写入故障整体回滚。
+
+| 验收 | 实际结果 |
+| --- | --- |
+| `npm --prefix web run build` | 通过，5.15 秒 |
+| `go vet ./...`、`go build ./cmd/controlplane ./cmd/agent` | 通过，最终检查无诊断 |
+| `go test ./...` | 全部通过；真实 Agent 跨进程验收 7.104 秒、HTTP 315.907 秒、Store 247.119 秒 |
+| 补充最终 HTTP / Store 声明测试 | 通过；覆盖声明传递、工作区引擎列表、协作源与事务内目标读取、降级清除；3.961 / 1.309 秒 |
+| `make test-postgres` | 通过，66.738 秒；含五组历史结构夹具及故障回滚 |
+| `npm --prefix web test -- --maxWorkers=1` | 73 文件、510 用例通过，162.92 秒 |
+| `npm --prefix web run typecheck` | 通过，无诊断 |
+| Agent 版本护栏、`git diff --check` | 通过，0.3.21 → 0.3.22，无空白错误 |
+
+`rg -n 'buildinfo\.Supports' internal cmd --glob '*.go' --glob '!**/*_test.go'` 的完整调用点扫描仅命中以下两处范围，合计 33 个调用：
+
+| 文件 | 调用数 | 原因 |
+| --- | --- | --- |
+| `internal/capabilities/capabilities.go` | 31 | 唯一旧 Agent 版本回退与 Agent 声明计算入口 |
+| `internal/agent/operation_sessions.go` | 2 | Agent 在执行 Claude 轮次时再次检查实际 CLI 的提问 / 追加能力 |
+
+跨进程用例未伪造或预置能力声明：真实 Agent 探测 CLI → 心跳 → 持久化 → 认证 HTTP，逐项检查服务器开关、三引擎会话能力及原 `*_supported` 字段；独立固定期望包含旧 Claude CLI 不支持追加/提问的情况。静态门槛特性测试、CLI 组合等价性与声明完整性全部通过。
+
+本步没有改页面交互，未运行 E2E。真实服务器 Agent 升级验证尚未执行：本轮仅授权本地重构与提交，待后续明确发布授权后验证新表与线上入口状态。P4-03 必须等实际发布版本确定并完成全部未吊销 Agent 升级，不能据本地测试提前删历史门槛。已纠正旧计划“直接切旧二进制即可回滚”的描述；schema 版本护栏要求恢复备份或兼容构建。未夹带其他缺陷修复。

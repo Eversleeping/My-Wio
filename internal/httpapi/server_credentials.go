@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/gitidentity"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
@@ -55,7 +54,7 @@ func (a *API) updateServerCredentialProfiles(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusConflict, "server must be online to update credentials")
 		return
 	}
-	if input.Scope != "" && !buildinfo.SupportsScopedCredentials(server.AgentVersion) {
+	if input.Scope != "" && !server.Supports(protocol.CapabilityCredentialsScoped) {
 		writeError(w, http.StatusConflict, "independent Codex and Git credentials require Agent 0.3.02 or later")
 		return
 	}

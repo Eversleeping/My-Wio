@@ -30,6 +30,7 @@ type ControlEnvelope struct {
 }
 
 type Heartbeat struct {
+	Capabilities  []string `json:"capabilities,omitempty"`
 	Hostname      string   `json:"hostname"`
 	AgentVersion  string   `json:"agent_version"`
 	CodexVersion  string   `json:"codex_version"`

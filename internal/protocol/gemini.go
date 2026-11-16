@@ -6,6 +6,7 @@ const GeminiOwnershipLostMessage = "Agent no longer owns this Gemini task; it ma
 // ReconcileOperationIDs lists other operations whose result is overdue; old
 // Agents ignore the field, so the control plane never treats silence as loss.
 type GeminiKeepalive struct {
+	Capabilities          []string `json:"capabilities,omitempty"`
 	OperationIDs          []string `json:"gemini_operation_ids,omitempty"`
 	ClaudeOperationIDs    []string `json:"claude_operation_ids,omitempty"`
 	ReconcileOperationIDs []string `json:"reconcile_operation_ids,omitempty"`

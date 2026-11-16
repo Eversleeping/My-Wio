@@ -33,7 +33,7 @@ func (a *API) refreshWorkspaceClaudeSkills(w http.ResponseWriter, r *http.Reques
 		writeError(w, 409, "skill discovery requires an online server and ready workspace")
 		return
 	}
-	if !buildinfo.SupportsClaudeSkills(server.AgentVersion) {
+	if !server.Supports(protocol.CapabilityClaudeSkills) {
 		writeError(w, 409, "Claude skills require Agent "+buildinfo.MinimumClaudeSkillsVersion+" or newer")
 		return
 	}

@@ -10,7 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -198,6 +198,8 @@ type Operation struct {
 }
 
 type OperationSummary struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+
 	AgentVersion       string     `db:"agent_version" json:"-"`
 	InterruptSupported bool       `json:"interrupt_supported"`
 	InterruptStatus    string     `db:"interrupt_status" json:"interrupt_status"`
@@ -243,7 +245,7 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 	}
 	limit = operationListLimit(limit)
 	const updatedAt = "COALESCE(o.completed_at,o.started_at,o.delivered_at,o.created_at)"
-	query := `SELECT o.id,o.server_id,COALESCE(s.name,'') server_name,COALESCE(s.agent_version,'') agent_version,
+	query := `SELECT o.id,o.server_id,COALESCE(s.name,'') server_name,COALESCE(s.agent_version,'') agent_version,` + serverCapabilitySelect + `,
 		COALESCE(o.project_id,'') project_id,COALESCE(p.name,'') project_name,
 		COALESCE(o.workspace_id,'') workspace_id,COALESCE(w.path,'') workspace_path,COALESCE(w.display_name,'') workspace_name,
 		COALESCE(o.thread_id,'') thread_id,COALESCE(t.title,'') thread_title,
@@ -267,7 +269,7 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 		return nil, err
 	}
 	for i := range out {
-		out[i].InterruptSupported = protocol.CanInterruptOperation(out[i].Kind) && buildinfo.SupportsOperationInterrupt(out[i].AgentVersion)
+		out[i].InterruptSupported = protocol.CanInterruptOperation(out[i].Kind) && capabilities.Supports(protocol.CapabilityOperationInterrupt, out[i].AgentVersion, "", out[i].DeclaredCapabilities)
 	}
 	return out, nil
 }

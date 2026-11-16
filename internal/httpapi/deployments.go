@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-chi/chi/v5"
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/deployer"
 	"github.com/wio-platform/wio/internal/deploymenttemplate"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -471,7 +470,7 @@ func (a *API) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "target server must be online before rollback")
 		return
 	}
-	if !buildinfo.SupportsExactDeploymentRollback(server.AgentVersion) {
+	if !server.Supports(protocol.CapabilityDeployRollbackExact) {
 		writeError(w, http.StatusConflict, "target Agent must be upgraded before selecting a historical rollback release")
 		return
 	}

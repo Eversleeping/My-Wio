@@ -24,12 +24,14 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/agent"
 	"github.com/wio-platform/wio/internal/agentgateway"
 	"github.com/wio-platform/wio/internal/httpapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -194,6 +196,8 @@ func TestCrossProcessAcceptance(t *testing.T) {
 		return online && workspace.ID != "", fmt.Sprintf("online=%v workspaces=%s", online, workspacesResponse.body)
 	})
 
+	assertAcceptanceCapabilityDeclarations(t, api, database)
+
 	engines := []*acceptanceEngine{
 		{name: "codex", collection: "/api/threads", reply: "P0-07 fake Codex reply", createFields: map[string]any{"workspace_id": workspace.ID}},
 		{name: "claude", collection: "/api/claude/threads", reply: "P0-07 fake Claude reply", createFields: map[string]any{"workspace_id": workspace.ID, "model": "sonnet", "permission_mode": "default"}},
@@ -201,6 +205,7 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	}
 	for _, engine := range engines {
 		engine.create(t, api)
+		assertAcceptanceSessionCapabilities(t, api, engine)
 		engine.start(t, api, "P0-07 normal reply")
 		engine.waitFor(t, api, "idle", 1)
 
@@ -564,4 +569,72 @@ func responseDetail(response acceptanceResponse, err error) string {
 		return err.Error()
 	}
 	return fmt.Sprintf("status=%d body=%s", response.status, response.body)
+}
+
+// This assertion follows the real Agent heartbeat through persistence and the
+// authenticated HTTP response, rather than seeding the declaration in the DB.
+func assertAcceptanceCapabilityDeclarations(t *testing.T, api *acceptanceAPI, database *store.Store) {
+	t.Helper()
+	server, err := database.Server(context.Background(), store.ControlPlaneServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fake Gemini is 0.66.0; fake Claude is 1.0.0 (no steer/questions).
+	if len(server.DeclaredCapabilities) != 29 || !capabilities.Supports(protocol.CapabilityGeminiGoal, "", "", server.DeclaredCapabilities) || capabilities.Supports(protocol.CapabilityClaudeSteer, "", "", server.DeclaredCapabilities) {
+		t.Fatalf("real heartbeat declaration=%v", server.DeclaredCapabilities)
+	}
+	response, err := api.request(http.MethodGet, "/api/servers", nil)
+	if err != nil || response.status != http.StatusOK {
+		t.Fatal(responseDetail(response, err))
+	}
+	var servers []store.Server
+	if err := json.Unmarshal(response.body, &servers); err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range servers {
+		if server.ID == store.ControlPlaneServerID {
+			if !server.AgentUpdateSupported || !server.CodexUpdateSupported || !server.CLIManagementSupported || !server.ExactRollbackSupported || !server.ScopedCredentialsSupported || !server.GeminiCredentialsSupported || !server.ClaudeEffortSupported || !server.ClaudeCredentialsSupported {
+				t.Fatalf("HTTP server capabilities: %+v", server)
+			}
+			return
+		}
+	}
+	t.Fatal("missing real Agent in HTTP response")
+}
+
+func assertAcceptanceSessionCapabilities(t *testing.T, api *acceptanceAPI, engine *acceptanceEngine) {
+	t.Helper()
+	expected := map[string]session.Capabilities{
+		"codex":  {Turns: true, Images: true, Steer: true, SteerImages: true, Rewrite: true, Fork: true, ForkMessages: true, ForkWorktree: true, Questions: true, Approvals: true, Goal: true, Compact: true, Skills: true, Effort: true, Yolo: true, Collaboration: true},
+		"gemini": {Turns: true, Images: true, Steer: true, SteerImages: true, Rewrite: true, Fork: true, ForkMessages: true, ForkWorktree: true, Questions: true, Approvals: true, Goal: true, Plan: true, Skills: true, SkillsManage: true, Thinking: true, Yolo: true, ConfirmStopped: true, Collaboration: true},
+		"claude": {Turns: true, Images: true, Rewrite: true, Fork: true, ForkMessages: true, ForkWorktree: true, Approvals: true, Compact: true, Skills: true, Effort: true, Yolo: true, ConfirmStopped: true, Collaboration: true},
+	}
+	for _, path := range []string{engine.collection + "/" + engine.threadID, "/api/sessions/" + engine.name + "/" + engine.threadID} {
+		response, err := api.request(http.MethodGet, path, nil)
+		if err != nil || response.status != http.StatusOK {
+			t.Fatal(responseDetail(response, err))
+		}
+		var body struct {
+			Capabilities session.Capabilities `json:"capabilities"`
+		}
+		if err := json.Unmarshal(response.body, &body); err != nil || body.Capabilities != expected[engine.name] {
+			t.Fatalf("%s capabilities=%+v want %+v: %v", path, body.Capabilities, expected[engine.name], err)
+		}
+		var flags map[string]any
+		if err := json.Unmarshal(response.body, &flags); err != nil {
+			t.Fatal(err)
+		}
+		for key, value := range flags {
+			if !strings.HasSuffix(key, "_supported") {
+				continue
+			}
+			want := true
+			if engine.name == "claude" && (key == "steer_supported" || key == "questions_supported") {
+				want = false
+			}
+			if value != want {
+				t.Fatalf("%s %s=%v want %v", path, key, value, want)
+			}
+		}
+	}
 }

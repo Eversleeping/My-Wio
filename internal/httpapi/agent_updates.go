@@ -32,7 +32,7 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	if !buildinfo.SupportsSelfUpdate(server.AgentVersion) {
+	if !server.Supports(protocol.CapabilityAgentSelfUpdate) {
 		writeError(w, http.StatusConflict, "Agent must be reinstalled once before remote updates are supported")
 		return
 	}

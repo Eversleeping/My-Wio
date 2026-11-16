@@ -236,7 +236,7 @@ func (a *claudeHTTPDriver) startClaudeTurn(w http.ResponseWriter, r *http.Reques
 		writeError(w, 409, "Claude requires an online Agent")
 		return
 	}
-	if !buildinfo.SupportsClaude(thread.AgentVersion) {
+	if !thread.Capabilities.Turns {
 		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumClaudeVersion+" or newer to use Claude")
 		return
 	}
@@ -384,7 +384,7 @@ func (a *claudeHTTPDriver) queueClaudeFork(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if t.ServerStatus != "online" || t.SessionID == "" || t.ArchivedAt != nil || !buildinfo.SupportsClaudeInput(t.AgentVersion) {
+	if t.ServerStatus != "online" || t.SessionID == "" || t.ArchivedAt != nil || !t.Capabilities.Images {
 		writeError(w, 409, "Claude fork requires an initialized online session and Agent "+buildinfo.MinimumClaudeInputVersion+" or newer")
 		return
 	}

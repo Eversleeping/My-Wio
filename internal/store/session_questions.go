@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
 )
@@ -17,6 +18,8 @@ type questionSpec struct {
 	checkCancellation                          bool
 }
 type questionSession struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities"`
+
 	OperationID  string     `db:"operation_id"`
 	Status       string     `db:"status"`
 	ArchivedAt   *time.Time `db:"archived_at"`
@@ -47,7 +50,7 @@ func (s *Store) queueSessionAnswer(ctx context.Context, threadID, requestID stri
 		return "", err
 	}
 	var thread questionSession
-	if err = tx.GetContext(ctx, &thread, s.Q("SELECT operation_id,status,archived_at,server_status,server_id,project_id,workspace_id,agent_version,"+cfg.cliColumn+" AS cli_version FROM ("+cfg.threadSelect+" WHERE t.id=?) question_thread"), time.Now().UTC().Add(-ServerOnlineGracePeriod), threadID); err != nil {
+	if err = tx.GetContext(ctx, &thread, s.Q("SELECT operation_id,status,archived_at,server_status,server_id,project_id,workspace_id,agent_version,declared_capabilities,"+cfg.cliColumn+" AS cli_version FROM ("+cfg.threadSelect+" WHERE t.id=?) question_thread"), time.Now().UTC().Add(-ServerOnlineGracePeriod), threadID); err != nil {
 		return "", err
 	}
 	var detail string
@@ -83,7 +86,7 @@ func (s *Store) queueSessionAnswer(ctx context.Context, threadID, requestID stri
 	if thread.OperationID != question.OperationID || thread.Status != "running" || thread.ArchivedAt != nil || thread.ServerStatus != "online" {
 		return "", stateConflict(cfg.name + " question has expired or Agent is offline")
 	}
-	if !session.ResolveCapabilities(cfg.kind, thread.AgentVersion, thread.CLIVersion).Questions {
+	if !session.ResolveCapabilities(cfg.kind, thread.AgentVersion, thread.CLIVersion, thread.DeclaredCapabilities).Questions {
 		return "", stateConflict(cfg.name + " questions require an Agent update")
 	}
 	if cfg.checkCancellation {

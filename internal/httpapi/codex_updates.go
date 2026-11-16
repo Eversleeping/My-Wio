@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
@@ -26,7 +25,7 @@ func (a *API) updateCodexCLI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "server is offline")
 		return
 	}
-	if !buildinfo.SupportsCodexUpdate(server.AgentVersion) {
+	if !server.Supports(protocol.CapabilityCodexCLIUpdate) {
 		writeError(w, http.StatusConflict, "update Agent before updating Codex CLI")
 		return
 	}

@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -30,7 +29,7 @@ func (a *API) interruptOperation(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not load server")
 		return
 	}
-	if !buildinfo.SupportsOperationInterrupt(server.AgentVersion) {
+	if !server.Supports(protocol.CapabilityOperationInterrupt) {
 		writeError(w, http.StatusConflict, "update Agent to 0.2.96 or later to interrupt operations")
 		return
 	}

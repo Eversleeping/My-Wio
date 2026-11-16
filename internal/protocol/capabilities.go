@@ -1,0 +1,37 @@
+package protocol
+
+// Capability names are wire contracts. Published names must never be renamed.
+// Unknown names are ignored by older control planes.
+const (
+	CapabilityAgentSelfUpdate      = "agent.self_update"
+	CapabilityCodexCLIUpdate       = "codex.cli_update"
+	CapabilityDeployRollbackExact  = "deploy.rollback_exact"
+	CapabilityCodexSteer           = "codex.steer"
+	CapabilityWorkspaceFileWrite   = "workspace.file_write"
+	CapabilityCodexForkAtMessage   = "codex.fork_at_message"
+	CapabilityGeminiSessions       = "gemini.sessions"
+	CapabilityCLIManage            = "cli.manage"
+	CapabilityGeminiCredentials    = "gemini.credentials"
+	CapabilityGeminiFork           = "gemini.fork"
+	CapabilityGeminiThinking       = "gemini.thinking"
+	CapabilityGeminiYolo           = "gemini.yolo"
+	CapabilityGeminiInput          = "gemini.input"
+	CapabilityGeminiSteer          = "gemini.steer"
+	CapabilityGeminiSkills         = "gemini.skills"
+	CapabilityGeminiPlan           = "gemini.plan"
+	CapabilityGeminiGoal           = "gemini.goal"
+	CapabilityGeminiRewrite        = "gemini.rewrite"
+	CapabilityGeminiSteerImages    = "gemini.steer_images"
+	CapabilityGeminiSkillsManage   = "gemini.skills_manage"
+	CapabilityClaudeSessions       = "claude.sessions"
+	CapabilityClaudeManage         = "claude.manage"
+	CapabilityClaudeEffort         = "claude.effort"
+	CapabilityClaudeInput          = "claude.input"
+	CapabilityClaudeSkills         = "claude.skills"
+	CapabilityClaudeSteer          = "claude.steer"
+	CapabilityOperationInterrupt   = "operation.interrupt"
+	CapabilityClaudeRewrite        = "claude.rewrite"
+	CapabilityClaudeQuestions      = "claude.questions"
+	CapabilityCredentialsScoped    = "credentials.scoped"
+	CapabilitySessionCollaboration = "session.collaboration"
+)

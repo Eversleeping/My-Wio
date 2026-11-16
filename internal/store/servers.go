@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -24,6 +25,8 @@ const (
 )
 
 type Server struct {
+	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+
 	ID                         string              `db:"id" json:"id"`
 	Name                       string              `db:"name" json:"name"`
 	Hostname                   string              `db:"hostname" json:"hostname"`
@@ -75,7 +78,7 @@ type ServerMetadata struct {
 
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
-	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.is_control_plane DESC,s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+serverCapabilitySelect+`,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.is_control_plane DESC,s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +87,7 @@ func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 
 func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	var server Server
-	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+serverCapabilitySelect+`,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	if err != nil {
 		return Server{}, err
 	}
@@ -370,6 +373,11 @@ func (s *Store) AuthenticateAgent(ctx context.Context, token string) (string, er
 }
 
 func (s *Store) Heartbeat(ctx context.Context, serverID string, h protocol.Heartbeat) error {
+	tx, err := s.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	ready := 0
 	if h.CodexReady {
 		ready = 1
@@ -380,7 +388,7 @@ func (s *Store) Heartbeat(ctx context.Context, serverID string, h protocol.Heart
 	}
 	roots, _ := json.Marshal(h.ScanRoots)
 	managedRoots, _ := json.Marshal(h.ManagedRoots)
-	_, err := s.DB.ExecContext(ctx, s.Q(`UPDATE servers SET hostname=?,status='online',agent_version=?,scan_roots=?,managed_roots=?,last_seen_at=? WHERE id=? AND revoked_at IS NULL`), h.Hostname, h.AgentVersion, string(roots), string(managedRoots), time.Now().UTC(), serverID)
+	_, err = tx.ExecContext(ctx, s.Q(`UPDATE servers SET hostname=?,status='online',agent_version=?,scan_roots=?,managed_roots=?,last_seen_at=? WHERE id=? AND revoked_at IS NULL`), h.Hostname, h.AgentVersion, string(roots), string(managedRoots), time.Now().UTC(), serverID)
 	if err != nil {
 		return err
 	}
@@ -392,10 +400,22 @@ func (s *Store) Heartbeat(ctx context.Context, serverID string, h protocol.Heart
 		name, version string
 		ready         int
 	}{{"codex", h.CodexVersion, ready}, {"gemini", h.GeminiVersion, geminiReady}, {"claude", h.ClaudeVersion, claudeReady}} {
-		_, err = s.DB.ExecContext(ctx, s.Q(`INSERT INTO server_engines(server_id,engine,cli_version,ready) SELECT id,?,?,? FROM servers WHERE id=? AND revoked_at IS NULL ON CONFLICT(server_id,engine) DO UPDATE SET cli_version=excluded.cli_version,ready=excluded.ready`), engine.name, engine.version, engine.ready, serverID)
+		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_engines(server_id,engine,cli_version,ready) SELECT id,?,?,? FROM servers WHERE id=? AND revoked_at IS NULL ON CONFLICT(server_id,engine) DO UPDATE SET cli_version=excluded.cli_version,ready=excluded.ready`), engine.name, engine.version, engine.ready, serverID)
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	if h.Capabilities == nil {
+		_, err = tx.ExecContext(ctx, s.Q("DELETE FROM server_capabilities WHERE server_id=?"), serverID)
+	} else {
+		declaration, marshalErr := json.Marshal(h.Capabilities)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_capabilities(server_id,capabilities) SELECT id,? FROM servers WHERE id=? AND revoked_at IS NULL ON CONFLICT(server_id) DO UPDATE SET capabilities=excluded.capabilities`), string(declaration), serverID)
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
