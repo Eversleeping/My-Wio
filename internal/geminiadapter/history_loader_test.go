@@ -59,6 +59,36 @@ console.log('REPLAY_FINISHED');
 	if current, err := os.ReadFile(path); err != nil || string(current) != string(source) {
 		t.Fatal("loader changed the installed source")
 	}
+	// Modern official releases already await replay but still need the
+	// private acknowledgement. Verify completed replay and source preservation.
+	awaitedPath := filepath.Join(directory, "awaited-gemini.mjs")
+	awaitedSource := strings.Replace(string(source), "session.streamHistory(messages).catch(() => {});", "await session.streamHistory(messages);", 1)
+	if err := os.WriteFile(awaitedPath, []byte(awaitedSource), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.CommandContext(ctx, node, awaitedPath)
+	cmd.Env = environment
+	if output, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(output), "REPLAY_FINISHED") {
+		t.Fatalf("loader did not acknowledge already awaited replay: %v %s", err, output)
+	}
+	if current, err := os.ReadFile(awaitedPath); err != nil || string(current) != awaitedSource {
+		t.Fatal("loader changed the installed awaited implementation")
+	}
+	// Two replay sites cannot be identified as the session/load fence. Refuse
+	// that implementation before executing it, preserving the installed file.
+	ambiguousPath := filepath.Join(directory, "ambiguous-gemini.mjs")
+	ambiguousSource := strings.Replace(awaitedSource, "await session.streamHistory(messages);", "await session.streamHistory(messages); await session.streamHistory(messages);", 1)
+	if err := os.WriteFile(ambiguousPath, []byte(ambiguousSource), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.CommandContext(ctx, node, ambiguousPath)
+	cmd.Env = environment
+	if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "Ambiguous Gemini ACP history implementation") {
+		t.Fatalf("loader did not refuse ambiguous replay: %v %s", err, output)
+	}
+	if current, err := os.ReadFile(ambiguousPath); err != nil || string(current) != ambiguousSource {
+		t.Fatal("loader changed the installed ambiguous implementation")
+	}
 	userPath := filepath.Join(t.TempDir(), "user-tool.mjs")
 	userSource := strings.Replace(string(source), "if (!response._meta?.wioHistoryReplayed || events.join(',') !== 'old1,old2,old3') process.exit(2);", "if (response._meta !== undefined || events.length !== 0) process.exit(2);", 1)
 	userSource = strings.Replace(userSource, "if (process.env.NODE_OPTIONS !== '--no-warnings') process.exit(3);", "", 1)
