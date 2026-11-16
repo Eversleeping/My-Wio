@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wio-platform/wio/internal/protocol"
-	"github.com/wio-platform/wio/internal/session"
 	"strings"
 	"time"
 )
@@ -154,110 +153,20 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 	}
 }
 
+// execute preserves the historical error-only entry point used by local callers.
+// In particular Gemini interruption keeps its original parent-context lifetime.
 func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	switch envelope.Kind {
-	case protocol.OpInventoryScan:
-		return c.executeInventoryScan(ctx, envelope)
-	case protocol.OpGitImport:
-		return c.executeGitImport(ctx, envelope)
-	case protocol.OpGeminiTurnStart, protocol.OpGeminiTurnRewrite:
-		return c.sessionRunner(session.Gemini).Start(ctx, envelope)
-	case protocol.OpClaudeTurnStart:
-		return c.sessionRunner(session.Claude).Start(ctx, envelope)
-	case protocol.OpClaudeQuestionAnswer:
-		return c.sessionRunner(session.Claude).Answer(ctx, envelope)
-	case protocol.OpGeminiQuestionAnswer:
-		return c.sessionRunner(session.Gemini).Answer(ctx, envelope)
-	case protocol.OpGeminiTurnInterrupt:
-		return c.executeGeminiTurnInterrupt(ctx, envelope)
-	case protocol.OpGeminiTurnSteer:
-		return c.sessionRunner(session.Gemini).Steer(ctx, envelope)
-	case protocol.OpCodexTurnStart:
-		return c.sessionRunner(session.Codex).Start(ctx, envelope)
-	case protocol.OpCodexTurnRewrite:
-		return c.sessionRunner(session.Codex).Start(ctx, envelope)
-	case protocol.OpCodexTurnSteer:
-		return c.sessionRunner(session.Codex).Steer(ctx, envelope)
-	case protocol.OpCodexTurnInterrupt:
-		_, err := c.sessionRunner(session.Codex).Interrupt(ctx, envelope)
-		return err
-	case protocol.OpCodexApproval:
-		return c.sessionRunner(session.Codex).Answer(ctx, envelope)
-	case protocol.OpGeminiCredentialsConfigure:
-		return c.executeGeminiCredentialsConfigure(ctx, envelope)
-	case protocol.OpClaudeCredentialsConfigure:
-		return c.executeClaudeCredentialsConfigure(ctx, envelope)
-	case protocol.OpCredentialsConfigure, protocol.OpCodexCredentialsConfigure, protocol.OpGitCredentialsConfigure:
-		return c.executeCredentialsConfigure(ctx, envelope)
-	case protocol.OpCodexUpdate:
-		return c.executeCodexUpdate(ctx, envelope)
-	case protocol.OpCLIInstall:
-		return c.executeCLIInstall(ctx, envelope)
-	case protocol.OpDeployStart:
-		return c.executeDeployStart(ctx, envelope)
-	case protocol.OpDeployRollback:
-		return c.executeDeployRollback(ctx, envelope)
-	default:
-		return fmt.Errorf("unsupported operation kind %q", envelope.Kind)
+	if handler, ok := operationHandlers[envelope.Kind]; ok && handler.execute != nil {
+		return handler.execute(c, ctx, envelope)
 	}
+	return fmt.Errorf("unsupported operation kind %q", envelope.Kind)
 }
 
 func (c *Client) dispatchOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (string, json.RawMessage, bool, error) {
-	if envelope.Kind == protocol.OpOperationInterrupt {
-		return c.runOperationInterruptOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpAgentUpdate {
-		return c.runAgentUpdateOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGeminiTurnInterrupt {
-		return runSessionInterrupt(ctx, c.sessionRunner(session.Gemini), envelope)
-	} else if envelope.Kind == protocol.OpClaudeTurnSteer {
-		return "", nil, false, c.sessionRunner(session.Claude).Steer(ctx, envelope)
-	} else if envelope.Kind == protocol.OpClaudeTurnInterrupt {
-		return runSessionInterrupt(ctx, c.sessionRunner(session.Claude), envelope)
-	} else if envelope.Kind == protocol.OpGeminiSkillsManage {
-		return c.runGeminiSkillsManageOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpClaudeSkillsList {
-		return c.runClaudeSkillsListOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGeminiSkillsList {
-		return c.runGeminiSkillsListOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpWorkspaceFiles {
-		return c.runWorkspaceFilesOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpWorkspaceFileWrite {
-		return c.runWorkspaceFileWriteOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpWorkspaceFilePreview || envelope.Kind == protocol.OpWorkspaceImagePreview {
-		return c.runWorkspaceFilePreviewOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpWorkspaceChanges {
-		return c.runWorkspaceChangesOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpWorkspaceDiffPreview {
-		return c.runWorkspaceDiffPreviewOperation(ctx, envelope)
-	} else if strings.HasPrefix(envelope.Kind, protocol.OpCodexGoalPrefix) || envelope.Kind == protocol.OpCodexMCPList || envelope.Kind == protocol.OpCodexSkillsList || envelope.Kind == protocol.OpCodexModelsList || envelope.Kind == protocol.OpCodexStatusSnapshot || envelope.Kind == protocol.OpCodexThreadCompact {
-		return c.runCodexGoalPrefixOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpCodexThreadFork {
-		return c.runCodexThreadForkOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitProjectCreate {
-		return c.runGitProjectCreateOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitProjectDelete {
-		return c.runGitProjectDeleteOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitWorkspaceInspect {
-		return c.runGitWorkspaceInspectOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitWorkspaceWrite {
-		return c.runGitWorkspaceWriteOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitWorkspaceLifecycle {
-		return c.runGitWorkspaceLifecycleOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitWorkspaceClone {
-		return c.runGitWorkspaceCloneOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpClaudeThreadFork {
-		return c.runClaudeThreadForkOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGeminiThreadFork {
-		return c.runGeminiThreadForkOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitWorktreeCreate {
-		return c.runGitWorktreeCreateOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpGitWorktreeCleanup {
-		return c.runGitWorktreeCleanupOperation(ctx, envelope)
-	} else if envelope.Kind == protocol.OpDeployContainer || strings.HasPrefix(envelope.Kind, protocol.OpDeployContainerPrefix) {
-		return c.runDeployContainerOperation(ctx, envelope)
-	} else {
-		return "", nil, false, c.execute(ctx, envelope)
+	if handler, ok := operationHandlerFor(envelope.Kind); ok {
+		return handler(c, ctx, envelope)
 	}
+	return "", nil, false, fmt.Errorf("unsupported operation kind %q", envelope.Kind)
 }
 
 func (c *Client) executeInventoryScan(ctx context.Context, envelope *protocol.ControlEnvelope) error {

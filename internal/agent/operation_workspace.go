@@ -17,7 +17,7 @@ import (
 
 func (c *Client) runWorkspaceFilesOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.WorkspaceFilesCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.WorkspaceFilesResult
 		result, err = scanner.ListWorkspaceFiles(ctx, command.Path, c.inventoryRoots())
 		if err == nil {
@@ -30,7 +30,7 @@ func (c *Client) runWorkspaceFilesOperation(ctx context.Context, envelope *proto
 
 func (c *Client) runWorkspaceFileWriteOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.WorkspaceFileWriteCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		err = scanner.WriteWorkspaceFile(ctx, command, c.inventoryRoots())
 	}
 
@@ -39,7 +39,7 @@ func (c *Client) runWorkspaceFileWriteOperation(ctx context.Context, envelope *p
 
 func (c *Client) runWorkspaceFilePreviewOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.WorkspaceFilePreviewCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.WorkspaceFilePreviewResult
 		result, err = scanner.ReadWorkspaceFile(ctx, command.Root, command.Path, c.inventoryRoots(), 1024*1024)
 		if err == nil && envelope.Kind == protocol.OpWorkspaceImagePreview && result.Encoding != "base64" {
@@ -55,7 +55,7 @@ func (c *Client) runWorkspaceFilePreviewOperation(ctx context.Context, envelope 
 
 func (c *Client) runWorkspaceChangesOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.WorkspaceChangesCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var changes []gitrepository.WorkspaceChange
 		changes, err = gitrepository.ListWorkspaceChanges(ctx, command.Path, c.inventoryRoots())
 		if err == nil {
@@ -72,7 +72,7 @@ func (c *Client) runWorkspaceChangesOperation(ctx context.Context, envelope *pro
 
 func (c *Client) runWorkspaceDiffPreviewOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.WorkspaceDiffCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var diff gitrepository.WorkspaceDiff
 		diff, err = gitrepository.ReadWorkspaceDiff(ctx, command.Root, command.Path, command.OldPath, c.inventoryRoots(), gitrepository.MaxWorkspaceDiffBytes)
 		if err == nil {
@@ -86,7 +86,7 @@ func (c *Client) runWorkspaceDiffPreviewOperation(ctx context.Context, envelope 
 
 func (c *Client) runGitProjectCreateOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitProjectCreateCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.GitProjectCreateResult
 		result, err = c.createProject(ctx, command)
 		if err == nil {
@@ -100,7 +100,7 @@ func (c *Client) runGitProjectCreateOperation(ctx context.Context, envelope *pro
 
 func (c *Client) runGitProjectDeleteOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitProjectDeleteCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.GitProjectDeleteResult
 		result, err = c.deleteProject(ctx, command)
 		if err == nil {
@@ -114,7 +114,7 @@ func (c *Client) runGitProjectDeleteOperation(ctx context.Context, envelope *pro
 
 func (c *Client) runGitWorkspaceInspectOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitWorkspaceInspectCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.GitWorkspaceInspectResult
 		result, err = c.inspectWorkspaceGit(ctx, command)
 		if err == nil {
@@ -127,7 +127,7 @@ func (c *Client) runGitWorkspaceInspectOperation(ctx context.Context, envelope *
 
 func (c *Client) runGitWorkspaceWriteOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitWorkspaceWriteCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.GitWorkspaceWriteResult
 		result, err = c.writeWorkspaceGit(ctx, command)
 		if err == nil {
@@ -140,7 +140,7 @@ func (c *Client) runGitWorkspaceWriteOperation(ctx context.Context, envelope *pr
 
 func (c *Client) runGitWorkspaceLifecycleOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitWorkspaceLifecycleCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.GitWorkspaceLifecycleResult
 		result.WorkspaceID, result.TargetWorkspaceID, result.Action, result.SourcePath = command.WorkspaceID, command.TargetWorkspaceID, command.Action, command.SourcePath
 		switch command.Action {
@@ -166,7 +166,7 @@ func (c *Client) runGitWorkspaceLifecycleOperation(ctx context.Context, envelope
 
 func (c *Client) runGitWorkspaceCloneOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitWorkspaceCloneCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		destination, destinationErr := projectCreateDestination(c.config.CloneRoot, command.Name, command.Destination)
 		if destinationErr != nil {
 			err = destinationErr
@@ -184,7 +184,7 @@ func (c *Client) runGitWorkspaceCloneOperation(ctx context.Context, envelope *pr
 
 func (c *Client) runGitWorktreeCreateOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitWorktreeCreateCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.GitWorktreeCreateResult
 		result, err = gitworktree.Create(ctx, command, c.inventoryRoots())
 		if err == nil && command.ClaudeFork != nil {
@@ -248,7 +248,7 @@ func (c *Client) runGitWorktreeCreateOperation(ctx context.Context, envelope *pr
 
 func (c *Client) runGitWorktreeCleanupOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GitWorktreeCleanupCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		err = gitworktree.Remove(ctx, command.SourcePath, command.TargetPath, command.Branch, c.inventoryRoots())
 	}
 
@@ -257,7 +257,7 @@ func (c *Client) runGitWorktreeCleanupOperation(ctx context.Context, envelope *p
 
 func (c *Client) runDeployContainerOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.ContainerActionCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		if command.Action == "" {
 			command.Action = strings.TrimPrefix(envelope.Kind, protocol.OpDeployContainerPrefix)
 		}
@@ -275,7 +275,7 @@ func (c *Client) runDeployContainerOperation(ctx context.Context, envelope *prot
 
 func (c *Client) executeGitImport(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.GitImportCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	if _, err := scanner.Import(ctx, c.config.CloneRoot, command); err != nil {
@@ -286,7 +286,7 @@ func (c *Client) executeGitImport(ctx context.Context, envelope *protocol.Contro
 
 func (c *Client) executeDeployStart(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.DeployCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.runDeployment(ctx, command)
@@ -294,7 +294,7 @@ func (c *Client) executeDeployStart(ctx context.Context, envelope *protocol.Cont
 
 func (c *Client) executeDeployRollback(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.RollbackCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.runRollback(ctx, command)

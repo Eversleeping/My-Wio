@@ -14,7 +14,7 @@ type geminiSessionRunner struct{ client *Client }
 func (r geminiSessionRunner) Interrupt(ctx context.Context, envelope *protocol.ControlEnvelope) (resultData json.RawMessage, err error) {
 	c := r.client
 	var command protocol.GeminiInterruptCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
 		err = c.interruptGeminiAndWait(stopContext, command.OperationID)
 		stopCancel()
@@ -29,7 +29,7 @@ func (r geminiSessionRunner) Interrupt(ctx context.Context, envelope *protocol.C
 func (r geminiSessionRunner) Start(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.GeminiTurnCommand
-	if err := c.prepareSessionCommand(envelope.PayloadJSON, &command, &command.Workspace); err != nil {
+	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, &command.Workspace); err != nil {
 		return err
 	}
 	environment, err := c.geminiGitEnvironment(ctx)
@@ -45,7 +45,7 @@ func (r geminiSessionRunner) Start(ctx context.Context, envelope *protocol.Contr
 func (r geminiSessionRunner) Answer(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.GeminiAnswerCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.gemini.Answer(command)
@@ -54,7 +54,7 @@ func (r geminiSessionRunner) Answer(ctx context.Context, envelope *protocol.Cont
 func (r geminiSessionRunner) Steer(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.GeminiSteerCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.gemini.Steer(command)

@@ -10,7 +10,7 @@ import (
 
 func (c *Client) runOperationInterruptOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.OperationInterruptCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
 		err = c.interruptOperation(stopContext, command)
 		stopCancel()
@@ -21,7 +21,7 @@ func (c *Client) runOperationInterruptOperation(ctx context.Context, envelope *p
 
 func (c *Client) runAgentUpdateOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.AgentUpdateCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		restartPath, err = c.stageAgentUpdate(ctx, command)
 	}
 
@@ -43,7 +43,7 @@ func (c *Client) runCodexGoalPrefixOperation(ctx context.Context, envelope *prot
 
 func (c *Client) runCodexThreadForkOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.ForkThreadCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.ForkThreadResult
 		result, err = c.codex.ForkThread(ctx, command)
 		if err == nil {
@@ -56,7 +56,7 @@ func (c *Client) runCodexThreadForkOperation(ctx context.Context, envelope *prot
 
 func (c *Client) executeCredentialsConfigure(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.ConfigureCredentialsCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	scopedKind, _ := protocol.CredentialOperationKind(command.Scope)
@@ -72,7 +72,7 @@ func (c *Client) executeCodexUpdate(ctx context.Context, envelope *protocol.Cont
 	}
 	defer c.cliInstallMu.Unlock()
 	var command protocol.CodexUpdateCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	if err := c.updateCodexCLI(ctx, command); err != nil {
@@ -87,7 +87,7 @@ func (c *Client) executeCLIInstall(ctx context.Context, envelope *protocol.Contr
 	}
 	defer c.cliInstallMu.Unlock()
 	var command protocol.CLIInstallCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	if err := c.installCLI(ctx, command); err != nil {

@@ -17,7 +17,7 @@ type claudeSessionRunner struct{ client *Client }
 func (r claudeSessionRunner) Steer(ctx context.Context, envelope *protocol.ControlEnvelope) (err error) {
 	c := r.client
 	var command protocol.ClaudeSteerCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		err = c.claudeTurns.Steer(ctx, command)
 	}
 
@@ -27,7 +27,7 @@ func (r claudeSessionRunner) Steer(ctx context.Context, envelope *protocol.Contr
 func (r claudeSessionRunner) Interrupt(ctx context.Context, envelope *protocol.ControlEnvelope) (resultData json.RawMessage, err error) {
 	c := r.client
 	var command protocol.ClaudeInterruptCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		stopContext, stopCancel := context.WithTimeout(ctx, 15*time.Second)
 		err = c.interruptClaudeAndWait(stopContext, command.OperationID)
 		stopCancel()
@@ -42,7 +42,7 @@ func (r claudeSessionRunner) Interrupt(ctx context.Context, envelope *protocol.C
 func (r claudeSessionRunner) Start(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.ClaudeTurnCommand
-	if err := c.prepareSessionCommand(envelope.PayloadJSON, &command, &command.Workspace); err != nil {
+	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, &command.Workspace); err != nil {
 		return err
 	}
 	var err error
@@ -101,7 +101,7 @@ func (r claudeSessionRunner) Start(ctx context.Context, envelope *protocol.Contr
 func (r claudeSessionRunner) Answer(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.ClaudeAnswerCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.claudeTurns.Answer(ctx, command)

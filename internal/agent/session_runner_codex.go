@@ -15,7 +15,7 @@ func (r codexSessionRunner) Start(ctx context.Context, envelope *protocol.Contro
 	}
 	c := r.client
 	var command protocol.StartTurnCommand
-	if err := c.prepareSessionCommand(envelope.PayloadJSON, &command, nil); err != nil {
+	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, nil); err != nil {
 		return err
 	}
 	command.OperationID = envelope.OperationID
@@ -25,7 +25,7 @@ func (r codexSessionRunner) Start(ctx context.Context, envelope *protocol.Contro
 func (r codexSessionRunner) rewrite(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.RewriteTurnCommand
-	if err := c.prepareSessionCommand(envelope.PayloadJSON, &command, nil); err != nil {
+	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, nil); err != nil {
 		return err
 	}
 	command.Start.OperationID = envelope.OperationID
@@ -35,7 +35,7 @@ func (r codexSessionRunner) rewrite(ctx context.Context, envelope *protocol.Cont
 func (r codexSessionRunner) Steer(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.SteerTurnCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.codex.SteerTurn(ctx, command)
@@ -44,7 +44,7 @@ func (r codexSessionRunner) Steer(ctx context.Context, envelope *protocol.Contro
 func (r codexSessionRunner) Interrupt(ctx context.Context, envelope *protocol.ControlEnvelope) (json.RawMessage, error) {
 	c := r.client
 	var command protocol.InterruptTurnCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return nil, err
 	}
 	return nil, c.codex.Interrupt(ctx, command)
@@ -53,7 +53,7 @@ func (r codexSessionRunner) Interrupt(ctx context.Context, envelope *protocol.Co
 func (r codexSessionRunner) Answer(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
 	var command protocol.ApprovalDecisionCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.codex.Decide(command)

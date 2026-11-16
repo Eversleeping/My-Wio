@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,7 +15,7 @@ import (
 func (c *Client) replayOperationResult(ctx context.Context, envelope *protocol.ControlEnvelope, result protocol.OperationResult) {
 	if envelope.Kind == protocol.OpOperationInterrupt && result.Status == "succeeded" {
 		var command protocol.OperationInterruptCommand
-		err := json.Unmarshal(envelope.PayloadJSON, &command)
+		err := decodeOperationCommand(envelope.PayloadJSON, &command)
 		if err == nil {
 			stopContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 			err = c.interruptOperation(stopContext, command)

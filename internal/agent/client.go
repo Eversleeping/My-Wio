@@ -197,7 +197,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			if confirmErr != nil {
 				c.log.Warn("could not confirm Agent update", "error", confirmErr)
 			} else if confirmed {
-				_ = c.queue(protocol.AgentKindAgentUpdateStatus, map[string]string{"version": buildinfo.Version, "status": "healthy"}, true)
+				_ = c.queue(protocol.AgentKindAgentUpdateStatus, protocol.AgentUpdateStatus{Version: buildinfo.Version, Status: "healthy"}, true)
 			}
 			c.log.Info("connected to Wio control plane", "server_id", c.config.ServerID)
 		}

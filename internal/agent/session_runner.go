@@ -51,11 +51,11 @@ func runSessionInterrupt(ctx context.Context, runner sessionRunner, envelope *pr
 // Preserve the previous order: update reservation, permissive native decoding,
 // then workspace validation where the Agent previously performed it. Codex
 // passes nil because its native adapter owns path validation and bridge setup.
-func (c *Client) prepareSessionCommand(raw json.RawMessage, command any, workspace *string) error {
+func prepareSessionCommand[T any](c *Client, raw json.RawMessage, command *T, workspace *string) error {
 	if c.agentUpdatePending() {
 		return errors.New("Agent update is in progress; retry the task after it reconnects")
 	}
-	if err := json.Unmarshal(raw, command); err != nil {
+	if err := decodeOperationCommand(raw, command); err != nil {
 		return err
 	}
 	if workspace != nil {

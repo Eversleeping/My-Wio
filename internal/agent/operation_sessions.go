@@ -11,7 +11,7 @@ import (
 
 func (c *Client) runGeminiSkillsManageOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GeminiSkillManageCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		if c.agentUpdatePending() {
 			err = errors.New("Agent update is in progress")
 		} else {
@@ -31,7 +31,7 @@ func (c *Client) runGeminiSkillsManageOperation(ctx context.Context, envelope *p
 
 func (c *Client) runClaudeSkillsListOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.ClaudeSkillsCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var result protocol.ClaudeSkillsResult
 		result, err = c.listClaudeSkills(ctx, command)
 		if err == nil {
@@ -44,7 +44,7 @@ func (c *Client) runClaudeSkillsListOperation(ctx context.Context, envelope *pro
 
 func (c *Client) runGeminiSkillsListOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GeminiSkillsCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var root string
 		root, err = scanner.ResolveWorkspaceRoot(command.Workspace, c.inventoryRoots())
 		if err == nil {
@@ -61,7 +61,7 @@ func (c *Client) runGeminiSkillsListOperation(ctx context.Context, envelope *pro
 
 func (c *Client) runClaudeThreadForkOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.ClaudeForkCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		_, err = scanner.ResolveWorkspaceRoot(command.SourceWorkspace, c.inventoryRoots())
 		if err == nil {
 			var fork protocol.ClaudeForkResult
@@ -77,7 +77,7 @@ func (c *Client) runClaudeThreadForkOperation(ctx context.Context, envelope *pro
 
 func (c *Client) runGeminiThreadForkOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (restartPath string, resultData json.RawMessage, refreshInventory bool, err error) {
 	var command protocol.GeminiForkCommand
-	if err = json.Unmarshal(envelope.PayloadJSON, &command); err == nil {
+	if err = decodeOperationCommand(envelope.PayloadJSON, &command); err == nil {
 		var root string
 		root, err = scanner.ResolveWorkspaceRoot(command.SourceWorkspace, c.inventoryRoots())
 		if err == nil && root != command.SourceWorkspace {
@@ -100,7 +100,7 @@ func (c *Client) runGeminiThreadForkOperation(ctx context.Context, envelope *pro
 
 func (c *Client) executeGeminiTurnInterrupt(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.GeminiInterruptCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.interruptGeminiAndWait(ctx, command.OperationID)
@@ -108,7 +108,7 @@ func (c *Client) executeGeminiTurnInterrupt(ctx context.Context, envelope *proto
 
 func (c *Client) executeGeminiCredentialsConfigure(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.ConfigureGeminiCredentialsCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.configureGeminiCredentials(command)
@@ -116,7 +116,7 @@ func (c *Client) executeGeminiCredentialsConfigure(ctx context.Context, envelope
 
 func (c *Client) executeClaudeCredentialsConfigure(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.ConfigureClaudeCredentialsCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
+	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
 	return c.configureClaudeCredentials(command)

@@ -59,7 +59,7 @@ func TestDispatchKeepsPermissiveDecodingAndInventoryIgnoresPayload(t *testing.T)
 
 func TestLegacyExecuteRejectsSpecializedDispatchKinds(t *testing.T) {
 	client := outboundTestClient(1)
-	for _, kind := range []string{protocol.OpAgentUpdate, protocol.OpWorkspaceFiles, protocol.OpClaudeTurnInterrupt, "codex.goal.future", "deploy.container.future"} {
+	for _, kind := range []string{protocol.OpAgentUpdate, protocol.OpWorkspaceFiles, protocol.OpClaudeTurnInterrupt, protocol.OpClaudeTurnSteer, "codex.goal.future", "deploy.container.future"} {
 		err := client.execute(context.Background(), &protocol.ControlEnvelope{Kind: kind, PayloadJSON: json.RawMessage(`{`)})
 		if err == nil || err.Error() != fmt.Sprintf("unsupported operation kind %q", kind) {
 			t.Fatalf("legacy execute changed %s: %v", kind, err)
