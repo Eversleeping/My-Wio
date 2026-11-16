@@ -413,8 +413,8 @@ P1降级护栏已部署：旧控制面会拒绝较新的schema，不能直接指
 
 **做法**
 
-1. `internal/agent/client.go` 里处理 `gemini.turn.start`、`claude.turn.start`、`codex.turn.start` 等操作的分支，有共同的前置步骤：检查是否正在自更新、解析载荷、解析工作区根目录、建立协作桥接。把公共部分提取出来。
-2. 定义 Agent 端的运行器接口，三个适配器各自实现：发起轮次、追加、中断、回答提问。
+1. 以 `cd293a9` 核对，P3-04 已把会话操作移动到 `internal/agent/operation_sessions.go` 和 `operation_cli.go`，分派位于 `operations.go`。提取自更新检查与载荷解码；Gemini / Claude 的工作区规范化、协作桥接共用入口。Codex 的路径检查、桥接和常驻 app-server 生命周期继续由原生适配器负责，不能改变原有检查顺序。
+2. 定义 Agent 端的运行器接口，三个引擎包装器各自组合现有原生适配器，实现发起轮次、追加、中断、回答提问。接口统一调用入口和返回值，保留各引擎的 JSON 类型与中断结果；原生适配器不反向依赖 Agent 包。事件发布也收敛为一处入口，仍使用旧信封，为 P4-05 做准备。
 3. 线上的操作类型字符串和载荷结构保持不变。
 4. 同一提交里升级 `buildinfo.Version`。
 
@@ -573,3 +573,10 @@ internal/store/session_driver_collaboration.go:319:	if t.Engine == "codex" {
 - 2026-11-15，D8 / P2-08评估完成，Codex：P2-07前置已在a795faa关闭，按既定取消条件将P2-08标记已取消，证据和剩余原生兼容查询列于本步。统一会话服务、协作、调度及前端不再依赖物理线程合表；保留原子写入、原生附表及P2-07的应用级引用完整性约束。同步M4交付目标、数据设计与P2-10前置/清理范围，未改产品代码、未新增迁移。本次只做文档调整，验证链接、步骤依赖、表格列位与git diff --check，沿用已通过的实现验收，不重复构建测试。M4四项实现全部完成，一项按D8取消；未启动M5。
 
 - 2026-11-15，M4收尾，Codex：P2-07在a795faa完成验收登记，P2-08在fc41aee按D8取消；独立测试修正f9bf855已通过68文件478项完整Vitest和正反验证。P2-06/P3-08/P3-09此前均完成，M4全部步骤现为已完成或已取消。总表已回填实际提交号；Markdown链接、58行列位、提交引用、步骤依赖和M5未开始边界检查通过。本次纯文档收尾不重复已通过的构建测试。main无待续代码，未推送或部署，下载的真实数据库副本和私有连接临时文件已清理。停止在M4，不自动启动M5。
+
+### 2026-11-16 P2-09 开始
+
+- Codex 在 main / `cd293a9` 领取；前置 P2-04、P3-04 已完成。更新拆分后的源码定位，明确 Codex 原生路径 / 桥接检查不能被提前，以保持行为不变。
+- 已有完整 malformed 命令、重复派发、原生追加 / 问答 / 中断测试及 P0-07 跨进程链路；先单独补齐三引擎启动前的错误优先级与工作区拒绝测试，再引入运行器。事件发送路径已有跨进程测试覆盖，收敛后再补入口契约断言。
+
+- P2-09 前置特性测试：`go test ./internal/agent -run 'TestSessionStartPreparationOrder|TestOperationDispatchRejectsMalformedCommands|TestExecuteRejectsMalformedCommandsBeforeSideEffects' -count=1` 通过；覆盖自更新拒绝先于 JSON 解码、Gemini / Claude 工作区校验先于环境与适配器配置。仅测试和阶段定位更新，单独提交。
