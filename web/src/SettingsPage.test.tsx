@@ -17,7 +17,7 @@ function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Response) {
+function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Response, pagedSessions = false) {
   const requests: Array<{ url: string; method: string }> = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
@@ -31,7 +31,10 @@ function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Re
     if (url === "/api/secret-sets") return jsonResponse([secretSet]);
     if (url.startsWith("/api/audit?")) return jsonResponse({ items: [], has_more: false, next: null });
     if (url === "/api/scheduled-tasks") return jsonResponse([scheduledTask]);
-    if (url === "/api/threads") return jsonResponse([]);
+    if (url.startsWith("/api/sessions?")) {
+      const tail = new URL(url,"http://localhost").searchParams.has("cursor");
+      return jsonResponse({items: pagedSessions ? [{id:tail?"late":"early",engine:tail?"claude":"codex",title:tail?"Later Claude session":"First Codex session",project_name:"Console",server_name:"Server"}] : [], next_cursor:pagedSessions && !tail ? "next-page" : null, groups:[]});
+    }
     return jsonResponse({ error: `Unexpected request: ${method} ${url}` }, 404);
   }));
   return requests;
@@ -105,4 +108,18 @@ test("keeps a failed settings deletion available for retry and blocks duplicate 
   await user.click(within(confirmation).getByRole("button", { name: "Delete credential profile" }));
   await waitFor(() => expect(requests.filter(request => request.method === "DELETE")).toHaveLength(2));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete credential profile" })).not.toBeInTheDocument());
+});
+
+
+test("loads settings session choices from every unified cursor page", async () => {
+ window.localStorage.setItem("wio_language","en");
+ const requests=installSettingsFetch(undefined,true), user=userEvent.setup();
+ renderSettings();
+ await screen.findByText(scheduledTask.name);
+ await user.click(screen.getByRole("button",{name:"New scheduled task"}));
+ const dialog=await screen.findByRole("dialog",{name:"New scheduled task"});
+ await user.selectOptions(within(dialog).getByLabelText("Agent"),"claude");
+ await within(dialog).findByRole("option",{name:/Later Claude session/});
+ expect(requests.some(request=>request.url.includes("cursor=next-page"))).toBe(true);
+ expect(requests.some(request=>/\/api\/(?:threads|claude\/threads|gemini\/threads)/.test(request.url))).toBe(false);
 });

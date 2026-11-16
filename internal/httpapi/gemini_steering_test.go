@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -43,7 +44,7 @@ func TestGeminiSteerScopesDeliveryRetriesAndNextTurnContext(t *testing.T) {
 	api := resourceTestAPI(db)
 	requestID := store.NewID()
 	send := func(operation, id, prompt string) int {
-		response := threadResourceRequest(t, http.MethodPost, "/steer", thread.ID, map[string]any{"prompt": prompt, "operation_id": operation, "request_id": id}, api.steerGeminiTurn)
+		response := threadResourceRequest(t, http.MethodPost, "/steer", thread.ID, map[string]any{"prompt": prompt, "operation_id": operation, "request_id": id}, sessionNativeHandler(api, session.Gemini, "steer"))
 		return response.Code
 	}
 	if code := send(op, requestID, "Focus on tests"); code != 409 {
@@ -78,25 +79,25 @@ func TestGeminiSteerScopesDeliveryRetriesAndNextTurnContext(t *testing.T) {
 	image := protocol.TurnImage{DataURL: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}
 	imageID := store.NewID()
 	imageBody := map[string]any{"operation_id": op, "request_id": imageID, "prompt": "Inspect the image", "images": []protocol.TurnImage{image}}
-	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 409 {
+	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, sessionNativeHandler(api, session.Gemini, "steer")); r.Code != 409 {
 		t.Fatalf("old agent accepted images: %d", r.Code)
 	}
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.88", GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 202 {
+		if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, sessionNativeHandler(api, session.Gemini, "steer")); r.Code != 202 {
 			t.Fatalf("image retry: %d %s", r.Code, r.Body.String())
 		}
 	}
 	imageBody["images"] = []protocol.TurnImage{image, image}
-	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 409 {
+	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, sessionNativeHandler(api, session.Gemini, "steer")); r.Code != 409 {
 		t.Fatalf("changed images accepted: %d", r.Code)
 	}
 	imageBody["request_id"] = store.NewID()
 	imageBody["prompt"] = ""
 	imageBody["images"] = []protocol.TurnImage{image}
-	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, api.steerGeminiTurn); r.Code != 202 {
+	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, sessionNativeHandler(api, session.Gemini, "steer")); r.Code != 202 {
 		t.Fatalf("image only rejected: %d %s", r.Code, r.Body.String())
 	}
 	current, _ := db.GeminiThread(ctx, thread.ID)

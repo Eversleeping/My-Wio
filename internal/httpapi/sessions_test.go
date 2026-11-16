@@ -14,18 +14,13 @@ import (
 	"github.com/wio-platform/wio/internal/session"
 )
 
-// Share the lifecycle scenarios, but retain a separate matrix for the new
-// endpoints and explicit tests for their intentionally different read contract.
+// Exercise all native lifecycle scenarios through the unified public endpoints.
 func TestUnifiedSessionContracts(t *testing.T) {
 	for _, engine := range []string{session.Codex, session.Gemini, session.Claude} {
 		t.Run(engine, func(t *testing.T) {
 			for _, tc := range sessionContractCases(engine) {
-				if tc.name == "create-detail-update-list" || tc.name == "archive-delete" || tc.name == "events-usage-validation" {
-					continue
-				}
 				t.Run(tc.name, func(t *testing.T) {
 					f := newSessionContract(t, engine)
-					f.prefix = "/api/sessions/" + engine
 					tc.run(t, f)
 				})
 			}
@@ -37,7 +32,6 @@ func TestUnifiedSessionCRUD(t *testing.T) {
 	for _, engine := range []string{session.Codex, session.Gemini, session.Claude} {
 		t.Run(engine, func(t *testing.T) {
 			f := newSessionContract(t, engine)
-			f.prefix = "/api/sessions/" + engine
 			created := f.call("POST", f.prefix, fmt.Sprintf(`{"workspace_id":%q}`, f.workspaceID), 201)
 			if created["engine"] != engine || created["mode"] == nil || created["workspace_name"] == nil {
 				t.Fatal(created)
@@ -57,7 +51,7 @@ func TestUnifiedSessionCRUD(t *testing.T) {
 				}
 			}
 			if engine != session.Codex {
-				if updated["steer_supported"] != updated["capabilities"].(map[string]any)["steer"] {
+				if _, legacy := updated["steer_supported"]; legacy {
 					t.Fatal(updated)
 				}
 			}
@@ -162,7 +156,6 @@ func TestUnifiedSessionEventWindowAndUnsupported(t *testing.T) {
 	for _, engine := range []string{session.Codex, session.Gemini, session.Claude} {
 		t.Run(engine, func(t *testing.T) {
 			f := newSessionContract(t, engine)
-			f.prefix = "/api/sessions/" + engine
 			for n := 0; n < 505; n++ {
 				f.add("user.message", fmt.Sprintf(`{"text":"message %d"}`, n))
 			}
@@ -216,7 +209,6 @@ func TestUnifiedSessionAnswersAndAudit(t *testing.T) {
 	for _, engine := range []string{session.Codex, session.Gemini, session.Claude} {
 		t.Run(engine, func(t *testing.T) {
 			f := newSessionContract(t, engine)
-			f.prefix = "/api/sessions/" + engine
 			if engine == session.Codex {
 				if f.call("POST", f.path("/questions/unknown/answer"), `{}`, 409)["code"] != "CAPABILITY_UNSUPPORTED" {
 					t.Fatal("unsupported answer")
@@ -246,6 +238,29 @@ func TestUnifiedSessionAnswersAndAudit(t *testing.T) {
 			if e = f.db.DB.GetContext(context.Background(), &count, f.db.Q("SELECT COUNT(*) FROM audit_log WHERE action=? AND resource_id=?"), engine+".turn.start", f.id); e != nil || count != 1 {
 				t.Fatalf("audit name: %d %v", count, e)
 			}
+		})
+	}
+}
+
+func TestRetiredSessionRoutesAreUnavailable(t *testing.T) {
+	for _, engine := range []string{session.Codex, session.Gemini, session.Claude} {
+		t.Run(engine, func(t *testing.T) {
+			f := newSessionContract(t, engine)
+			prefix := "/api/" + engine + "/threads"
+			if engine == session.Codex {
+				prefix = "/api/threads"
+			}
+			for _, old := range []struct{ method, path, body string }{
+				{"GET", prefix, ""}, {"POST", prefix, fmt.Sprintf(`{"workspace_id":%q}`, f.workspaceID)},
+				{"GET", prefix + "/" + f.id, ""}, {"PATCH", prefix + "/" + f.id, `{"title":"must not change"}`},
+				{"DELETE", prefix + "/" + f.id, ""}, {"GET", prefix + "/" + f.id + "/events", ""},
+				{"POST", prefix + "/" + f.id + "/turns", `{"prompt":"must not queue"}`},
+			} {
+				if w := f.request(old.method, old.path, old.body); w.Code != 404 {
+					t.Fatalf("retired %s %s returned %d: %s", old.method, old.path, w.Code, w.Body)
+				}
+			}
+			f.call("GET", f.path(""), "", 200)
 		})
 	}
 }

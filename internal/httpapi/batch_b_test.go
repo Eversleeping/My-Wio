@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -45,13 +47,13 @@ func TestStoreErrorStatusClassification(t *testing.T) {
 func TestRemainingHandlersSeparateStoreFailures(t *testing.T) {
 	for name, call := range map[string]func(*API) *httptest.ResponseRecorder{
 		"create Codex": func(a *API) *httptest.ResponseRecorder {
-			return directJSONRequest(t, http.MethodPost, "/api/threads", map[string]string{"workspace_id": "missing"}, &store.Session{UserID: "test-user"}, a.createThread)
+			return directJSONRequest(t, http.MethodPost, "/api/sessions/codex", map[string]string{"workspace_id": "missing"}, &store.Session{UserID: "test-user"}, sessionNativeHandler(a, session.Codex, "create"))
 		},
 		"create Claude": func(a *API) *httptest.ResponseRecorder {
-			return directJSONRequest(t, http.MethodPost, "/api/claude/threads", map[string]string{"workspace_id": "missing"}, &store.Session{UserID: "test-user"}, a.createClaudeThread)
+			return directJSONRequest(t, http.MethodPost, "/api/sessions/claude", map[string]string{"workspace_id": "missing"}, &store.Session{UserID: "test-user"}, sessionNativeHandler(a, session.Claude, "create"))
 		},
 		"create Gemini": func(a *API) *httptest.ResponseRecorder {
-			return directJSONRequest(t, http.MethodPost, "/api/gemini/threads", map[string]string{"workspace_id": "missing"}, &store.Session{UserID: "test-user"}, a.createGeminiThread)
+			return directJSONRequest(t, http.MethodPost, "/api/sessions/gemini", map[string]string{"workspace_id": "missing"}, &store.Session{UserID: "test-user"}, sessionNativeHandler(a, session.Gemini, "create"))
 		},
 		"approval": func(a *API) *httptest.ResponseRecorder {
 			return directJSONRequest(t, http.MethodPost, "/api/approvals/missing", map[string]string{"decision": "denied"}, &store.Session{UserID: "test-user"}, a.decideApproval)
@@ -101,7 +103,7 @@ func TestCodexHTTPRetriesReplayAfterTurnCompletion(t *testing.T) {
 	}
 	api := resourceTestAPI(db)
 	turnInput := map[string]string{"prompt": "hello", "request_id": "turn-key"}
-	first := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, turnInput, api.startTurn)
+	first := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/turns", thread.ID, turnInput, sessionNativeHandler(api, session.Codex, "turns"))
 	if first.Code != 202 {
 		t.Fatalf("turn: %d %s", first.Code, first.Body.String())
 	}
@@ -112,7 +114,7 @@ func TestCodexHTTPRetriesReplayAfterTurnCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	steerInput := map[string]string{"prompt": "correction", "request_id": "steer-key"}
-	steering := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/steer", thread.ID, steerInput, api.steerTurn)
+	steering := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/steer", thread.ID, steerInput, sessionNativeHandler(api, session.Codex, "steer"))
 	if steering.Code != 202 {
 		t.Fatalf("steer: %d %s", steering.Code, steering.Body.String())
 	}
@@ -123,14 +125,14 @@ func TestCodexHTTPRetriesReplayAfterTurnCompletion(t *testing.T) {
 		body     any
 		handler  http.HandlerFunc
 		previous *httptest.ResponseRecorder
-	}{{turnInput, api.startTurn, first}, {steerInput, api.steerTurn, steering}} {
-		retry := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID, thread.ID, item.body, item.handler)
+	}{{turnInput, sessionNativeHandler(api, session.Codex, "turns"), first}, {steerInput, sessionNativeHandler(api, session.Codex, "steer"), steering}} {
+		retry := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID, thread.ID, item.body, item.handler)
 		if retry.Code != 202 || retry.Body.String() != item.previous.Body.String() {
 			t.Fatalf("replay: %d %s; first: %s", retry.Code, retry.Body.String(), item.previous.Body.String())
 		}
 	}
 	steerInput["prompt"] = "changed"
-	conflict := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/steer", thread.ID, steerInput, api.steerTurn)
+	conflict := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/steer", thread.ID, steerInput, sessionNativeHandler(api, session.Codex, "steer"))
 	if conflict.Code != 409 {
 		t.Fatalf("conflict: %d %s", conflict.Code, conflict.Body.String())
 	}

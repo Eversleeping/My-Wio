@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -188,13 +189,13 @@ func TestGitWriteStillStartsRefreshWhenUnlocked(t *testing.T) {
 func TestHandlersSeparateMissingResourcesFromStoreFailures(t *testing.T) {
 	cases := map[string]func(*testing.T, *API) *httptest.ResponseRecorder{
 		"start turn": func(t *testing.T, api *API) *httptest.ResponseRecorder {
-			return threadResourceRequest(t, http.MethodPost, "/api/threads/missing/turns", "missing", map[string]string{"prompt": "hello"}, api.startTurn)
+			return threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/missing/turns", "missing", map[string]string{"prompt": "hello"}, sessionNativeHandler(api, session.Codex, "turns"))
 		},
 		"steer turn": func(t *testing.T, api *API) *httptest.ResponseRecorder {
-			return threadResourceRequest(t, http.MethodPost, "/api/threads/missing/steer", "missing", map[string]string{"prompt": "hello"}, api.steerTurn)
+			return threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/missing/steer", "missing", map[string]string{"prompt": "hello"}, sessionNativeHandler(api, session.Codex, "steer"))
 		},
 		"interrupt turn": func(t *testing.T, api *API) *httptest.ResponseRecorder {
-			return threadResourceRequest(t, http.MethodPost, "/api/threads/missing/interrupt", "missing", nil, api.interruptTurn)
+			return threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/missing/interrupt", "missing", nil, sessionNativeHandler(api, session.Codex, "interrupt"))
 		},
 		"start deployment": func(t *testing.T, api *API) *httptest.ResponseRecorder {
 			return deploymentResourceRequest(t, http.MethodPost, "/api/deployment-targets/missing/deploy", "targetID", "missing", map[string]string{}, api.startDeployment)

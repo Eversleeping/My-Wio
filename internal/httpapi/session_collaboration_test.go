@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
@@ -180,14 +181,14 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 	t.Run("codex turn", func(t *testing.T) {
 		thread := codex(t)
 		spent := spend(t, "codex:"+thread.ID, "codex:"+store.NewID())
-		accepted(t, post("/api/threads/"+thread.ID+"/turns", turn), spent)
+		accepted(t, post("/api/sessions/codex/"+thread.ID+"/turns", turn), spent)
 	})
 	t.Run("codex correction to a running turn", func(t *testing.T) {
 		thread := codex(t)
 		exec(t, "UPDATE codex_threads SET codex_thread_id=?,status='running' WHERE id=?", "native-"+thread.ID, thread.ID)
 		event(t, protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.started", Payload: json.RawMessage(`{"turn":{"id":"active-turn"}}`)})
 		spent := spend(t, "codex:"+thread.ID, "codex:"+store.NewID())
-		accepted(t, post("/api/threads/"+thread.ID+"/steer", map[string]any{"prompt": "correct", "images": []any{}}), spent)
+		accepted(t, post("/api/sessions/codex/"+thread.ID+"/steer", map[string]any{"prompt": "correct", "images": []any{}}), spent)
 	})
 	t.Run("codex edited message", func(t *testing.T) {
 		thread := codex(t)
@@ -195,7 +196,7 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 		event(t, protocol.StreamEvent{StreamID: thread.ID, Kind: "turn.accepted", Payload: json.RawMessage(`{"turn_id":"turn-1"}`)})
 		event(t, protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"status":"completed"}}`)})
 		spent := spend(t, "codex:"+thread.ID, "codex:"+store.NewID())
-		accepted(t, post("/api/threads/"+thread.ID+"/events/"+target.EventID+"/rewrite", map[string]any{"prompt": "revised", "approval_mode": "on-request"}), spent)
+		accepted(t, post("/api/sessions/codex/"+thread.ID+"/events/"+target.EventID+"/rewrite", map[string]any{"prompt": "revised", "approval_mode": "on-request"}), spent)
 	})
 	t.Run("claude turn, sent to the child", func(t *testing.T) {
 		thread, err := db.CreateClaudeThread(ctx, workspace(), "sonnet", "default", "")
@@ -204,14 +205,14 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 		}
 		// The user may write to any session of the group, here the child.
 		spent := spend(t, "codex:"+store.NewID(), "claude:"+thread.ID)
-		accepted(t, post("/api/claude/threads/"+thread.ID+"/turns", map[string]any{"prompt": "continue"}), spent)
+		accepted(t, post("/api/sessions/claude/"+thread.ID+"/turns", map[string]any{"prompt": "continue"}), spent)
 	})
 	t.Run("claude correction to a running turn", func(t *testing.T) {
 		thread, err := db.CreateClaudeThread(ctx, workspace(), "sonnet", "default", "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if w := post("/api/claude/threads/"+thread.ID+"/turns", map[string]any{"prompt": "start"}); w.Code != http.StatusAccepted {
+		if w := post("/api/sessions/claude/"+thread.ID+"/turns", map[string]any{"prompt": "start"}); w.Code != http.StatusAccepted {
 			t.Fatalf("start: %d %s", w.Code, w.Body.String())
 		}
 		if thread, err = db.ClaudeThread(ctx, thread.ID); err != nil {
@@ -222,7 +223,7 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 		ready, _ := json.Marshal(map[string]any{"operation_id": thread.OperationID, "ready": true})
 		event(t, protocol.StreamEvent{StreamID: thread.ID, Kind: "claude.steer.ready", Payload: ready})
 		spent := spend(t, "claude:"+thread.ID, "codex:"+store.NewID())
-		accepted(t, post("/api/claude/threads/"+thread.ID+"/steer", map[string]any{"operation_id": thread.OperationID, "request_id": uuid.NewString(), "prompt": "correct"}), spent)
+		accepted(t, post("/api/sessions/claude/"+thread.ID+"/steer", map[string]any{"operation_id": thread.OperationID, "request_id": uuid.NewString(), "prompt": "correct"}), spent)
 	})
 	t.Run("gemini turn", func(t *testing.T) {
 		thread, err := db.CreateGeminiThread(ctx, workspace(), "flash", "default")
@@ -230,14 +231,14 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 			t.Fatal(err)
 		}
 		spent := spend(t, "gemini:"+thread.ID, "codex:"+store.NewID())
-		accepted(t, post("/api/gemini/threads/"+thread.ID+"/turns", map[string]any{"prompt": "continue"}), spent)
+		accepted(t, post("/api/sessions/gemini/"+thread.ID+"/turns", map[string]any{"prompt": "continue"}), spent)
 	})
 	t.Run("gemini correction to a running turn", func(t *testing.T) {
 		thread, err := db.CreateGeminiThread(ctx, workspace(), "flash", "default")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if w := post("/api/gemini/threads/"+thread.ID+"/turns", map[string]any{"prompt": "start"}); w.Code != http.StatusAccepted {
+		if w := post("/api/sessions/gemini/"+thread.ID+"/turns", map[string]any{"prompt": "start"}); w.Code != http.StatusAccepted {
 			t.Fatalf("start: %d %s", w.Code, w.Body.String())
 		}
 		if thread, err = db.GeminiThread(ctx, thread.ID); err != nil {
@@ -247,14 +248,14 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 		ready, _ := json.Marshal(map[string]any{"operation_id": thread.OperationID})
 		event(t, protocol.StreamEvent{EventID: thread.OperationID + ":steer-ready", StreamID: thread.ID, Kind: "gemini.steer.ready", Payload: ready})
 		spent := spend(t, "gemini:"+thread.ID, "codex:"+store.NewID())
-		accepted(t, post("/api/gemini/threads/"+thread.ID+"/steer", map[string]any{"operation_id": thread.OperationID, "request_id": uuid.NewString(), "prompt": "correct"}), spent)
+		accepted(t, post("/api/sessions/gemini/"+thread.ID+"/steer", map[string]any{"operation_id": thread.OperationID, "request_id": uuid.NewString(), "prompt": "correct"}), spent)
 	})
 	t.Run("gemini goal resumed by the user", func(t *testing.T) {
 		thread, err := db.CreateGeminiThread(ctx, workspace(), "flash", "default")
 		if err != nil {
 			t.Fatal(err)
 		}
-		path := "/api/gemini/threads/" + thread.ID
+		path := "/api/sessions/gemini/" + thread.ID
 		if w := post(path+"/turns", map[string]any{"prompt": "Verify the tests", "goal": map[string]int{"max_continuations": 4, "max_seconds": 300}}); w.Code != http.StatusAccepted {
 			t.Fatalf("start: %d %s", w.Code, w.Body.String())
 		}
@@ -274,11 +275,11 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 	})
 	t.Run("a refused message leaves the allowance alone", func(t *testing.T) {
 		thread := codex(t)
-		if w := post("/api/threads/"+thread.ID+"/turns", turn); w.Code != http.StatusAccepted {
+		if w := post("/api/sessions/codex/"+thread.ID+"/turns", turn); w.Code != http.StatusAccepted {
 			t.Fatalf("start: %d %s", w.Code, w.Body.String())
 		}
 		spent := spend(t, "codex:"+thread.ID, "codex:"+store.NewID())
-		if w := post("/api/threads/"+thread.ID+"/turns", turn); w.Code != http.StatusConflict {
+		if w := post("/api/sessions/codex/"+thread.ID+"/turns", turn); w.Code != http.StatusConflict {
 			t.Fatalf("a second turn was accepted while one is active: %d %s", w.Code, w.Body.String())
 		}
 		if count := spent(); count != 10 {

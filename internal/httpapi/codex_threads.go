@@ -8,16 +8,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-
-	"github.com/wio-platform/wio/internal/session"
-	"github.com/wio-platform/wio/internal/store"
 )
-
-type threadListPageResponse struct {
-	Items   []store.Thread `json:"items"`
-	HasMore bool           `json:"has_more"`
-	Next    *int           `json:"next"`
-}
 
 func parseThreadPageValue(values []string, present bool, name string, fallback int, positive bool) (int, error) {
 	if !present {
@@ -63,28 +54,4 @@ func (a *API) archiveProjectThreads(w http.ResponseWriter, r *http.Request) {
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.archive_project", "project", projectID, map[string]any{"archived": count, "server_id": serverID}, clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]int64{"archived": count})
-}
-func (a *API) threads(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "list")
-}
-func (a *API) createThread(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "create")
-}
-func (a *API) thread(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "detail")
-}
-func (a *API) updateThread(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "update")
-}
-func (a *API) deleteThread(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "delete")
-}
-func (a *API) forkThread(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "fork")
-}
-func (a *API) forkThreadToWorktree(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "fork-worktree")
-}
-func (a *API) threadEvents(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "events")
 }

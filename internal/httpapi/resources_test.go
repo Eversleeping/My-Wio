@@ -20,6 +20,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -613,7 +614,7 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 	}
 	api := resourceTestAPI(database)
 	image := "data:image/png;base64,iVBORw0KGgo="
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "hello", "images": []map[string]string{{"data_url": image}}, "model": "  gpt-5.6-sol  ", "reasoning_effort": "  high  ", "approval_mode": "on-request"}, api.startTurn)
+	response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "hello", "images": []map[string]string{{"data_url": image}}, "model": "  gpt-5.6-sol  ", "reasoning_effort": "  high  ", "approval_mode": "on-request"}, sessionNativeHandler(api, session.Codex, "turns"))
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("start turn returned %d: %s", response.Code, response.Body.String())
 	}
@@ -634,7 +635,7 @@ func TestStartTurnQueuesSelectedModelAndReasoningEffort(t *testing.T) {
 	if len(command.Images) != 1 || command.Images[0].DataURL != image {
 		t.Fatalf("unexpected turn images: %#v", command.Images)
 	}
-	duplicate := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "duplicate", "approval_mode": "on-request"}, api.startTurn)
+	duplicate := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "duplicate", "approval_mode": "on-request"}, sessionNativeHandler(api, session.Codex, "turns"))
 	if duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate active turn returned %d: %s", duplicate.Code, duplicate.Body.String())
 	}
@@ -676,7 +677,7 @@ func TestRewriteTurnPreservesHistoryUntilForkIsAccepted(t *testing.T) {
 	add("codex.item.completed", `{"item":{"type":"agentMessage","text":"third answer"}}`)
 
 	api := resourceTestAPI(database)
-	response := rewriteResourceRequest(t, thread.ID, target.EventID, map[string]any{"prompt": "revised second", "approval_mode": "on-request"}, api.rewriteTurn)
+	response := rewriteResourceRequest(t, thread.ID, target.EventID, map[string]any{"prompt": "revised second", "approval_mode": "on-request"}, sessionNativeHandler(api, session.Codex, "rewrite"))
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("rewrite returned %d: %s", response.Code, response.Body.String())
 	}
@@ -721,7 +722,7 @@ func TestRewriteTurnPreservesHistoryUntilForkIsAccepted(t *testing.T) {
 	if err != nil || updated.CodexThreadID != "forked-thread" || updated.Status != "running" {
 		t.Fatalf("accepted rewrite did not bind fork: %#v %v", updated, err)
 	}
-	conflict := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "again", "approval_mode": "on-request", "edit_event_id": replacement.EventID}, api.startTurn)
+	conflict := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "again", "approval_mode": "on-request", "edit_event_id": replacement.EventID}, sessionNativeHandler(api, session.Codex, "turns"))
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("active rewrite returned %d: %s", conflict.Code, conflict.Body.String())
 	}
@@ -752,7 +753,7 @@ func TestInterruptQueuesTheCurrentlyAcceptedTurnID(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/interrupt", thread.ID, nil, api.interruptTurn)
+	response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/interrupt", thread.ID, nil, sessionNativeHandler(api, session.Codex, "interrupt"))
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("interrupt returned %d: %s", response.Code, response.Body.String())
 	}
@@ -792,7 +793,7 @@ func TestInterruptCancelsQueuedTurnBeforeDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/interrupt", thread.ID, nil, api.interruptTurn)
+	response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/interrupt", thread.ID, nil, sessionNativeHandler(api, session.Codex, "interrupt"))
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("queued interrupt returned %d: %s", response.Code, response.Body.String())
 	}
@@ -829,7 +830,7 @@ func TestCreateThreadIgnoresLegacyClientTitle(t *testing.T) {
 		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
 	}
 	api := resourceTestAPI(database)
-	response := directJSONRequest(t, http.MethodPost, "/api/threads", map[string]string{"workspace_id": workspaces[0].ID, "title": "legacy custom title"}, &store.Session{UserID: "test-user"}, api.createThread)
+	response := directJSONRequest(t, http.MethodPost, "/api/sessions/codex", map[string]string{"workspace_id": workspaces[0].ID, "title": "legacy custom title"}, &store.Session{UserID: "test-user"}, sessionNativeHandler(api, session.Codex, "create"))
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create returned %d: %s", response.Code, response.Body.String())
 	}
@@ -868,7 +869,7 @@ func TestDeleteThreadCleansEventsAndRejectsActiveSessions(t *testing.T) {
 				}
 			}
 			api := resourceTestAPI(database)
-			response := threadResourceRequest(t, http.MethodDelete, "/api/threads/"+thread.ID, thread.ID, nil, api.deleteThread)
+			response := threadResourceRequest(t, http.MethodDelete, "/api/sessions/codex/"+thread.ID, thread.ID, nil, sessionNativeHandler(api, session.Codex, "delete"))
 			if status == "running" {
 				if response.Code != http.StatusConflict {
 					t.Fatalf("active delete returned %d: %s", response.Code, response.Body.String())
@@ -889,100 +890,6 @@ func TestDeleteThreadCleansEventsAndRejectsActiveSessions(t *testing.T) {
 				t.Fatalf("thread events were not deleted: %#v %v", events, err)
 			}
 		})
-	}
-}
-
-func TestThreadsSupportOptionalBoundedPagination(t *testing.T) {
-	database := openBootstrapTestStore(t)
-	ctx := context.Background()
-	server := enrollResourceTestServer(t, database, "thread-pagination")
-	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/thread-pagination", Name: "thread-pagination"}}}); err != nil {
-		t.Fatal(err)
-	}
-	workspaces, err := database.ListWorkspaces(ctx)
-	if err != nil || len(workspaces) != 1 {
-		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
-	}
-	var threads []store.Thread
-	for _, title := range []string{"oldest", "middle", "newest", "archived"} {
-		thread, createErr := database.CreateThread(ctx, workspaces[0].ID, title)
-		if createErr != nil {
-			t.Fatal(createErr)
-		}
-		threads = append(threads, thread)
-	}
-	base := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
-	for index, thread := range threads[:3] {
-		if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE codex_threads SET updated_at=? WHERE id=?"), base.Add(time.Duration(index)*time.Minute), thread.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	archived := true
-	if _, err := database.UpdateThread(ctx, threads[3].ID, nil, nil, &archived); err != nil {
-		t.Fatal(err)
-	}
-	api := resourceTestAPI(database)
-
-	compatibility := directJSONRequest(t, http.MethodGet, "/api/threads", nil, nil, api.threads)
-	if compatibility.Code != http.StatusOK {
-		t.Fatalf("legacy listing returned %d: %s", compatibility.Code, compatibility.Body.String())
-	}
-	var legacy []store.Thread
-	if err := json.Unmarshal(compatibility.Body.Bytes(), &legacy); err != nil || len(legacy) != 3 || legacy[0].ID != threads[2].ID || legacy[1].ID != threads[1].ID || legacy[2].ID != threads[0].ID {
-		t.Fatalf("legacy response must remain an ordered array: %#v %v", legacy, err)
-	}
-
-	firstResponse := directJSONRequest(t, http.MethodGet, "/api/threads?limit=2", nil, nil, api.threads)
-	if firstResponse.Code != http.StatusOK {
-		t.Fatalf("first page returned %d: %s", firstResponse.Code, firstResponse.Body.String())
-	}
-	var first threadListPageResponse
-	if err := json.Unmarshal(firstResponse.Body.Bytes(), &first); err != nil {
-		t.Fatal(err)
-	}
-	if !first.HasMore || first.Next == nil || *first.Next != 2 || len(first.Items) != 2 || first.Items[0].ID != threads[2].ID || first.Items[1].ID != threads[1].ID {
-		t.Fatalf("unexpected first page: %#v", first)
-	}
-	secondResponse := directJSONRequest(t, http.MethodGet, "/api/threads?limit=2&offset=2", nil, nil, api.threads)
-	var second threadListPageResponse
-	if secondResponse.Code != http.StatusOK || json.Unmarshal(secondResponse.Body.Bytes(), &second) != nil || second.HasMore || second.Next != nil || len(second.Items) != 1 || second.Items[0].ID != threads[0].ID {
-		t.Fatalf("unexpected second page: %d %#v", secondResponse.Code, second)
-	}
-	defaultLimitResponse := directJSONRequest(t, http.MethodGet, "/api/threads?offset=1", nil, nil, api.threads)
-	var defaultLimit threadListPageResponse
-	if defaultLimitResponse.Code != http.StatusOK || json.Unmarshal(defaultLimitResponse.Body.Bytes(), &defaultLimit) != nil || defaultLimit.HasMore || defaultLimit.Next != nil || len(defaultLimit.Items) != 2 {
-		t.Fatalf("offset-only pagination did not use the default limit: %d %#v", defaultLimitResponse.Code, defaultLimit)
-	}
-	archivedResponse := directJSONRequest(t, http.MethodGet, "/api/threads?archived=true&limit=1", nil, nil, api.threads)
-	var archivedPage threadListPageResponse
-	if archivedResponse.Code != http.StatusOK || json.Unmarshal(archivedResponse.Body.Bytes(), &archivedPage) != nil || archivedPage.HasMore || archivedPage.Next != nil || len(archivedPage.Items) != 1 || archivedPage.Items[0].ID != threads[3].ID {
-		t.Fatalf("archived pagination filter failed: %d %#v", archivedResponse.Code, archivedPage)
-	}
-	allResponse := directJSONRequest(t, http.MethodGet, "/api/threads?archived=all&limit=10", nil, nil, api.threads)
-	var allPage threadListPageResponse
-	if allResponse.Code != http.StatusOK || json.Unmarshal(allResponse.Body.Bytes(), &allPage) != nil || allPage.HasMore || len(allPage.Items) != 4 {
-		t.Fatalf("all-thread pagination filter failed: %d %#v", allResponse.Code, allPage)
-	}
-
-	for _, target := range []string{
-		"/api/threads?limit=", "/api/threads?limit=0", "/api/threads?limit=-1", "/api/threads?limit=one", "/api/threads?limit=1&limit=2",
-		"/api/threads?offset=", "/api/threads?offset=-1", "/api/threads?offset=one", "/api/threads?offset=1&offset=2",
-	} {
-		response := directJSONRequest(t, http.MethodGet, target, nil, nil, api.threads)
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("invalid pagination %q returned %d: %s", target, response.Code, response.Body.String())
-		}
-	}
-
-	for count := len(legacy); count <= maxThreadsPageLimit; count++ {
-		if _, err := database.CreateThread(ctx, workspaces[0].ID, "capped"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cappedResponse := directJSONRequest(t, http.MethodGet, "/api/threads?limit=1000", nil, nil, api.threads)
-	var capped threadListPageResponse
-	if cappedResponse.Code != http.StatusOK || json.Unmarshal(cappedResponse.Body.Bytes(), &capped) != nil || !capped.HasMore || capped.Next == nil || *capped.Next != maxThreadsPageLimit || len(capped.Items) != maxThreadsPageLimit {
-		t.Fatalf("page limit was not capped: %d %#v", cappedResponse.Code, capped)
 	}
 }
 
@@ -1049,7 +956,7 @@ func TestAuditLogSupportsOptionalBoundedPagination(t *testing.T) {
 func TestStartTurnRejectsOversizedModel(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/missing/turns", "missing", map[string]string{"prompt": "hello", "model": strings.Repeat("m", 129)}, api.startTurn)
+	response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/missing/turns", "missing", map[string]string{"prompt": "hello", "model": strings.Repeat("m", 129)}, sessionNativeHandler(api, session.Codex, "turns"))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("start turn returned %d: %s", response.Code, response.Body.String())
 	}
@@ -1058,7 +965,7 @@ func TestStartTurnRejectsOversizedModel(t *testing.T) {
 func TestStartTurnRejectsInvalidReasoningEffort(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/missing/turns", "missing", map[string]string{"prompt": "hello", "reasoning_effort": "extreme"}, api.startTurn)
+	response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/missing/turns", "missing", map[string]string{"prompt": "hello", "reasoning_effort": "extreme"}, sessionNativeHandler(api, session.Codex, "turns"))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("start turn returned %d: %s", response.Code, response.Body.String())
 	}
@@ -1086,20 +993,21 @@ func TestThreadEventsUseRecentBoundedWindows(t *testing.T) {
 	}
 
 	api := resourceTestAPI(database)
+	eventRouter := chi.NewRouter()
+	eventRouter.Get("/api/sessions/{engine}/{threadID}/events", api.unifiedSessionAction("events"))
 	for name, test := range map[string]struct {
 		target string
 		count  int
 		first  int64
 	}{
-		"conversation default":              {target: "/api/threads/" + thread.ID + "/events?view=conversation", count: 500, first: 502},
-		"raw default":                       {target: "/api/threads/" + thread.ID + "/events?view=raw", count: 500, first: 502},
-		"raw before uses default":           {target: "/api/threads/" + thread.ID + "/events?view=raw&before=1002", count: 500, first: 502},
-		"non-positive limit uses default":   {target: "/api/threads/" + thread.ID + "/events?view=raw&limit=0", count: 500, first: 502},
-		"oversized limit is capped at 1000": {target: "/api/threads/" + thread.ID + "/events?view=conversation&limit=1001", count: 1000, first: 2},
-		"before oversized limit is capped":  {target: "/api/threads/" + thread.ID + "/events?view=conversation&before=1002&limit=1001", count: 1000, first: 2},
+		"conversation default":              {target: "/api/sessions/codex/" + thread.ID + "/events?view=conversation", count: 500, first: 502},
+		"raw default":                       {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw", count: 500, first: 502},
+		"raw before uses default":           {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=1002", count: 500, first: 502},
+		"oversized limit is capped at 1000": {target: "/api/sessions/codex/" + thread.ID + "/events?view=conversation&limit=1001", count: 1000, first: 2},
+		"before oversized limit is capped":  {target: "/api/sessions/codex/" + thread.ID + "/events?view=conversation&before=1002&limit=1001", count: 1000, first: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, api.threadEvents)
+			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, eventRouter.ServeHTTP)
 			if response.Code != http.StatusOK {
 				t.Fatalf("thread events returned %d: %s", response.Code, response.Body.String())
 			}
@@ -1136,30 +1044,32 @@ func TestThreadEventsSupportCursorsViewsAndLimits(t *testing.T) {
 	}
 
 	api := resourceTestAPI(database)
+	eventRouter := chi.NewRouter()
+	eventRouter.Get("/api/sessions/{engine}/{threadID}/events", api.unifiedSessionAction("events"))
 	for name, test := range map[string]struct {
 		target    string
 		sequences []int64
 		status    int
 	}{
-		"conversation recent window filters raw events": {target: "/api/threads/" + thread.ID + "/events?view=conversation&limit=2", sequences: []int64{5, 7}, status: http.StatusOK},
-		"raw recent window includes every event":        {target: "/api/threads/" + thread.ID + "/events?view=raw&limit=3", sequences: []int64{5, 6, 7}, status: http.StatusOK},
-		"conversation after cursor":                     {target: "/api/threads/" + thread.ID + "/events?view=conversation&after=3&limit=2", sequences: []int64{5, 7}, status: http.StatusOK},
-		"raw after cursor":                              {target: "/api/threads/" + thread.ID + "/events?view=raw&after=3&limit=2", sequences: []int64{4, 5}, status: http.StatusOK},
-		"zero is a valid cursor":                        {target: "/api/threads/" + thread.ID + "/events?view=conversation&after=0&limit=2", sequences: []int64{2, 3}, status: http.StatusOK},
-		"invalid cursor is rejected":                    {target: "/api/threads/" + thread.ID + "/events?view=raw&after=invalid", status: http.StatusBadRequest},
-		"negative cursor is rejected":                   {target: "/api/threads/" + thread.ID + "/events?view=raw&after=-1", status: http.StatusBadRequest},
-		"conversation before cursor filters raw events": {target: "/api/threads/" + thread.ID + "/events?view=conversation&before=6&limit=2", sequences: []int64{3, 5}, status: http.StatusOK},
-		"raw before cursor":                             {target: "/api/threads/" + thread.ID + "/events?view=raw&before=6&limit=2", sequences: []int64{4, 5}, status: http.StatusOK},
-		"before cursor excludes its sequence":           {target: "/api/threads/" + thread.ID + "/events?view=raw&before=5&limit=2", sequences: []int64{3, 4}, status: http.StatusOK},
-		"before at first sequence is empty":             {target: "/api/threads/" + thread.ID + "/events?view=raw&before=1&limit=2", sequences: []int64{}, status: http.StatusOK},
-		"zero is a valid before cursor":                 {target: "/api/threads/" + thread.ID + "/events?view=raw&before=0&limit=2", sequences: []int64{}, status: http.StatusOK},
-		"invalid before cursor is rejected":             {target: "/api/threads/" + thread.ID + "/events?view=raw&before=invalid", status: http.StatusBadRequest},
-		"negative before cursor is rejected":            {target: "/api/threads/" + thread.ID + "/events?view=raw&before=-1", status: http.StatusBadRequest},
-		"empty before cursor is rejected":               {target: "/api/threads/" + thread.ID + "/events?view=raw&before=", status: http.StatusBadRequest},
-		"before and after are mutually exclusive":       {target: "/api/threads/" + thread.ID + "/events?view=raw&before=6&after=3", status: http.StatusBadRequest},
+		"conversation recent window filters raw events": {target: "/api/sessions/codex/" + thread.ID + "/events?view=conversation&limit=2", sequences: []int64{5, 7}, status: http.StatusOK},
+		"raw recent window includes every event":        {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&limit=3", sequences: []int64{5, 6, 7}, status: http.StatusOK},
+		"conversation after cursor":                     {target: "/api/sessions/codex/" + thread.ID + "/events?view=conversation&after=3&limit=2", sequences: []int64{5, 7}, status: http.StatusOK},
+		"raw after cursor":                              {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&after=3&limit=2", sequences: []int64{4, 5}, status: http.StatusOK},
+		"zero is a valid cursor":                        {target: "/api/sessions/codex/" + thread.ID + "/events?view=conversation&after=0&limit=2", sequences: []int64{2, 3}, status: http.StatusOK},
+		"invalid cursor is rejected":                    {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&after=invalid", status: http.StatusBadRequest},
+		"negative cursor is rejected":                   {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&after=-1", status: http.StatusBadRequest},
+		"conversation before cursor filters raw events": {target: "/api/sessions/codex/" + thread.ID + "/events?view=conversation&before=6&limit=2", sequences: []int64{3, 5}, status: http.StatusOK},
+		"raw before cursor":                             {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=6&limit=2", sequences: []int64{4, 5}, status: http.StatusOK},
+		"before cursor excludes its sequence":           {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=5&limit=2", sequences: []int64{3, 4}, status: http.StatusOK},
+		"before at first sequence is empty":             {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=1&limit=2", sequences: []int64{}, status: http.StatusOK},
+		"zero is a valid before cursor":                 {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=0&limit=2", sequences: []int64{}, status: http.StatusOK},
+		"invalid before cursor is rejected":             {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=invalid", status: http.StatusBadRequest},
+		"negative before cursor is rejected":            {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=-1", status: http.StatusBadRequest},
+		"empty before cursor is rejected":               {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=", status: http.StatusBadRequest},
+		"before and after are mutually exclusive":       {target: "/api/sessions/codex/" + thread.ID + "/events?view=raw&before=6&after=3", status: http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, api.threadEvents)
+			response := threadResourceRequest(t, http.MethodGet, test.target, thread.ID, nil, eventRouter.ServeHTTP)
 			if response.Code != test.status {
 				t.Fatalf("thread events returned %d, want %d: %s", response.Code, test.status, response.Body.String())
 			}
@@ -1465,7 +1375,7 @@ func TestUpdateThreadReturnsPreferencesAndWritesAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPatch, "/api/threads/"+thread.ID, thread.ID, map[string]any{"title": "  after  ", "pinned": true}, api.updateThread)
+	response := threadResourceRequest(t, http.MethodPatch, "/api/sessions/codex/"+thread.ID, thread.ID, map[string]any{"title": "  after  ", "pinned": true}, sessionNativeHandler(api, session.Codex, "update"))
 	if response.Code != http.StatusOK {
 		t.Fatalf("update returned %d: %s", response.Code, response.Body.String())
 	}
@@ -1491,13 +1401,13 @@ func TestUpdateThreadRejectsInvalidInputAndMissingThread(t *testing.T) {
 		"oversized title": map[string]any{"title": strings.Repeat("题", threadTitleLimit+1)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := threadResourceRequest(t, http.MethodPatch, "/api/threads/missing", "missing", body, api.updateThread)
+			response := threadResourceRequest(t, http.MethodPatch, "/api/sessions/codex/missing", "missing", body, sessionNativeHandler(api, session.Codex, "update"))
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("returned %d: %s", response.Code, response.Body.String())
 			}
 		})
 	}
-	missing := threadResourceRequest(t, http.MethodPatch, "/api/threads/missing", "missing", map[string]any{"pinned": true}, api.updateThread)
+	missing := threadResourceRequest(t, http.MethodPatch, "/api/sessions/codex/missing", "missing", map[string]any{"pinned": true}, sessionNativeHandler(api, session.Codex, "update"))
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing thread returned %d: %s", missing.Code, missing.Body.String())
 	}
@@ -1532,7 +1442,7 @@ func rewriteResourceRequest(t *testing.T, threadID, eventID string, body any, ha
 	route.URLParams.Add("eventID", eventID)
 	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
 	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
-	return directJSONRequest(t, http.MethodPost, "/api/threads/"+threadID+"/events/"+eventID+"/rewrite", body, nil, func(w http.ResponseWriter, r *http.Request) {
+	return directJSONRequest(t, http.MethodPost, "/api/sessions/codex/"+threadID+"/events/"+eventID+"/rewrite", body, nil, func(w http.ResponseWriter, r *http.Request) {
 		handler(w, r.WithContext(requestContext))
 	})
 }
@@ -1874,7 +1784,7 @@ func TestCodexGoalRefreshQueuesFixedOperation(t *testing.T) {
 	route.URLParams.Add("threadID", thread.ID)
 	requestContext := context.WithValue(context.Background(), chi.RouteCtxKey, route)
 	requestContext = context.WithValue(requestContext, sessionContextKey{}, store.Session{UserID: "test-user"})
-	response := directJSONRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/goal/refresh", map[string]any{}, nil, func(w http.ResponseWriter, r *http.Request) { api.refreshThreadGoal(w, r.WithContext(requestContext)) })
+	response := directJSONRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/goal/refresh", map[string]any{}, nil, func(w http.ResponseWriter, r *http.Request) { api.refreshThreadGoal(w, r.WithContext(requestContext)) })
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("refresh returned %d: %s", response.Code, response.Body.String())
 	}
@@ -1914,7 +1824,7 @@ func TestCodexCompactQueuesThreadOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/compact", thread.ID, map[string]any{}, api.compactThread)
+	response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/compact", thread.ID, map[string]any{}, api.compactThread)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("compact returned %d: %s", response.Code, response.Body.String())
 	}
@@ -1947,7 +1857,7 @@ func TestForkRequiresOnlineServerAndArchivedThreadsAreReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/fork", thread.ID, map[string]any{}, api.forkThread)
+	response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/fork", thread.ID, map[string]any{}, sessionNativeHandler(api, session.Codex, "fork"))
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "offline") {
 		t.Fatalf("offline fork returned %d: %s", response.Code, response.Body.String())
 	}
@@ -1959,11 +1869,11 @@ func TestForkRequiresOnlineServerAndArchivedThreadsAreReadOnly(t *testing.T) {
 	if _, err := database.UpdateThread(ctx, thread.ID, nil, nil, &archived); err != nil {
 		t.Fatal(err)
 	}
-	response = threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "hello"}, api.startTurn)
+	response = threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/turns", thread.ID, map[string]any{"prompt": "hello"}, sessionNativeHandler(api, session.Codex, "turns"))
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "read-only") {
 		t.Fatalf("archived turn returned %d: %s", response.Code, response.Body.String())
 	}
-	response = threadResourceRequest(t, http.MethodDelete, "/api/threads/"+thread.ID+"/goal", thread.ID, map[string]any{}, api.clearThreadGoal)
+	response = threadResourceRequest(t, http.MethodDelete, "/api/sessions/codex/"+thread.ID+"/goal", thread.ID, map[string]any{}, api.clearThreadGoal)
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "read-only") {
 		t.Fatalf("archived goal clear returned %d: %s", response.Code, response.Body.String())
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T) {
@@ -27,13 +28,13 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	}
 	api := resourceTestAPI(db)
 	body := map[string]string{"prompt": "replacement"}
-	if response := rewriteResourceRequest(t, thread.ID, "missing", body, api.startGeminiTurn); response.Code != 409 || !strings.Contains(response.Body.String(), buildinfo.MinimumGeminiRewriteVersion) {
+	if response := rewriteResourceRequest(t, thread.ID, "missing", body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 409 || !strings.Contains(response.Body.String(), buildinfo.MinimumGeminiRewriteVersion) {
 		t.Fatalf("old Agent accepted rewrite: %d %s", response.Code, response.Body.String())
 	}
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiRewriteVersion}); err != nil {
 		t.Fatal(err)
 	}
-	if response := rewriteResourceRequest(t, thread.ID, "missing", body, api.startGeminiTurn); response.Code != 409 {
+	if response := rewriteResourceRequest(t, thread.ID, "missing", body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 409 {
 		t.Fatalf("invalid target accepted: %d", response.Code)
 	}
 	event, err := db.QueueGeminiTurn(ctx, thread, "original", "model", "default")
@@ -54,11 +55,11 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE gemini_threads SET session_id='native' WHERE id=?"), thread.ID); err != nil {
 		t.Fatal(err)
 	}
-	if response := rewriteResourceRequest(t, thread.ID, event.EventID, map[string]string{"prompt": "replacement", "approval_mode": "invalid"}, api.startGeminiTurn); response.Code != 400 {
+	if response := rewriteResourceRequest(t, thread.ID, event.EventID, map[string]string{"prompt": "replacement", "approval_mode": "invalid"}, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 400 {
 		t.Fatal("invalid mode accepted")
 	}
 	body["approval_mode"] = "yolo"
-	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, api.startGeminiTurn); response.Code != 202 {
+	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 202 {
 		t.Fatalf("rewrite: %d %s", response.Code, response.Body.String())
 	}
 	current, _ = db.GeminiThread(ctx, thread.ID)
@@ -77,7 +78,7 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	if len(events) < 2 || events[0].EventID != event.EventID {
 		t.Fatal("queued rewrite changed original history")
 	}
-	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, api.startGeminiTurn); response.Code != 409 {
+	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 409 {
 		t.Fatal("concurrent rewrite accepted")
 	}
 	if err := db.InterruptGeminiTurn(ctx, current); err != nil {
@@ -86,7 +87,7 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	if err := db.UpdateGeminiThread(ctx, thread.ID, "archived", true); err != nil {
 		t.Fatal(err)
 	}
-	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, api.startGeminiTurn); response.Code != 409 {
+	if response := rewriteResourceRequest(t, thread.ID, event.EventID, body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 409 {
 		t.Fatal("archived rewrite accepted")
 	}
 }

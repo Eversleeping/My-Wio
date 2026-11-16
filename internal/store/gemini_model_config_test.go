@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -82,7 +83,12 @@ func assertGeminiModelConfigRevision(t *testing.T, db *Store) {
 }
 
 func TestGeminiModelConfigMigration(t *testing.T) {
-	assertGeminiModelConfigMigration(t, testStore(t))
+	db, err := openPreCleanupTestStore(filepath.Join(t.TempDir(), "legacy-model-config.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	assertGeminiModelConfigMigration(t, db)
 }
 
 func assertGeminiModelConfigMigration(t *testing.T, db *Store) {

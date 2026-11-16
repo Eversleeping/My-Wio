@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -29,7 +31,7 @@ func TestGeminiGoalRequiresCompatibleAgentAndCanPauseResumeCancel(t *testing.T) 
 	api := resourceTestAPI(db)
 	input := map[string]any{"prompt": "Verify the tests", "goal": map[string]int{"max_continuations": 4, "max_seconds": 300}}
 	start := func() *httptest.ResponseRecorder {
-		return threadResourceRequest(t, http.MethodPost, "/turns", thread.ID, input, api.startGeminiTurn)
+		return threadResourceRequest(t, http.MethodPost, "/turns", thread.ID, input, sessionNativeHandler(api, session.Gemini, "turns"))
 	}
 	if response := start(); response.Code != 409 {
 		t.Fatalf("old Agent accepted goal: %d %s", response.Code, response.Body.String())

@@ -45,11 +45,11 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	if w := request("GET", "/api/claude/threads", "", false); w.Code != 401 {
+	if w := request("GET", "/api/sessions?engine=claude", "", false); w.Code != 401 {
 		t.Fatalf("unauthenticated: %d", w.Code)
 	}
 	createBody, _ := json.Marshal(map[string]string{"workspace_id": workspaces[0].ID, "model": "sonnet", "permission_mode": "default", "effort": "low"})
-	w := request("POST", "/api/claude/threads", string(createBody), true)
+	w := request("POST", "/api/sessions/claude", string(createBody), true)
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
@@ -60,8 +60,8 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if thread.Effort != "low" {
 		t.Fatalf("created effort: %+v", thread)
 	}
-	path := "/api/claude/threads/" + thread.ID + "/turns"
-	if w := request("POST", path, `{"prompt":"test"}`, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.2.90") {
+	path := "/api/sessions/claude/" + thread.ID + "/turns"
+	if w := request("POST", path, `{"prompt":"test"}`, true); w.Code != 409 || !strings.Contains(w.Body.String(), "CAPABILITY_UNSUPPORTED") {
 		t.Fatalf("old Agent: %d %s", w.Code, w.Body.String())
 	}
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.90"}); err != nil {
@@ -97,7 +97,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if w := request("POST", path, `{"prompt":"duplicate"}`, true); w.Code != 409 {
 		t.Fatalf("duplicate: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
 		t.Fatalf("interrupt: %d %s", w.Code, w.Body.String())
 	}
 	if w := request("POST", path, `{"prompt":"continue"}`, true); w.Code != 202 {
@@ -108,7 +108,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if json.Unmarshal([]byte(op.Payload), &command) != nil || command.Effort != "max" {
 		t.Fatalf("effort not inherited: %+v", command)
 	}
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
 		t.Fatal(w.Body.String())
 	}
 	if w := request("POST", path, `{"prompt":"reset","effort":""}`, true); w.Code != 202 {
@@ -121,7 +121,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 		t.Fatalf("effort not cleared: %+v", command)
 	}
 
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
 		t.Fatal(w.Body.String())
 	}
 	imageBody := `{"images":[{"data_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII="}]}`
@@ -145,13 +145,13 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if json.Unmarshal([]byte(op.Payload), &command) != nil || len(command.Images) != 1 || command.Prompt != "" {
 		t.Fatalf("images lost: %+v", command)
 	}
-	if w := request("PATCH", "/api/claude/threads/"+thread.ID, `{"pinned":true}`, true); w.Code != 200 {
+	if w := request("PATCH", "/api/sessions/claude/"+thread.ID, `{"pinned":true}`, true); w.Code != 200 {
 		t.Fatalf("active pin: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/fork", `{}`, true); w.Code != 409 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/fork", `{}`, true); w.Code != 409 {
 		t.Fatal("forked active thread")
 	}
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
 		t.Fatal(w.Body.String())
 	}
 	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE claude_threads SET session_id=? WHERE id=?"), "550e8400-e29b-41d4-a716-446655440000", thread.ID); err != nil {
@@ -167,11 +167,11 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 			target = event
 		}
 	}
-	rewritePath := "/api/claude/threads/" + thread.ID + "/events/" + target.EventID + "/rewrite"
+	rewritePath := "/api/sessions/claude/" + thread.ID + "/events/" + target.EventID + "/rewrite"
 	if w := request("POST", rewritePath, imageBody, false); w.Code != 401 {
 		t.Fatalf("unauthenticated rewrite: %d", w.Code)
 	}
-	if w := request("POST", rewritePath, imageBody, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.2.97") {
+	if w := request("POST", rewritePath, imageBody, true); w.Code != 409 || !strings.Contains(w.Body.String(), "CAPABILITY_UNSUPPORTED") {
 		t.Fatalf("old rewrite Agent: %d %s", w.Code, w.Body.String())
 	}
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.97"}); err != nil {
@@ -180,7 +180,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if w := request("POST", rewritePath, `{"prompt":""}`, true); w.Code != 400 {
 		t.Fatalf("empty edit: %d", w.Code)
 	}
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/events/foreign/rewrite", `{"prompt":"edit"}`, true); w.Code != 409 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/events/foreign/rewrite", `{"prompt":"edit"}`, true); w.Code != 409 {
 		t.Fatalf("foreign edit: %d", w.Code)
 	}
 	if w := request("POST", rewritePath, imageBody, true); w.Code != 202 {
@@ -195,7 +195,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if w := request("POST", rewritePath, imageBody, true); w.Code != 409 {
 		t.Fatal("rewrote an active thread")
 	}
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/interrupt", `{}`, true); w.Code != 202 {
 		t.Fatal(w.Body.String())
 	}
 	after, _ := db.Events(ctx, thread.ID, 0, 500)
@@ -208,7 +208,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 			t.Fatal("cancelled edit removed history", event.EventID)
 		}
 	}
-	if w := request("POST", "/api/claude/threads/"+thread.ID+"/fork", `{}`, true); w.Code != 202 {
+	if w := request("POST", "/api/sessions/claude/"+thread.ID+"/fork", `{}`, true); w.Code != 202 {
 		t.Fatalf("fork: %d %s", w.Code, w.Body.String())
 	}
 	scheduleBody := `{"agent_kind":"claude","thread_id":"` + thread.ID + `","name":"review","prompt":"review","schedule":"@hourly","timezone":"Asia/Shanghai","reasoning_effort":"max","approval_mode":"plan","model":"custom-model"}`

@@ -7,7 +7,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wio-platform/wio/internal/protocol"
-	"github.com/wio-platform/wio/internal/session"
 )
 
 type sessionForkSource struct {
@@ -89,16 +88,4 @@ func (a *API) queueEngineFork(w http.ResponseWriter, r *http.Request, worktree b
 		result["workspace_id"] = command.TargetWorkspaceID
 	}
 	writeJSON(w, 202, result)
-}
-func (a *API) forkGeminiThread(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Gemini, "fork")
-}
-func (a *API) forkGeminiWorktree(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Gemini, "fork-worktree")
-}
-func (a *API) forkClaudeThread(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Claude, "fork")
-}
-func (a *API) forkClaudeWorktree(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Claude, "fork-worktree")
 }

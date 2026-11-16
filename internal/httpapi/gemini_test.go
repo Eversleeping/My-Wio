@@ -12,6 +12,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -32,7 +33,7 @@ func TestGeminiYoloPersistsAndDispatchesWithoutApprovals(t *testing.T) {
 	api := resourceTestAPI(db)
 	input := map[string]string{"workspace_id": workspaces[0].ID, "model": "flash", "approval_mode": "yolo"}
 	create := func() *httptest.ResponseRecorder {
-		return directJSONRequest(t, "POST", "/api/gemini/threads", input, &store.Session{UserID: "test-user"}, api.createGeminiThread)
+		return directJSONRequest(t, "POST", "/api/sessions/gemini", input, &store.Session{UserID: "test-user"}, sessionNativeHandler(api, session.Gemini, "create"))
 	}
 	if w := create(); w.Code != 409 || !strings.Contains(w.Body.String(), buildinfo.MinimumGeminiYoloVersion) {
 		t.Fatalf("old Agent accepted yolo: %d %s", w.Code, w.Body.String())
@@ -48,18 +49,18 @@ func TestGeminiYoloPersistsAndDispatchesWithoutApprovals(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &thread); err != nil || thread.ApprovalMode != "yolo" {
 		t.Fatalf("yolo not saved: %+v %v", thread, err)
 	}
-	path := "/api/gemini/threads/" + thread.ID + "/turns"
+	path := "/api/sessions/gemini/" + thread.ID + "/turns"
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.71"}); err != nil {
 		t.Fatal(err)
 	}
-	if w := threadResourceRequest(t, "POST", path, thread.ID, map[string]string{"prompt": "old agent"}, api.startGeminiTurn); w.Code != 409 {
+	if w := threadResourceRequest(t, "POST", path, thread.ID, map[string]string{"prompt": "old agent"}, sessionNativeHandler(api, session.Gemini, "turns")); w.Code != 409 {
 		t.Fatalf("old Agent accepted inherited yolo: %d %s", w.Code, w.Body.String())
 	}
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiYoloVersion}); err != nil {
 		t.Fatal(err)
 	}
 	for _, mode := range []string{"", "default", "yolo"} {
-		w := threadResourceRequest(t, "POST", path, thread.ID, map[string]string{"prompt": "run commands", "approval_mode": mode}, api.startGeminiTurn)
+		w := threadResourceRequest(t, "POST", path, thread.ID, map[string]string{"prompt": "run commands", "approval_mode": mode}, sessionNativeHandler(api, session.Gemini, "turns"))
 		if w.Code != 202 {
 			t.Fatalf("turn: %d %s", w.Code, w.Body.String())
 		}
@@ -119,21 +120,21 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	if w := request("GET", "/api/workspaces/"+workspaces[0].ID+"/gemini/models", "", false); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
-	if w := request("POST", "/api/gemini/threads/missing/events/missing/rewrite", `{"prompt":"edit"}`, false); w.Code != 401 {
+	if w := request("POST", "/api/sessions/gemini/missing/events/missing/rewrite", `{"prompt":"edit"}`, false); w.Code != 401 {
 		t.Fatalf("rewrite route bypassed authentication: %d", w.Code)
 	}
-	if w := request("GET", "/api/gemini/threads", "", false); w.Code != 401 {
+	if w := request("GET", "/api/sessions?engine=gemini", "", false); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
-	if w := request("POST", "/api/gemini/threads", `{"workspace_id":"missing"}`, true); w.Code != 400 {
+	if w := request("POST", "/api/sessions/gemini", `{"workspace_id":"missing"}`, true); w.Code != 400 {
 		t.Fatal(w.Code)
 	}
 	for _, options := range []string{`"model":"--help"`, `"approval_mode":"invalid"`} {
-		if w := request("POST", "/api/gemini/threads", `{"workspace_id":"`+workspaces[0].ID+`",`+options+`}`, true); w.Code != 400 {
+		if w := request("POST", "/api/sessions/gemini", `{"workspace_id":"`+workspaces[0].ID+`",`+options+`}`, true); w.Code != 400 {
 			t.Fatalf("options accepted: %s", w.Body.String())
 		}
 	}
-	w := request("POST", "/api/gemini/threads", `{"workspace_id":"`+workspaces[0].ID+`","model":"flash"}`, true)
+	w := request("POST", "/api/sessions/gemini", `{"workspace_id":"`+workspaces[0].ID+`","model":"flash"}`, true)
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
@@ -141,7 +142,7 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &thread); err != nil {
 		t.Fatal(err)
 	}
-	path := "/api/gemini/threads/" + thread.ID
+	path := "/api/sessions/gemini/" + thread.ID
 	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE servers SET last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-time.Hour), server.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.60"}); err != nil {
 		t.Fatal(err)
 	}
-	if w := request("GET", "/api/threads/"+thread.ID, "", true); w.Code != 404 {
+	if w := request("GET", "/api/sessions/codex/"+thread.ID, "", true); w.Code != 404 {
 		t.Fatalf("Gemini leaked into Codex: %d", w.Code)
 	}
 	if w := request("POST", path+"/turns", `{"prompt":"检查项目","model":"pro","approval_mode":"auto_edit"}`, true); w.Code != 202 {
@@ -208,7 +209,7 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	if w := request("POST", path+"/turns", `{"prompt":"archived"}`, true); w.Code != 409 {
 		t.Fatal(w.Code)
 	}
-	if w := request("GET", "/api/gemini/threads?archived=true", "", true); !strings.Contains(w.Body.String(), "历史") {
+	if w := request("GET", "/api/sessions?engine=gemini&archived=true", "", true); !strings.Contains(w.Body.String(), "历史") {
 		t.Fatal(w.Body.String())
 	}
 	if w := request("GET", path+"/events?after=bad", "", true); w.Code != 400 {
@@ -244,9 +245,9 @@ func TestGeminiManualStopConfirmationIsBoundToTheLostTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(db)
-	path := "/api/gemini/threads/" + thread.ID + "/confirm-stopped"
+	path := "/api/sessions/gemini/" + thread.ID + "/confirm-stopped"
 	request := func(body map[string]any) *httptest.ResponseRecorder {
-		return threadResourceRequest(t, "POST", path, thread.ID, body, api.confirmGeminiStopped)
+		return threadResourceRequest(t, "POST", path, thread.ID, body, sessionNativeHandler(api, session.Gemini, "confirm-stopped"))
 	}
 	if w := request(map[string]any{"operation_id": thread.OperationID}); w.Code != 400 {
 		t.Fatalf("missing confirmation accepted: %d", w.Code)

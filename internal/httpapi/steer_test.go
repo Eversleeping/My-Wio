@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 func TestSteerQueuesAgainstCapturedTurnWithoutChangingStatus(t *testing.T) {
@@ -35,9 +36,9 @@ func TestSteerQueuesAgainstCapturedTurnWithoutChangingStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
-	path := "/api/threads/" + thread.ID + "/steer"
+	path := "/api/sessions/codex/" + thread.ID + "/steer"
 	image := "data:image/png;base64,iVBORw0KGgo="
-	response := threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]any{"prompt": "  Focus on tests  ", "images": []map[string]string{{"data_url": image}}}, api.steerTurn)
+	response := threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]any{"prompt": "  Focus on tests  ", "images": []map[string]string{{"data_url": image}}}, sessionNativeHandler(api, session.Codex, "steer"))
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("steer: %d %s", response.Code, response.Body.String())
 	}
@@ -67,7 +68,7 @@ func TestSteerQueuesAgainstCapturedTurnWithoutChangingStatus(t *testing.T) {
 		if err := database.SetThreadStatus(ctx, thread.ID, status); err != nil {
 			t.Fatal(err)
 		}
-		response := threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]string{"prompt": "late"}, api.steerTurn)
+		response := threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]string{"prompt": "late"}, sessionNativeHandler(api, session.Codex, "steer"))
 		if response.Code != http.StatusConflict {
 			t.Fatalf("%s accepted steering: %d", status, response.Code)
 		}
@@ -78,7 +79,7 @@ func TestSteerQueuesAgainstCapturedTurnWithoutChangingStatus(t *testing.T) {
 	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.50"}); err != nil {
 		t.Fatal(err)
 	}
-	response = threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]string{"prompt": "old agent"}, api.steerTurn)
+	response = threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]string{"prompt": "old agent"}, sessionNativeHandler(api, session.Codex, "steer"))
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "steer_agent_update") {
 		t.Fatalf("old agent: %d %s", response.Code, response.Body.String())
 	}
@@ -88,7 +89,7 @@ func TestSteerQueuesAgainstCapturedTurnWithoutChangingStatus(t *testing.T) {
 	if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"id":"active-turn","status":"completed"}}`)}); err != nil {
 		t.Fatal(err)
 	}
-	response = threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]string{"prompt": "race with completion"}, api.steerTurn)
+	response = threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]string{"prompt": "race with completion"}, sessionNativeHandler(api, session.Codex, "steer"))
 	if response.Code != http.StatusConflict {
 		t.Fatal("completed event accepted steering")
 	}
@@ -112,7 +113,7 @@ func TestSteerRejectsEmptyImagesAndTurnOverrides(t *testing.T) {
 		{"images": []map[string]string{{"data_url": "file:///private.png"}}},
 		{"prompt": "correction", "model": "other-model"},
 	} {
-		response := threadResourceRequest(t, http.MethodPost, "/api/threads/missing/steer", "missing", input, api.steerTurn)
+		response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/missing/steer", "missing", input, sessionNativeHandler(api, session.Codex, "steer"))
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("invalid input: %d %s", response.Code, response.Body.String())
 		}

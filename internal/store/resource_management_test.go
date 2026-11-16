@@ -128,57 +128,51 @@ func TestFreshSchemaKeepsThreadOwnershipOnOperations(t *testing.T) {
 }
 
 func TestOpenNormalizesLegacyWorkspaceLifecycleStatuses(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-workspace-status.db")
-	database, err := Open(path + "?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := createOperationTestServer(t, database, "legacy-status", "legacy-status-token")
-	if err := database.UpsertInventory(context.Background(), server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/legacy-status", Name: "legacy-status"}}}); err != nil {
-		t.Fatal(err)
-	}
-	workspaces, err := database.ListWorkspaces(context.Background())
-	if err != nil || len(workspaces) != 1 {
-		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
-	}
-	workspaceID := workspaces[0].ID
-	if _, err := database.DB.Exec(database.Q("UPDATE workspaces SET status='moveing' WHERE id=?"), workspaceID); err != nil {
-		t.Fatal(err)
-	}
-	// Reapply the legacy baseline to injected historical state, preserving later migrations.
-	if _, err := database.DB.Exec("DELETE FROM schema_migrations WHERE version=1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	for _, status := range []struct{ legacy, expected string }{{"moveing", "moving"}, {"deleteing", "deleting"}} {
-		database, err = Open(path + "?_pragma=foreign_keys(1)")
-		if err != nil {
-			t.Fatal(err)
-		}
-		workspace, err := database.Workspace(context.Background(), workspaceID)
-		if err != nil || workspace.Status != status.expected {
-			t.Fatalf("legacy status %q was not normalized to %q: %#v %v", status.legacy, status.expected, workspace, err)
-		}
-		if status.expected == "moving" {
-			if _, err := database.DB.Exec(database.Q("UPDATE workspaces SET status='deleteing' WHERE id=?"), workspaceID); err != nil {
+		t.Run(status.legacy, func(t *testing.T) {
+			dsn := filepath.Join(t.TempDir(), "legacy-status.db") + "?_pragma=foreign_keys(1)"
+			database, err := openPreCleanupTestStore(dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := createOperationTestServer(t, database, "legacy-status", "legacy-status-token")
+			if err := database.UpsertInventory(context.Background(), server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/legacy-status", Name: "legacy-status"}}}); err != nil {
+				t.Fatal(err)
+			}
+			workspaces, err := database.ListWorkspaces(context.Background())
+			if err != nil || len(workspaces) != 1 {
+				t.Fatalf("workspaces: %v %v", workspaces, err)
+			}
+			id := workspaces[0].ID
+			if _, err := database.DB.Exec(database.Q("UPDATE workspaces SET status=? WHERE id=?"), status.legacy, id); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := database.DB.Exec("DELETE FROM schema_migrations WHERE version=1"); err != nil {
 				t.Fatal(err)
 			}
-		}
-		if err := database.Close(); err != nil {
-			t.Fatal(err)
-		}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				database, err = Open(dsn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				workspace, err := database.Workspace(context.Background(), id)
+				if err != nil || workspace.Status != status.expected {
+					t.Fatalf("legacy %s -> %s: %+v %v", status.legacy, status.expected, workspace, err)
+				}
+				if err := database.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
 func TestOpenRestoresManagedModeForHistoricalWorkspaces(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "historical-worktree.db")
-	database, err := Open(path + "?_pragma=foreign_keys(1)")
+	database, err := openPreCleanupTestStore(path + "?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatal(err)
 	}

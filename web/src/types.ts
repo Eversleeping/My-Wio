@@ -1,3 +1,4 @@
+import type { SessionCapabilities } from "./sessions/types";
 export interface Session { username: string; csrf_token: string; expires_at: string }
 export interface Server { id: string; name: string; hostname: string; status: string; is_control_plane?: boolean; agent_version: string; agent_target_version: string; agent_update_available: boolean; agent_update_supported: boolean; exact_rollback_supported?: boolean; codex_version: string; codex_ready: number; gemini_version?: string; gemini_ready?: number; claude_version?: string; claude_ready?: number; scoped_credentials_supported?: boolean; claude_credentials_supported?: boolean; claude_effort_supported?: boolean; claude_profile_id?: string; claude_profile_name?: string; claude_profile_model?: string; cli_management_supported?: boolean; gemini_credentials_supported?: boolean; gemini_profile_id?: string; gemini_profile_name?: string; codex_target_version: string; codex_update_available: boolean; codex_update_supported: boolean; address: string; configuration: string; notes: string; codex_profile_id: string; codex_profile_name: string; git_profile_id: string; git_profile_name: string; git_profiles?: CredentialProfile[]; last_seen_at: string | null; created_at: string }
 export interface CodexCLISettings { target_version: string; latest_version?: string; versions?: string[]; updated?: boolean }
@@ -27,17 +28,15 @@ export interface WorkspaceChangesSnapshot { workspace_id: string; changes: Works
 export interface WorkspaceDiffPreview { workspace_id: string; path: string; content: string; additions: number; deletions: number; binary: boolean; truncated: boolean; status: "idle" | "loading" | "succeeded" | "failed"; error: string; requested_at: string | null; updated_at: string | null }
 export interface Thread { id: string; workspace_id: string; project_id: string; codex_thread_id: string; title: string; status: string; path: string; server_id: string; server_name: string; project_name: string; created_at: string; updated_at: string; pinned_at: string | null; archived_at: string | null; project_pinned_at: string | null; project_hidden_at: string | null }
 export interface GeminiThread {
+  capabilities?: Partial<SessionCapabilities>;
   credential_revision?: string; model_credential_revision?: string;
   recovery_pending?: boolean;
-  steer_supported?: boolean; steer_ready?: boolean; steer_images_supported?: boolean; skills_management_supported?: boolean;
-  skills_supported?: boolean; plan_supported?: boolean; goal_supported?: boolean;
- input_supported?: boolean;
- thinking_level?: string; thinking_supported?: boolean;
-  fork_supported: boolean;
+  steer_ready?: boolean;
+  thinking_level?: string;
   pinned_at?: string;
   project_pinned_at?: string;
-  project_hidden_at?: string; id: string; workspace_id: string; session_id: string; title: string; model: string; approval_mode: string; status: string; operation_id: string; archived_at: string | null; created_at: string; updated_at: string; path: string; project_id: string; project_name: string; server_id: string; server_name: string; server_status: string; rewrite_supported: boolean }
-export interface ClaudeThread { model_credential_revision?: string; questions_supported?: boolean; rewrite_supported?: boolean; steer_supported?: boolean; steer_ready?: boolean; skills_supported?: boolean; input_supported: boolean; pinned_at?: string | null; effort: string; effort_supported: boolean; project_pinned_at?: string | null; project_hidden_at?: string | null; id: string; workspace_id: string; session_id: string; title: string; model: string; permission_mode: string; status: string; operation_id: string; archived_at: string | null; created_at: string; updated_at: string; path: string; project_id: string; project_name: string; server_id: string; server_name: string; server_status: string; recovery_pending: boolean }
+  project_hidden_at?: string; id: string; workspace_id: string; session_id: string; title: string; model: string; approval_mode: string; status: string; operation_id: string; archived_at: string | null; created_at: string; updated_at: string; path: string; project_id: string; project_name: string; server_id: string; server_name: string; server_status: string; }
+export interface ClaudeThread { capabilities?: Partial<SessionCapabilities>; model_credential_revision?: string; steer_ready?: boolean; pinned_at?: string | null; effort: string; project_pinned_at?: string | null; project_hidden_at?: string | null; id: string; workspace_id: string; session_id: string; title: string; model: string; permission_mode: string; status: string; operation_id: string; archived_at: string | null; created_at: string; updated_at: string; path: string; project_id: string; project_name: string; server_id: string; server_name: string; server_status: string; recovery_pending: boolean }
 export type CodexSnapshotState = "idle" | "loading" | "refreshing" | "succeeded" | "failed" | "unsupported";
 export interface CodexSnapshot<T> { status: CodexSnapshotState; supported: boolean; reason: string; codex_version: string; data: T | null; error: string; requested_at: string | null; updated_at: string | null }
 export interface CodexGoal { thread_id: string; objective: string; status: string; token_budget: number | null; tokens_used: number; time_used_seconds: number; created_at: number; updated_at: number }

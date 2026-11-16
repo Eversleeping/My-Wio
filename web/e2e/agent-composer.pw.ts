@@ -10,15 +10,7 @@ for (const engine of ["codex", "claude", "gemini"] as const) {
     const mobile = testInfo.project.name === "mobile-chromium";
     const base = `/sessions/${engine}`;
     const workspace = { id: "workspace", project_id: "project", server_id: "server", server_name: "Server", project_name: "Project", path: "/srv/project", display_name: "Project", status: "ready", kind: "primary" };
-    const thread = {
-      engine, native_id:"native", capabilities:{},
-      id: "screenshot-thread", workspace_id: workspace.id, project_id: workspace.project_id,
-      title: "Screenshot review", status: "idle", path: workspace.path, server_id: workspace.server_id,
-      server_name: workspace.server_name, server_status: "online", project_name: workspace.project_name,
-      model: engine === "claude" ? "sonnet" : engine === "gemini" ? "auto" : "gpt-5.6-sol",
-      session_id: "native-session", codex_thread_id: "native-session", permission_mode: "default", approval_mode: "default",
-      input_supported: true, created_at: "2026-11-10T00:00:00Z", updated_at: "2026-11-10T00:00:00Z", archived_at: null,
-    };
+    const thread = {engine,native_id:"native",capabilities:{...{},images:true},id: "screenshot-thread",workspace_id: workspace.id,project_id: workspace.project_id,title: "Screenshot review",status: "idle",path: workspace.path,server_id: workspace.server_id,server_name: workspace.server_name,server_status: "online",project_name: workspace.project_name,model: engine === "claude" ? "sonnet" : engine === "gemini" ? "auto" : "gpt-5.6-sol",session_id: "native-session",codex_thread_id: "native-session",permission_mode: "default",approval_mode: "default",created_at: "2026-11-10T00:00:00Z",updated_at: "2026-11-10T00:00:00Z",archived_at: null};
     const events = Array.from({ length: 30 }, (_, index) => ({
       event_id: `message-${index}`, stream_id: thread.id, sequence: index + 1, occurred_at: thread.updated_at,
       kind: engine === "codex" ? "user.message" : `${engine}.user.message`,

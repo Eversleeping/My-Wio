@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { Dialog } from "../components/FormUI";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -8,49 +8,23 @@ import { settings } from "../data/settings";
 import { useI18n } from "../i18n";
 import { ScheduledTaskDialog } from "../pages/ScheduledTaskDialog";
 import { message } from "../text";
+import { useSessionChoices } from "./useSessionChoices";
 import type { ScheduledTask, Workspace } from "../types";
-import { sessionAPI } from "./api";
 import { rememberedEngine } from "./CreateSessionDialog";
 import { engineModule } from "./engineModules";
 import { workspaceTitle } from "./unifiedGroups";
-import type { AISession, SessionListPage } from "./types";
-
-// Fetch every matching cursor window before offering session choices. Paths can
-// be shared by several servers; identity is filtered by workspace ID afterwards.
-function useWorkspaceSessions(workspaceID: string, path: string | undefined, revision: string) {
-  const [state, setState] = useState<{data:AISession[]; loading:boolean; error:string}>({data:[],loading:true,error:""});
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    const controller = new AbortController();
-    setState({data:[],loading:true,error:""});
-    void (async () => {
-      try {
-        const items:AISession[] = [], cursors = new Set<string>();
-        let cursor: string | null = null;
-        do {
-          const page: SessionListPage = await sessionAPI.list({q:path,archived:false,limit:100,cursor},{signal:controller.signal});
-          items.push(...page.items.filter(item => item.workspace_id === workspaceID));
-          cursor=page.next_cursor;
-          if (cursor && cursors.has(cursor)) throw new Error("Unable to load sessions. Please try again.");
-          if (cursor) cursors.add(cursor);
-        } while (cursor && !controller.signal.aborted);
-        if (!controller.signal.aborted) setState({data:items,loading:false,error:""});
-      } catch (error) { if (!controller.signal.aborted) setState({data:[],loading:false,error:message(error)}); }
-    })();
-    return () => controller.abort();
-  },[workspaceID,path,revision,retry]);
-  return {...state,reload:()=>setRetry(value=>value+1)};
-}
+import type { AISession } from "./types";
 
 export default function WorkspaceScheduledTasks({workspaceID, workspace, initialThread, revision, notify, onClose}: {workspaceID:string; workspace?:Workspace; initialThread?:AISession; revision:string; notify:(text:string)=>void; onClose:()=>void}) {
   const {t}=useI18n();
   const shared = useResourceRevision(["codex","gemini","claude","projects"]);
-  const options=useWorkspaceSessions(workspaceID,workspace?.path,`${revision}:${shared}`);
+  const options=useSessionChoices({q:workspace?.path},`${workspaceID}:${revision}:${shared}`);
   const tasks=useResource(settings.scheduledTasks());
   const [editor,setEditor]=useState<{task?:ScheduledTask; thread?:AISession} | null>(() => initialThread ? {thread:initialThread} : null);
   const [deleting,setDeleting]=useState<ScheduledTask | null>(null);
   const [busy,setBusy]=useState(false);
-  const sessions = initialThread && !options.data.some(item=>item.engine===initialThread.engine && item.id===initialThread.id) ? [...options.data,initialThread] : options.data;
+  const workspaceSessions = options.data.filter(item=>item.workspace_id===workspaceID);
+  const sessions = initialThread && !workspaceSessions.some(item=>item.engine===initialThread.engine && item.id===initialThread.id) ? [...workspaceSessions,initialThread] : workspaceSessions;
   const change=async (action:()=>Promise<unknown>) => {
     if (busy) return;
     setBusy(true);

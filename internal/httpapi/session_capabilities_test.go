@@ -3,12 +3,14 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
-func TestLegacyCapabilityFieldsMatchCapabilityObject(t *testing.T) {
+func TestUnifiedCapabilityObjectReplacesLegacyFields(t *testing.T) {
 	for _, engine := range []string{"codex", "gemini", "claude"} {
 		t.Run(engine, func(t *testing.T) {
 			f := newSessionContract(t, engine)
@@ -17,20 +19,34 @@ func TestLegacyCapabilityFieldsMatchCapabilityObject(t *testing.T) {
 					t.Fatal(err)
 				}
 				detail := f.call("GET", f.path(""), "", 200)
-				w := f.request("GET", f.prefix, "")
-				var items []map[string]any
-				if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &items) != nil || len(items) != 1 {
+				w := f.request("GET", "/api/sessions?engine="+engine, "")
+				var page struct {
+					Items []map[string]any `json:"items"`
+				}
+				if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
 					t.Fatalf("list: %s", w.Body)
 				}
-				for _, item := range []map[string]any{detail, items[0]} {
+				for _, item := range []map[string]any{detail, page.Items[0]} {
 					caps, ok := item["capabilities"].(map[string]any)
 					if !ok {
 						t.Fatal("missing capabilities", item)
 					}
 					fields := map[string]string{"steer_supported": "steer", "steer_images_supported": "steer_images", "skills_management_supported": "skills_manage", "input_supported": "images", "thinking_supported": "thinking", "skills_supported": "skills", "goal_supported": "goal", "plan_supported": "plan", "fork_supported": "fork", "rewrite_supported": "rewrite", "questions_supported": "questions", "effort_supported": "effort"}
-					for old, current := range fields {
-						if value, ok := item[old]; ok && value != caps[current] {
-							t.Fatalf("%s %s: %s=%v, %s=%v", engine, version, old, value, current, caps[current])
+					driver, err := f.db.AISession(context.Background(), session.Ref{Engine: engine, ID: f.id})
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw, _ := json.Marshal(driver.Capabilities)
+					var expected map[string]any
+					if err := json.Unmarshal(raw, &expected); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(caps, expected) {
+						t.Fatalf("%s %s capabilities: %v want %v", engine, version, caps, expected)
+					}
+					for old := range fields {
+						if _, ok := item[old]; ok {
+							t.Fatalf("retired field %s leaked", old)
 						}
 					}
 				}

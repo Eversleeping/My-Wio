@@ -28,12 +28,3 @@ func (a *API) sessionUsage(w http.ResponseWriter, r *http.Request, engine, prefi
 	}
 	writeJSON(w, 200, usage)
 }
-func (a *API) threadUsage(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "usage")
-}
-func (a *API) geminiUsage(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Gemini, "usage")
-}
-func (a *API) claudeUsage(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Claude, "usage")
-}

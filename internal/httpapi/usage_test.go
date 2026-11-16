@@ -54,7 +54,7 @@ func TestUsageRoutesRequireAuthenticationAndRespectSessionType(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	for _, path := range []string{"/api/threads/" + codex.ID + "/usage", "/api/gemini/threads/" + gemini.ID + "/usage", "/api/claude/threads/" + claude.ID + "/usage"} {
+	for _, path := range []string{"/api/sessions/codex/" + codex.ID + "/usage", "/api/sessions/gemini/" + gemini.ID + "/usage", "/api/sessions/claude/" + claude.ID + "/usage"} {
 		if w := request(path, false); w.Code != http.StatusUnauthorized {
 			t.Fatalf("unauthenticated %s: %d", path, w.Code)
 		}
@@ -62,7 +62,7 @@ func TestUsageRoutesRequireAuthenticationAndRespectSessionType(t *testing.T) {
 			t.Fatalf("empty usage %s: %d %s", path, w.Code, w.Body.String())
 		}
 	}
-	for _, path := range []string{"/api/threads/" + gemini.ID + "/usage", "/api/gemini/threads/" + codex.ID + "/usage", "/api/claude/threads/" + gemini.ID + "/usage", "/api/claude/threads/" + codex.ID + "/usage", "/api/threads/" + claude.ID + "/usage"} {
+	for _, path := range []string{"/api/sessions/codex/" + gemini.ID + "/usage", "/api/sessions/gemini/" + codex.ID + "/usage", "/api/sessions/claude/" + gemini.ID + "/usage", "/api/sessions/claude/" + codex.ID + "/usage", "/api/sessions/codex/" + claude.ID + "/usage"} {
 		if w := request(path, true); w.Code != http.StatusNotFound {
 			t.Fatalf("cross-provider %s: %d", path, w.Code)
 		}

@@ -1,5 +1,5 @@
 import type { Engine } from "../sessions/types";
-import type { AuditEntry, ClaudeThread, CodexCLISettings, CredentialProfile, GeminiThread, ScheduledTask, SecretSet, Thread } from "../types";
+import type { AuditEntry, CodexCLISettings, CredentialProfile, ScheduledTask, SecretSet } from "../types";
 import { mutation, query, writeResource } from "./resources";
 
 export type AuditListPage = {items: AuditEntry[]; has_more: boolean; next: number | null};
@@ -14,10 +14,6 @@ export const settings = {
   selectVersion: (engine: Engine, version: string) => writeResource(mutation<CodexCLISettings>(`/settings/${engine}-cli/select-version`, "POST", ["settings"]), {version}),
   audit: (offset?: number) => query<AuditListPage>(`/audit?limit=${auditListPageSize}${offset === undefined ? "" : `&offset=${offset}`}`, ["settings"]),
   scheduledTasks: () => query<ScheduledTask[]>("/scheduled-tasks", ["settings"]),
-  // Settings keeps its native array selectors during the M6 compatibility window.
-  codexThreads: () => query<Thread[]>("/threads", ["settings"]),
-  claudeThreads: () => query<ClaudeThread[]>("/claude/threads", ["settings"]),
-  geminiThreads: () => query<GeminiThread[]>("/gemini/threads", ["settings"]),
   geminiModels: (workspaceID: string) => query<{models: {id: string; name: string}[]}>(`/workspaces/${workspaceID}/gemini/models`, ["settings"]),
   saveProfile: (input: CredentialProfileInput) => writeResource(mutation("/credential-profiles", "POST", ["settings"]), input),
   createSecret: (name: string, values: Record<string, string>) => writeResource(mutation("/secret-sets", "POST", ["settings"]), {name, values}),

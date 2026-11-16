@@ -24,11 +24,11 @@ export function GeminiSkillsDialog({ open, thread, onClose, onUse }: { open: boo
   const [removing, setRemoving] = useState<Skill | null>(null);
   const pending = useRef<Pending>();
   const active = ["queued", "running", "interrupting"].includes(thread.status) || thread.recovery_pending;
-  const canManage = Boolean(thread.skills_management_supported && !thread.archived_at && !active && thread.server_status === "online");
+  const canManage = Boolean(thread.capabilities?.skills_manage && !thread.archived_at && !active && thread.server_status === "online");
   const root = `/workspaces/${encodeURIComponent(thread.workspace_id)}/gemini/skills`;
 
   useEffect(() => {
-    if (!open || !thread.skills_supported || thread.server_status !== "online") return;
+    if (!open || !thread.capabilities?.skills || thread.server_status !== "online") return;
     if (pending.current?.workspace !== thread.workspace_id) pending.current = undefined;
     const controller = new AbortController();
     let timer = 0;
@@ -68,7 +68,7 @@ export function GeminiSkillsDialog({ open, thread, onClose, onUse }: { open: boo
     })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [open, revision, thread.workspace_id, thread.skills_supported, thread.server_status, root, t]);
+  }, [open, revision, thread.workspace_id, thread.capabilities?.skills, thread.server_status, root, t]);
 
   const change = (value: Omit<Change, "request_id">) => {
     if (!canManage || loading || pending.current) return;
@@ -79,12 +79,12 @@ export function GeminiSkillsDialog({ open, thread, onClose, onUse }: { open: boo
   return <>
     <Dialog open={open} title={t("gemini.skillsTitle")} onClose={onClose} wide closeLabel={t("common.close")}>
       <p className="muted">{t("gemini.skillsHint")}</p>
-      {!thread.skills_supported ? <p>{t("gemini.skillsUpdate")}</p> : thread.server_status !== "online" ? <p>{t("gemini.offline")}</p> : <>
+      {!thread.capabilities?.skills ? <p>{t("gemini.skillsUpdate")}</p> : thread.server_status !== "online" ? <p>{t("gemini.offline")}</p> : <>
         {loading && <p role="status"><LoaderCircle className="spin" size={16} /> {t(pending.current ? "gemini.skillsChanging" : "gemini.skillsLoading")}</p>}
         {error && <p role="alert">{error}</p>}
         {notice && <p role="status">{notice}</p>}
         {pending.current && !loading && <button type="button" className="secondary-button" onClick={() => setRevision(value => value + 1)}>{t("gemini.skillsRetry")}</button>}
-        {!thread.skills_management_supported ? <p className="muted">{t("gemini.skillsManageUpdate")}</p> : <>
+        {!thread.capabilities?.skills_manage ? <p className="muted">{t("gemini.skillsManageUpdate")}</p> : <>
           {active && <p className="muted">{t("gemini.skillsBusy")}</p>}
           <form className="gemini-skill-install" onSubmit={event => { event.preventDefault(); if (source.trim()) change({ action: "install", source: source.trim(), ...(subpath.trim() ? {path:subpath.trim()} : {}), scope }); }}>
             <label className="field"><span>{t("gemini.skillScope")}</span><select value={scope} disabled={loading || Boolean(pending.current)} onChange={event => setScope(event.target.value)}><option value="workspace">{t("gemini.skillScope.workspace")}</option><option value="user">{t("gemini.skillScope.user")}</option></select></label>
@@ -100,12 +100,12 @@ export function GeminiSkillsDialog({ open, thread, onClose, onUse }: { open: boo
           <p>{skill.description}</p>
           <div className="gemini-skill-actions">
             <button type="button" className="secondary-button" disabled={!skill.enabled || loading} aria-label={`${t("gemini.skillsUse")} ${skill.name}`} onClick={() => onUse(skill.name)}>{t("gemini.skillsUse")}</button>
-            {thread.skills_management_supported && <button type="button" className="secondary-button" disabled={!canManage || loading || Boolean(pending.current)} aria-label={`${t(skill.enabled ? "gemini.skillDisable" : "gemini.skillEnable")} ${skill.name}`} onClick={() => change({ action: skill.enabled ? "disable" : "enable", name:skill.name, scope })}>{t(skill.enabled ? "gemini.skillDisable" : "gemini.skillEnable")}</button>}
-            {thread.skills_management_supported && !skill.builtin && ["workspace", "user"].includes(skill.scope ?? "") && <button type="button" className="secondary-button danger" disabled={!canManage || loading || Boolean(pending.current)} aria-label={`${t("gemini.skillUninstall")} ${skill.name}`} onClick={() => setRemoving(skill)}>{t("gemini.skillUninstall")}</button>}
+            {thread.capabilities?.skills_manage && <button type="button" className="secondary-button" disabled={!canManage || loading || Boolean(pending.current)} aria-label={`${t(skill.enabled ? "gemini.skillDisable" : "gemini.skillEnable")} ${skill.name}`} onClick={() => change({ action: skill.enabled ? "disable" : "enable", name:skill.name, scope })}>{t(skill.enabled ? "gemini.skillDisable" : "gemini.skillEnable")}</button>}
+            {thread.capabilities?.skills_manage && !skill.builtin && ["workspace", "user"].includes(skill.scope ?? "") && <button type="button" className="secondary-button danger" disabled={!canManage || loading || Boolean(pending.current)} aria-label={`${t("gemini.skillUninstall")} ${skill.name}`} onClick={() => setRemoving(skill)}>{t("gemini.skillUninstall")}</button>}
           </div>
         </article>)}</div>}
       </>}
-      <DialogActions><button type="button" className="secondary-button" disabled={loading || Boolean(pending.current) || !thread.skills_supported || thread.server_status !== "online"} onClick={() => { setNotice(""); setRevision(value => value + 1); }}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions>
+      <DialogActions><button type="button" className="secondary-button" disabled={loading || Boolean(pending.current) || !thread.capabilities?.skills || thread.server_status !== "online"} onClick={() => { setNotice(""); setRevision(value => value + 1); }}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions>
     </Dialog>
     <ConfirmDialog open={Boolean(removing)} danger title={t("gemini.skillUninstall")} impact={t("gemini.skillUninstallImpact", {name:removing?.name ?? "",scope:t(`gemini.skillScope.${removing?.scope ?? "workspace"}`)})} confirmLabel={t("gemini.skillUninstall")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={loading} onClose={() => setRemoving(null)} onConfirm={() => { if (removing) change({action:"uninstall",name:removing.name,scope:removing.scope ?? "workspace"}); setRemoving(null); }} />
   </>;

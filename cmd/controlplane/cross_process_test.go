@@ -199,9 +199,9 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	assertAcceptanceCapabilityDeclarations(t, api, database)
 
 	engines := []*acceptanceEngine{
-		{name: "codex", collection: "/api/threads", reply: "P0-07 fake Codex reply", createFields: map[string]any{"workspace_id": workspace.ID}},
-		{name: "claude", collection: "/api/claude/threads", reply: "P0-07 fake Claude reply", createFields: map[string]any{"workspace_id": workspace.ID, "model": "sonnet", "permission_mode": "default"}},
-		{name: "gemini", collection: "/api/gemini/threads", reply: "P0-07 fake Gemini reply", createFields: map[string]any{"workspace_id": workspace.ID, "model": "flash", "approval_mode": "default"}},
+		{name: "codex", collection: "/api/sessions/codex", reply: "P0-07 fake Codex reply", createFields: map[string]any{"workspace_id": workspace.ID}},
+		{name: "claude", collection: "/api/sessions/claude", reply: "P0-07 fake Claude reply", createFields: map[string]any{"workspace_id": workspace.ID, "model": "sonnet", "permission_mode": "default"}},
+		{name: "gemini", collection: "/api/sessions/gemini", reply: "P0-07 fake Gemini reply", createFields: map[string]any{"workspace_id": workspace.ID, "model": "flash", "approval_mode": "default"}},
 	}
 	for _, engine := range engines {
 		engine.create(t, api)
@@ -609,7 +609,7 @@ func assertAcceptanceSessionCapabilities(t *testing.T, api *acceptanceAPI, engin
 		"gemini": {Turns: true, Images: true, Steer: true, SteerImages: true, Rewrite: true, Fork: true, ForkMessages: true, ForkWorktree: true, Questions: true, Approvals: true, Goal: true, Plan: true, Skills: true, SkillsManage: true, Thinking: true, Yolo: true, ConfirmStopped: true, Collaboration: true},
 		"claude": {Turns: true, Images: true, Rewrite: true, Fork: true, ForkMessages: true, ForkWorktree: true, Approvals: true, Compact: true, Skills: true, Effort: true, Yolo: true, ConfirmStopped: true, Collaboration: true},
 	}
-	for _, path := range []string{engine.collection + "/" + engine.threadID, "/api/sessions/" + engine.name + "/" + engine.threadID} {
+	for _, path := range []string{engine.collection + "/" + engine.threadID} {
 		response, err := api.request(http.MethodGet, path, nil)
 		if err != nil || response.status != http.StatusOK {
 			t.Fatal(responseDetail(response, err))
@@ -624,16 +624,9 @@ func assertAcceptanceSessionCapabilities(t *testing.T, api *acceptanceAPI, engin
 		if err := json.Unmarshal(response.body, &flags); err != nil {
 			t.Fatal(err)
 		}
-		for key, value := range flags {
-			if !strings.HasSuffix(key, "_supported") {
-				continue
-			}
-			want := true
-			if engine.name == "claude" && (key == "steer_supported" || key == "questions_supported") {
-				want = false
-			}
-			if value != want {
-				t.Fatalf("%s %s=%v want %v", path, key, value, want)
+		for key := range flags {
+			if strings.HasSuffix(key, "_supported") {
+				t.Fatalf("%s leaked retired field %s", path, key)
 			}
 		}
 	}

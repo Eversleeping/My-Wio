@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/wio-platform/wio/internal/protocol"
-	"github.com/wio-platform/wio/internal/session"
 )
 
 func validReasoningEffort(value string) bool {
@@ -38,16 +37,4 @@ func validTurnImages(images []protocol.TurnImage) bool {
 		total += len(decoded)
 	}
 	return total <= 4<<20
-}
-func (a *API) startTurn(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "turns")
-}
-func (a *API) rewriteTurn(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "rewrite")
-}
-func (a *API) steerTurn(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "steer")
-}
-func (a *API) interruptTurn(w http.ResponseWriter, r *http.Request) {
-	a.legacySession(w, r, session.Codex, "interrupt")
 }

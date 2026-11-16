@@ -52,11 +52,51 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	})
 	t.Run("versioned migrations", func(t *testing.T) { assertPostgresMigrationRunner(t, databaseURL) })
 	t.Run("scheduled migration", func(t *testing.T) { assertPostgresScheduledTaskMigration(t, databaseURL) })
+	t.Run("session cleanup migration", func(t *testing.T) {
+		admin, err := sqlx.Connect("pgx", databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		if _, err := admin.Exec("CREATE SCHEMA session_cleanup_migration"); err != nil {
+			t.Fatal(err)
+		}
+		db, err := sqlx.Connect("pgx", postgresSchemaURL(t, databaseURL, "session_cleanup_migration"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		db.SetMaxOpenConns(1)
+		assertSessionCleanupMigration(t, db, "pgx")
+	})
+	t.Run("legacy model configuration", func(t *testing.T) {
+		admin, err := sqlx.Connect("pgx", databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		if _, err := admin.Exec("CREATE SCHEMA legacy_model_configuration"); err != nil {
+			t.Fatal(err)
+		}
+		db, err := openPreCleanupTestStore(postgresSchemaURL(t, databaseURL, "legacy_model_configuration"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		assertClaudeModelConfigRevision(t, db)
+		assertGeminiModelConfigMigration(t, db)
+	})
 	t.Run("server engine migration", func(t *testing.T) { assertPostgresServerEngineMigration(t, databaseURL) })
 	createLegacyPostgresSchema(t, databaseURL)
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		database, err := Open(databaseURL)
+		var database *Store
+		var err error
+		if attempt == 1 {
+			database, err = openPreCleanupTestStore(databaseURL)
+		} else {
+			database, err = Open(databaseURL)
+		}
 		if err != nil {
 			t.Fatalf("open migrated PostgreSQL attempt %d: %v", attempt, err)
 		}
@@ -127,7 +167,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertMessageForkCopiesOnlySelectedHistory(t, scans)
 	assertGeminiCredentialBindingsAndReplay(t, scans)
 	assertClaudeCredentialBindingsAndReplay(t, scans)
-	assertClaudeModelConfigRevision(t, scans)
+
 	assertClaudeEffortStorage(t, scans)
 	assertAgentConcurrentSessions(t, scans)
 	assertSessionWorkspaceWriteRace(t, scans)
@@ -153,7 +193,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	assertGeminiRecoveryOnPostgres(t, scans)
 	assertGeminiGoalOnPostgres(t, scans)
 	assertGeminiModelConfigRevision(t, scans)
-	assertGeminiModelConfigMigration(t, scans)
+
 	t.Run("batch B retention", func(t *testing.T) { assertRetentionDefaultsAndOptIn(t, scans) })
 	t.Run("batch B requests", func(t *testing.T) { assertCodexRequestsReplayAndConflict(t, scans) })
 	t.Run("batch B literal paths", func(t *testing.T) { assertWorkspacePathFilterMatchesLiteralWildcards(t, scans) })

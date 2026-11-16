@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 func TestClaudeQuestionAPIValidationAndGating(t *testing.T) {
@@ -32,7 +34,7 @@ func TestClaudeQuestionAPIValidationAndGating(t *testing.T) {
 		route.URLParams.Add("requestID", "question")
 		r = r.WithContext(context.WithValue(ctx, chi.RouteCtxKey, route))
 		w := httptest.NewRecorder()
-		a.answerClaudeQuestion(w, r)
+		sessionNativeHandler(a, session.Claude, "answer")(w, r)
 		return w
 	}
 	if w := request(`{"answers":{"0":{"answers":["A"]}}}`); w.Code != 409 {

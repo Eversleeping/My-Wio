@@ -53,7 +53,7 @@ func TestAsyncQuestionReplyThroughAuthenticatedRouter(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			path := "/api/threads/" + thread.ID
+			path := "/api/sessions/codex/" + thread.ID
 			unauthenticated := requestJSON(t, handler, http.MethodGet, path, nil, nil)
 			if unauthenticated.Code != http.StatusUnauthorized {
 				t.Fatalf("unauthenticated lookup: %d", unauthenticated.Code)
@@ -103,7 +103,7 @@ func TestAsyncQuestionReplyThroughAuthenticatedRouter(t *testing.T) {
 			t.Fatalf("answer not queued as %s", kind)
 		})
 	}
-	missing := requestJSON(t, handler, http.MethodGet, "/api/threads/missing", nil, cookie)
+	missing := requestJSON(t, handler, http.MethodGet, "/api/sessions/codex/missing", nil, cookie)
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing session: %d %s", missing.Code, missing.Body.String())
 	}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,7 +10,12 @@ import (
 )
 
 func TestClaudeModelConfigRevision(t *testing.T) {
-	assertClaudeModelConfigRevision(t, testStore(t))
+	db, err := openPreCleanupTestStore(filepath.Join(t.TempDir(), "legacy-model-config.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	assertClaudeModelConfigRevision(t, db)
 }
 
 func assertClaudeModelConfigRevision(t *testing.T, db *Store) {

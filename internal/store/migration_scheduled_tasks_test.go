@@ -67,7 +67,7 @@ func assertScheduledTaskMigration(t *testing.T, db *sqlx.DB, driver string, conf
 		}
 	}
 	if conflict {
-		_, err := runMigrations(ctx, db, driver, schemaMigrations)
+		_, err := runMigrations(ctx, db, driver, schemaMigrations[:4])
 		if err == nil || !strings.Contains(err.Error(), "duplicate scheduled task IDs: task-codex") {
 			t.Fatalf("conflict not identified: %v", err)
 		}
@@ -87,7 +87,7 @@ func assertScheduledTaskMigration(t *testing.T, db *sqlx.DB, driver string, conf
 		}
 	}
 	for range 2 {
-		if _, err := runMigrations(ctx, db, driver, schemaMigrations); err != nil {
+		if _, err := runMigrations(ctx, db, driver, schemaMigrations[:4]); err != nil {
 			t.Fatal(err)
 		}
 	}

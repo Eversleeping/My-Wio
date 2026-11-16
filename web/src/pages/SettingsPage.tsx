@@ -29,8 +29,9 @@ import { CodexModelPicker } from "../components/CodexModelPicker";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
 import { GeminiSettings } from "../components/GeminiSettings";
-import { DataTable, Section, Status } from "../components/PageUI";
-import { useResource } from "../data/resources";
+import { DataTable, ErrorState, PageLoading, Section, Status } from "../components/PageUI";
+import { useSessionChoices } from "../sessions/useSessionChoices";
+import { useResource, useResourceRevision } from "../data/resources";
 import { settings as settingEndpoints } from "../data/settings";
 import { useAuditList } from "../data/useAuditList";
 import { formatDate, relative, shortSHA } from "../format";
@@ -75,9 +76,8 @@ export function SettingsPage({ notify }: PageProps) {
   const secrets = useResource(settingEndpoints.secrets());
   const audit = useAuditList();
   const scheduledTasks = useResource(settingEndpoints.scheduledTasks());
-  const threads = useResource(settingEndpoints.codexThreads());
-  const claudeThreads = useResource(settingEndpoints.claudeThreads());
-  const geminiThreads = useResource(settingEndpoints.geminiThreads());
+  const sessionRevision = useResourceRevision(["settings", "codex", "gemini", "claude"]);
+  const sessions = useSessionChoices({}, sessionRevision);
   const [profileDialog, setProfileDialog] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileForm, setProfileForm] = useState({ id: "", kind: "codex" as CredentialProfile["kind"], name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, commit_name: "", commit_email: "", secret: "" });
@@ -163,7 +163,7 @@ export function SettingsPage({ notify }: PageProps) {
       <DialogActions><button type="button" className="secondary-button" disabled={profileBusy} onClick={() => setProfileDialog(false)}>{t("common.cancel")}</button><button className="primary-button" disabled={profileBusy}>{profileBusy ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />}{t("settings.encryptSave")}</button></DialogActions>
     </form></Dialog>
     <Dialog open={secretDialog} title={t("settings.secretSetTitle")} onClose={() => setSecretDialog(false)}><form onSubmit={submitSecretSet}><Field label={t("settings.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("settings.environmentValues")}><textarea value={lines} onChange={e => setLines(e.target.value)} rows={8} placeholder={"DATABASE_URL=...\nAPI_TOKEN=..."} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setSecretDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("settings.encryptSave")}</button></DialogActions></form></Dialog>
-    <ScheduledTaskDialog open={scheduledTarget !== null} task={scheduledTarget?.task} threads={threads.data ?? []} geminiThreads={geminiThreads.data ?? []} claudeThreads={claudeThreads.data ?? []} notify={notify} onClose={() => setScheduledTarget(null)} onSaved={() => {}} />
+    <ScheduledTaskDialog open={scheduledTarget !== null} task={scheduledTarget?.task} threads={[]} sessions={sessions.data} sessionNotice={sessions.error ? <ErrorState error={sessions.error} reload={sessions.reload} /> : sessions.loading ? <PageLoading /> : null} notify={notify} onClose={() => setScheduledTarget(null)} onSaved={() => {}} />
     {settingsConfirmation?.type === "scheduled-task" ? <ConfirmDialog open danger title={t("settings.deleteScheduledTask")} impact={t("settings.confirmDeleteScheduledTask", { name: settingsConfirmation.task.name })} confirmLabel={t("settings.deleteScheduledTask")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteScheduledTask(settingsConfirmation.task)} /> : settingsConfirmation?.type === "credential-profile" ? <ConfirmDialog open danger title={t("settings.deleteProfile")} impact={t("settings.confirmDeleteProfile", { name: settingsConfirmation.profile.name })} confirmLabel={t("settings.deleteProfile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteProfile(settingsConfirmation.profile)} /> : settingsConfirmation?.type === "secret-set" ? <ConfirmDialog open danger title={t("settings.deleteSecretSet")} impact={t("settings.confirmDelete", { name: settingsConfirmation.secret.name })} confirmLabel={t("settings.deleteSecretSet")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteSecretSet(settingsConfirmation.secret)} /> : null}
   </div>;
 }

@@ -102,6 +102,13 @@ func sessionResponse(ctx context.Context, driver session.Driver, item session.Re
 	if err != nil {
 		return nil, err
 	}
+	// Unified clients use the capability object. Native fields remain internal
+	// to the drivers while their historical HTTP aliases are retired.
+	for key := range result {
+		if strings.HasSuffix(key, "_supported") {
+			delete(result, key)
+		}
+	}
 	// Merge the common fields last so grouping and ordering use one definition.
 	err = json.Unmarshal(raw, &result)
 	return result, err
@@ -121,7 +128,7 @@ func (a *API) unifiedSessionAction(action string) http.HandlerFunc {
 			return
 		}
 		handler := driver.Handler(action)
-		if handler == nil {
+		if handler == nil && action != "detail" && action != "events" {
 			writeUnsupportedSessionAction(w)
 			return
 		}
@@ -193,8 +200,7 @@ func (a *API) unifiedSessionAction(action string) http.HandlerFunc {
 	}
 }
 
-// Only JSON create/update actions are buffered, so a new response can add the
-// common read model while the old routes keep their original body verbatim.
+// Buffer native JSON create/update actions to return the common read model.
 type sessionActionResponse struct {
 	header http.Header
 	status int

@@ -38,7 +38,11 @@ func TestOpenMigratesLegacyCredentialProfilesWithCommitIdentity(t *testing.T) {
 }
 
 func TestMigrateServerGitCredentialProfilesCopiesLegacyBinding(t *testing.T) {
-	database := testStore(t)
+	database, err := openPreCleanupTestStore(filepath.Join(t.TempDir(), "legacy-binding.db") + "?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
 	ctx := context.Background()
 	server := enrollProjectImportTestServer(t, database, "legacy-git-binding")
 	codex, err := database.SaveCredentialProfile(ctx, CredentialProfile{Kind: "codex", Name: "Codex", Endpoint: "https://api.example.com/v1", Model: "gpt-5.6-sol"}, "v1:codex")

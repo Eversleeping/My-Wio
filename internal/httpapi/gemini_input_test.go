@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 func TestGeminiImagesAndAnswersStayInTheirActiveTurn(t *testing.T) {
@@ -29,7 +31,7 @@ func TestGeminiImagesAndAnswersStayInTheirActiveTurn(t *testing.T) {
 	api := resourceTestAPI(db)
 	image := protocol.TurnImage{DataURL: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}
 	send := func(images []protocol.TurnImage) *httptest.ResponseRecorder {
-		return threadResourceRequest(t, "POST", "/turns", thread.ID, map[string]any{"images": images}, api.startGeminiTurn)
+		return threadResourceRequest(t, "POST", "/turns", thread.ID, map[string]any{"images": images}, sessionNativeHandler(api, session.Gemini, "turns"))
 	}
 	if w := send([]protocol.TurnImage{image}); w.Code != 409 {
 		t.Fatalf("old Agent accepted image: %d %s", w.Code, w.Body.String())
@@ -77,7 +79,7 @@ func TestGeminiImagesAndAnswersStayInTheirActiveTurn(t *testing.T) {
 		route.URLParams.Add("threadID", thread.ID)
 		route.URLParams.Add("requestID", question.EventID)
 		return directJSONRequest(t, "POST", "/answer", map[string]any{"answers": answers}, nil, func(w http.ResponseWriter, r *http.Request) {
-			api.answerGeminiQuestion(w, r.WithContext(context.WithValue(ctx, chi.RouteCtxKey, route)))
+			sessionNativeHandler(api, session.Gemini, "answer")(w, r.WithContext(context.WithValue(ctx, chi.RouteCtxKey, route)))
 		})
 	}
 	if w := answer(nil); w.Code != 409 {

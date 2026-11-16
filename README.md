@@ -214,7 +214,11 @@ internal/agentgateway     已认证的双向 gRPC 网关
 internal/codexadapter     Codex app-server 适配
 internal/geminiadapter    Gemini CLI / ACP 适配
 internal/claudeadapter    Claude Code CLI 适配
-internal/sessionservice   会话协作服务
+internal/session          会话引用、能力、记录与驱动契约
+internal/sessionservice   会话驱动装配、调度与协作编排
+internal/capabilities     Agent 能力声明与解析
+internal/protocol         Agent 操作、信封与结果 DTO
+internal/protocol/wirecontract  线上格式注册与只增兼容夹具
 internal/sessiontools     协作工具契约
 internal/mcpbridge        进程级 MCP 桥接
 internal/store            PostgreSQL / SQLite、迁移和持久化
@@ -234,3 +238,15 @@ web                       React / TypeScript PWA 与测试
 deploy                    Compose、Caddy、Dockerfile、systemd
 docs                      用户手册、部署和专题参考
 ```
+
+
+### 扩展一种会话引擎
+
+新增引擎沿用现有会话、授权和调度链路，主要改动位置如下：
+
+1. 在 `internal/session` 定义引擎标识及能力，在 `internal/sessionservice` 注册实现 `session.Driver` 的原生驱动；需要事务协作时实现 Store 的事务端口，不在公共编排里新增引擎分支。
+2. 在 `internal/store` 增加原生持久化适配和追加迁移，接入统一会话读模型、定时任务及服务器引擎配置。原生线程表是否独立由其原子更新与历史约束决定。
+3. 在 `internal/httpapi` 注册原生动作和输入校验，复用 `/api/sessions` 的列表、能力门槛与错误处理；模型、技能或凭据等独有接口按实际需要提供。
+4. 在引擎适配器、`internal/agent` 和 `internal/agentgateway` 接入 CLI 执行与事件处理；扩展 `internal/protocol` 注册、只增 wire fixtures 和 `internal/capabilities` 声明，保留未协商连接的兼容路径，并同步升级 Agent 版本。
+5. 在 `web/src/sessions/engines` 注册引擎模块，使用统一外壳、会话引用、能力对象和数据层；补齐引擎选择、模型与原生交互文案。
+6. 扩展三引擎共享的生命周期/授权/调度矩阵，加入新引擎的原生边界、迁移、协议、跨进程与桌面/移动浏览器验收。第四引擎本身是新增功能，不在本次重构中实现。

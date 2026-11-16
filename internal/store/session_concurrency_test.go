@@ -206,7 +206,7 @@ func assertSessionWorkspaceWriteRace(t *testing.T, db *Store) {
 func TestSessionConcurrencyMigratesLegacyIndex(t *testing.T) {
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "legacy.db") + "?_pragma=foreign_keys(1)"
-	db, err := Open(dsn)
+	db, err := openPreCleanupTestStore(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -24,14 +23,11 @@ type claudeHTTPDriver struct {
 
 func (d *claudeHTTPDriver) Handler(action string) http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"list":            d.claudeThreads,
 		"create":          d.createClaudeThread,
-		"detail":          d.claudeThread,
 		"update":          d.updateClaudeThread,
 		"delete":          d.deleteClaudeThread,
 		"fork":            d.forkClaudeThread,
 		"fork-worktree":   d.forkClaudeWorktree,
-		"events":          d.claudeEvents,
 		"usage":           d.claudeUsage,
 		"turns":           d.startClaudeTurn,
 		"steer":           d.steerClaudeTurn,
@@ -41,15 +37,6 @@ func (d *claudeHTTPDriver) Handler(action string) http.HandlerFunc {
 		"rewrite":         d.startClaudeTurn,
 	}[action]
 }
-func (a *claudeHTTPDriver) claudeThreads(w http.ResponseWriter, r *http.Request) {
-	threads, err := a.store.ClaudeThreads(r.Context(), r.URL.Query().Get("archived") == "true")
-	if err != nil {
-		writeError(w, 500, "could not list Claude sessions")
-		return
-	}
-	writeJSON(w, 200, threads)
-}
-
 func (a *claudeHTTPDriver) createClaudeThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		WorkspaceID    string `json:"workspace_id"`
@@ -91,12 +78,6 @@ func (a *claudeHTTPDriver) createClaudeThread(w http.ResponseWriter, r *http.Req
 	a.auditClaude(r, "claude.thread.create", thread.ID)
 	a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadCreated)
 	writeJSON(w, 201, thread)
-}
-
-func (a *claudeHTTPDriver) claudeThread(w http.ResponseWriter, r *http.Request) {
-	if thread, ok := a.loadClaudeThread(w, r); ok {
-		writeJSON(w, 200, thread)
-	}
 }
 
 func (a *claudeHTTPDriver) updateClaudeThread(w http.ResponseWriter, r *http.Request) {
@@ -160,42 +141,6 @@ func (a *claudeHTTPDriver) forkClaudeThread(w http.ResponseWriter, r *http.Reque
 
 func (a *claudeHTTPDriver) forkClaudeWorktree(w http.ResponseWriter, r *http.Request) {
 	a.queueClaudeFork(w, r, true)
-}
-
-func (a *claudeHTTPDriver) claudeEvents(w http.ResponseWriter, r *http.Request) {
-	thread, ok := a.loadClaudeThread(w, r)
-	if !ok {
-		return
-	}
-	query := r.URL.Query()
-	var cursor int64
-	var err error
-	if query.Has("after") && query.Has("before") {
-		writeError(w, 400, "before and after cannot be used together")
-		return
-	}
-	if query.Has("before") {
-		cursor, err = strconv.ParseInt(query.Get("before"), 10, 64)
-	} else if query.Has("after") {
-		cursor, err = strconv.ParseInt(query.Get("after"), 10, 64)
-	}
-	if err != nil || cursor < 0 {
-		writeError(w, 400, "invalid event cursor")
-		return
-	}
-	var events []protocol.StreamEvent
-	if query.Has("before") {
-		events, err = a.store.EventsBefore(r.Context(), thread.ID, cursor, 500)
-	} else if query.Has("after") {
-		events, err = a.store.Events(r.Context(), thread.ID, cursor, 500)
-	} else {
-		events, err = a.store.RecentEvents(r.Context(), thread.ID, 500)
-	}
-	if err != nil {
-		writeError(w, 500, "could not load Claude events")
-		return
-	}
-	writeJSON(w, 200, events)
 }
 
 func (a *claudeHTTPDriver) claudeUsage(w http.ResponseWriter, r *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 func TestMessageForkQueuesExactBoundaryAndGuardsOldAgents(t *testing.T) {
@@ -39,7 +40,7 @@ func TestMessageForkQueuesExactBoundaryAndGuardsOldAgents(t *testing.T) {
 	api := resourceTestAPI(db)
 	call := func(id string) int {
 		t.Helper()
-		response := threadResourceRequest(t, http.MethodPost, "/api/threads/"+thread.ID+"/fork", thread.ID, map[string]string{"event_id": id}, api.forkThread)
+		response := threadResourceRequest(t, http.MethodPost, "/api/sessions/codex/"+thread.ID+"/fork", thread.ID, map[string]string{"event_id": id}, sessionNativeHandler(api, session.Codex, "fork"))
 		return response.Code
 	}
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.58"}); err != nil {

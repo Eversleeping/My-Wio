@@ -17,14 +17,7 @@ for (const engine of ["codex", "claude", "gemini"] as const) {
     const imageSize = Buffer.from(png, "base64").length;
     const base = `/sessions/${engine}`;
     const workspace = { id: "workspace", project_id: "project", server_id: "server", server_name: "Server", project_name: "Project", path: "/srv/project", display_name: "Project", status: "ready", kind: "primary", management_mode: "managed" };
-    const thread = {
-      engine, native_id:"native", capabilities:{},
-      id: "images", workspace_id: workspace.id, project_id: workspace.project_id, title: "Image review", status: "idle",
-      path: workspace.path, server_id: workspace.server_id, server_name: "Server", server_status: "online", project_name: "Project",
-      model: engine === "claude" ? "sonnet" : engine === "gemini" ? "auto" : "gpt-5.6-sol", operation_id: "turn",
-      session_id: "native", codex_thread_id: "native", permission_mode: "default", approval_mode: "default", input_supported: true,
-      created_at: "2026-11-10T00:00:00Z", updated_at: "2026-11-10T00:00:00Z", archived_at: null,
-    };
+    const thread = {engine,native_id:"native",capabilities:{...{},images:true},id: "images",workspace_id: workspace.id,project_id: workspace.project_id,title: "Image review",status: "idle",path: workspace.path,server_id: workspace.server_id,server_name: "Server",server_status: "online",project_name: "Project",model: engine === "claude" ? "sonnet" : engine === "gemini" ? "auto" : "gpt-5.6-sol",operation_id: "turn",session_id: "native",codex_thread_id: "native",permission_mode: "default",approval_mode: "default",created_at: "2026-11-10T00:00:00Z",updated_at: "2026-11-10T00:00:00Z",archived_at: null};
     const markdown = "Here is the screenshot: ![Generated screenshot](/srv/project/screenshot.png)";
     const native = engine === "claude" ? { type: "image", source: { type: "base64", media_type: "image/png", data: png } } : { type: "image", mimeType: "image/png", data: png };
     const event = (sequence: number, kind: string, payload: unknown) => ({ event_id: `event-${sequence}`, stream_id: thread.id, sequence, occurred_at: thread.updated_at, kind, payload });

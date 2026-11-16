@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -26,14 +25,11 @@ type geminiHTTPDriver struct {
 
 func (d *geminiHTTPDriver) Handler(action string) http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"list":            d.geminiThreads,
 		"create":          d.createGeminiThread,
-		"detail":          d.geminiThread,
 		"update":          d.updateGeminiThread,
 		"delete":          d.deleteGeminiThread,
 		"fork":            d.forkGeminiThread,
 		"fork-worktree":   d.forkGeminiWorktree,
-		"events":          d.geminiEvents,
 		"usage":           d.geminiUsage,
 		"turns":           d.startGeminiTurn,
 		"steer":           d.steerGeminiTurn,
@@ -45,15 +41,6 @@ func (d *geminiHTTPDriver) Handler(action string) http.HandlerFunc {
 		"goal:control":    d.controlGeminiGoal,
 	}[action]
 }
-func (a *geminiHTTPDriver) geminiThreads(w http.ResponseWriter, r *http.Request) {
-	items, err := a.store.GeminiThreads(r.Context(), r.URL.Query().Get("archived") == "true")
-	if err != nil {
-		writeError(w, 500, "could not list Gemini sessions")
-		return
-	}
-	writeJSON(w, 200, items)
-}
-
 func (a *geminiHTTPDriver) createGeminiThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		WorkspaceID   string `json:"workspace_id"`
@@ -106,12 +93,6 @@ func (a *geminiHTTPDriver) createGeminiThread(w http.ResponseWriter, r *http.Req
 	a.auditGemini(r, "gemini.thread.create", thread.ID)
 	a.publishGeminiChange(r, thread.ID, protocol.EventGeminiThreadCreated)
 	writeJSON(w, 201, thread)
-}
-
-func (a *geminiHTTPDriver) geminiThread(w http.ResponseWriter, r *http.Request) {
-	if thread, ok := a.loadGeminiThread(w, r); ok {
-		writeJSON(w, 200, thread)
-	}
 }
 
 func (a *geminiHTTPDriver) updateGeminiThread(w http.ResponseWriter, r *http.Request) {
@@ -178,43 +159,6 @@ func (a *geminiHTTPDriver) forkGeminiThread(w http.ResponseWriter, r *http.Reque
 
 func (a *geminiHTTPDriver) forkGeminiWorktree(w http.ResponseWriter, r *http.Request) {
 	a.queueGeminiFork(w, r, true)
-}
-
-func (a *geminiHTTPDriver) geminiEvents(w http.ResponseWriter, r *http.Request) {
-	thread, ok := a.loadGeminiThread(w, r)
-	if !ok {
-		return
-	}
-	query := r.URL.Query()
-	after, before := int64(0), int64(0)
-	var err error
-	if query.Has("after") && query.Has("before") {
-		writeError(w, 400, "before and after cannot be used together")
-		return
-	}
-	if query.Has("after") {
-		after, err = strconv.ParseInt(query.Get("after"), 10, 64)
-	}
-	if query.Has("before") {
-		before, err = strconv.ParseInt(query.Get("before"), 10, 64)
-	}
-	if err != nil || after < 0 || before < 0 {
-		writeError(w, 400, "invalid event cursor")
-		return
-	}
-	var events []protocol.StreamEvent
-	if query.Has("before") {
-		events, err = a.store.EventsBefore(r.Context(), thread.ID, before, 500)
-	} else if query.Has("after") {
-		events, err = a.store.Events(r.Context(), thread.ID, after, 500)
-	} else {
-		events, err = a.store.RecentEvents(r.Context(), thread.ID, 500)
-	}
-	if err != nil {
-		writeError(w, 500, "could not load Gemini events")
-		return
-	}
-	writeJSON(w, 200, events)
 }
 
 func (a *geminiHTTPDriver) geminiUsage(w http.ResponseWriter, r *http.Request) {

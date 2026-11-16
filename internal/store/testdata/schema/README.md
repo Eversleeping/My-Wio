@@ -32,12 +32,12 @@
 
 ## 示例（仅演练，不加入产品清单）
 
-在独立临时源码副本的清单末尾追加以下条目。编号用当时最大编号加一；当前最大编号为 4，所以下例使用 5。
+在独立临时源码副本的清单末尾追加以下条目。编号用当时最大编号加一；当前最大编号为 5，所以下例使用 6。
 此例使用两种数据库均支持的 SQL，在已有 `events` 行上自动提供默认值。
 
 ```go
 {
-    version: 5,
+    version: 6,
     name: "example_event_source",
     up: func(ctx context.Context, tx *sqlx.Tx, driver string) error {
         _, err := tx.ExecContext(ctx,
@@ -48,8 +48,8 @@
 ```
 
 演练至少覆盖空库、全部历史结构夹具、重复打开、已有行读取到 `legacy`、新写入行默认值
-和版本 5 只记录一次。追加示例迁移后，可在测试中用
-`runMigrations(..., schemaMigrations[:4])`
+和版本 6 只记录一次。追加示例迁移后，可在测试中用
+`runMigrations(..., schemaMigrations[:5])`
 准备迁移前的隔离库并写一条事件，再执行完整清单；两个方言共用断言，PostgreSQL
 入口挂在 `TestPostgresMigrationAndStorage` 下，确保 `make test-postgres` 选中。
 框架的事务失败、数据/结构回滚与重试断言已由 `assertMigrationRunner` 共用覆盖。

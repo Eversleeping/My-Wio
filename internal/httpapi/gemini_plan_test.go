@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -22,7 +23,7 @@ func TestGeminiPlanRequiresCompatibleVersionsAndDispatchesACP(t *testing.T) {
 	a := resourceTestAPI(db)
 	input := map[string]string{"workspace_id": workspaces[0].ID, "model": "flash", "approval_mode": "plan"}
 	create := func() *httptest.ResponseRecorder {
-		return directJSONRequest(t, http.MethodPost, "/gemini/threads", input, &store.Session{UserID: "test-user"}, a.createGeminiThread)
+		return directJSONRequest(t, http.MethodPost, "/gemini/threads", input, &store.Session{UserID: "test-user"}, sessionNativeHandler(a, session.Gemini, "create"))
 	}
 	for _, heartbeat := range []protocol.Heartbeat{{AgentVersion: "0.2.82", GeminiVersion: "0.66.0"}, {AgentVersion: "0.2.83", GeminiVersion: "0.65.0"}} {
 		if err := db.Heartbeat(ctx, server.ID, heartbeat); err != nil {
@@ -40,7 +41,7 @@ func TestGeminiPlanRequiresCompatibleVersionsAndDispatchesACP(t *testing.T) {
 	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &thread) != nil || !thread.PlanSupported {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
-	w = threadResourceRequest(t, http.MethodPost, "/turns", thread.ID, map[string]string{"prompt": "Plan the change", "approval_mode": "plan"}, a.startGeminiTurn)
+	w = threadResourceRequest(t, http.MethodPost, "/turns", thread.ID, map[string]string{"prompt": "Plan the change", "approval_mode": "plan"}, sessionNativeHandler(a, session.Gemini, "turns"))
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("start: %d %s", w.Code, w.Body.String())
 	}

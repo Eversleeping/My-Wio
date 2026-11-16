@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,8 +17,8 @@ import (
 	"github.com/wio-platform/wio/internal/store"
 )
 
-// These contracts deliberately exercise the authenticated router. Differences
-// here are compatibility requirements, not suggestions for the unified API.
+// These scenarios exercise the authenticated unified router and retain each
+// engine's native execution, persistence and validation boundaries.
 type sessionContract struct {
 	t                                         *testing.T
 	db                                        *store.Store
@@ -51,10 +49,7 @@ func newSessionContract(t *testing.T, engine string) *sessionContract {
 		t.Fatal(err)
 	}
 	a := resourceTestAPI(db)
-	prefix := "/api/" + engine + "/threads"
-	if engine == "codex" {
-		prefix = "/api/threads"
-	}
+	prefix := "/api/sessions/" + engine
 	f := &sessionContract{t: t, db: db, engine: engine, prefix: prefix, workspaceID: workspaces[0].ID, serverID: server.ID, handler: New(db, a.hub, a.gateway, a.vault, a.log, fstest.MapFS{"index.html": {Data: []byte("ok")}}, "http://localhost", true)}
 	result := f.call("POST", prefix, fmt.Sprintf(`{"workspace_id":%q}`, f.workspaceID), 201)
 	f.id, _ = result["id"].(string)
@@ -70,7 +65,6 @@ func newSessionContract(t *testing.T, engine string) *sessionContract {
 	if result["title"] != defaults[engine] {
 		t.Fatalf("create title: %v", result)
 	}
-	f.assertGolden("create", result)
 	return f
 }
 
@@ -141,54 +135,6 @@ func (f *sessionContract) complete() {
 	}
 }
 
-func TestLegacySessionContracts(t *testing.T) {
-	for _, engine := range []string{"codex", "gemini", "claude"} {
-		t.Run(engine, func(t *testing.T) {
-			cases := sessionContractCases(engine)
-			for _, tc := range cases {
-				t.Run(tc.name, func(t *testing.T) { f := newSessionContract(t, engine); tc.run(t, f) })
-			}
-		})
-	}
-}
-
-// Golden files cover every existing response field. The additive capabilities
-// object is introduced by P2-02 and has its own version-boundary contracts.
-func (f *sessionContract) assertGolden(name string, value map[string]any) {
-	f.t.Helper()
-	normalized := map[string]any{}
-	for key, v := range value {
-		if key == "capabilities" {
-			continue
-		}
-		if text, ok := v.(string); ok && text != "" {
-			if strings.HasSuffix(key, "_at") {
-				v = "<time>"
-			} else if key == "id" || strings.HasSuffix(key, "_id") {
-				v = "<id>"
-			}
-		}
-		normalized[key] = v
-	}
-	raw, err := json.MarshalIndent(normalized, "", "  ")
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	path := filepath.Join("testdata", "sessions", f.engine+"-"+name+".json")
-	if os.Getenv("UPDATE_SESSION_CONTRACTS") == "1" {
-		if err := os.WriteFile(path, append(raw, '\n'), 0644); err != nil {
-			f.t.Fatal(err)
-		}
-	}
-	expected, err := os.ReadFile(path)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	if strings.TrimSpace(string(raw)) != strings.TrimSpace(string(expected)) {
-		f.t.Fatalf("%s response changed:\n%s\nwant:\n%s", path, raw, expected)
-	}
-}
-
 type sessionContractCase struct {
 	name string
 	run  func(*testing.T, *sessionContract)
@@ -196,54 +142,6 @@ type sessionContractCase struct {
 
 func sessionContractCases(engine string) []sessionContractCase {
 	return []sessionContractCase{
-		{"create-detail-update-list", func(t *testing.T, f *sessionContract) {
-			detail := f.call("GET", f.path(""), "", 200)
-			f.assertGolden("detail", detail)
-			if detail["id"] != f.id {
-				t.Fatal(detail)
-			}
-			updated := f.call("PATCH", f.path(""), `{"title":"  renamed  ","pinned":true}`, 200)
-			if engine == "codex" {
-				if updated["title"] != "renamed" {
-					t.Fatal(updated)
-				}
-			} else if !reflect.DeepEqual(updated, map[string]any{"ok": true}) {
-				t.Fatal(updated)
-			}
-			detail = f.call("GET", f.path(""), "", 200)
-			if detail["title"] != "renamed" || detail["pinned_at"] == nil {
-				t.Fatal(detail)
-			}
-			w := f.request("GET", f.prefix, "")
-			var list []map[string]any
-			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &list) != nil || len(list) != 1 || list[0]["id"] != f.id {
-				t.Fatalf("list: %s", w.Body)
-			}
-			if engine == "codex" {
-				page := f.call("GET", f.prefix+"?limit=1&offset=0", "", 200)
-				if page["has_more"] != false || page["next"] != nil || len(page["items"].([]any)) != 1 {
-					t.Fatal(page)
-				}
-				f.call("GET", f.prefix+"?archived=false", "", 400)
-			} else {
-				if w := f.request("GET", f.prefix+"?archived=false", ""); w.Code != 200 {
-					t.Fatal(w.Body)
-				}
-			}
-			emptyStatus := 200
-			if engine == "codex" {
-				emptyStatus = 400
-			}
-			f.call("PATCH", f.path(""), `{}`, emptyStatus)
-			bad := f.call("PATCH", f.path(""), `{"title":" "}`, 400)
-			want := "invalid session title"
-			if engine == "codex" {
-				want = "thread title is required"
-			}
-			if bad["error"] != want {
-				t.Fatal(bad)
-			}
-		}},
 		{"queue-lock-complete", func(t *testing.T, f *sessionContract) {
 			response := f.call("POST", f.path("/turns"), `{"prompt":"first"}`, 202)
 			if engine == "codex" {
@@ -301,76 +199,6 @@ func sessionContractCases(engine string) []sessionContractCase {
 			}
 			f.call("POST", f.path("/turns"), `{"prompt":"after confirmed exit"}`, 202)
 
-		}},
-		{"archive-delete", func(t *testing.T, f *sessionContract) {
-			f.call("PATCH", f.path(""), `{"archived":true}`, 200)
-			if f.call("GET", f.path(""), "", 200)["archived_at"] == nil {
-				t.Fatal("archive lost")
-			}
-			f.call("POST", f.path("/turns"), `{"prompt":"blocked"}`, 409)
-			w := f.request("GET", f.prefix+"?archived=true", "")
-			var items []map[string]any
-			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &items) != nil || len(items) != 1 {
-				t.Fatalf("archived list: %s", w.Body)
-			}
-			w = f.request("GET", f.prefix+"?archived=all", "")
-			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &items) != nil {
-				t.Fatal(w.Body)
-			}
-			want := 0
-			if engine == "codex" {
-				want = 1
-			}
-			if len(items) != want {
-				t.Fatalf("archived all: %s", w.Body)
-			}
-			f.call("PATCH", f.path(""), `{"archived":false}`, 200)
-			if response := f.call("DELETE", f.path(""), "", 200); !reflect.DeepEqual(response, map[string]any{"ok": true}) {
-				t.Fatal(response)
-			}
-			response := f.call("GET", f.path(""), "", 404)
-			name := map[string]string{"codex": "Codex", "gemini": "Gemini", "claude": "Claude"}[engine]
-			if response["error"] != name+" session not found" {
-				t.Fatal(response)
-			}
-		}},
-		{"events-usage-validation", func(t *testing.T, f *sessionContract) {
-			kind := engine + ".user.message"
-			if engine == "codex" {
-				kind = "user.message"
-			}
-			first := f.add(kind, `{"text":"one"}`)
-			last := f.add(kind, `{"text":"two"}`)
-			for _, q := range []string{"?after=0", "?before=" + fmt.Sprint(last.Sequence+1), ""} {
-				w := f.request("GET", f.path("/events")+q, "")
-				var events []protocol.StreamEvent
-				if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &events) != nil {
-					t.Fatal(w.Body)
-				}
-				seen := false
-				for _, e := range events {
-					if e.EventID == first.EventID {
-						seen = true
-					}
-				}
-				if !seen {
-					t.Fatalf("missing event %s: %s", q, w.Body)
-				}
-			}
-			f.call("GET", f.path("/events?after=0&before=1"), "", 400)
-			invalid := f.call("GET", f.path("/events?after=-1"), "", 400)
-			want := "invalid event cursor"
-			if engine == "codex" {
-				want = "after must be a non-negative sequence number"
-			}
-			if invalid["error"] != want {
-				t.Fatal(invalid)
-			}
-			usage := f.call("GET", f.path("/usage"), "", 200)
-			expected := map[string]any{"input_tokens": nil, "output_tokens": nil, "per_minute": nil, "output_per_second": nil, "partial": false}
-			if !reflect.DeepEqual(usage, expected) {
-				t.Fatal(usage)
-			}
 		}},
 		{"rewrite-invalid-boundary", func(t *testing.T, f *sessionContract) {
 			status := 409

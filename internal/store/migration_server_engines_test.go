@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
@@ -61,7 +62,7 @@ func assertServerEngineMigration(t *testing.T, db *sqlx.DB, driver string) {
 		}
 	}
 	for range 2 {
-		if _, err := runMigrations(ctx, db, driver, schemaMigrations); err != nil {
+		if _, err := runMigrations(ctx, db, driver, schemaMigrations[:4]); err != nil {
 			t.Fatal(err)
 		}
 	}

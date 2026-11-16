@@ -8,19 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/go-chi/chi/v5"
-	"github.com/gorilla/websocket"
-	"github.com/pquerna/otp/totp"
-	"github.com/wio-platform/wio/internal/agentgateway"
-	"github.com/wio-platform/wio/internal/agentupdate"
-	"github.com/wio-platform/wio/internal/buildinfo"
-	"github.com/wio-platform/wio/internal/codexcli"
-	"github.com/wio-platform/wio/internal/gitprovider"
-	"github.com/wio-platform/wio/internal/protocol"
-	"github.com/wio-platform/wio/internal/realtime"
-	"github.com/wio-platform/wio/internal/security"
-	"github.com/wio-platform/wio/internal/sshbootstrap"
-	"github.com/wio-platform/wio/internal/store"
 	"io/fs"
 	"log/slog"
 	"mime"
@@ -33,6 +20,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/websocket"
+	"github.com/pquerna/otp/totp"
+
+	"github.com/wio-platform/wio/internal/agentgateway"
+	"github.com/wio-platform/wio/internal/agentupdate"
+	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/gitprovider"
+	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/realtime"
+	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/sshbootstrap"
+	"github.com/wio-platform/wio/internal/store"
 )
 
 const sessionCookie = "wio_session"
@@ -663,8 +665,6 @@ const (
 	projectDestinationLimit  = 1024
 	gitBranchNameLimit       = 240
 	threadTitleLimit         = 200
-	defaultThreadsPageLimit  = 50
-	maxThreadsPageLimit      = 100
 	defaultAuditPageLimit    = 50
 	maxAuditPageLimit        = 100
 )

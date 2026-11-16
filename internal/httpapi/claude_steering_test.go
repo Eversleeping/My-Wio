@@ -10,7 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 )
 
 func TestClaudeSteerAPIValidationAndGating(t *testing.T) {
@@ -33,7 +35,7 @@ func TestClaudeSteerAPIValidationAndGating(t *testing.T) {
 		route.URLParams.Add("threadID", thread.ID)
 		r = r.WithContext(context.WithValue(ctx, chi.RouteCtxKey, route))
 		w := httptest.NewRecorder()
-		a.steerClaudeTurn(w, r)
+		sessionNativeHandler(a, session.Claude, "steer")(w, r)
 		return w
 	}
 	c := protocol.ClaudeSteerCommand{OperationID: uuid.NewString(), RequestID: uuid.NewString(), Prompt: "correct"}

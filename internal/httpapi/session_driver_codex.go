@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -22,14 +21,11 @@ type codexHTTPDriver struct {
 
 func (d *codexHTTPDriver) Handler(action string) http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"list":           d.threads,
 		"create":         d.createThread,
-		"detail":         d.thread,
 		"update":         d.updateThread,
 		"delete":         d.deleteThread,
 		"fork":           d.forkThread,
 		"fork-worktree":  d.forkThreadToWorktree,
-		"events":         d.threadEvents,
 		"usage":          d.threadUsage,
 		"turns":          d.startTurn,
 		"rewrite":        d.rewriteTurn,
@@ -44,50 +40,6 @@ func (d *codexHTTPDriver) Handler(action string) http.HandlerFunc {
 		"status:refresh": d.refreshThreadCodexStatus,
 	}[action]
 }
-func (a *codexHTTPDriver) threads(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	archived := query.Get("archived")
-	if archived != "" && archived != "true" && archived != "all" {
-		writeError(w, http.StatusBadRequest, "archived must be true or all")
-		return
-	}
-	limitValues, hasLimit := query["limit"]
-	offsetValues, hasOffset := query["offset"]
-	if hasLimit || hasOffset {
-		limit, err := parseThreadPageValue(limitValues, hasLimit, "limit", defaultThreadsPageLimit, true)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if limit > maxThreadsPageLimit {
-			limit = maxThreadsPageLimit
-		}
-		offset, err := parseThreadPageValue(offsetValues, hasOffset, "offset", 0, false)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		page, err := a.store.ListThreadsPage(r.Context(), archived, limit, offset)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not list Codex sessions")
-			return
-		}
-		var next *int
-		if page.HasMore {
-			value := offset + len(page.Items)
-			next = &value
-		}
-		writeJSON(w, http.StatusOK, threadListPageResponse{Items: page.Items, HasMore: page.HasMore, Next: next})
-		return
-	}
-	threads, err := a.store.ListThreads(r.Context(), archived)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list Codex sessions")
-		return
-	}
-	writeJSON(w, http.StatusOK, threads)
-}
-
 func (a *codexHTTPDriver) createThread(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		WorkspaceID string `json:"workspace_id"`
@@ -109,19 +61,6 @@ func (a *codexHTTPDriver) createThread(w http.ResponseWriter, r *http.Request) {
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.create", "thread", thread.ID, map[string]string{"workspace_id": input.WorkspaceID}, clientIP(r))
 	writeJSON(w, http.StatusCreated, thread)
-}
-
-func (a *codexHTTPDriver) thread(w http.ResponseWriter, r *http.Request) {
-	thread, err := a.store.Thread(r.Context(), chi.URLParam(r, "threadID"))
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "Codex session not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load Codex session")
-		return
-	}
-	writeJSON(w, http.StatusOK, thread)
 }
 
 func (a *codexHTTPDriver) updateThread(w http.ResponseWriter, r *http.Request) {
@@ -331,80 +270,6 @@ func (a *codexHTTPDriver) forkThreadToWorktree(w http.ResponseWriter, r *http.Re
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.fork_worktree", "thread", thread.ID, map[string]string{"operation_id": operationID, "target_workspace_id": command.TargetWorkspaceID, "target_thread_id": command.TargetThreadID}, clientIP(r))
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID, "workspace_id": command.TargetWorkspaceID, "target_thread_id": command.TargetThreadID})
-}
-
-func (a *codexHTTPDriver) threadEvents(w http.ResponseWriter, r *http.Request) {
-	const (
-		defaultThreadEventsLimit = 500
-		maxThreadEventsLimit     = 1000
-	)
-	query := r.URL.Query()
-	afterValue, hasAfter := query["after"]
-	beforeValue, hasBefore := query["before"]
-	if hasAfter && hasBefore {
-		writeError(w, http.StatusBadRequest, "before and after cannot be used together")
-		return
-	}
-	var after int64
-	if hasAfter && len(afterValue) > 0 && afterValue[0] != "" {
-		parsedAfter, err := strconv.ParseInt(afterValue[0], 10, 64)
-		if err != nil || parsedAfter < 0 {
-			writeError(w, http.StatusBadRequest, "after must be a non-negative sequence number")
-			return
-		}
-		after = parsedAfter
-	} else if hasAfter {
-		writeError(w, http.StatusBadRequest, "after must be a non-negative sequence number")
-		return
-	}
-	var before int64
-	if hasBefore && len(beforeValue) > 0 && beforeValue[0] != "" {
-		parsedBefore, err := strconv.ParseInt(beforeValue[0], 10, 64)
-		if err != nil || parsedBefore < 0 {
-			writeError(w, http.StatusBadRequest, "before must be a non-negative sequence number")
-			return
-		}
-		before = parsedBefore
-	} else if hasBefore {
-		writeError(w, http.StatusBadRequest, "before must be a non-negative sequence number")
-		return
-	}
-
-	limit := defaultThreadEventsLimit
-	if limitValue := query.Get("limit"); limitValue != "" {
-		if parsedLimit, err := strconv.Atoi(limitValue); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		}
-	}
-	if limit > maxThreadEventsLimit {
-		limit = maxThreadEventsLimit
-	}
-
-	threadID := chi.URLParam(r, "threadID")
-	var events []protocol.StreamEvent
-	var err error
-	if query.Get("view") == "raw" {
-		if hasAfter {
-			events, err = a.store.Events(r.Context(), threadID, after, limit)
-		} else if hasBefore {
-			events, err = a.store.EventsBefore(r.Context(), threadID, before, limit)
-		} else {
-			events, err = a.store.RecentEvents(r.Context(), threadID, limit)
-		}
-	} else {
-		if hasAfter {
-			events, err = a.store.ConversationEvents(r.Context(), threadID, after, limit)
-		} else if hasBefore {
-			events, err = a.store.ConversationEventsBefore(r.Context(), threadID, before, limit)
-		} else {
-			events, err = a.store.RecentConversationEvents(r.Context(), threadID, limit)
-		}
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load session events")
-		return
-	}
-	writeJSON(w, http.StatusOK, events)
 }
 
 func (a *codexHTTPDriver) threadUsage(w http.ResponseWriter, r *http.Request) {
