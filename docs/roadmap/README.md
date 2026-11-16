@@ -35,7 +35,7 @@
 | `httpapi/claude_credentials.go` 与 `gemini_credentials.go` | 各 71 行，替换引擎名后只差 6 行 |
 | `httpapi/claude.go` 与 `gemini.go` | 共 695 行，替换引擎名后差 229 行 |
 | `store/session_collaboration_actions.go` 中按引擎名分支 | 22 处 |
-| `buildinfo/version.go` 中的 `Supports*` 版本门槛函数 | 31 个 |
+| `buildinfo/version.go` 中的 `Supports*` 版本门槛函数 | 基线 31 个；P4-03 后为 1 个，仅保留旧 Agent 自更新 |
 | 非测试 Go 代码里带点号的字符串字面量 | 234 种，主要是操作类型和事件类型，也包含审计动作名等其他标识；`"claude.turn.start"` 出现 15 次 |
 | Go 测试 / 前端测试 | Go 默认构建 852 个顶层测试，另有 2 个只在 `postgresintegration` 标签下编译；Vitest 61 个文件、449 个用例；Playwright 22 个用例，在桌面和移动端两个项目下共运行 44 次。这一行是 P0-01 用测试运行器实测的结果，取代原先用 `grep` 估算的“约 846 个 / 约 336 个” |
 | CI 工作流、lint 配置 | 均无；`gofmt -l` 当前为空 |
@@ -239,7 +239,7 @@ npm --prefix web run typecheck
 | P3-10 | 拆分 `styles.css` 与 `i18n.tsx` | M | P3-07 | 待开始 | |  | |
 | P4-01 | 操作与事件类型常量化 | M | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | b675034 |
 | P4-02 | 心跳携带能力列表 | M | P1-04、P2-02、P0-07 | 已完成 | 11-16 Codex | GPT-6（Codex）；本地验收通过，真实升级待发布 | d5543a2、cd293a9 |
-| P4-03 | 最低 Agent 版本基线，删除历史门槛 | M | P4-02、决策 D2 | 进行中 | 11-16 Codex |  | |
+| P4-03 | 最低 Agent 版本基线，删除历史门槛 | M | P4-02、决策 D2 | 已完成 | 11-16 Codex；615eb944 接续 | gpt-6.1-sol（Codex，自验） | a4d2ac3、97f957d |
 | P4-04 | 载荷注册表与线上格式夹具 | M | P4-01、P3-04 | 已完成 | 11-16 Codex | GPT-6（Codex，本会话自验） | dc40819、70d2dc6、3a5d218、6774d1e |
 | P4-05 | 统一会话事件信封 | M | P4-02、P2-09 | 已完成 | 11-16 Codex | GPT-6（Codex，自验）；本地通过，真实服务器待发布 | c8b7d5e、ab4ab40 |
 | P5-01 | 威胁模型与可达性盘点 | S | 无 | 待开始 | |  | |
@@ -305,7 +305,7 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-13 | 制定路线图 | `web/src/App.tsx` 第 632 行的 `useAuditList` 没有调用方，`web/src/pages/SettingsPage.tsx` 第 78 行有同名实现在用。`web/tsconfig.app.json` 开了 `strict` 但没开 `noUnusedLocals`、`noUnusedParameters`，这类残留不会让类型检查失败 | P3-07 已删除孤立实现（f2413cf）；未使用项开关按 P0-04 后续评估 |
 | 2026-11-13 | 制定路线图 | 按代码阅读、尚未实测：内置控制机的 Agent 运行在控制面进程内，AI CLI 子进程会继承 `WIO_MASTER_KEY`、`WIO_DATABASE_URL`、`WIO_SETUP_TOKEN` | P5-01 实测确认，P5-02 处理 |
 | 2026-11-13 | 制定路线图 | 协作用的回环 MCP 令牌出现在 Claude 和 Codex 的进程参数里，同账号的其他进程可以读到 | P5-02 评估能否改用其他传递方式 |
-| 2026-11-13 | 制定路线图 | 网关 `flush` 的“未下发即失败”路径只有部署和凭据类操作的测试（`agentgateway/decryption_failure_test.go`），没有覆盖会话轮次、Git 和工作区操作 | P4-03 第 2 步补测试 |
+| 2026-11-13 | 制定路线图 | 网关 `flush` 的“未下发即失败”路径只有部署和凭据类操作的测试（`agentgateway/decryption_failure_test.go`），没有覆盖会话轮次、Git 和工作区操作 | P4-03 已补齐：前置特性测试 a4d2ac3；真实最低版本拒绝与资源收尾矩阵 97f957d 通过 |
 | 2026-11-13 | P0-01 | Git 相关测试会继承运行环境里的 Git 配置变量。环境里有 `GIT_CONFIG_PARAMETERS`（Wio Agent 会给 Claude、Gemini 会话注入）时，`internal/gitrepository` 有 3 个测试失败；另有 `GIT_CONFIG_COUNT` 一组变量（Gemini CLI 的 shell 会注入）时，`internal/gitrepository` 再有 2 个、`internal/scanner` 有 1 个测试失败。清掉全部 `GIT_CONFIG*` 后全部通过，用例名见 P0 的“执行记录”。所以在 Wio 的 Claude、Gemini 会话里直接运行 `go test ./...` 会误报失败 | 建议在这些测试的辅助函数里隔离 Git 配置环境，只改测试代码；处理之前，在这类会话里跑验收命令要先清掉 `GIT_CONFIG*`。何时处理由用户决定 |
 | 2026-11-13 | P0-01 审阅 | `make test-postgres` 用 `-run TestPostgresMigrationAndStorage` 只运行一个测试。同样带 `postgresintegration` 标签的 `TestPostgresAuthConsumptionIsAtomic`（`internal/store/postgres_auth_integration_test.go`）不在任何文档列出的验收命令里；手动运行时两个测试都通过 | 建议把 `-run` 改成 `^TestPostgres`。P1-01 把新用例挂在 `TestPostgresMigrationAndStorage` 下面，没有改 `-run`，所以 `TestPostgresAuthConsumptionIsAtomic` 仍然不在任何验收命令里。由用户决定 |
 | 2026-11-13 | P6-01 | Gemini 和 Claude 的新建对话框里切换工作区时，模型和思考程度会重置，审批模式、权限模式却保留原值，可能把为另一个工作区选的高权限模式带过去（P6 清单 D15） | P6-03 已在统一对话框中按工作区与引擎重建全部字段，并验证未保存的高权限选择不会跨工作区带入；三个旧入口保留原有行为，待 P6-04 切换 |
@@ -416,3 +416,11 @@ M6 可在本地推进的步骤已完成；M6 尚未全部完成，P4-03 保持�
 完整备份验证后，在隔离数据库执行 schema 3 → 5 升级和重复打开；53 张保留表全部行摘要一致，65 个原生会话、2 项定时任务及 18 行引擎配置保留。新服务启动/重启、旧制品拒绝 schema 5、恢复升级前备份后启动旧制品均通过。生产迁移完成，两端健康检查、98 份前端资源（196 次 SHA256 比较）、统一 API / 退役路由、认证/CSRF/WebSocket、桌面/移动页面及新内置 Agent 的 Git/文件只读往返验收通过，运行日志零 ERROR/FATAL/panic。临时验证登录与克隆已清理；最新完整备份和匹配恢复镜像已留存，实际环境及恢复路径只保存在忽略的部署档案。
 
 内置 Agent 已是 0.3.26，能力声明已持久化；5 台外部 Agent 仍是 0.3.21，均已恢复新心跳并可发现 0.3.26 升级。本次没有升级/重启外部 Agent、发起模型轮次、写工作区文件或应用凭据。D2 对应的首个能力协商发布版本已确定为 0.3.26，但 P4-03 的全量升级前置尚未满足；31 个历史 Supports 门槛继续保留，M6 尚未关闭。
+
+### 2026-11-16 M6 本地研发与验收完成
+
+M6 六项已完成。本轮接续完成最后一步 P4-03：前置特性测试 `a4d2ac3`，实现及兼容文档 `97f957d`。最低 Agent 为已发布并逐台核验全部 6 台升级的 0.3.26，当前 Agent 为 0.3.27；历史 `Supports*` 门槛从 31 个减至 1 个，仅保留旧 Agent 自更新恢复。新连接先成功处理自己的心跳再派单，旧 Agent 的非更新操作明确失败并通过正常业务收尾，服务器页面显示升级要求及恢复入口。schema 仍为 5，已有协议取值和格式夹具保持兼容。
+
+最终 Go 全量、vet、双入口构建、前端 73 文件/512 项、构建与体积护栏、类型检查、静态检查和版本护栏均通过。PostgreSQL、连接 race 及完整桌面/移动 E2E 的原会话日志与成功退出码已核对：E2E 45 通过、11 既有跳过；接续补看升级提示两端截图，2 项通过。调度器旧心跳夹具与 CLI 管理旧提示断言均已修正并完成全量复验，详细结果及首次失败记录见 [P4 执行记录](P4-agent-protocol.md#执行记录)。
+
+本轮全部实现和记录在 main 本地提交，未推送或部署，不启动 M7。后续发布 0.3.27 时按 [生产部署指南](../PRODUCTION_DEPLOYMENT.md#更新回滚与备份) 验证升级与备份，并执行真实模型交互验收；本地测试不代替该生产验收。本收尾只改文档，回填进度、提交号与验收记录并校准远程执行的说明，检查文档引用和差异，不重复代码构建测试。
