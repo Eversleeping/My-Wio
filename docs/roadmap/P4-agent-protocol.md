@@ -136,7 +136,7 @@ type Heartbeat struct {
 
 - **能力名**是小写、带点号的字符串，例如 `claude.steer`、`workspace.file_write`。本文件末尾的“能力名清单”给出了 31 个现有门槛对应的建议名，由 P4-02 冻结。能力名一旦发布就不再改。
 - **Agent 怎么算。** 只和 Agent 自身有关的能力是编译进去的固定列表。和 CLI 有关的能力（清单里“CLI 要求”一栏非空的 8 个）在每次心跳时根据实际探测到的 CLI 版本决定是否声明。这样“Agent 够新但 CLI 不够新”就由 Agent 如实表达，控制面不需要知道 CLI 的版本门槛。
-- **存在哪里。** 新建以 `server_id` 为主键的附属表（建议名 `server_capabilities`），不往 `servers` 表加列。仓库里已有同样的做法（`server_claude_cli`、`server_metadata`）：附属表不影响旧版控制面读 `servers`，回滚更安全。心跳里没有能力列表时清空这一行，避免 Agent 降级后留下过期的声明。
+- **存在哪里。** 新建以 `server_id` 为主键的附属表（建议名 `server_capabilities`），不往 `servers` 表加列。仓库里已有同样的做法（现行 `server_engines`、`server_metadata`；旧 `server_claude_cli` 已停写）：附属表不影响旧版控制面读 `servers`，回滚更安全。心跳里没有能力列表时清空这一行，避免 Agent 降级后留下过期的声明。
 - **怎么用。** P2-02 的能力解析函数增加一个输入：服务器声明的能力集合。有声明就按集合判断；没有声明（旧 Agent）就退回现有的版本门槛。服务器级的开关（`agent_update_supported`、`cli_management_supported` 等）也改为走同一个解析入口。
 - **等价性测试。** 对当前版本的 Agent，在若干 CLI 版本组合下，“Agent 会声明的集合”和“按版本门槛推断出的集合”必须相同。这条测试保证上线能力列表不会改变任何功能的可用性。
 - **此后的规则。** 新增能力只加一个能力名，由 Agent 声明；不再新增 `buildinfo.Supports*` 函数。控制面遇到不认识的能力名直接忽略。
@@ -211,9 +211,9 @@ grep -rnoE '"[a-z_]+(\.[a-zA-Z_]+)+"' internal cmd --include=*.go --exclude=*_te
 1. 冻结能力名：核对本文件末尾的“能力名清单”，把最终名字定义为 `internal/protocol` 里的常量，并更新清单。
 2. Agent 端：`Heartbeat` 增加 `capabilities` 字段。`enqueueHeartbeat` 里组装列表，固定能力来自一张表，和 CLI 有关的能力根据当次探测到的 CLI 版本决定。CLI 版本的解析沿用 `buildinfo` 里现有的写法（Claude 的版本串取第一个空格之前的部分）。
 3. 新迁移：建立附属表。按 P1-04 的规范编写，两种数据库都要有，并给 P1-01 的结构一致性测试增加夹具。
-4. `Store.Heartbeat` 写入能力列表；心跳里没有列表时清空。这个函数目前是两条不在同一事务里的语句，新增写入后把三条放进同一个事务。
+4. `Store.Heartbeat` 写入能力列表；心跳里没有列表时清空。以 `25596d0` 核对，服务器更新及三种引擎的 `server_engines` 写入尚未使用事务；新增能力写入后全部放入同一个事务。
 5. 能力解析函数增加“服务器声明的能力集合”这个输入，逻辑见“设计”。查询线程和服务器的函数相应地多读这一列。
-6. `httpapi/resources.go` 里计算服务器级开关的那一段，以及其余不属于会话的调用点（工作区文件写入、操作中断、Agent 更新、协作），改为走能力解析入口。
+6. 服务器级开关现位于 `httpapi/servers.go`（基线 `25596d0`），以及其余不属于会话的调用点（工作区文件写入、操作中断、Agent 更新、协作），改为走能力解析入口。服务器引擎配置现由 `server_engines` 提供，能力附属表仍单独新增。
 7. `keepalive` 载荷增加控制面能力列表字段，暂时为空。
 8. 测试：等价性测试；旧 Agent（心跳里没有列表）走版本推断的测试；Agent 降级后声明被清空的测试。
 9. 同一提交里升级 `buildinfo.Version`。在 `docs/CLAUDE.md` 和 `docs/GEMINI.md` 的“兼容版本”一节注明：从这个版本起以 Agent 声明的能力为准。
@@ -435,3 +435,10 @@ grep -rnoE '"[a-z_]+(\.[a-zA-Z_]+)+"' internal cmd --include=*.go --exclude=*_te
 - `workspace.copy.cross_server`, `workspace.diff.preview`, `workspace.file.write`, `workspace.files.scan`, `workspace.remove_record`, `workspace.update`
 
 - 交接：P4-01 的实现与本地验收完成，用户随后授权按步骤自动提交，本步骤在当前 `main` 提交；未授权推送。代码集中在上述协议类型引用及新增的 `internal/protocol/{kinds.go,credential_kinds.go,kinds_test.go,testdata/kinds.golden}`；路线图两份文件同步更新。没有剩余实现项；提交号在下一步骤的路线图更新中回填。
+
+### 2026-11-16 P4-02 开始
+
+- Codex 在 main / `25596d0` 领取；核对 31 个现有门槛与阶段清单。先更新已拆分 HTTP 文件与服务器引擎迁移后的计划定位。
+- 当前线上 Agent 尚未具备能力声明；本轮保留旧版本推断。P4-03 的发布和全量升级前置继续生效。
+
+- P4-02 前置特性测试：以独立的 31 项门槛表覆盖最低版本、前一版本、无效版本、构建后缀及 8 项 CLI 条件；`go test ./internal/buildinfo ./internal/session` 通过。仅测试和计划更新，先单独提交。
