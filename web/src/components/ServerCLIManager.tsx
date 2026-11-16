@@ -91,6 +91,7 @@ export function ServerCLIManager({ server, onClose, notify }: { server: Server; 
     <div className="server-cli-manager">
       <div className="server-cli-heading"><p className="muted">{t("server.cliDescription")}</p><button type="button" className="icon-button" aria-label={t("server.cliRefresh")} title={t("server.cliRefresh")} disabled={busy || !!confirmation || kinds.some(kind => versions[kind].loading)} onClick={() => setRefresh(current => current + 1)}><RefreshCw size={16} className={kinds.some(kind => versions[kind].loading) ? "spin" : undefined} /></button></div>
       {statusError && <div className="error-banner" role="alert">{statusError}</div>}
+      {server.agent_upgrade_required && <p className="error-banner">{t("server.agentUpgradeRequired", { version: server.agent_minimum_version ?? "" })}</p>}
       {server.status !== "online" && <p className="error-banner">{t("server.updateOffline")}</p>}
       <div className="server-cli-list"><table className="server-cli-table" aria-label={t("server.manageCLI")}>
         <thead><tr><th scope="col">{t("server.cliAgentName")}</th><th scope="col">{t("server.cliVersionNumber")}</th><th scope="col">{t("column.status")}</th><th scope="col">{t("common.actions")}</th></tr></thead>

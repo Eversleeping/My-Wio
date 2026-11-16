@@ -40,7 +40,7 @@ func TestClaudeQuestionAPIValidationAndGating(t *testing.T) {
 	if w := request(`{"answers":{"0":{"answers":["A"]}}}`); w.Code != 409 {
 		t.Fatal("ungated old Agent", w.Code)
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.98", ClaudeVersion: "2.1.318"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318"), ClaudeVersion: "2.1.318"}); err != nil {
 		t.Fatal(err)
 	}
 	if w := request(`invalid`); w.Code != 400 {

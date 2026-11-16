@@ -12,9 +12,9 @@ func TestDeclaredSessionCapabilities(t *testing.T) {
 		for _, claude := range []string{"", "invalid", "2.1.285", "2.1.286", "2.1.286 (Claude Code)"} {
 			declared := capabilities.AgentDeclaration(gemini, claude)
 			for engine, cli := range map[string]string{Codex: "", Gemini: gemini, Claude: claude} {
-				legacy := ResolveCapabilities(engine, buildinfo.Version, cli)
-				if got := ResolveCapabilities(engine, "", "", declared); got != legacy {
-					t.Fatalf("engine=%s Gemini=%q Claude=%q: %+v want %+v", engine, gemini, claude, got, legacy)
+				expected := ResolveCapabilities(engine, buildinfo.Version, cli, declared)
+				if got := ResolveCapabilities(engine, buildinfo.MinimumAgentVersion, "invalid", declared); got != expected {
+					t.Fatalf("engine=%s Gemini=%q Claude=%q: %+v want %+v", engine, gemini, claude, got, expected)
 				}
 			}
 		}
@@ -24,7 +24,7 @@ func TestDeclaredSessionCapabilities(t *testing.T) {
 		if c.Steer || c.Collaboration || c.ForkMessages || c.SkillsManage {
 			t.Fatalf("version enabled undeclared features: %+v", c)
 		}
-		c = ResolveCapabilities(engine, "", "", capabilities.Declaration{protocol.CapabilitySessionCollaboration})
+		c = ResolveCapabilities(engine, buildinfo.MinimumAgentVersion, "", capabilities.Declaration{protocol.CapabilitySessionCollaboration})
 		if !c.Collaboration {
 			t.Fatal("declaration lost")
 		}

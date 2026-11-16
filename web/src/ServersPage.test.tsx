@@ -312,3 +312,16 @@ test("manages Codex updates through the shared AI Agent dialog and keeps failure
   expect(attempts).toBe(2);
   expect(requests.some(url => url.endsWith("/codex-update"))).toBe(false);
 });
+
+test("shows the minimum Agent requirement in the list and details while keeping recovery actions available", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === "/api/servers" ? [{ ...server, agent_version: "0.3.25", agent_target_version: "0.3.27", agent_upgrade_required: true, agent_minimum_version: "0.3.26", agent_update_available: true }] : []))));
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage notify={vi.fn()} /></DataProvider></I18nProvider>);
+  const text = "Upgrade Agent to 0.3.26 or newer to run operations";
+  expect(await screen.findByText(text)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Update Agent to 0.3.27" })).toBeEnabled();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Edit server information" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit server information" });
+  expect(within(dialog).getByText(text)).toBeInTheDocument();
+});

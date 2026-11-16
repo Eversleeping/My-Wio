@@ -29,16 +29,16 @@ func TestClaudeSkillsDiscoveryGatesAndWorkspaceIsolation(t *testing.T) {
 	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.93", ClaudeReady: true, ClaudeVersion: "2.1.318"}); err != nil {
 		t.Fatal(err)
 	}
-	if w := queue(); w.Code != 409 || !strings.Contains(w.Body.String(), "0.2.94") {
+	if w := queue(); w.Code != 409 || !strings.Contains(w.Body.String(), "0.3.26") {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.94"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if w := queue(); w.Code != 409 || !strings.Contains(w.Body.String(), "ready") {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.94", ClaudeReady: true, ClaudeVersion: "2.1.318"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318"), ClaudeReady: true, ClaudeVersion: "2.1.318"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.ExecContext(ctx, db.Q("UPDATE servers SET last_seen_at=? WHERE id=?"), time.Now().UTC().Add(-time.Hour), server.ID); err != nil {
@@ -47,7 +47,7 @@ func TestClaudeSkillsDiscoveryGatesAndWorkspaceIsolation(t *testing.T) {
 	if w := queue(); w.Code != 409 {
 		t.Fatal("offline", w.Code)
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.94", ClaudeReady: true, ClaudeVersion: "2.1.318"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318"), ClaudeReady: true, ClaudeVersion: "2.1.318"}); err != nil {
 		t.Fatal(err)
 	}
 	w := queue()

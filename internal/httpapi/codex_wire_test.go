@@ -17,7 +17,7 @@ func TestCodexSnapshotProducersPreserveWireScope(t *testing.T) {
 			ctx := context.Background()
 			db := openBootstrapTestStore(t)
 			server := enrollResourceTestServer(t, db, "wire-scope")
-			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.23", CodexVersion: "0.159.3", CodexReady: true}); err != nil {
+			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), CodexVersion: "0.159.3", CodexReady: true}); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {

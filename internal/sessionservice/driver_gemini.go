@@ -45,7 +45,7 @@ func (r *geminiDriver) EnqueueScheduled(ctx context.Context, task store.Schedule
 		mode = thread.ApprovalMode
 	}
 	if mode == "yolo" && !thread.Capabilities.Yolo {
-		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals", "", now)
+		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", "update Gemini Agent to "+buildinfo.MinimumAgentVersion+" or newer to use Gemini without approvals", "", now)
 		return
 	}
 	level := task.ThinkingLevel
@@ -87,7 +87,7 @@ func (r *geminiDriver) ValidateSchedule(ctx context.Context, input session.Sched
 		return session.LookupError{Err: err}
 	}
 	if approval == "yolo" && !thread.Capabilities.Yolo {
-		return errors.New("update Gemini Agent to " + buildinfo.MinimumGeminiYoloVersion + " or newer to use Gemini without approvals")
+		return errors.New("update Gemini Agent to " + buildinfo.MinimumAgentVersion + " or newer to use Gemini without approvals")
 	}
 	selectedModel := model
 	if selectedModel == "" {

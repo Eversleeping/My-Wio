@@ -73,15 +73,15 @@ func (a *geminiHTTPDriver) createGeminiThread(w http.ResponseWriter, r *http.Req
 			return
 		}
 		if input.ApprovalMode == "plan" && !server.Supports(protocol.CapabilityGeminiPlan) {
-			writeError(w, 409, "Gemini plan mode requires Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
+			writeError(w, 409, "Gemini plan mode requires Wio Agent "+buildinfo.MinimumAgentVersion+" and Gemini CLI 0.66.0 or newer")
 			return
 		}
 		if input.ApprovalMode == "yolo" && !server.Supports(protocol.CapabilityGeminiYolo) {
-			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals")
+			writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer to use Gemini without approvals")
 			return
 		}
 		if input.ThinkingLevel != "" && !server.Supports(protocol.CapabilityGeminiThinking) {
-			writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiThinkingVersion+" or newer to configure Gemini thinking")
+			writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer to configure Gemini thinking")
 			return
 		}
 	}
@@ -213,23 +213,23 @@ func (a *geminiHTTPDriver) startGeminiTurn(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !server.Supports(protocol.CapabilityGeminiSessions) {
-		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiVersion+" or newer to use Gemini")
+		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumAgentVersion+" or newer to use Gemini")
 		return
 	}
 	if input.ApprovalMode == "yolo" && !server.Supports(protocol.CapabilityGeminiYolo) {
-		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiYoloVersion+" or newer to use Gemini without approvals")
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer to use Gemini without approvals")
 		return
 	}
 	if input.ApprovalMode == "plan" && !server.Supports(protocol.CapabilityGeminiPlan) {
-		writeError(w, 409, "Gemini plan mode requires Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
+		writeError(w, 409, "Gemini plan mode requires Wio Agent "+buildinfo.MinimumAgentVersion+" and Gemini CLI 0.66.0 or newer")
 		return
 	}
 	if level != "" && !server.Supports(protocol.CapabilityGeminiThinking) {
-		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiThinkingVersion+" or newer to configure Gemini thinking")
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer to configure Gemini thinking")
 		return
 	}
 	if len(input.Images) > 0 && !server.Supports(protocol.CapabilityGeminiInput) {
-		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiInputVersion+" or newer to send Gemini images")
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer to send Gemini images")
 		return
 	}
 	editEventID := chi.URLParam(r, "eventID")
@@ -239,12 +239,12 @@ func (a *geminiHTTPDriver) startGeminiTurn(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if !server.Supports(protocol.CapabilityGeminiGoal) {
-			writeError(w, 409, "Gemini goals require Wio Agent "+buildinfo.MinimumGeminiGoalVersion+" and Gemini CLI 0.66.0 or newer")
+			writeError(w, 409, "Gemini goals require Wio Agent "+buildinfo.MinimumAgentVersion+" and Gemini CLI 0.66.0 or newer")
 			return
 		}
 	}
 	if editEventID != "" && !server.Supports(protocol.CapabilityGeminiRewrite) {
-		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumGeminiRewriteVersion+" or newer to edit Gemini history")
+		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumAgentVersion+" or newer to edit Gemini history")
 		return
 	}
 	var event protocol.StreamEvent
@@ -299,11 +299,11 @@ func (a *geminiHTTPDriver) steerGeminiTurn(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !thread.SteerSupported {
-		writeError(w, 409, "Gemini steering requires Agent 0.2.79 and Gemini CLI 0.66.0 or newer")
+		writeError(w, 409, "Gemini steering requires Agent "+buildinfo.MinimumAgentVersion+" and Gemini CLI 0.66.0 or newer")
 		return
 	}
 	if len(input.Images) > 0 && !thread.SteerImagesSupported {
-		writeError(w, 409, "running image updates require Agent 0.2.88 and Gemini CLI 0.66.0 or newer")
+		writeError(w, 409, "running image updates require Agent "+buildinfo.MinimumAgentVersion+" and Gemini CLI 0.66.0 or newer")
 		return
 	}
 	event, id, err := a.store.QueueGeminiSteer(r.Context(), thread.ID, input.OperationID, input.RequestID, input.Prompt, input.Images...)
@@ -391,7 +391,7 @@ func (a *geminiHTTPDriver) queueGeminiFork(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !t.Capabilities.Fork {
-		writeError(w, 409, "update Agent to "+buildinfo.MinimumGeminiForkVersion+" or newer")
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer")
 		return
 	}
 	a.queueEngineFork(w, r, worktree, sessionForkSource{

@@ -1006,3 +1006,23 @@ test("the /collab command creates a collaboration session through the current mo
   expect(body.prompt.endsWith("Task:\nReview the deployment parser")).toBe(true);
   await expect(composer).toHaveValue("");
 });
+
+test("an outdated Agent shows its requirement and retains the update and repair actions", async ({ page }) => {
+  const server = { ...deploymentServer, agent_version: "0.3.25", agent_target_version: "0.3.27", agent_upgrade_required: true, agent_minimum_version: "0.3.26", agent_update_supported: true, agent_update_available: true };
+  await installMockApplication(page, {
+    configured: true,
+    expectedDefaultRequests: authenticatedBootstrapContract,
+    onAPIRequest: request => {
+      if (request.path === "/servers" && request.method === "GET") return { body: [server] };
+      if (request.path === "/credential-profiles" && request.method === "GET") return { body: [] };
+      return undefined;
+    }
+  });
+  await page.goto("/?view=servers");
+  const text = "Upgrade Agent to 0.3.26 or newer to run operations";
+  await expect(page.getByText(text)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Update Agent to 0.3.27", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Repair registration", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Edit server information", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Edit server information" }).getByText(text)).toBeVisible();
+});

@@ -20,7 +20,7 @@ func TestGeminiYoloPersistsAndDispatchesWithoutApprovals(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "yolo-agent")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.71"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityGeminiYolo)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/yolo", Name: "yolo"}}}); err != nil {
@@ -35,10 +35,10 @@ func TestGeminiYoloPersistsAndDispatchesWithoutApprovals(t *testing.T) {
 	create := func() *httptest.ResponseRecorder {
 		return directJSONRequest(t, "POST", "/api/sessions/gemini", input, &store.Session{UserID: "test-user"}, sessionNativeHandler(api, session.Gemini, "create"))
 	}
-	if w := create(); w.Code != 409 || !strings.Contains(w.Body.String(), buildinfo.MinimumGeminiYoloVersion) {
+	if w := create(); w.Code != 409 || !strings.Contains(w.Body.String(), buildinfo.MinimumAgentVersion) {
 		t.Fatalf("old Agent accepted yolo: %d %s", w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiYoloVersion}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	w := create()
@@ -50,13 +50,13 @@ func TestGeminiYoloPersistsAndDispatchesWithoutApprovals(t *testing.T) {
 		t.Fatalf("yolo not saved: %+v %v", thread, err)
 	}
 	path := "/api/sessions/gemini/" + thread.ID + "/turns"
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.71"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityGeminiYolo)}); err != nil {
 		t.Fatal(err)
 	}
 	if w := threadResourceRequest(t, "POST", path, thread.ID, map[string]string{"prompt": "old agent"}, sessionNativeHandler(api, session.Gemini, "turns")); w.Code != 409 {
 		t.Fatalf("old Agent accepted inherited yolo: %d %s", w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiYoloVersion}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	for _, mode := range []string{"", "default", "yolo"} {
@@ -90,7 +90,7 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "gemini-server-token")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.60"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/gemini", Name: "gemini"}}}); err != nil {
@@ -155,7 +155,7 @@ func TestGeminiSessionLifecycleThroughAuthenticatedRouter(t *testing.T) {
 	if w := request("POST", path+"/turns", `{"prompt":"old agent"}`, true); w.Code != 409 {
 		t.Fatalf("old Agent accepted Gemini turn: %d", w.Code)
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.60"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if w := request("GET", "/api/sessions/codex/"+thread.ID, "", true); w.Code != 404 {

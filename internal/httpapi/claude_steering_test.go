@@ -39,7 +39,7 @@ func TestClaudeSteerAPIValidationAndGating(t *testing.T) {
 		return w
 	}
 	c := protocol.ClaudeSteerCommand{OperationID: uuid.NewString(), RequestID: uuid.NewString(), Prompt: "correct"}
-	for _, heartbeat := range []protocol.Heartbeat{{AgentVersion: "0.2.94", ClaudeVersion: "2.1.318 (Claude Code)"}, {AgentVersion: "0.2.95", ClaudeVersion: "2.1.285"}} {
+	for _, heartbeat := range []protocol.Heartbeat{{AgentVersion: "0.3.25", Capabilities: testCapabilities("", "2.1.318"), ClaudeVersion: "2.1.318 (Claude Code)"}, {AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.285"), ClaudeVersion: "2.1.285"}} {
 		if err := db.Heartbeat(ctx, server.ID, heartbeat); err != nil {
 			t.Fatal(err)
 		}
@@ -47,7 +47,7 @@ func TestClaudeSteerAPIValidationAndGating(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95", ClaudeVersion: "2.1.318 (Claude Code)"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318 (Claude Code)"), ClaudeVersion: "2.1.318 (Claude Code)"}); err != nil {
 		t.Fatal(err)
 	}
 	if w := request(c); w.Code != 409 {

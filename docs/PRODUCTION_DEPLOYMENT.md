@@ -186,6 +186,9 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 
 ## 更新、回滚与备份
 
+- **部署包含 P4-03 的控制面前，先在当前控制面将所有未吊销 Agent 升级至 0.3.26 或更高版本**（包括内置与外部 Agent），逐台检查版本与最近心跳。长期离线机器需先明确吊销或接受重新上线后先升级；不能只检查在线列表。新控制面的 Agent 版本为 0.3.27，协议最低版本为 0.3.26。
+- P4-03 不改库结构：低于最低版本、版本未知或无效的 Agent 可以连接和报告心跳，只下发 `agent.update`；其他排队操作明确失败并释放对应业务状态。0.2.0 以前或版本无效的 Agent 需要重新安装，服务器页保留修复入口。新连接必须先成功处理自己的心跳再派单。能力仅按声明判断，不再从历史版本推断；旧信封兼容继续保留。
+
 - 更新前先备份 PostgreSQL 数据库、`.env` 和原始 `WIO_MASTER_KEY`，以及内置 Agent 的 `controlplane_agent_state` 卷。外部 Agent 需保留 `/etc/wio-agent`、`/var/lib/wio-agent` 和运行账号实际使用的 CLI 原生历史目录（默认 `~/.codex`、`~/.gemini`、`~/.claude`）；同时备份重要工作区、应用数据卷与 Caddy 证书卷。仅有控制面数据库不能恢复 CLI 原生续聊。这些内容应加密保存到 Docker 主机之外，备份命令见 [README](../README.md#备份与安全)。
 - 更新前核对远端工作树干净、Git remote 与预期仓库一致，并记录旧 HEAD；不要在存在未知改动时直接拉取或切换版本。
 - 备份至少应包含 `.env`、PostgreSQL 自定义格式 dump 和旧 HEAD 的 Git bundle，并将备份目录和各文件大小写入部署记录。

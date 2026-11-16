@@ -2,56 +2,6 @@ package buildinfo
 
 import "testing"
 
-func TestGeminiSteeringRequiresBothCompatibleVersions(t *testing.T) {
-	for _, test := range []struct {
-		agent, cli string
-		want       bool
-	}{
-		{"0.2.79", "0.66.0", true},
-		{"0.3.0", "0.67.0", true},
-		{"0.2.78", "0.66.0", false},
-		{"0.2.79", "0.65.0", false},
-		{"dev", "0.66.0", false},
-		{"0.2.79", "", false},
-	} {
-		if got := SupportsGeminiSteering(test.agent, test.cli); got != test.want {
-			t.Errorf("SupportsGeminiSteering(%q,%q)=%v, want %v", test.agent, test.cli, got, test.want)
-		}
-	}
-}
-
-func TestGeminiYoloRequiresNewAgent(t *testing.T) {
-	for version, want := range map[string]bool{"0.2.71": false, "0.2.72": true, "v0.3.0": true, "invalid": false} {
-		if got := SupportsGeminiYolo(version); got != want {
-			t.Errorf("SupportsGeminiYolo(%q)=%v, want %v", version, got, want)
-		}
-	}
-}
-
-func TestCLIManagementRequiresNewAgent(t *testing.T) {
-	for version, want := range map[string]bool{"0.2.60": false, "0.2.61": true, "0.3.0": true, "invalid": false} {
-		if SupportsCLIManagement(version) != want {
-			t.Errorf("CLI management %s: want %v", version, want)
-		}
-	}
-}
-
-func TestSupportsGemini(t *testing.T) {
-	for version, want := range map[string]bool{"0.2.59": false, "0.2.60": true, "0.2.61": true, "invalid": false} {
-		if got := SupportsGemini(version); got != want {
-			t.Fatalf("SupportsGemini(%q)=%v, want %v", version, got, want)
-		}
-	}
-}
-
-func TestSupportsMessageFork(t *testing.T) {
-	for version, want := range map[string]bool{"0.2.58": false, "0.2.59": true, "0.2.60": true, "invalid": false} {
-		if got := SupportsMessageFork(version); got != want {
-			t.Fatalf("SupportsMessageFork(%q)=%v, want %v", version, got, want)
-		}
-	}
-}
-
 func TestSupportsSelfUpdate(t *testing.T) {
 	for version, want := range map[string]bool{
 		"0.1.9":  false,
@@ -92,31 +42,33 @@ func TestCurrentVersionUpdatesExistingSelfUpdatingAgents(t *testing.T) {
 	}
 }
 
-func TestSupportsExactDeploymentRollback(t *testing.T) {
+func TestMinimumAgentVersion(t *testing.T) {
 	for version, want := range map[string]bool{
-		"0.2.44": false,
-		"0.2.45": true,
-		"v0.3.0": true,
-		"dev":    false,
+		"": false, "invalid": false, "0.3.25": false, "0.3.9": false,
+		"0.3.26": true, "v0.3.26+build": true, "0.3.27": true,
+		"0.3.100": true, "0.4.0": true, "1.0.0": true, "-1.0.0": false,
 	} {
-		if got := SupportsExactDeploymentRollback(version); got != want {
-			t.Fatalf("SupportsExactDeploymentRollback(%q) = %v, want %v", version, got, want)
+		if got := MeetsAgentMinimum(version); got != want {
+			t.Errorf("minimum %q: %v want %v", version, got, want)
 		}
+	}
+	if !MeetsAgentMinimum(Version) {
+		t.Fatal("built Agent is below baseline")
 	}
 }
 
-func TestGeminiRewriteRequiresNewAgent(t *testing.T) {
-	for version, want := range map[string]bool{"0.2.65": false, "0.2.66": false, "0.2.84": false, "0.2.85": true, "0.3.0": true, "invalid": false} {
-		if SupportsGeminiRewrite(version) != want {
-			t.Fatalf("Gemini rewrite %s: want %v", version, want)
-		}
-	}
-}
-
-func TestClaudeRewriteRequiresNewAgent(t *testing.T) {
-	for version, want := range map[string]bool{"0.2.96": false, "0.2.97": true, "v0.3.0": true, "dev": false} {
-		if SupportsClaudeRewrite(version) != want {
-			t.Fatalf("Claude rewrite %s: want %v", version, want)
+func TestNumericVersionComparison(t *testing.T) {
+	for _, tc := range []struct {
+		current, minimum string
+		want             bool
+	}{
+		{"0.3.9", "0.3.26", false}, {"0.3.100", "0.3.26", true},
+		{"0.10.0", "0.9.99", true}, {" v2.1.286+build ", "2.1.286", true},
+		{"2.1.286-preview", "2.1.286", true}, {"2.1", "2.1.0", false},
+		{"dev", "0.0.0", false}, {"1.0.0", "invalid", false},
+	} {
+		if got := VersionAtLeast(tc.current, tc.minimum); got != tc.want {
+			t.Errorf("%q >= %q: %v", tc.current, tc.minimum, got)
 		}
 	}
 }

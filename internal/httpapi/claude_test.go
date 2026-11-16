@@ -64,7 +64,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if w := request("POST", path, `{"prompt":"test"}`, true); w.Code != 409 || !strings.Contains(w.Body.String(), "CAPABILITY_UNSUPPORTED") {
 		t.Fatalf("old Agent: %d %s", w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.90"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityClaudeEffort, protocol.CapabilityClaudeInput)}); err != nil {
 		t.Fatal(err)
 	}
 	if w := request("POST", path, `{"prompt":"test","permission_mode":"invented"}`, true); w.Code != 400 {
@@ -76,13 +76,13 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 			t.Fatalf("invalid effort: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.91"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityClaudeEffort, protocol.CapabilityClaudeInput)}); err != nil {
 		t.Fatal(err)
 	}
-	if w := request("POST", path, `{"prompt":"test","effort":"max"}`, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.2.92") {
+	if w := request("POST", path, `{"prompt":"test","effort":"max"}`, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.3.26") {
 		t.Fatalf("old effort Agent: %d %s", w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.92"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityClaudeInput)}); err != nil {
 		t.Fatal(err)
 	}
 	if w := request("POST", path, `{"prompt":"test","model":"opus[1m]","permission_mode":"acceptEdits","effort":"max"}`, true); w.Code != 202 {
@@ -125,10 +125,10 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	imageBody := `{"images":[{"data_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII="}]}`
-	if w := request("POST", path, imageBody, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.2.93") {
+	if w := request("POST", path, imageBody, true); w.Code != 409 || !strings.Contains(w.Body.String(), "0.3.26") {
 		t.Fatalf("old Agent accepted images: %d %s", w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.93"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityClaudeRewrite)}); err != nil {
 		t.Fatal(err)
 	}
 	for _, invalid := range []string{`{"images":[{"data_url":"data:image/png;base64,aGVsbG8="}]}`, `{"images":[{"data_url":"https://example.com/test.png"}]}`, `{"images":[{"data_url":"data:image/svg+xml;base64,PHN2Zz4="}]}`} {
@@ -174,7 +174,7 @@ func TestClaudeAuthenticatedSessionAndAgentVersion(t *testing.T) {
 	if w := request("POST", rewritePath, imageBody, true); w.Code != 409 || !strings.Contains(w.Body.String(), "CAPABILITY_UNSUPPORTED") {
 		t.Fatalf("old rewrite Agent: %d %s", w.Code, w.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.97"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if w := request("POST", rewritePath, `{"prompt":""}`, true); w.Code != 400 {

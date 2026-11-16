@@ -15,7 +15,7 @@ func TestGeminiSteerScopesDeliveryRetriesAndNextTurnContext(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "gemini-steer-agent")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.79", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "", protocol.CapabilityGeminiSteerImages), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/steering", Name: "steering"}}}); err != nil {
@@ -82,7 +82,7 @@ func TestGeminiSteerScopesDeliveryRetriesAndNextTurnContext(t *testing.T) {
 	if r := threadResourceRequest(t, "POST", "/steer", thread.ID, imageBody, sessionNativeHandler(api, session.Gemini, "steer")); r.Code != 409 {
 		t.Fatalf("old agent accepted images: %d", r.Code)
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.88", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {

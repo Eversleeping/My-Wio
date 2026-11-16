@@ -18,7 +18,7 @@ func TestAsyncQuestionReplyThroughAuthenticatedRouter(t *testing.T) {
 	ctx := context.Background()
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "question-reply-token")
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.54"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/question", Name: "question"}}}); err != nil {

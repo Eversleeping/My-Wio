@@ -54,7 +54,7 @@ func assertHeartbeatPreservesAppliedEngineConfiguration(t *testing.T, db *Store)
 		t.Fatal(err)
 	}
 	for _, ready := range []bool{true, false} {
-		if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.21", CodexVersion: "codex-new", CodexReady: ready, GeminiVersion: "gemini-new", GeminiReady: ready, ClaudeVersion: "claude-new", ClaudeReady: ready}); err != nil {
+		if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("gemini-new", "claude-new"), CodexVersion: "codex-new", CodexReady: ready, GeminiVersion: "gemini-new", GeminiReady: ready, ClaudeVersion: "claude-new", ClaudeReady: ready}); err != nil {
 			t.Fatal(err)
 		}
 		afterGemini, err := db.GeminiModelConfiguration(ctx, server.ID)

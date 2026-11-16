@@ -18,7 +18,7 @@ func TestServerCredentialUpdateQueuesEncryptedSecretsAndPersistsAssignmentOnSucc
 	database := openBootstrapTestStore(t)
 	api := resourceTestAPI(database)
 	server := enrollResourceTestServer(t, database, "credential-update-token")
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.7"}); err != nil {
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityCredentialsScoped)}); err != nil {
 		t.Fatal(err)
 	}
 	codexCiphertext, _ := api.vault.Encrypt("codex-secret-value")
@@ -154,7 +154,7 @@ func TestScopedCredentialsKeepAssignmentsIndependent(t *testing.T) {
 	a := resourceTestAPI(db)
 	ctx := context.Background()
 	server := enrollResourceTestServer(t, db, "scoped-credentials")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.02"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	secret, _ := a.vault.Encrypt("test-credential-secret")
@@ -219,7 +219,7 @@ func TestScopedCredentialsKeepAssignmentsIndependent(t *testing.T) {
 	if !remove.RemoveGit || current.CodexProfileID != codex.ID || len(current.GitProfiles) != 0 || current.GitProfileID != "" {
 		t.Fatal("Git removal changes Codex or retains Git")
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.99"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityCredentialsScoped)}); err != nil {
 		t.Fatal(err)
 	}
 	if got := serverCredentialRequest(t, server.ID, gitBody, a.updateServerCredentialProfiles); got.Code != http.StatusConflict {

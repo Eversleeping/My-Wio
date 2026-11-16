@@ -52,7 +52,7 @@ func TestEmbeddedGitCredentialsAreRejectedConsistently(t *testing.T) {
 	const remote = "https://user:ghp_secret@github.com/org/repo.git"
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "git-credential-url-token")
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.28"}); err != nil {
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)

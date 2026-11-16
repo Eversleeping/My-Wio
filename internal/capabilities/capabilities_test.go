@@ -50,53 +50,59 @@ func TestGateRegistryCoversProtocolNames(t *testing.T) {
 	}
 }
 
-func TestAgentDeclarationsMatchLegacyInference(t *testing.T) {
+func TestAgentDeclarationCLIRequirements(t *testing.T) {
 	for _, gemini := range []string{"", "invalid", "0.65.99", "0.66.0", "v0.66.1+build"} {
-		for _, claude := range []string{"", "invalid", "2.1.285", "2.1.286", "2.1.286 (Claude Code)", "v2.1.287+build"} {
+		for _, claude := range []string{"", "invalid", "2.1.285", "2.1.286", "2.1.286 (Claude Code)", "v2.1.287+build", " 2.1.286"} {
 			declared := AgentDeclaration(gemini, claude)
-			count := 0
-			for _, gate := range gates {
-				cli := gemini
-				if strings.HasPrefix(gate.name, "claude.") {
-					cli = claude
-				}
-				want := gate.legacy(buildinfo.Version, cli)
-				if want {
-					count++
-				}
-				if got := Supports(gate.name, "invalid", "invalid", declared); got != want {
-					t.Fatalf("%s Gemini=%q Claude=%q: declared=%v legacy=%v", gate.name, gemini, claude, got, want)
-				}
-				if Supports(gate.name, buildinfo.Version, cli, nil) != want {
-					t.Fatalf("legacy fallback %s", gate.name)
+			expected := 23
+			goodGemini := gemini == "0.66.0" || gemini == "v0.66.1+build"
+			goodClaude := claude == "2.1.286" || claude == "2.1.286 (Claude Code)" || claude == "v2.1.287+build"
+			if goodGemini {
+				expected += 6
+			}
+			if goodClaude {
+				expected += 2
+			}
+			if len(declared) != expected {
+				t.Fatalf("Gemini=%q Claude=%q: %v", gemini, claude, declared)
+			}
+			for _, name := range []string{protocol.CapabilityGeminiSteer, protocol.CapabilityGeminiSkills, protocol.CapabilityGeminiPlan, protocol.CapabilityGeminiGoal, protocol.CapabilityGeminiSteerImages, protocol.CapabilityGeminiSkillsManage} {
+				if Supports(name, buildinfo.MinimumAgentVersion, declared) != goodGemini {
+					t.Fatalf("Gemini CLI gate %s: %q", name, gemini)
 				}
 			}
-			if len(declared) != count {
-				t.Fatalf("unexpected/duplicate names %v", declared)
+			for _, name := range []string{protocol.CapabilityClaudeSteer, protocol.CapabilityClaudeQuestions} {
+				if Supports(name, buildinfo.MinimumAgentVersion, declared) != goodClaude {
+					t.Fatalf("Claude CLI gate %s: %q", name, claude)
+				}
 			}
 		}
-	}
-	if len(AgentDeclaration("", "")) != 23 || len(AgentDeclaration("0.66.0", "2.1.286")) != 31 {
-		t.Fatal("fixed/conditional capability count changed")
 	}
 }
 
-func TestDeclaredSetIsAuthoritative(t *testing.T) {
+func TestDeclaredSetAndMinimumAreAuthoritative(t *testing.T) {
+	all := AgentDeclaration("0.66.0", "2.1.286")
 	for _, gate := range gates {
-		for _, declared := range []Declaration{{}, {"future.unknown"}} {
-			if Supports(gate.name, "9.9.9", "9.9.9", declared) {
+		for _, declared := range []Declaration{nil, {}, {"future.unknown"}} {
+			if Supports(gate.name, "9.9.9", declared) {
 				t.Fatalf("missing declaration grants %s", gate.name)
 			}
 		}
-		if !Supports(gate.name, "", "", Declaration{gate.name}) {
-			t.Fatalf("version overrides declaration %s", gate.name)
+		if !Supports(gate.name, buildinfo.MinimumAgentVersion, Declaration{gate.name}) {
+			t.Fatalf("declaration ignored %s", gate.name)
+		}
+		for _, version := range []string{"", "invalid", "0.1.0", "0.2.0", "0.3.9", "0.3.25"} {
+			want := gate.name == protocol.CapabilityAgentSelfUpdate && (version == "0.2.0" || version == "0.3.9" || version == "0.3.25")
+			if got := Supports(gate.name, version, all); got != want {
+				t.Fatalf("minimum bypassed: %s %q: %v", gate.name, version, got)
+			}
+			if got := Supports(gate.name, version, nil); got != want {
+				t.Fatalf("legacy rescue: %s %q: %v", gate.name, version, got)
+			}
 		}
 	}
-	if Supports("future.unknown", "9.9.9", "9.9.9", Declaration{"future.unknown"}) {
+	if Supports("future.unknown", "9.9.9", Declaration{"future.unknown"}) {
 		t.Fatal("unknown capability granted")
-	}
-	if !Supports(protocol.CapabilityAgentSelfUpdate, "0.2.0", "", nil) {
-		t.Fatal("legacy self update lost")
 	}
 }
 

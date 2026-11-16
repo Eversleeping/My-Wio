@@ -15,7 +15,7 @@ import (
 func TestClaudeQuestionReceiptsPreserveRunningParent(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude-questions")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.98", ClaudeVersion: "2.1.318"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318"), ClaudeVersion: "2.1.318"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/questions", Name: "questions"}}}); err != nil {

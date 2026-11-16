@@ -139,7 +139,7 @@ test("retains rejected corrections and blocks queued sessions", async () => {
   const composer = await screen.findByPlaceholderText("Add instructions to correct the running task");
   await user.type(composer, "Use the existing API");
   await user.click(screen.getByRole("button", { name: "Send correction" }));
-  await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("Agent 0.2.51")));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("Agent 0.3.26")));
   expect(composer).toHaveValue("Use the existing API");
   rerender(session("queued"));
   expect(screen.getByPlaceholderText("Message Codex")).toHaveValue("Use the existing API");

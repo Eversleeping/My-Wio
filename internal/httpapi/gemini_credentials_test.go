@@ -64,7 +64,7 @@ func TestGeminiCredentialDispatchCommitsOnlySuccessAndPreservesOtherProfiles(t *
 	if request() != 409 {
 		t.Fatal("old Agent accepted credentials")
 	}
-	_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.63"})
+	_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")})
 	codex, _ := db.SaveCredentialProfile(ctx, store.CredentialProfile{Kind: "codex", Name: "Other Codex"}, secret)
 	_ = db.SetServerCredentialProfiles(ctx, server.ID, codex.ID, "")
 	if wrong := serverCredentialRequest(t, server.ID, map[string]string{"profile_id": codex.ID}, a.updateServerGeminiCredentialProfile); wrong.Code != 400 {

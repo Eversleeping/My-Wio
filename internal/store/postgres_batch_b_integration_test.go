@@ -20,7 +20,7 @@ func assertRemainingEventWritersUseStreamLock(t *testing.T, db *Store) {
 		t.Run(kind, func(t *testing.T) {
 			fixture := batchBFixture(t, db)
 			setupCtx := context.Background()
-			if err := db.Heartbeat(setupCtx, fixture.ServerID, protocol.Heartbeat{AgentVersion: "0.2.99", ClaudeVersion: "2.1.318 (Claude Code)", ClaudeReady: true, GeminiVersion: "0.66.0"}); err != nil {
+			if err := db.Heartbeat(setupCtx, fixture.ServerID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "2.1.318 (Claude Code)"), ClaudeVersion: "2.1.318 (Claude Code)", ClaudeReady: true, GeminiVersion: "0.66.0"}); err != nil {
 				t.Fatal(err)
 			}
 			var stream string

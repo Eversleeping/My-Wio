@@ -29,7 +29,7 @@ func cliRequest(a *API, id, kind, body string) *httptest.ResponseRecorder {
 func TestCLIInstallAndStatusPreserveExplicitVersion(t *testing.T) {
 	db := openBootstrapTestStore(t)
 	s := enrollResourceTestServer(t, db, "cli-install-token")
-	if err := db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.2.61", GeminiReady: true, GeminiVersion: "0.65.0"}); err != nil {
+	if err := db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.65.0", "", protocol.CapabilityClaudeManage), GeminiReady: true, GeminiVersion: "0.65.0"}); err != nil {
 		t.Fatal(err)
 	}
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +95,7 @@ func TestCLIInstallRejectsOldOfflineAndBusyAgents(t *testing.T) {
 	if w := cliRequest(a, s.ID, "gemini", `{"version":"0.65.0"}`); w.Code != 409 {
 		t.Fatalf("old Agent: %d", w.Code)
 	}
-	db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.2.61"})
+	db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")})
 	if _, err := db.QueueOperation(context.Background(), s.ID, "codex.update", protocol.CodexUpdateCommand{Version: "0.162.1"}, "existing-update"); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestCLIInstallRejectsActiveGeminiTurns(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	s := enrollResourceTestServer(t, db, "cli-active-turn-token")
-	if err := db.Heartbeat(ctx, s.ID, protocol.Heartbeat{AgentVersion: "0.2.61"}); err != nil {
+	if err := db.Heartbeat(ctx, s.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, s.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/cli-test", Name: "cli-test"}}}); err != nil {

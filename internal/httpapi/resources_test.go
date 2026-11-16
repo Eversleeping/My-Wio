@@ -101,7 +101,7 @@ func TestDiscoverProjectsQueuesInventoryScan(t *testing.T) {
 	if err := database.RemoveWorkspaceRecord(ctx, workspaces[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.1.0"}); err != nil {
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
@@ -147,10 +147,10 @@ func TestImportProjectReusesExistingProjectOnAnotherServer(t *testing.T) {
 	serverA := enrollResourceTestServer(t, database, "import-project-a-token")
 	serverB := enrollResourceTestServer(t, database, "import-project-b-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, serverA.ID, protocol.Heartbeat{Hostname: "node-a", AgentVersion: "0.2.0"}); err != nil {
+	if err := database.Heartbeat(ctx, serverA.ID, protocol.Heartbeat{Hostname: "node-a", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(ctx, serverB.ID, protocol.Heartbeat{Hostname: "node-b", AgentVersion: "0.2.0"}); err != nil {
+	if err := database.Heartbeat(ctx, serverB.ID, protocol.Heartbeat{Hostname: "node-b", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
@@ -223,7 +223,7 @@ func TestWorkspaceFilesQueuesAgentScanAndReturnsSnapshot(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "workspace-files-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.5"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project", RemoteURL: "https://example.com/project.git"}}}); err != nil {
@@ -269,7 +269,7 @@ func TestWorkspaceFilePreviewQueuesAgentReadAndReturnsContent(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "workspace-preview-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.12"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
@@ -393,7 +393,7 @@ func TestWorkspaceChangesAndDiffPreviewQueueAgentReads(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "workspace-changes-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.5"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
@@ -480,7 +480,7 @@ func TestListProjectsIncludesLatestFailedImport(t *testing.T) {
 func TestRetryProjectImportPreservesServerAndDestination(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "retry-import-token")
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.0"}); err != nil {
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	project, err := database.CreateProject(context.Background(), "tankwar", "https://example.com/tankwar.git")
@@ -1193,7 +1193,7 @@ func TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "workspace-git-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "workspace-git", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "workspace-git", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/workspace-git", Name: "git-view", Branch: "main", CommitSHA: "abc", Dirty: true}}}); err != nil {
@@ -1253,7 +1253,7 @@ func TestWorkspaceGitChangeActionsQueueStructuredWriteCommands(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "workspace-git-write-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "workspace-git-write", AgentVersion: "0.2.36"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "workspace-git-write", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/workspace-git-write", Name: "git-write", Branch: "main", CommitSHA: "abc", Dirty: true}}}); err != nil {
@@ -1461,7 +1461,7 @@ func workspaceResourceRequest(t *testing.T, method, target, workspaceID string, 
 func TestDeploymentTargetManagementAndLogs(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-management-token")
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.28", ScanRoots: []string{"/srv"}}); err != nil {
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), ScanRoots: []string{"/srv"}}); err != nil {
 		t.Fatal(err)
 	}
 	project, err := database.CreateProject(context.Background(), "deploy-management", "https://example.com/deploy-management.git")
@@ -1549,7 +1549,7 @@ func TestDeploymentTargetUsesServerWorkspaceAndRemoteRepositorySources(t *testin
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-source-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.28", ScanRoots: []string{"/srv"}}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), ScanRoots: []string{"/srv"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/existing", Name: "existing", RemoteURL: "https://example.com/existing.git", Branch: "develop"}}}); err != nil {
@@ -1574,7 +1574,7 @@ func TestStartDeploymentCarriesConfiguredAndFallbackPublicAddressInputs(t *testi
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-public-address-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.42", ScanRoots: []string{"/srv"}}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), ScanRoots: []string{"/srv"}}); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := database.UpdateServerMetadata(ctx, server.ID, store.ServerMetadata{Address: "203.0.113.10"}); err != nil || !ok {
@@ -1616,7 +1616,7 @@ func TestRollbackUsesEncryptedHistoricalSecretVersionAndRequiresCapableAgent(t *
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-rollback-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.45", ScanRoots: []string{"/srv"}}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), ScanRoots: []string{"/srv"}}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
@@ -1684,7 +1684,7 @@ func TestDeploymentContainerActionsQueueEncryptedOperationsAndExposeState(t *tes
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-container-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.28", ScanRoots: []string{"/srv"}}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), ScanRoots: []string{"/srv"}}); err != nil {
 		t.Fatal(err)
 	}
 	project, err := database.CreateProject(ctx, "container-actions", "https://example.com/container-actions.git")
@@ -1765,7 +1765,7 @@ func TestCodexGoalRefreshQueuesFixedOperation(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "codex-goal-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.9", CodexVersion: "codex-cli 0.144.5", CodexReady: true}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), CodexVersion: "codex-cli 0.144.5", CodexReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
@@ -1806,7 +1806,7 @@ func TestCodexCompactQueuesThreadOperation(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "codex-compact-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.9", CodexVersion: "codex-cli 0.145.0", CodexReady: true}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), CodexVersion: "codex-cli 0.145.0", CodexReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {
@@ -1890,7 +1890,7 @@ func TestDeploymentQueuesEncryptedHistoricalRecovery(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "deployment-recovery-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
@@ -2003,7 +2003,7 @@ func TestDeploymentQueuesWithoutUnavailableHistoricalSecrets(t *testing.T) {
 			db := openBootstrapTestStore(t)
 			server := enrollResourceTestServer(t, db, "recovery-unavailable")
 			ctx := context.Background()
-			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95"}); err != nil {
+			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 				t.Fatal(err)
 			}
 			api := resourceTestAPI(db)

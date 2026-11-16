@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -46,6 +47,8 @@ type Server struct {
 	Notes                      string              `db:"notes" json:"notes"`
 	LastSeenAt                 *time.Time          `db:"last_seen_at" json:"last_seen_at"`
 	CreatedAt                  time.Time           `db:"created_at" json:"created_at"`
+	AgentUpgradeRequired       bool                `db:"-" json:"agent_upgrade_required"`
+	AgentMinimumVersion        string              `db:"-" json:"agent_minimum_version"`
 	AgentTargetVersion         string              `db:"-" json:"agent_target_version"`
 	AgentUpdateAvailable       bool                `db:"-" json:"agent_update_available"`
 	AgentUpdateSupported       bool                `db:"-" json:"agent_update_supported"`
@@ -82,6 +85,9 @@ func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	for i := range out {
+		out[i].setAgentBaseline()
+	}
 	return out, s.loadServerGitCredentialProfiles(ctx, out)
 }
 
@@ -98,6 +104,7 @@ func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 		return Server{}, err
 	}
 	server.GitProfiles = profiles
+	server.setAgentBaseline()
 	return server, nil
 }
 
@@ -418,4 +425,9 @@ func (s *Store) Heartbeat(ctx context.Context, serverID string, h protocol.Heart
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Server) setAgentBaseline() {
+	s.AgentMinimumVersion = buildinfo.MinimumAgentVersion
+	s.AgentUpgradeRequired = !buildinfo.MeetsAgentMinimum(s.AgentVersion)
 }

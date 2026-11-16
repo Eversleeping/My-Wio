@@ -203,7 +203,7 @@ func assertSessionCleanupMigration(t *testing.T, db *sqlx.DB, driver string) {
 		t.Fatalf("old control plane accepted contracted schema: %v", err)
 	}
 	s := &Store{DB: db, driver: driver}
-	if err := s.Heartbeat(ctx, "cleanup-server", protocol.Heartbeat{AgentVersion: "0.3.26", CodexVersion: "new-cli", GeminiVersion: "new-cli", ClaudeVersion: "new-cli"}); err != nil {
+	if err := s.Heartbeat(ctx, "cleanup-server", protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("new-cli", "new-cli"), CodexVersion: "new-cli", GeminiVersion: "new-cli", ClaudeVersion: "new-cli"}); err != nil {
 		t.Fatal(err)
 	}
 	server, err := s.Server(ctx, "cleanup-server")

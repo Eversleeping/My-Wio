@@ -19,7 +19,7 @@ import (
 func TestGeminiEventsAreScopedAndTurnsComplete(t *testing.T) {
 	db, server := gatewayTestServer(t, "gemini")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.79", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/gemini", Name: "gemini"}}}); err != nil {
@@ -181,7 +181,7 @@ func TestGeminiInterruptOnlyReleasesWorkspaceAfterConfirmedStop(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			db, server := gatewayTestServer(t, "stop-"+test.name)
 			ctx := context.Background()
-			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.80", GeminiVersion: "0.66.0"}); err != nil {
+			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/gemini", Name: "gemini"}}}); err != nil {

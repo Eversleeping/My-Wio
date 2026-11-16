@@ -12,7 +12,6 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -31,7 +30,7 @@ func newSessionContract(t *testing.T, engine string) *sessionContract {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "contract-agent")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.Version, GeminiVersion: "0.66.0", ClaudeVersion: "2.1.286"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "2.1.286"), GeminiVersion: "0.66.0", ClaudeVersion: "2.1.286"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/contract", Name: "contract"}}}); err != nil {

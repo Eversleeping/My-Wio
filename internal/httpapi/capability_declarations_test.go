@@ -16,7 +16,7 @@ import (
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
-func TestDeclaredCapabilitiesReachHTTPAndLegacyFallback(t *testing.T) {
+func TestDeclaredCapabilitiesReachHTTPAndEnforceMinimum(t *testing.T) {
 	for _, engine := range []string{session.Codex, session.Gemini, session.Claude} {
 		t.Run(engine, func(t *testing.T) {
 			f := newSessionContract(t, engine)
@@ -26,11 +26,12 @@ func TestDeclaredCapabilitiesReachHTTPAndLegacyFallback(t *testing.T) {
 				declared                      capabilities.Declaration
 				supported                     bool
 			}{
-				{"legacy", "9.9.9", "0.66.0", "2.1.286", nil, true},
+				{"absent", "9.9.9", "0.66.0", "2.1.286", nil, false},
 				{"declared_empty", "9.9.9", "0.66.0", "2.1.286", capabilities.Declaration{}, false},
 				{"unknown_only", "9.9.9", "0.66.0", "2.1.286", capabilities.Declaration{"future.unknown"}, false},
-				{"authoritative", "0.1.0", "invalid", "invalid", all, true},
-				{"downgrade", "9.9.9", "0.66.0", "2.1.286", nil, true},
+				{"authoritative", "0.3.26", "invalid", "invalid", all, true},
+				{"below_minimum", "0.3.25", "0.66.0", "2.1.286", all, false},
+				{"declaration_removed", "9.9.9", "0.66.0", "2.1.286", nil, false},
 			}
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
@@ -71,8 +72,9 @@ func TestDeclaredCapabilitiesReachHTTPAndLegacyFallback(t *testing.T) {
 						if server["id"] == f.serverID {
 							found = true
 							for _, key := range []string{"agent_update_supported", "codex_update_supported", "cli_management_supported", "exact_rollback_supported", "scoped_credentials_supported", "gemini_credentials_supported", "claude_effort_supported", "claude_credentials_supported"} {
-								if server[key] != tc.supported {
-									t.Fatalf("server %s=%v want %v", key, server[key], tc.supported)
+								want := tc.supported || (tc.name == "below_minimum" && key == "agent_update_supported")
+								if server[key] != want {
+									t.Fatalf("server %s=%v want %v", key, server[key], want)
 								}
 							}
 							if _, leaked := server["declared_capabilities"]; leaked {

@@ -118,19 +118,19 @@ func assertHeartbeatCapabilities(t *testing.T, db *Store) {
 	if err := db.Heartbeat(ctx, server.ID, heartbeat); err != nil {
 		t.Fatal(err)
 	}
-	check(capabilities.Declaration(heartbeat.Capabilities), true) // low version overridden
+	check(capabilities.Declaration(heartbeat.Capabilities), false) // declarations cannot bypass the minimum
 	heartbeat.AgentVersion = "9.9.9"
 	heartbeat.Capabilities = []string{}
 	if err := db.Heartbeat(ctx, server.ID, heartbeat); err != nil {
 		t.Fatal(err)
 	}
 	check(capabilities.Declaration{}, false)
-	// A downgrade to a legacy heartbeat clears the row and restores old inference.
+	// A heartbeat without a declaration clears the row and grants no features.
 	heartbeat.Capabilities = nil
 	if err := db.Heartbeat(ctx, server.ID, heartbeat); err != nil {
 		t.Fatal(err)
 	}
-	check(nil, true)
+	check(nil, false)
 	var count int
 	if err := db.DB.Get(&count, db.Q("SELECT COUNT(*) FROM server_capabilities WHERE server_id=?"), server.ID); err != nil || count != 0 {
 		t.Fatalf("stale row=%d %v", count, err)

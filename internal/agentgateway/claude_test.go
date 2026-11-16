@@ -17,7 +17,7 @@ import (
 func TestClaudeCompactionEventsPersistAndDeduplicateWithoutCompletingTurn(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude-compaction")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.03"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/compaction", Name: "compaction"}}}); err != nil {
@@ -73,7 +73,7 @@ func TestClaudeCompactionEventsPersistAndDeduplicateWithoutCompletingTurn(t *tes
 func TestClaudeSessionStreamsResumesAndSharesWorkspaceLock(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.90"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityClaudeEffort, protocol.CapabilityClaudeInput)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude", Name: "claude"}}}); err != nil {
@@ -158,7 +158,7 @@ func TestClaudeSessionStreamsResumesAndSharesWorkspaceLock(t *testing.T) {
 func TestClaudeUsageSurvivesGatewayRedaction(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude-usage")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.99"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/usage", Name: "usage"}}}); err != nil {
@@ -234,7 +234,7 @@ func TestClaudeUsageSurvivesGatewayRedaction(t *testing.T) {
 func TestClaudeLostOwnershipKeepsWorkspaceUntilConfirmed(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude-lost")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.90"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityClaudeEffort, protocol.CapabilityClaudeInput)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/lost", Name: "lost"}}}); err != nil {
@@ -281,7 +281,7 @@ func TestClaudeLostOwnershipKeepsWorkspaceUntilConfirmed(t *testing.T) {
 func TestClaudeInterruptReceiptMustConfirmProcessExit(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude-stop")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.90"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityClaudeEffort, protocol.CapabilityClaudeInput)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/stop", Name: "stop"}}}); err != nil {
@@ -381,7 +381,7 @@ func TestClaudeForkCompletionAndScheduledNativeIdentity(t *testing.T) {
 		t.Run(map[bool]string{false: "same-workspace", true: "worktree"}[worktree], func(t *testing.T) {
 			db, server := gatewayTestServer(t, "claude-fork")
 			ctx := context.Background()
-			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.93"}); err != nil {
+			if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude-fork", Name: "claude"}}}); err != nil {
@@ -476,7 +476,7 @@ func TestClaudeForkCompletionAndScheduledNativeIdentity(t *testing.T) {
 func TestClaudeSteerReceiptsUseStoredContentAndDoNotCompleteParent(t *testing.T) {
 	db, server := gatewayTestServer(t, "claude-steer-receipts")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95", ClaudeVersion: "2.1.318", ClaudeReady: true}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318"), ClaudeVersion: "2.1.318", ClaudeReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude-steer", Name: "steer"}}}); err != nil {

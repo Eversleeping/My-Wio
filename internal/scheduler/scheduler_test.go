@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/agentgateway"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
@@ -35,7 +36,7 @@ func TestTickQueuesDueTaskAndRecordsPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.1.0", CodexReady: true}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.3.26", Capabilities: capabilities.AgentDeclaration("", ""), CodexReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduler", Name: "scheduler"}}}); err != nil {
@@ -105,7 +106,7 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.2.70", CodexReady: true}); err != nil {
+			if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.3.26", Capabilities: []string{protocol.CapabilityGeminiSessions, protocol.CapabilityGeminiThinking}, CodexReady: true}); err != nil {
 				t.Fatal(err)
 			}
 			if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduler", Name: "scheduler"}}}); err != nil {
@@ -133,7 +134,7 @@ func TestTickQueuesGeminiAndSkipsBusyArchivedOffline(t *testing.T) {
 				if err != nil || failed.LastRunStatus != "failed" || failed.LastOperationID != "" {
 					t.Fatalf("old Agent accepted yolo: %+v %v", failed, err)
 				}
-				if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.72"}); err != nil {
+				if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: capabilities.AgentDeclaration("", "")}); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := database.DB.ExecContext(ctx, database.Q("UPDATE scheduled_tasks SET next_run_at=? WHERE engine='gemini' AND id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
@@ -205,7 +206,7 @@ func TestTickQueuesClaudeAndSkipsUnsafeStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.93"}); err != nil {
+	if err = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: capabilities.AgentDeclaration("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude", Name: "claude"}}}); err != nil {
@@ -254,7 +255,7 @@ func TestTickQueuesClaudeAndSkipsUnsafeStates(t *testing.T) {
 			}
 		}
 		if state == "old-agent" {
-			_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.92"})
+			_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.25", Capabilities: capabilities.AgentDeclaration("", "")})
 		}
 		if _, err = db.DB.ExecContext(ctx, db.Q("UPDATE scheduled_tasks SET next_run_at=? WHERE engine='claude' AND id=?"), time.Now().UTC().Add(-time.Minute), task.ID); err != nil {
 			t.Fatal(err)
@@ -291,7 +292,7 @@ func schedulerFixture(t *testing.T) (*store.Store, store.Server, store.Workspace
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.2.97", CodexReady: true}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduler-node", AgentVersion: "0.3.26", Capabilities: capabilities.AgentDeclaration("", ""), CodexReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduler", Name: "scheduler"}}}); err != nil {

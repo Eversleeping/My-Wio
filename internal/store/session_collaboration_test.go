@@ -41,6 +41,9 @@ func newCollaborationFixture(t *testing.T, db *Store, engine string) collaborati
 			t.Fatal(err)
 		}
 	}
+	if err := db.Heartbeat(ctx, server, protocol.Heartbeat{AgentVersion: buildinfo.Version, GeminiVersion: "0.66.0", ClaudeVersion: "2.1.286", Capabilities: testCapabilities("0.66.0", "2.1.286")}); err != nil {
+		t.Fatal(err)
+	}
 	var ref sessiontools.Ref
 	var op string
 	switch engine {

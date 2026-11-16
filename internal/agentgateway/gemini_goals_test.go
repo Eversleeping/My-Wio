@@ -16,7 +16,7 @@ import (
 func TestGeminiGoalReportRequiresCurrentOperationAndNormalCompletion(t *testing.T) {
 	db, server := gatewayTestServer(t, "goal-agent")
 	ctx := context.Background()
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/goal", Name: "goal"}}}); err != nil {
@@ -64,7 +64,7 @@ func TestGeminiGoalReportRequiresCurrentOperationAndNormalCompletion(t *testing.
 func TestGeminiGoalPauseResumeAndUnreportedCompletion(t *testing.T) {
 	db, server := gatewayTestServer(t, "goal-pause-agent")
 	ctx := context.Background()
-	_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84", GeminiVersion: "0.66.0"})
+	_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"})
 	_ = db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/goal-pause", Name: "goal"}}})
 	workspaces, _ := db.ListWorkspaces(ctx)
 	thread, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "flash", "default")
@@ -112,7 +112,7 @@ func TestGeminiGoalFailedStopAndRecoveredOwnerRestoreActiveStatus(t *testing.T) 
 			t.Run(action+map[bool]string{false: "-failure", true: "-ownership"}[lostOwner], func(t *testing.T) {
 				ctx := context.Background()
 				db, server := gatewayTestServer(t, "goal-stop-"+action)
-				_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84", GeminiVersion: "0.66.0"})
+				_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"})
 				_ = db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/goal-stop", Name: "goal"}}})
 				workspaces, _ := db.ListWorkspaces(ctx)
 				thread, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "flash", "default")
@@ -185,7 +185,7 @@ func TestGeminiGoalFailedStopAndRecoveredOwnerRestoreActiveStatus(t *testing.T) 
 func TestGeminiGoalResumePreservesImagesAndFailedReplacementKeepsGoal(t *testing.T) {
 	ctx := context.Background()
 	db, server := gatewayTestServer(t, "goal-images")
-	_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84", GeminiVersion: "0.66.0"})
+	_ = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"})
 	_ = db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/goal-images", Name: "goal"}}})
 	workspaces, _ := db.ListWorkspaces(ctx)
 	thread, err := db.CreateGeminiThread(ctx, workspaces[0].ID, "flash", "default")

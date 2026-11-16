@@ -25,7 +25,7 @@ func TestGeminiPlanRequiresCompatibleVersionsAndDispatchesACP(t *testing.T) {
 	create := func() *httptest.ResponseRecorder {
 		return directJSONRequest(t, http.MethodPost, "/gemini/threads", input, &store.Session{UserID: "test-user"}, sessionNativeHandler(a, session.Gemini, "create"))
 	}
-	for _, heartbeat := range []protocol.Heartbeat{{AgentVersion: "0.2.82", GeminiVersion: "0.66.0"}, {AgentVersion: "0.2.83", GeminiVersion: "0.65.0"}} {
+	for _, heartbeat := range []protocol.Heartbeat{{AgentVersion: "0.3.25", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}, {AgentVersion: "0.3.26", Capabilities: testCapabilities("0.65.0", ""), GeminiVersion: "0.65.0"}} {
 		if err := db.Heartbeat(ctx, server.ID, heartbeat); err != nil {
 			t.Fatal(err)
 		}
@@ -33,7 +33,7 @@ func TestGeminiPlanRequiresCompatibleVersionsAndDispatchesACP(t *testing.T) {
 			t.Fatalf("outdated versions accepted: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.83", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	w := create()

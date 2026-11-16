@@ -182,20 +182,20 @@ func (a *claudeHTTPDriver) startClaudeTurn(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !thread.Capabilities.Turns {
-		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumClaudeVersion+" or newer to use Claude")
+		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumAgentVersion+" or newer to use Claude")
 		return
 	}
 	if effort != "" && !thread.EffortSupported {
-		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumClaudeEffortVersion+" or newer to select Claude effort")
+		writeError(w, 409, "update the Agent to version "+buildinfo.MinimumAgentVersion+" or newer to select Claude effort")
 		return
 	}
 	if (len(input.Images) > 0 || (thread.SessionID == "" && thread.ForkSnapshotID != "")) && !thread.InputSupported {
-		writeError(w, 409, "update Agent to "+buildinfo.MinimumClaudeInputVersion+" or newer to use Claude images and session forks")
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer to use Claude images and session forks")
 		return
 	}
 	editID := chi.URLParam(r, "eventID")
 	if editID != "" && !thread.RewriteSupported {
-		writeError(w, 409, "update Agent to "+buildinfo.MinimumClaudeRewriteVersion+" or newer to edit Claude messages")
+		writeError(w, 409, "update Agent to "+buildinfo.MinimumAgentVersion+" or newer to edit Claude messages")
 		return
 	}
 	var event protocol.StreamEvent
@@ -243,7 +243,7 @@ func (a *claudeHTTPDriver) steerClaudeTurn(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !thread.SteerSupported {
-		writeError(w, 409, "Claude steering requires Agent 0.2.95 and Claude Code 2.1.286 or newer")
+		writeError(w, 409, "Claude steering requires Agent "+buildinfo.MinimumAgentVersion+" and Claude Code 2.1.286 or newer")
 		return
 	}
 	event, id, err := a.store.QueueClaudeSteer(r.Context(), input)
@@ -306,7 +306,7 @@ func (a *claudeHTTPDriver) answerClaudeQuestion(w http.ResponseWriter, r *http.R
 		return
 	}
 	if !thread.QuestionsSupported {
-		writeError(w, 409, "Claude questions require Agent 0.2.98 and Claude Code 2.1.286 or later")
+		writeError(w, 409, "Claude questions require Agent "+buildinfo.MinimumAgentVersion+" and Claude Code 2.1.286 or later")
 		return
 	}
 	var input struct {
@@ -330,7 +330,7 @@ func (a *claudeHTTPDriver) queueClaudeFork(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if t.ServerStatus != "online" || t.SessionID == "" || t.ArchivedAt != nil || !t.Capabilities.Images {
-		writeError(w, 409, "Claude fork requires an initialized online session and Agent "+buildinfo.MinimumClaudeInputVersion+" or newer")
+		writeError(w, 409, "Claude fork requires an initialized online session and Agent "+buildinfo.MinimumAgentVersion+" or newer")
 		return
 	}
 	a.queueEngineFork(w, r, worktree, sessionForkSource{

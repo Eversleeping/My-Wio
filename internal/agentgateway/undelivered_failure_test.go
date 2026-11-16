@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -12,9 +13,8 @@ import (
 	"github.com/wio-platform/wio/internal/store"
 )
 
-// Session payloads are plaintext: corrupting them to trigger decryption failure
-// would destroy the business identifiers needed by completion. Exercise the
-// exact completion path used by flush, retaining real queued payloads.
+// Exercise the real pre-dispatch rejection path, preserving the queued payload
+// required by business completion. No operation or delivery claim may escape.
 func failUndelivered(t *testing.T, g *Gateway, serverID, operationID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -22,14 +22,32 @@ func failUndelivered(t *testing.T, g *Gateway, serverID, operationID string) {
 	if err != nil || op.Status != "queued" || op.DeliveredAt != nil {
 		t.Fatalf("not undelivered: %+v %v", op, err)
 	}
+	server, err := g.store.Server(ctx, serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.store.Heartbeat(ctx, serverID, protocol.Heartbeat{AgentVersion: "0.3.25", Capabilities: testCapabilities("0.66.0", "2.1.286")}); err != nil {
+		t.Fatal(err)
+	}
+	stream := &keepaliveStream{ctx: ctx, sent: make(chan *protocol.ControlEnvelope, 8)}
 	for i := 0; i < 2; i++ {
-		if err := g.handleOperationResult(ctx, serverID, protocol.OperationResult{OperationID: operationID, Status: "failed", Message: "operation rejected before delivery"}, false); err != nil {
+		if err := g.flush(stream, serverID); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if len(stream.sent) != 0 {
+		t.Fatal("rejected operation was dispatched")
+	}
 	op, err = g.store.Operation(ctx, operationID)
-	if err != nil || op.Status != "failed" || op.DeliveredAt != nil {
+	if err != nil || op.Status != "failed" || op.DeliveredAt != nil || !strings.Contains(op.Result, "requires upgrade to 0.3.26") {
 		t.Fatalf("not failed before delivery: %+v %v", op, err)
+	}
+	// A delayed success cannot resurrect the operation or its resources.
+	if err := g.handleOperationResult(ctx, serverID, protocol.OperationResult{OperationID: operationID, Status: "succeeded"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.store.Heartbeat(ctx, serverID, protocol.Heartbeat{AgentVersion: server.AgentVersion, GeminiVersion: server.GeminiVersion, ClaudeVersion: server.ClaudeVersion, Capabilities: server.DeclaredCapabilities}); err != nil {
+		t.Fatal(err)
 	}
 }
 

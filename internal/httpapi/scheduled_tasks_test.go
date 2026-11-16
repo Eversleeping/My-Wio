@@ -18,7 +18,7 @@ func TestScheduledTaskCRUD(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "scheduled-task-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.1.0"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduled", Name: "scheduled"}}}); err != nil {
@@ -83,7 +83,7 @@ func TestGeminiScheduledTaskCRUD(t *testing.T) {
 			database := openBootstrapTestStore(t)
 			server := enrollResourceTestServer(t, database, "scheduled-task-token")
 			ctx := context.Background()
-			if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.2.72"}); err != nil {
+			if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "scheduled-node", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 				t.Fatal(err)
 			}
 			if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/scheduled", Name: "scheduled"}}}); err != nil {

@@ -36,7 +36,7 @@ func TestGeminiSkillDiscoveryChecksVersionsAndWorkspace(t *testing.T) {
 		}
 		return response.ID
 	}
-	for _, version := range []protocol.Heartbeat{{AgentVersion: "0.2.82", GeminiVersion: "0.66.0"}, {AgentVersion: "0.2.83", GeminiVersion: "0.65.0"}} {
+	for _, version := range []protocol.Heartbeat{{AgentVersion: "0.3.25", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}, {AgentVersion: "0.3.26", Capabilities: testCapabilities("0.65.0", ""), GeminiVersion: "0.65.0"}} {
 		if err := db.Heartbeat(ctx, server.ID, version); err != nil {
 			t.Fatal(err)
 		}
@@ -45,7 +45,7 @@ func TestGeminiSkillDiscoveryChecksVersionsAndWorkspace(t *testing.T) {
 			t.Fatalf("outdated versions accepted: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.83", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	id := start()
@@ -90,13 +90,13 @@ func TestGeminiSkillManagementValidationIdempotencyAndBusyServer(t *testing.T) {
 	send := func() *httptest.ResponseRecorder {
 		return workspaceResourceRequest(t, "POST", "/skills/manage", workspaces[0].ID, body, a.manageWorkspaceGeminiSkill)
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.85", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "", protocol.CapabilityGeminiSkillsManage), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if r := send(); r.Code != 409 {
 		t.Fatalf("old agent: %d", r.Code)
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.88", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	body["scope"] = "global"

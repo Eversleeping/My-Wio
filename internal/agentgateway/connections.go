@@ -41,6 +41,8 @@ type gatewayConnection struct {
 	gateway  *Gateway
 	serverID string
 	token    string
+	// Protected by slot.mu; a reconnect must establish its own heartbeat.
+	heartbeatProcessed bool
 }
 
 func (c *gatewayConnection) Context() context.Context { return c.ctx }

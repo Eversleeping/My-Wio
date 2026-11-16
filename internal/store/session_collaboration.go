@@ -486,7 +486,7 @@ func (s *Store) ReadCollaborationState(ctx context.Context, ref sessiontools.Ref
 	if err = s.DB.SelectContext(ctx, &notifications, s.Q("SELECT target_key,unread_event_id FROM session_subscriptions WHERE source_key=? AND unread_event_id<>''"), ref.Key()); err != nil {
 		return nil, err
 	}
-	return map[string]any{"session": source, "grant": grant, "requests": requests, "links": items, "notifications": notifications, "supported": capabilities.Supports(protocol.CapabilitySessionCollaboration, source.AgentVersion, "", source.DeclaredCapabilities)}, nil
+	return map[string]any{"session": source, "grant": grant, "requests": requests, "links": items, "notifications": notifications, "supported": capabilities.Supports(protocol.CapabilitySessionCollaboration, source.AgentVersion, source.DeclaredCapabilities)}, nil
 }
 
 // Acknowledge only the displayed event, preserving notifications arriving while

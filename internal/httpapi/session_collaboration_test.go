@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -89,7 +88,7 @@ func TestUserMessageRestoresContinuationAllowance(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "allowance-agent")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.Version, ClaudeVersion: "2.1.318 (Claude Code)", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "2.1.318 (Claude Code)"), ClaudeVersion: "2.1.318 (Claude Code)", GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	// One workspace for each case: a workspace takes one writing turn at a time.

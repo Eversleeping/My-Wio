@@ -24,6 +24,7 @@ type keepaliveStream struct {
 	ctx      context.Context
 	sent     chan *protocol.ControlEnvelope
 	recvDone chan struct{}
+	incoming chan *protocol.AgentEnvelope
 	onSend   func(*protocol.ControlEnvelope) error
 }
 
@@ -38,11 +39,15 @@ func (s *keepaliveStream) Send(message *protocol.ControlEnvelope) error {
 }
 
 func (s *keepaliveStream) Recv() (*protocol.AgentEnvelope, error) {
-	<-s.ctx.Done()
-	if s.recvDone != nil {
-		close(s.recvDone)
+	select {
+	case msg := <-s.incoming:
+		return msg, nil
+	case <-s.ctx.Done():
+		if s.recvDone != nil {
+			close(s.recvDone)
+		}
+		return nil, s.ctx.Err()
 	}
-	return nil, s.ctx.Err()
 }
 
 func (s *keepaliveStream) SetHeader(metadata.MD) error  { return nil }
@@ -108,7 +113,7 @@ func TestConnectWakeDeliversQueuedOperationWithoutWaitingForFallback(t *testing.
 	database, server := gatewayTestServer(t, "wake-agent-token")
 	streamContext, cancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer wake-agent-token")))
 	defer cancel()
-	stream := &keepaliveStream{ctx: streamContext, sent: make(chan *protocol.ControlEnvelope, 4)}
+	stream := &keepaliveStream{ctx: streamContext, sent: make(chan *protocol.ControlEnvelope, 4), incoming: testHeartbeatInput()}
 	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	gateway.keepaliveEvery = time.Hour
 	gateway.pollEvery = time.Hour
@@ -120,6 +125,7 @@ func TestConnectWakeDeliversQueuedOperationWithoutWaitingForFallback(t *testing.
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for initial keepalive")
 	}
+	waitConnectionHeartbeat(t, gateway, server.ID)
 	operationID, err := database.QueueOperation(context.Background(), server.ID, "inventory.scan", map[string]any{}, "wake-operation")
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +151,7 @@ func TestConnectFallbackEventuallyDeliversOperationWithoutWake(t *testing.T) {
 	database, server := gatewayTestServer(t, "fallback-agent-token")
 	streamContext, cancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer fallback-agent-token")))
 	defer cancel()
-	stream := &keepaliveStream{ctx: streamContext, sent: make(chan *protocol.ControlEnvelope, 4)}
+	stream := &keepaliveStream{ctx: streamContext, sent: make(chan *protocol.ControlEnvelope, 4), incoming: testHeartbeatInput()}
 	gateway := New(database, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	gateway.keepaliveEvery = time.Hour
 	gateway.pollEvery = 20 * time.Millisecond
@@ -157,6 +163,7 @@ func TestConnectFallbackEventuallyDeliversOperationWithoutWake(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for initial keepalive")
 	}
+	waitConnectionHeartbeat(t, gateway, server.ID)
 	operationID, err := database.QueueOperation(context.Background(), server.ID, "inventory.scan", map[string]any{}, "fallback-operation")
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +193,7 @@ func TestConnectRedeliversTimedOutDeliveredOperationAfterReconnect(t *testing.T)
 	firstContext, firstCancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer reconnect-agent-token")))
 	defer firstCancel()
 	firstRecvDone := make(chan struct{})
-	firstStream := &keepaliveStream{ctx: firstContext, sent: make(chan *protocol.ControlEnvelope, 4), recvDone: firstRecvDone}
+	firstStream := &keepaliveStream{ctx: firstContext, sent: make(chan *protocol.ControlEnvelope, 4), incoming: testHeartbeatInput(), recvDone: firstRecvDone}
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- gateway.Connect(firstStream) }()
 	select {
@@ -195,6 +202,7 @@ func TestConnectRedeliversTimedOutDeliveredOperationAfterReconnect(t *testing.T)
 		t.Fatal("timed out waiting for initial keepalive on first connection")
 	}
 
+	waitConnectionHeartbeat(t, gateway, server.ID)
 	operationID, err := database.QueueOperation(context.Background(), server.ID, "inventory.scan", map[string]any{}, "reconnect-operation")
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +257,7 @@ func TestConnectRedeliversTimedOutDeliveredOperationAfterReconnect(t *testing.T)
 	secondContext, secondCancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer reconnect-agent-token")))
 	defer secondCancel()
 	secondRecvDone := make(chan struct{})
-	secondStream := &keepaliveStream{ctx: secondContext, sent: make(chan *protocol.ControlEnvelope, 4), recvDone: secondRecvDone}
+	secondStream := &keepaliveStream{ctx: secondContext, sent: make(chan *protocol.ControlEnvelope, 4), incoming: testHeartbeatInput(), recvDone: secondRecvDone}
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- gateway.Connect(secondStream) }()
 	select {
@@ -394,6 +402,9 @@ func gatewayTestServer(t *testing.T, agentToken string) (*store.Store, store.Ser
 	}
 	server, err := database.EnrollServer(ctx, enrollment, "queue-node.local", agentToken)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "2.1.286")}); err != nil {
 		t.Fatal(err)
 	}
 	return database, server
@@ -1106,5 +1117,41 @@ func TestWorkspaceFilesOperationStoresAgentSnapshot(t *testing.T) {
 	var count int
 	if err := database.DB.GetContext(ctx, &count, database.Q("SELECT COUNT(*) FROM agent_operations WHERE idempotency_key IN (?,?)"), writeID+":files", writeID+":changes"); err != nil || count != 2 {
 		t.Fatalf("missing refresh operations: %d %v", count, err)
+	}
+}
+
+func testHeartbeatInput() chan *protocol.AgentEnvelope {
+	input := make(chan *protocol.AgentEnvelope, 1)
+	payload, _ := json.Marshal(protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")})
+	input <- &protocol.AgentEnvelope{Kind: protocol.AgentKindHeartbeat, PayloadJSON: payload}
+	return input
+}
+
+func waitConnectionHeartbeat(t *testing.T, g *Gateway, id string) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		g.mu.Lock()
+		slot := g.connections[id]
+		g.mu.Unlock()
+		if slot != nil {
+			if c := slot.current.Load(); c != nil {
+				ready := false
+				if err := c.run(func() error { ready = c.heartbeatProcessed; return nil }); err != nil {
+					t.Fatal(err)
+				}
+				if ready {
+					return
+				}
+			}
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("connection did not process heartbeat")
+		case <-tick.C:
+		}
 	}
 }

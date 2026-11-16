@@ -28,22 +28,14 @@ Agent 将配置保存在受保护的状态文件，启动模型进程时注入 `
 
 ## 兼容版本
 
-从 Agent 0.3.22 起，控制面以心跳声明的能力为准，CLI 相关能力随探测版本声明；未上报能力的旧 Agent 继续按下表推断。安装状态、凭据和运行中就绪状态仍分别检查。
+最低 Wio Agent 为 **0.3.26**。控制面按心跳声明的能力判断功能；缺少声明时不再按历史版本推断。低于基线的 Agent 可连接、上报心跳，并通过自更新或 SSH 修复升级；其他操作会明确失败；服务器页面显示升级提示。安装状态、凭据和运行中就绪状态仍分别检查。
 
-会话能力的版本门槛以 [`internal/session/capabilities_test.go`](../internal/session/capabilities_test.go) 的边界表为准；HTTP 同时返回 `capabilities` 和兼容旧客户端的 `*_supported` 字段。能力表示版本支持，在线状态与当前轮次是否就绪仍单独判断。
+会话接口返回统一的 `capabilities` 对象。CLI 条件由 Agent 根据实际探测版本决定是否声明，规则与边界测试见 [capabilities](../internal/capabilities/capabilities.go) 及其[测试](../internal/capabilities/capabilities_test.go)。
 
 | 能力 | 最低 Wio Agent | CLI 要求 |
 | --- | --- | --- |
-| 基础 Claude 会话 | 0.2.90 | 可用的 Claude Code CLI |
-| 凭据与版本管理 | 0.2.91 | 可运行对应管理命令 |
-| 思考程度 | 0.2.92 | 支持 `--effort` |
-| 图片、续聊快照、定时任务及菜单 | 0.2.93 | 支持相应 stream-json / resume 参数 |
-| 主动发现技能 | 0.2.94 | 支持 SDK initialize |
-| 运行中追加 | 0.2.95 | 2.1.286+ |
-| 消息编辑与回复分支 | 0.2.97 | 支持 `--resume-session-at` 等参数 |
-| 会话内提问 | 0.2.98 | 2.1.286+ |
-| 上下文压缩事件 | 0.3.03 | 上报原生压缩事件 |
-| Wio 会话协作 | 0.3.06 | 支持进程级 MCP 配置 |
+| 会话、凭据、版本管理、图片、快照、思考程度、技能与协作 | 0.3.26 | 支持相应 stream-json、resume、effort、SDK initialize 及进程级 MCP 参数的 Claude Code CLI |
+| 运行中追加、会话内提问 | 0.3.26 | Claude Code 2.1.286+ |
 
 当前镜像的 Claude CLI 基线见 [Dockerfile](../deploy/controlplane.Dockerfile)，不表示其他 CLI 版本都已验证。
 

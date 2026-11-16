@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
-	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/claudeadapter"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
@@ -79,8 +80,9 @@ func (r claudeSessionRunner) Start(ctx context.Context, envelope *protocol.Contr
 	}
 	environment = append(environment, gitEnvironment...)
 	cliVersion := c.currentClaudeVersion(ctx, effectiveClaudePath(c.config.StateDir))
-	command.Questions = command.Questions && buildinfo.SupportsClaudeQuestions(buildinfo.Version, cliVersion)
-	command.Steer = command.Steer && buildinfo.SupportsClaudeSteering(buildinfo.Version, cliVersion)
+	declared := capabilities.AgentDeclaration("", cliVersion)
+	command.Questions = command.Questions && slices.Contains(declared, protocol.CapabilityClaudeQuestions)
+	command.Steer = command.Steer && slices.Contains(declared, protocol.CapabilityClaudeSteer)
 	bridge, closeBridge := c.prepareSessionBridge(ctx, session.Claude, command.ThreadID, envelope.OperationID)
 	command.CollaborationMCP = bridge
 	defer closeBridge()

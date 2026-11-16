@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
@@ -150,6 +151,11 @@ func (g *Gateway) receiveWithTools(stream protocol.AgentServiceConnectServer, se
 			}
 			if err := g.handle(stream.Context(), serverID, msg); err != nil {
 				g.log.Warn("agent message rejected", "server_id", serverID, "kind", msg.Kind, "error", err)
+			} else if msg.Kind == protocol.AgentKindHeartbeat {
+				if connection, ok := stream.(*gatewayConnection); ok {
+					connection.heartbeatProcessed = true
+				}
+				g.Wake(serverID)
 			}
 			return nil
 		}
@@ -276,11 +282,31 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 }
 
 func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID string) error {
+	// Connect calls flush under the connection slot lock, as does receive.
+	if connection, ok := stream.(*gatewayConnection); ok && !connection.heartbeatProcessed {
+		return nil
+	}
 	ops, err := g.store.PendingOperations(stream.Context(), serverID)
-	if err != nil {
+	if err != nil || len(ops) == 0 {
+		return err
+	}
+	// Avoid the full server/CLI/profile projection, and skip the lookup when
+	// idle. Incoming heartbeats and dispatch share the connection slot lock.
+	var agentVersion string
+	if err := g.store.DB.GetContext(stream.Context(), &agentVersion, g.store.Q("SELECT agent_version FROM servers WHERE id=?"), serverID); err != nil {
 		return err
 	}
 	for _, op := range ops {
+		if op.Kind != protocol.OpAgentUpdate && !buildinfo.MeetsAgentMinimum(agentVersion) {
+			message := fmt.Sprintf("Agent %q requires upgrade to %s or newer before this operation can run", agentVersion, buildinfo.MinimumAgentVersion)
+			if err := g.failDeploymentOperation(stream.Context(), op, message); err != nil {
+				return err
+			}
+			if err := g.handleOperationResult(stream.Context(), serverID, protocol.OperationResult{OperationID: op.ID, Status: "failed", Message: message}, op.Status != "queued" || op.DeliveredAt != nil); err != nil {
+				return err
+			}
+			continue
+		}
 		geminiTurn := op.Kind == protocol.OpGeminiTurnStart || op.Kind == protocol.OpGeminiTurnRewrite || op.Kind == protocol.OpClaudeTurnStart
 		payload := json.RawMessage(op.Payload)
 		if strings.HasPrefix(op.Payload, "v1:") {

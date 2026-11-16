@@ -34,7 +34,7 @@ func (a *API) refreshWorkspaceClaudeSkills(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !server.Supports(protocol.CapabilityClaudeSkills) {
-		writeError(w, 409, "Claude skills require Agent "+buildinfo.MinimumClaudeSkillsVersion+" or newer")
+		writeError(w, 409, "Claude skills require Agent "+buildinfo.MinimumAgentVersion+" or newer")
 		return
 	}
 	if server.ClaudeReady != 1 {

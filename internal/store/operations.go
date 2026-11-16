@@ -269,7 +269,7 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 		return nil, err
 	}
 	for i := range out {
-		out[i].InterruptSupported = protocol.CanInterruptOperation(out[i].Kind) && capabilities.Supports(protocol.CapabilityOperationInterrupt, out[i].AgentVersion, "", out[i].DeclaredCapabilities)
+		out[i].InterruptSupported = protocol.CanInterruptOperation(out[i].Kind) && capabilities.Supports(protocol.CapabilityOperationInterrupt, out[i].AgentVersion, out[i].DeclaredCapabilities)
 	}
 	return out, nil
 }

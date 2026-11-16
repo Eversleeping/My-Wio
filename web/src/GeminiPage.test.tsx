@@ -646,7 +646,7 @@ test("requires a compatible Agent before adding running images", async () => {
   const {notify}=setup(true,"auto","configured",[],{status:"running",steerSupported:true,steerReady:true});
   const input=await screen.findByRole("textbox",{name:"Ask Gemini to work on this project…"});
   fireEvent.paste(input,{clipboardData:{items:[{type:"image/png",getAsFile:()=>new File(["image"],"test.png",{type:"image/png"})}]}});
-  expect(notify).toHaveBeenCalledWith(expect.stringContaining("Running image updates require Agent 0.2.88+"));
+  expect(notify).toHaveBeenCalledWith(expect.stringContaining("Running image updates require Agent 0.3.26+"));
   expect(document.querySelector(".composer-images")).not.toBeInTheDocument();
 });
 
@@ -689,7 +689,7 @@ test("reports an unsupported plan mode and lets Escape dismiss the slash menu", 
   const { user, notify } = setup(true);
   const input = await screen.findByRole("textbox", { name: "Ask Gemini to work on this project…" });
   await user.type(input, "/plan{Enter}");
-  expect(notify).toHaveBeenCalledWith(expect.stringContaining("0.2.83"));
+  expect(notify).toHaveBeenCalledWith(expect.stringContaining("0.3.26"));
   expect(screen.getByRole("combobox", {name:"Tool permissions"})).toHaveValue("default");
   await user.type(input, "/");
   expect(screen.getByRole("option", {name:/\/schedule/})).toBeInTheDocument();
@@ -750,10 +750,10 @@ test("explains when goal mode is unsupported", async () => {
   const {user, notify, requests} = setup(true);
   const input = await screen.findByRole("textbox", {name:"Ask Gemini to work on this project…"});
   await user.type(input, "/goal{Enter}");
-  expect(notify).toHaveBeenCalledWith(expect.stringContaining("0.2.84"));
+  expect(notify).toHaveBeenCalledWith(expect.stringContaining("0.3.26"));
   fireEvent.change(input, {target:{value:"/goal Check the feature"}});
   await user.click(screen.getByRole("button", {name:"Send"}));
-  expect(await screen.findByText(/Goal mode requires Wio Agent 0.2.84/)).toBeInTheDocument();
+  expect(await screen.findByText(/Goal mode requires Wio Agent 0.3.26/)).toBeInTheDocument();
   expect(requests).toHaveLength(0);
   expect(input).toHaveValue("/goal Check the feature");
 });

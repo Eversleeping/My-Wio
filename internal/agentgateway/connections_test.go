@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -128,7 +129,7 @@ func TestConnectNewestStreamSupersedesOldWithoutMarkingOffline(t *testing.T) {
 	start := func() (*keepaliveStream, context.CancelFunc, <-chan error) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer multiple-streams-token")))
-		s := &keepaliveStream{ctx: ctx, sent: make(chan *protocol.ControlEnvelope, 8)}
+		s := &keepaliveStream{ctx: ctx, sent: make(chan *protocol.ControlEnvelope, 8), incoming: make(chan *protocol.AgentEnvelope, 4)}
 		done := make(chan error, 1)
 		go func() { done <- g.Connect(s) }()
 		select {
@@ -142,9 +143,8 @@ func TestConnectNewestStreamSupersedesOldWithoutMarkingOffline(t *testing.T) {
 	defer oldCancel()
 	newest, newestCancel, newestDone := start()
 	defer newestCancel()
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{}); err != nil {
-		t.Fatal(err)
-	}
+	raw, _ := json.Marshal(protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")})
+	newest.incoming <- &protocol.AgentEnvelope{Kind: protocol.AgentKindHeartbeat, PayloadJSON: raw}
 	// No cancellation from the client is needed: opening a replacement closes
 	// the superseded Connect even when its Recv is waiting forever.
 	select {

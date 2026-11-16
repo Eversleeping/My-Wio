@@ -29,7 +29,7 @@ func (m *mockProjectRemoteCreator) Create(_ context.Context, request gitprovider
 func TestCreateBlankProjectWithExistingRemoteQueuesOrigin(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "blank-existing-remote-token")
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "blank-existing", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "blank-existing", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
@@ -65,7 +65,7 @@ func TestCreateBlankProjectCreatesRemoteWithoutPersistingToken(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "blank-provider-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-provider", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-provider", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	profile, err := database.SaveCredentialProfile(ctx, store.CredentialProfile{Kind: "git", Name: "provider", Endpoint: "https://gitee.com", Username: "user"}, "")
@@ -121,7 +121,7 @@ func TestCreateBlankProjectRemoteFailureIsRetryable(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "blank-provider-failure-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-provider-failure", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-provider-failure", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	vault := security.DevVault()
@@ -159,7 +159,7 @@ func TestCreateBlankProjectQueuesProvisioningOperation(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "blank-http-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-http", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-http", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
@@ -200,7 +200,7 @@ func TestCreateBlankProjectValidatesServerInputsAndCommitIdentity(t *testing.T) 
 	database := openBootstrapTestStore(t)
 	offline := enrollResourceTestServer(t, database, "blank-offline-token")
 	online := enrollResourceTestServer(t, database, "blank-online-token")
-	if err := database.Heartbeat(context.Background(), online.ID, protocol.Heartbeat{Hostname: "blank-online", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(context.Background(), online.ID, protocol.Heartbeat{Hostname: "blank-online", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	api := resourceTestAPI(database)
@@ -234,7 +234,7 @@ func TestCreateBlankProjectAllowsInitialCommitWithGitProfile(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "blank-readme-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-readme", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-readme", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	profile, err := database.SaveCredentialProfile(ctx, store.CredentialProfile{Kind: "git", Name: "Git identity", Endpoint: "https://gitee.com", Username: "git-user", CommitName: "Wio User", CommitEmail: "wio@example.com"}, "v1:test")
@@ -266,7 +266,7 @@ func TestRetryBlankProjectRequiresOnlineServerAndPreservesCommand(t *testing.T) 
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "blank-retry-http-token")
 	ctx := context.Background()
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-retry", AgentVersion: "0.2.23"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: "blank-retry", AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	provision, err := database.CreateBlankProject(ctx, server.ID, "retry-http", "apps/retry-http", "main", false)

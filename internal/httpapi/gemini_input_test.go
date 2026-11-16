@@ -17,7 +17,7 @@ func TestGeminiImagesAndAnswersStayInTheirActiveTurn(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "image-agent")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.72"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityGeminiInput)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/images", Name: "images"}}}); err != nil {
@@ -36,7 +36,7 @@ func TestGeminiImagesAndAnswersStayInTheirActiveTurn(t *testing.T) {
 	if w := send([]protocol.TurnImage{image}); w.Code != 409 {
 		t.Fatalf("old Agent accepted image: %d %s", w.Code, w.Body.String())
 	}
-	if err = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.73"}); err != nil {
+	if err = db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	for _, images := range [][]protocol.TurnImage{nil, {{DataURL: "data:image/png;base64,bad"}}, {image, image, image, image, image}} {

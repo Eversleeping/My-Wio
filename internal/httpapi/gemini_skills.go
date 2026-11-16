@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -48,7 +49,7 @@ func (a *API) manageWorkspaceGeminiSkill(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !server.Supports(protocol.CapabilityGeminiSkillsManage) {
-		writeError(w, 409, "skill management requires Agent 0.2.88 and Gemini CLI 0.66.0 or newer")
+		writeError(w, 409, "skill management requires Agent "+buildinfo.MinimumAgentVersion+" and Gemini CLI 0.66.0 or newer")
 		return
 	}
 	op, err := a.store.QueueGeminiSkillManagement(r.Context(), workspace, input.GeminiSkillManageCommand, input.RequestID)
@@ -81,7 +82,7 @@ func (a *API) refreshWorkspaceGeminiSkills(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !server.Supports(protocol.CapabilityGeminiSkills) {
-		writeError(w, http.StatusConflict, "Gemini skills require Wio Agent 0.2.83 and Gemini CLI 0.66.0 or newer")
+		writeError(w, http.StatusConflict, "Gemini skills require Wio Agent "+buildinfo.MinimumAgentVersion+" and Gemini CLI 0.66.0 or newer")
 		return
 	}
 	op, err := a.store.QueueResourceOperation(r.Context(), workspace.ServerID, protocol.OpGeminiSkillsList, protocol.GeminiSkillsCommand{Workspace: workspace.Path}, "gemini-skills:"+workspace.ID+":"+store.NewID(), store.OperationResource{ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID}, false)

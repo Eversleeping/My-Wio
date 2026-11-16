@@ -113,11 +113,11 @@ func (a *API) installServerCLI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == "claude" && !server.Supports(protocol.CapabilityClaudeManage) {
-		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumClaudeManagementVersion+" or newer first")
+		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumAgentVersion+" or newer first")
 		return
 	}
 	if kind != "claude" && !server.Supports(protocol.CapabilityCLIManage) {
-		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumCLIManagementVersion+" or newer first")
+		writeError(w, 409, "update Wio Agent to "+buildinfo.MinimumAgentVersion+" or newer first")
 		return
 	}
 	var input struct {

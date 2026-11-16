@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"net/http"
 	"strings"
 
@@ -86,7 +87,7 @@ func (a *API) writeWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !server.Supports(protocol.CapabilityWorkspaceFileWrite) {
-		writeError(w, http.StatusConflict, "upgrade the server Agent to 0.2.56 or later to add or edit files")
+		writeError(w, http.StatusConflict, "upgrade the server Agent to "+buildinfo.MinimumAgentVersion+" or later to add or edit files")
 		return
 	}
 	command := protocol.WorkspaceFileWriteCommand{WorkspaceID: workspace.ID, Root: workspace.Path, Path: path, Content: content, Create: create, ExpectedHash: strings.ToLower(input.ExpectedHash)}

@@ -57,7 +57,7 @@ func runSessionEnvelopeScenario(t *testing.T, engine string, form sessionEnvelop
 	t.Helper()
 	ctx := context.Background()
 	db, server := gatewayTestServer(t, "session-envelope-"+engine)
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.25", GeminiVersion: "0.66.0", ClaudeVersion: "2.1.318"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "2.1.318"), GeminiVersion: "0.66.0", ClaudeVersion: "2.1.318"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/project", Name: "project"}}}); err != nil {

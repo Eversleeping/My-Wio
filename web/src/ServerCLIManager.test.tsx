@@ -122,7 +122,7 @@ test("disables installation until Wio Agent supports CLI management", async () =
   window.localStorage.setItem("wio_language", "en");
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith("/versions") ? { versions: ["0.65.0"] } : [{ kind: "gemini", version: "", ready: false, supported: false }]), { status: 200 })));
   render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
-  expect(await screen.findByText(/Update Wio Agent to 0.2.61/)).toBeInTheDocument();
+  expect(await screen.findByText(/Update Wio Agent to 0.3.26/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Switch Gemini version" })).toBeDisabled();
 });
 

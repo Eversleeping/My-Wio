@@ -3,6 +3,7 @@ package httpapi
 import (
 	"database/sql"
 	"errors"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -195,7 +196,7 @@ func (a *codexHTTPDriver) forkThread(w http.ResponseWriter, r *http.Request) {
 	command := protocol.ForkThreadCommand{SourceThreadID: thread.ID, TargetThreadID: targetID, CodexThread: thread.CodexThreadID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Title: thread.Title + " (continued)"}
 	if input.EventID != "" {
 		if !server.Supports(protocol.CapabilityCodexForkAtMessage) {
-			writeJSON(w, http.StatusConflict, map[string]string{"code": "fork_agent_update", "error": "Branching from a message requires Agent 0.2.59 or newer"})
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "fork_agent_update", "error": "Branching from a message requires Agent " + buildinfo.MinimumAgentVersion + " or newer"})
 			return
 		}
 		command.LastTurnID, command.CutoffSequence, err = a.store.ThreadForkBoundary(r.Context(), thread.ID, input.EventID)
@@ -333,7 +334,7 @@ func (a *codexHTTPDriver) steerTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !server.Supports(protocol.CapabilityCodexSteer) {
-		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_agent_update", "error": "Steering requires Agent 0.2.51 or newer; update it after the current task finishes"})
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "steer_agent_update", "error": "Steering requires Agent " + buildinfo.MinimumAgentVersion + " or newer; update it after the current task finishes"})
 		return
 	}
 	turnID, err := a.store.LatestActiveTurnID(r.Context(), thread.ID)

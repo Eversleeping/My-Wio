@@ -15,7 +15,7 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "gemini-rewrite-api")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityGeminiRewrite)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/rewrite-api", Name: "rewrite-api"}}}); err != nil {
@@ -28,10 +28,10 @@ func TestGeminiRewriteValidatesAgentAndTargetWithoutRemovingHistory(t *testing.T
 	}
 	api := resourceTestAPI(db)
 	body := map[string]string{"prompt": "replacement"}
-	if response := rewriteResourceRequest(t, thread.ID, "missing", body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 409 || !strings.Contains(response.Body.String(), buildinfo.MinimumGeminiRewriteVersion) {
+	if response := rewriteResourceRequest(t, thread.ID, "missing", body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 409 || !strings.Contains(response.Body.String(), buildinfo.MinimumAgentVersion) {
 		t.Fatalf("old Agent accepted rewrite: %d %s", response.Code, response.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.MinimumGeminiRewriteVersion}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if response := rewriteResourceRequest(t, thread.ID, "missing", body, sessionNativeHandler(api, session.Gemini, "turns")); response.Code != 409 {

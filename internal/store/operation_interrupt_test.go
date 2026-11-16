@@ -17,7 +17,7 @@ func assertOperationInterruptLifecycle(t *testing.T, database *Store) {
 	t.Helper()
 	ctx := context.Background()
 	server := createOperationTestServer(t, database, "interrupt-node", "interrupt-node")
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.96"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/interrupt", Name: "interrupt"}}}); err != nil {

@@ -18,7 +18,7 @@ func TestWorkspaceFileWritesThroughAuthenticatedRouter(t *testing.T) {
 	ctx := context.Background()
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "file-write-token")
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.56"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/files", Name: "files"}}}); err != nil {

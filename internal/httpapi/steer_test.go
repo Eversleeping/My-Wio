@@ -15,7 +15,7 @@ func TestSteerQueuesAgainstCapturedTurnWithoutChangingStatus(t *testing.T) {
 	ctx := context.Background()
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "steer-token")
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.51"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/steer", Name: "steer"}}}); err != nil {
@@ -76,14 +76,14 @@ func TestSteerQueuesAgainstCapturedTurnWithoutChangingStatus(t *testing.T) {
 	if err := database.SetThreadStatus(ctx, thread.ID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.50"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityCodexSteer)}); err != nil {
 		t.Fatal(err)
 	}
 	response = threadResourceRequest(t, http.MethodPost, path, thread.ID, map[string]string{"prompt": "old agent"}, sessionNativeHandler(api, session.Codex, "steer"))
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "steer_agent_update") {
 		t.Fatalf("old agent: %d %s", response.Code, response.Body.String())
 	}
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.51"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: "codex.turn.completed", Payload: json.RawMessage(`{"turn":{"id":"active-turn","status":"completed"}}`)}); err != nil {

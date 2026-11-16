@@ -18,7 +18,7 @@ import (
 func TestCodexUpdateQueuesConfiguredTargetVersion(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, database, "codex-update-token")
-	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.2.9", CodexVersion: "codex-cli 0.139.0", CodexReady: true}); err != nil {
+	if err := database.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{Hostname: "node-1", AgentVersion: "0.3.26", Capabilities: testCapabilities("", ""), CodexVersion: "codex-cli 0.139.0", CodexReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.SetSetting(context.Background(), codexCLITargetSetting, "0.144.4"); err != nil {

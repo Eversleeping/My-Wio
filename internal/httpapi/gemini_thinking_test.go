@@ -14,7 +14,7 @@ func TestGeminiThinkingPersistsDispatchesAndCanResetToDefault(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "thinking-agent")
-	db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.68"})
+	db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityGeminiThinking)})
 	db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/thinking", Name: "thinking"}}})
 	workspaces, _ := db.ListWorkspaces(ctx)
 	api := resourceTestAPI(db)
@@ -25,7 +25,7 @@ func TestGeminiThinkingPersistsDispatchesAndCanResetToDefault(t *testing.T) {
 	if create() != 409 {
 		t.Fatal("old Agent accepted unsupported thinking control")
 	}
-	db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.70"})
+	db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")})
 	w := directJSONRequest(t, "POST", "/api/sessions/gemini", input, &store.Session{UserID: "test-user"}, sessionNativeHandler(api, session.Gemini, "create"))
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())

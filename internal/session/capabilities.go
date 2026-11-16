@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 )
@@ -30,14 +31,17 @@ type Capabilities struct {
 	Collaboration  bool `json:"collaboration"`
 }
 
-// ResolveCapabilities maps declarations to session features. Undeclared legacy
-// Agents retain the exact previous version rules. Ungated features stay static.
+// ResolveCapabilities maps declarations to session features. Agents below the
+// protocol baseline have no session features.
 func ResolveCapabilities(engine Engine, agentVersion, cliVersion string, declarations ...capabilities.Declaration) Capabilities {
+	if !buildinfo.MeetsAgentMinimum(agentVersion) {
+		return Capabilities{}
+	}
 	var declared capabilities.Declaration
 	if len(declarations) > 0 {
 		declared = declarations[0]
 	}
-	supports := func(name string) bool { return capabilities.Supports(name, agentVersion, cliVersion, declared) }
+	supports := func(name string) bool { return capabilities.Supports(name, agentVersion, declared) }
 	var c Capabilities
 	switch engine {
 	case Codex:

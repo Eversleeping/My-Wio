@@ -400,7 +400,7 @@ func assertGeminiGoalOnPostgres(t *testing.T, database *Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84", GeminiVersion: "0.66.0"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/goal-pg", Name: "goal-pg"}}}); err != nil {

@@ -14,7 +14,7 @@ func assertClaudeSteerStorage(t *testing.T, db *Store) {
 	t.Helper()
 	ctx := context.Background()
 	server := createOperationTestServer(t, db, "claude-steer", "claude-steer")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.95", ClaudeVersion: "2.1.318 (Claude Code)", ClaudeReady: true}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318 (Claude Code)"), ClaudeVersion: "2.1.318 (Claude Code)", ClaudeReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude-steer", Name: "steer"}}}); err != nil {

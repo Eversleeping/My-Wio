@@ -17,7 +17,7 @@ func TestGeminiGoalRequiresCompatibleAgentAndCanPauseResumeCancel(t *testing.T) 
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "goal-http-agent")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.83", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", "", protocol.CapabilityGeminiGoal), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/goal", Name: "goal"}}}); err != nil {
@@ -36,7 +36,7 @@ func TestGeminiGoalRequiresCompatibleAgentAndCanPauseResumeCancel(t *testing.T) 
 	if response := start(); response.Code != 409 {
 		t.Fatalf("old Agent accepted goal: %d %s", response.Code, response.Body.String())
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.84", GeminiVersion: "0.66.0"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.66.0", ""), GeminiVersion: "0.66.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if response := start(); response.Code != 202 {

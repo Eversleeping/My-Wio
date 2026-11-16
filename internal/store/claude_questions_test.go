@@ -13,7 +13,7 @@ func assertClaudeQuestionsStorage(t *testing.T, db *Store) {
 	t.Helper()
 	ctx := context.Background()
 	server := createOperationTestServer(t, db, "claude-question", "claude-question")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.98", ClaudeVersion: "2.1.318", ClaudeReady: true}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "2.1.318"), ClaudeVersion: "2.1.318", ClaudeReady: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/claude-question", Name: "question"}}}); err != nil {

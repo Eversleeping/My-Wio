@@ -87,7 +87,7 @@ func TestCodexHTTPRetriesReplayAfterTurnCompletion(t *testing.T) {
 	db := openBootstrapTestStore(t)
 	ctx := context.Background()
 	server := enrollResourceTestServer(t, db, "codex-request-replay")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.99"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/replay", Name: "replay"}}}); err != nil {

@@ -580,7 +580,7 @@ func assertAcceptanceCapabilityDeclarations(t *testing.T, api *acceptanceAPI, da
 		t.Fatal(err)
 	}
 	// Fake Gemini is 0.66.0; fake Claude is 1.0.0 (no steer/questions).
-	if len(server.DeclaredCapabilities) != 29 || !capabilities.Supports(protocol.CapabilityGeminiGoal, "", "", server.DeclaredCapabilities) || capabilities.Supports(protocol.CapabilityClaudeSteer, "", "", server.DeclaredCapabilities) {
+	if len(server.DeclaredCapabilities) != 29 || !capabilities.Supports(protocol.CapabilityGeminiGoal, server.AgentVersion, server.DeclaredCapabilities) || capabilities.Supports(protocol.CapabilityClaudeSteer, server.AgentVersion, server.DeclaredCapabilities) {
 		t.Fatalf("real heartbeat declaration=%v", server.DeclaredCapabilities)
 	}
 	response, err := api.request(http.MethodGet, "/api/servers", nil)

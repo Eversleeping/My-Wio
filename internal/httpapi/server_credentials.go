@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"net/http"
 	"strings"
 
@@ -55,7 +56,7 @@ func (a *API) updateServerCredentialProfiles(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if input.Scope != "" && !server.Supports(protocol.CapabilityCredentialsScoped) {
-		writeError(w, http.StatusConflict, "independent Codex and Git credentials require Agent 0.3.02 or later")
+		writeError(w, http.StatusConflict, "independent Codex and Git credentials require Agent "+buildinfo.MinimumAgentVersion+" or later")
 		return
 	}
 

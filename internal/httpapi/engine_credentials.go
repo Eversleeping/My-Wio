@@ -23,7 +23,7 @@ type credentialSpec struct {
 
 func (a *API) updateServerClaudeCredentialProfile(w http.ResponseWriter, r *http.Request) {
 	a.updateServerEngineCredentialProfile(w, r, credentialSpec{
-		kind: "claude", name: "Claude", minimum: buildinfo.MinimumClaudeManagementVersion, capability: protocol.CapabilityClaudeManage, busy: store.ErrClaudeCredentialsBusy,
+		kind: "claude", name: "Claude", minimum: buildinfo.MinimumAgentVersion, capability: protocol.CapabilityClaudeManage, busy: store.ErrClaudeCredentialsBusy,
 		command: func(p store.CredentialProfile, key string) any {
 			return protocol.ConfigureClaudeCredentialsCommand{Endpoint: p.Endpoint, APIKey: key, Model: p.Model}
 		},
@@ -34,7 +34,7 @@ func (a *API) updateServerClaudeCredentialProfile(w http.ResponseWriter, r *http
 }
 func (a *API) updateServerGeminiCredentialProfile(w http.ResponseWriter, r *http.Request) {
 	a.updateServerEngineCredentialProfile(w, r, credentialSpec{
-		kind: "gemini", name: "Gemini", minimum: buildinfo.MinimumGeminiCredentialsVersion, capability: protocol.CapabilityGeminiCredentials, busy: store.ErrGeminiCredentialsBusy,
+		kind: "gemini", name: "Gemini", minimum: buildinfo.MinimumAgentVersion, capability: protocol.CapabilityGeminiCredentials, busy: store.ErrGeminiCredentialsBusy,
 		command: func(p store.CredentialProfile, key string) any {
 			return protocol.ConfigureGeminiCredentialsCommand{Endpoint: p.Endpoint, APIKey: key, Model: p.Model}
 		},

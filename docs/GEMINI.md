@@ -6,9 +6,9 @@
 
 ## 安装与兼容版本
 
-从 Agent 0.3.22 起，控制面以心跳声明的能力为准，CLI 相关能力随探测版本声明；未上报能力的旧 Agent 继续按下表推断。安装状态、凭据和运行中就绪状态仍分别检查。
+最低 Wio Agent 为 **0.3.26**。控制面按心跳声明的能力判断功能；缺少声明时不再按历史版本推断。低于基线的 Agent 可连接、上报心跳，并通过自更新或 SSH 修复升级；其他操作会明确失败；服务器页面显示升级提示。安装状态、凭据和运行中就绪状态仍分别检查。
 
-会话能力的版本门槛以 [`internal/session/capabilities_test.go`](../internal/session/capabilities_test.go) 的边界表为准；HTTP 同时返回 `capabilities` 和兼容旧客户端的 `*_supported` 字段。能力表示版本支持，在线状态与当前轮次是否就绪仍单独判断。
+会话接口返回统一的 `capabilities` 对象。CLI 条件由 Agent 根据实际探测版本决定是否声明，规则与边界测试见 [capabilities](../internal/capabilities/capabilities.go) 及其[测试](../internal/capabilities/capabilities_test.go)。
 
 SSH 注册/修复会安装最新正式版；已有服务器可在 **设置 → Gemini CLI 版本管理** 选择目标版本，再到 **服务器 → 管理 AI Agent** 安装。网页安装依赖 Node.js/npm，校验后才切换受管版本，失败保留旧选择。
 
@@ -16,21 +16,11 @@ SSH 注册/修复会安装最新正式版；已有服务器可在 **设置 → G
 
 | 能力 | 最低 Wio Agent | CLI 要求 |
 | --- | --- | --- |
-| 基础 Gemini 会话 | 0.2.60 | 官方无头 CLI |
-| 通用 CLI 安装管理 | 0.2.61 | Node.js/npm |
-| 托管 API 凭据 | 0.2.63 | 支持 API Key 与基础地址 |
-| 原生分支 | 0.2.68 | 0.65.0+ |
-| 思考等级 | 0.2.70 | 0.65.0+ 模型配置 |
-| yolo 权限 | 0.2.72 | 支持对应审批模式 |
-| ACP 交互输入/审批 | 0.2.73 | 支持 ACP |
-| 运行中追加文字 | 0.2.79 | 0.66.0+ |
-| 计划与技能发现 | 0.2.83 | 0.66.0+ |
-| Goal | 0.2.84 | 0.66.0+ |
-| 编辑重发 | 0.2.85 | 0.65.0+ |
-| 追加图片、技能管理、Goal 重复保护 | 0.2.88 | 0.66.0+ |
-| Wio 会话协作 | 0.3.06 | 支持额外 ACP MCP 服务 |
+| 会话、凭据、图片、原生分支、编辑重发、思考等级与协作 | 0.3.26 | 官方 Gemini CLI，支持相应无头/ACP、原生会话与额外 MCP 参数；原生分支和编辑重发使用 0.65.0+ |
+| 追加文字/图片、计划、技能发现/管理、Goal | 0.3.26 | Gemini CLI 0.66.0+ |
+| 网页 CLI 安装管理 | 0.3.26 | Node.js/npm |
 
-具体开关以 [buildinfo](../internal/buildinfo/version.go) 和运行时能力检查为准。
+最低 Agent 版本见 [buildinfo](../internal/buildinfo/version.go)，具体功能以 Agent 声明和运行时能力检查为准。
 
 ## 托管 API 配置
 

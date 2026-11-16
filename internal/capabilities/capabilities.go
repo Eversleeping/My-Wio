@@ -1,20 +1,20 @@
-// Package capabilities resolves Agent declarations, with version inference only
-// for legacy Agents that have not declared a set. Engine readiness, credentials
-// and native probes remain separate from protocol support.
+// Package capabilities resolves Agent declarations after enforcing the minimum
+// Agent version. Engine readiness, credentials and native probes remain separate
+// from protocol support.
 package capabilities
 
 import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
-// Declaration distinguishes absent (nil, legacy inference) from explicitly
-// empty (no gated capabilities). It is scanned from an optional TEXT side table
-// and never included in the existing public HTTP response shapes.
+// Declaration preserves absent (nil) and explicitly empty sets for storage.
+// Neither grants protocol features after the legacy inference is retired.
 type Declaration []string
 
 func (d *Declaration) Scan(value any) error {
@@ -36,72 +36,77 @@ func (d *Declaration) Scan(value any) error {
 	return json.Unmarshal(raw, d)
 }
 
+const MinimumGeminiCLI = "0.66.0"
+const MinimumClaudeInteractiveCLI = "2.1.286"
+
 type gate struct {
-	name   string
-	legacy func(string, string) bool
-	cli    bool
+	name string
+	cli  func(gemini, claude string) bool
+}
+
+func geminiInteractive(gemini, _ string) bool {
+	return buildinfo.VersionAtLeast(gemini, MinimumGeminiCLI)
+}
+func claudeInteractive(_, claude string) bool {
+	return buildinfo.VersionAtLeast(strings.TrimSpace(strings.SplitN(claude, " ", 2)[0]), MinimumClaudeInteractiveCLI)
 }
 
 var gates = []gate{
-	{protocol.CapabilityAgentSelfUpdate, func(agent, cli string) bool { return buildinfo.SupportsSelfUpdate(agent) }, false},
-	{protocol.CapabilityCodexCLIUpdate, func(agent, cli string) bool { return buildinfo.SupportsCodexUpdate(agent) }, false},
-	{protocol.CapabilityDeployRollbackExact, func(agent, cli string) bool { return buildinfo.SupportsExactDeploymentRollback(agent) }, false},
-	{protocol.CapabilityCodexSteer, func(agent, cli string) bool { return buildinfo.SupportsCodexSteer(agent) }, false},
-	{protocol.CapabilityWorkspaceFileWrite, func(agent, cli string) bool { return buildinfo.SupportsWorkspaceFileWrite(agent) }, false},
-	{protocol.CapabilityCodexForkAtMessage, func(agent, cli string) bool { return buildinfo.SupportsMessageFork(agent) }, false},
-	{protocol.CapabilityGeminiSessions, func(agent, cli string) bool { return buildinfo.SupportsGemini(agent) }, false},
-	{protocol.CapabilityCLIManage, func(agent, cli string) bool { return buildinfo.SupportsCLIManagement(agent) }, false},
-	{protocol.CapabilityGeminiCredentials, func(agent, cli string) bool { return buildinfo.SupportsGeminiCredentials(agent) }, false},
-	{protocol.CapabilityGeminiFork, func(agent, cli string) bool { return buildinfo.SupportsGeminiFork(agent) }, false},
-	{protocol.CapabilityGeminiThinking, func(agent, cli string) bool { return buildinfo.SupportsGeminiThinking(agent) }, false},
-	{protocol.CapabilityGeminiYolo, func(agent, cli string) bool { return buildinfo.SupportsGeminiYolo(agent) }, false},
-	{protocol.CapabilityGeminiInput, func(agent, cli string) bool { return buildinfo.SupportsGeminiInput(agent) }, false},
-	{protocol.CapabilityGeminiSteer, func(agent, cli string) bool { return buildinfo.SupportsGeminiSteering(agent, cli) }, true},
-	{protocol.CapabilityGeminiSkills, func(agent, cli string) bool { return buildinfo.SupportsGeminiSkills(agent, cli) }, true},
-	{protocol.CapabilityGeminiPlan, func(agent, cli string) bool { return buildinfo.SupportsGeminiPlan(agent, cli) }, true},
-	{protocol.CapabilityGeminiGoal, func(agent, cli string) bool { return buildinfo.SupportsGeminiGoal(agent, cli) }, true},
-	{protocol.CapabilityGeminiRewrite, func(agent, cli string) bool { return buildinfo.SupportsGeminiRewrite(agent) }, false},
-	{protocol.CapabilityGeminiSteerImages, func(agent, cli string) bool { return buildinfo.SupportsGeminiImageSteering(agent, cli) }, true},
-	{protocol.CapabilityGeminiSkillsManage, func(agent, cli string) bool { return buildinfo.SupportsGeminiSkillManagement(agent, cli) }, true},
-	{protocol.CapabilityClaudeSessions, func(agent, cli string) bool { return buildinfo.SupportsClaude(agent) }, false},
-	{protocol.CapabilityClaudeManage, func(agent, cli string) bool { return buildinfo.SupportsClaudeManagement(agent) }, false},
-	{protocol.CapabilityClaudeEffort, func(agent, cli string) bool { return buildinfo.SupportsClaudeEffort(agent) }, false},
-	{protocol.CapabilityClaudeInput, func(agent, cli string) bool { return buildinfo.SupportsClaudeInput(agent) }, false},
-	{protocol.CapabilityClaudeSkills, func(agent, cli string) bool { return buildinfo.SupportsClaudeSkills(agent) }, false},
-	{protocol.CapabilityClaudeSteer, func(agent, cli string) bool { return buildinfo.SupportsClaudeSteering(agent, cli) }, true},
-	{protocol.CapabilityOperationInterrupt, func(agent, cli string) bool { return buildinfo.SupportsOperationInterrupt(agent) }, false},
-	{protocol.CapabilityClaudeRewrite, func(agent, cli string) bool { return buildinfo.SupportsClaudeRewrite(agent) }, false},
-	{protocol.CapabilityClaudeQuestions, func(agent, cli string) bool { return buildinfo.SupportsClaudeQuestions(agent, cli) }, true},
-	{protocol.CapabilityCredentialsScoped, func(agent, cli string) bool { return buildinfo.SupportsScopedCredentials(agent) }, false},
-	{protocol.CapabilitySessionCollaboration, func(agent, cli string) bool { return buildinfo.SupportsSessionCollaboration(agent) }, false},
+	{protocol.CapabilityAgentSelfUpdate, nil},
+	{protocol.CapabilityCodexCLIUpdate, nil},
+	{protocol.CapabilityDeployRollbackExact, nil},
+	{protocol.CapabilityCodexSteer, nil},
+	{protocol.CapabilityWorkspaceFileWrite, nil},
+	{protocol.CapabilityCodexForkAtMessage, nil},
+	{protocol.CapabilityGeminiSessions, nil},
+	{protocol.CapabilityCLIManage, nil},
+	{protocol.CapabilityGeminiCredentials, nil},
+	{protocol.CapabilityGeminiFork, nil},
+	{protocol.CapabilityGeminiThinking, nil},
+	{protocol.CapabilityGeminiYolo, nil},
+	{protocol.CapabilityGeminiInput, nil},
+	{protocol.CapabilityGeminiSteer, geminiInteractive},
+	{protocol.CapabilityGeminiSkills, geminiInteractive},
+	{protocol.CapabilityGeminiPlan, geminiInteractive},
+	{protocol.CapabilityGeminiGoal, geminiInteractive},
+	{protocol.CapabilityGeminiRewrite, nil},
+	{protocol.CapabilityGeminiSteerImages, geminiInteractive},
+	{protocol.CapabilityGeminiSkillsManage, geminiInteractive},
+	{protocol.CapabilityClaudeSessions, nil},
+	{protocol.CapabilityClaudeManage, nil},
+	{protocol.CapabilityClaudeEffort, nil},
+	{protocol.CapabilityClaudeInput, nil},
+	{protocol.CapabilityClaudeSkills, nil},
+	{protocol.CapabilityClaudeSteer, claudeInteractive},
+	{protocol.CapabilityOperationInterrupt, nil},
+	{protocol.CapabilityClaudeRewrite, nil},
+	{protocol.CapabilityClaudeQuestions, claudeInteractive},
+	{protocol.CapabilityCredentialsScoped, nil},
+	{protocol.CapabilitySessionCollaboration, nil},
 }
 
-// Supports treats a present declaration as authoritative, including an empty
-// set. Unknown names never grant support, even when explicitly declared.
-func Supports(name, agent, cli string, declared Declaration) bool {
+// Supports requires a supported Agent and its explicit declaration. Unknown
+// names grant nothing. Self-update alone retains version inference below the
+// baseline so legacy Agents can still be upgraded, even without a declaration.
+func Supports(name, agent string, declared Declaration) bool {
+	if !buildinfo.MeetsAgentMinimum(agent) {
+		return name == protocol.CapabilityAgentSelfUpdate && buildinfo.SupportsSelfUpdate(agent)
+	}
 	for _, g := range gates {
-		if g.name != name {
-			continue
-		}
-		if declared != nil {
+		if g.name == name {
 			return slices.Contains(declared, name)
 		}
-		return g.legacy(agent, cli)
 	}
 	return false
 }
 
 // AgentDeclaration advertises fixed protocol features independently of CLI
-// installation/readiness, and the eight CLI-dependent features only when the
-// detected CLI version supports them. This matches legacy version inference.
+// readiness, and the eight CLI-dependent features only when supported by the
+// detected CLI. The same declaration is used by native runtime checks.
 func AgentDeclaration(geminiVersion, claudeVersion string) Declaration {
 	declared := make(Declaration, 0, len(gates))
 	for _, g := range gates {
-		cli := geminiVersion
-		if g.name == protocol.CapabilityClaudeSteer || g.name == protocol.CapabilityClaudeQuestions {
-			cli = claudeVersion
-		}
-		if !g.cli || g.legacy(buildinfo.Version, cli) {
+		if g.cli == nil || g.cli(geminiVersion, claudeVersion) {
 			declared = append(declared, g.name)
 		}
 	}

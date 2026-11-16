@@ -3,6 +3,7 @@ package httpapi
 import (
 	"database/sql"
 	"errors"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -30,7 +31,7 @@ func (a *API) interruptOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !server.Supports(protocol.CapabilityOperationInterrupt) {
-		writeError(w, http.StatusConflict, "update Agent to 0.2.96 or later to interrupt operations")
+		writeError(w, http.StatusConflict, "update Agent to "+buildinfo.MinimumAgentVersion+" or later to interrupt operations")
 		return
 	}
 	interruptID, err := a.store.RequestOperationInterrupt(r.Context(), operation.ID)

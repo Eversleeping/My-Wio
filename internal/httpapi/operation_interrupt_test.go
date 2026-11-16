@@ -17,7 +17,7 @@ func TestOperationInterruptRouteAuthenticationAndLifecycle(t *testing.T) {
 	ctx := context.Background()
 	db := openBootstrapTestStore(t)
 	server := enrollResourceTestServer(t, db, "operation-interrupt-agent")
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.96"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	user := store.User{ID: "interrupt-user", Username: "interrupt-user", AuthMode: store.AuthModePassword}

@@ -16,7 +16,7 @@ func scheduledTaskFixture(t *testing.T, database *Store, name string) (Server, W
 	t.Helper()
 	ctx := context.Background()
 	server := createOperationTestServer(t, database, name, name+"-token")
-	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: name, AgentVersion: "0.2.97"}); err != nil {
+	if err := database.Heartbeat(ctx, server.ID, protocol.Heartbeat{Hostname: name, AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/" + name, Name: name}}}); err != nil {

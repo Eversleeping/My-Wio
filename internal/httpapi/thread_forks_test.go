@@ -49,7 +49,7 @@ func TestMessageForkQueuesExactBoundaryAndGuardsOldAgents(t *testing.T) {
 	if status := call(reply.EventID); status != http.StatusConflict {
 		t.Fatalf("old Agent accepted: %d", status)
 	}
-	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.2.59"}); err != nil {
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")}); err != nil {
 		t.Fatal(err)
 	}
 	if status := call("missing"); status != http.StatusBadRequest {
