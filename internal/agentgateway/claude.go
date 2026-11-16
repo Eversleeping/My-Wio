@@ -10,14 +10,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
 func (g *Gateway) handleClaudeEvent(ctx context.Context, serverID string, raw json.RawMessage) error {
-	var event protocol.StreamEvent
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return err
-	}
+	return g.handleLegacySessionEvent(ctx, serverID, session.Claude, raw)
+}
+
+func (g *Gateway) processClaudeEvent(ctx context.Context, serverID string, event protocol.StreamEvent) error {
 	thread, err := g.store.ClaudeThread(ctx, event.StreamID)
 	if err != nil {
 		return err

@@ -166,11 +166,12 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	_ = c.enqueueHeartbeat(ctx)
 	_ = c.enqueueMetrics(ctx)
 	_ = c.enqueueInventory(ctx)
+	capabilities := &controlPlaneCapabilities{}
 	sendErrors := make(chan error, 1)
 	sendDone := make(chan struct{})
 	go func() {
 		defer close(sendDone)
-		c.sendLoop(streamContext, stream, sendErrors)
+		c.sendLoop(streamContext, stream, sendErrors, capabilities)
 		cancel()
 	}()
 	// The next connection's sendLoop must not start before this one has parked
@@ -212,6 +213,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			continue
 		}
 		if command.Kind == protocol.ControlKindKeepalive && command.OperationID == "" {
+			capabilities.observeKeepalive(command.PayloadJSON)
 			c.startWorker(func() { c.reconcileGeminiOperations(command.PayloadJSON) })
 			c.startWorker(func() { c.reconcileClaudeOperations(command.PayloadJSON) })
 			c.startWorker(func() { c.reconcileOperations(command.PayloadJSON) })
@@ -221,7 +223,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	}
 }
 
-func (c *Client) sendLoop(ctx context.Context, stream protocol.AgentServiceConnectClient, errors chan<- error) {
+func (c *Client) sendLoop(ctx context.Context, stream protocol.AgentServiceConnectClient, errors chan<- error, capabilities *controlPlaneCapabilities) {
 	for {
 		envelope := c.takeRetry()
 		if envelope == nil {
@@ -231,7 +233,11 @@ func (c *Client) sendLoop(ctx context.Context, stream protocol.AgentServiceConne
 			case envelope = <-c.outbound:
 			}
 		}
-		if err := stream.Send(envelope); err != nil {
+		wire := envelope
+		if capabilities != nil && capabilities.sessionEnvelopes.Load() {
+			wire = negotiatedSessionEnvelope(envelope)
+		}
+		if err := stream.Send(wire); err != nil {
 			if status.Code(err) == codes.ResourceExhausted {
 				// The message itself is too large for the stream. Retrying the same
 				// bytes would kill every future connection, so shrink or drop it.

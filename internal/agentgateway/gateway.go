@@ -126,7 +126,7 @@ func (g *Gateway) sendKeepalive(stream protocol.AgentServiceConnectServer, serve
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(protocol.GeminiKeepalive{OperationIDs: ids, ClaudeOperationIDs: claudeIDs, ReconcileOperationIDs: overdue})
+	payload, err := json.Marshal(protocol.GeminiKeepalive{Capabilities: []string{protocol.ControlCapabilitySessionEnvelopes}, OperationIDs: ids, ClaudeOperationIDs: claudeIDs, ReconcileOperationIDs: overdue})
 	if err != nil {
 		return err
 	}
@@ -190,115 +190,27 @@ func (g *Gateway) handle(ctx context.Context, serverID string, msg *protocol.Age
 			return err
 		}
 		return g.publish(ctx, protocol.StreamEvent{StreamID: "inventory", Kind: protocol.EventInventoryUpdated, Payload: msg.PayloadJSON})
-	case protocol.AgentKindGeminiEvent:
-		return g.handleGeminiEvent(ctx, serverID, msg.PayloadJSON)
-	case protocol.AgentKindClaudeEvent:
-		return g.handleClaudeEvent(ctx, serverID, msg.PayloadJSON)
-	case protocol.AgentKindClaudeOwnershipLost, protocol.AgentKindClaudeOwnershipActive:
+	case protocol.AgentKindEvent, protocol.AgentKindGeminiEvent, protocol.AgentKindClaudeEvent:
+		return g.handleLegacySessionEvent(ctx, serverID, legacyEventEngines[msg.Kind], msg.PayloadJSON)
+	case protocol.AgentKindSessionEvent:
+		var event protocol.SessionEvent
+		if err := json.Unmarshal(msg.PayloadJSON, &event); err != nil {
+			return err
+		}
+		return g.handleSessionEvent(ctx, serverID, event.Engine, event.StreamEvent)
+	case protocol.AgentKindClaudeOwnershipLost, protocol.AgentKindClaudeOwnershipActive, protocol.AgentKindGeminiOwnershipLost, protocol.AgentKindGeminiOwnershipActive:
 		var ownership protocol.GeminiOwnership
 		if err := json.Unmarshal(msg.PayloadJSON, &ownership); err != nil {
 			return err
 		}
-		return g.updateClaudeOwnership(ctx, serverID, ownership.OperationID, msg.Kind == protocol.AgentKindClaudeOwnershipActive)
-	case protocol.AgentKindGeminiOwnershipLost:
-		var lost protocol.GeminiOwnership
-		if err := json.Unmarshal(msg.PayloadJSON, &lost); err != nil {
+		legacy := legacyOwnershipKinds[msg.Kind]
+		return g.handleSessionOwnership(ctx, serverID, legacy.engine, ownership.OperationID, legacy.active)
+	case protocol.AgentKindSessionOwnership:
+		var ownership protocol.SessionOwnership
+		if err := json.Unmarshal(msg.PayloadJSON, &ownership); err != nil {
 			return err
 		}
-		return g.markGeminiOwnershipLost(ctx, serverID, lost.OperationID)
-	case protocol.AgentKindGeminiOwnershipActive:
-		var active protocol.GeminiOwnership
-		if err := json.Unmarshal(msg.PayloadJSON, &active); err != nil {
-			return err
-		}
-		return g.markGeminiOwnershipActive(ctx, serverID, active.OperationID)
-	case protocol.AgentKindEvent:
-		var event protocol.StreamEvent
-		if err := json.Unmarshal(msg.PayloadJSON, &event); err != nil {
-			return err
-		}
-		thread, err := g.store.Thread(ctx, event.StreamID)
-		if err != nil {
-			return fmt.Errorf("resolve Agent event thread: %w", err)
-		}
-		if thread.ServerID != serverID {
-			return errors.New("Agent event server mismatch")
-		}
-		if event.Kind == protocol.EventCodexThreadTokenUsageUpdated {
-			event.Payload = codexUsagePayload(event.Payload)
-		}
-		event.Payload = security.RedactJSON(event.Payload)
-		if event.Kind != protocol.EventUserMessage {
-			cancelled, err := g.store.HasPendingTurnCancellation(ctx, event.StreamID)
-			if err != nil {
-				return err
-			}
-			if cancelled {
-				// A queued turn can cross the Agent boundary just as the UI
-				// cancels it. Its late notifications must not resurrect the
-				// cancelled session or leak stale output into the conversation.
-				return nil
-			}
-		}
-		if strings.Contains(event.Kind, protocol.EventApprovalRequested) {
-			if err := g.upsertApproval(ctx, event); err != nil {
-				g.log.Error("could not persist approval request", "thread_id", event.StreamID, "error", err)
-			}
-		}
-		if event.Kind == protocol.EventThreadBound {
-			_ = g.bindCodexThread(ctx, event)
-		}
-		if event.Kind == protocol.EventCodexServerRequestResolved {
-			var params struct {
-				RequestID json.RawMessage `json:"requestId"`
-			}
-			if err := json.Unmarshal(event.Payload, &params); err != nil {
-				return err
-			}
-			var requestID string
-			if json.Unmarshal(params.RequestID, &requestID) != nil {
-				requestID = string(params.RequestID)
-			}
-			if _, err := g.store.DB.ExecContext(ctx, g.store.Q("UPDATE approvals SET status='resolved',decision='cancelled',resolved_at=? WHERE thread_id=? AND request_id=? AND status='pending'"), time.Now().UTC(), event.StreamID, requestID); err != nil {
-				return err
-			}
-		}
-		if event.Kind == protocol.EventCodexThreadNameUpdated {
-			_ = g.updateThreadTitle(ctx, event)
-		}
-		if event.Kind == protocol.EventCodexTurnStarted || event.Kind == protocol.EventTurnAccepted {
-			if event.Kind == protocol.EventTurnAccepted {
-				if err := g.acceptCodexTurn(ctx, event); err != nil {
-					return err
-				}
-			}
-			saved, err := g.store.AddEvent(ctx, event)
-			if err != nil {
-				return err
-			}
-			if err := g.store.SetThreadStatus(ctx, event.StreamID, "running"); err != nil {
-				return err
-			}
-			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, "running", "")
-			g.hub.Publish(saved)
-			return nil
-		}
-		if event.Kind == protocol.EventCodexTurnCompleted || event.Kind == protocol.EventCodexTurnCancelled {
-			_ = g.setThreadTitleFromFirstResponse(ctx, event.StreamID)
-			status := completedTurnStatus(event.Payload)
-			if event.Kind == protocol.EventCodexTurnCancelled {
-				status = "interrupted"
-			}
-			_ = g.store.SetThreadStatus(ctx, event.StreamID, status)
-			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, scheduledTurnStatus(status), scheduledTurnMessage(event.Payload))
-			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
-		}
-		if event.Kind == protocol.EventCodexTurnFailed {
-			_ = g.store.SetThreadStatus(ctx, event.StreamID, "failed")
-			_ = g.store.MarkScheduledTaskByThread(ctx, event.StreamID, "failed", scheduledTurnMessage(event.Payload))
-			_ = g.store.ResolvePendingApprovals(ctx, event.StreamID, "cancelled")
-		}
-		return g.publish(ctx, event)
+		return g.handleSessionOwnership(ctx, serverID, ownership.Engine, ownership.OperationID, ownership.Active)
 	case protocol.AgentKindOperationStarted:
 		var started protocol.OperationStarted
 		if err := json.Unmarshal(msg.PayloadJSON, &started); err != nil {

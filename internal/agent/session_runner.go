@@ -77,8 +77,8 @@ func (c *Client) prepareSessionBridge(ctx context.Context, engine, id, operation
 	return bridge, closeBridge
 }
 
-// emitSessionEvent preserves the old envelopes until the control plane and
-// Agent negotiate the replacement in P4-05. All engines use one outbound queue.
+// emitSessionEvent queues the legacy format for reconnect compatibility. The
+// sender negotiates a temporary wire copy; all engines share one outbound queue.
 func (c *Client) emitSessionEvent(engine string, event protocol.StreamEvent) error {
 	kind := ""
 	switch engine {

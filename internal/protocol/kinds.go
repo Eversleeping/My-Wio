@@ -18,6 +18,8 @@ const (
 	AgentKindOperationReconcile    = "operation_reconcile"
 	AgentKindOperationResult       = "operation_result"
 	AgentKindOperationStarted      = "operation_started"
+	AgentKindSessionEvent          = "session_event"
+	AgentKindSessionOwnership      = "session_ownership"
 	AgentKindSessionToolRequest    = "session_tool_request"
 )
 

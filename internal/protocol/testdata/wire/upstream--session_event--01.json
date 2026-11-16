@@ -1,0 +1,24 @@
+{
+  "baseline": "P4-05@c8b7d5e",
+  "direction": "upstream",
+  "kind": "session_event",
+  "source": [
+    "agent.TestCaptureNegotiatedSessionWireFixtures",
+    "agent.(*Client).sendLoop",
+    "agent.negotiatedSessionEnvelope"
+  ],
+  "payload": {
+    "engine": "codex",
+    "event_id": "event-codex",
+    "kind": "codex.item.completed",
+    "occurred_at": "2026-01-02T03:04:05Z",
+    "payload": {
+      "text": "unchanged",
+      "usage": {
+        "tokens": 3
+      }
+    },
+    "sequence": 42,
+    "stream_id": "thread-codex"
+  }
+}

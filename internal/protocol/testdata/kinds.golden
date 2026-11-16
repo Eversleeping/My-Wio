@@ -1,5 +1,6 @@
 # Wire kind values captured before P4-01 from 67275e2.
 # Includes fixed kinds, compared Codex notifications, and named prefixes/suffixes.
+# P4-05 adds session_event and session_ownership; all older values are retained.
 .question
 .question.answered
 .question.cancelled
@@ -155,6 +156,8 @@ session.collaboration.child
 session.collaboration.grant.updated
 session.collaboration.request
 session.collaboration.updated
+session_event
+session_ownership
 session_tool_request
 session_tool_response
 thread.bound

@@ -81,6 +81,8 @@ var operations = map[string]Contract{
 }
 
 var upstream = map[string]Contract{
+	protocol.AgentKindSessionEvent:          command[protocol.SessionEvent](),
+	protocol.AgentKindSessionOwnership:      command[protocol.SessionOwnership](),
 	protocol.AgentKindAgentUpdateStatus:     command[protocol.AgentUpdateStatus](),
 	protocol.AgentKindClaudeEvent:           command[protocol.StreamEvent](),
 	protocol.AgentKindClaudeOwnershipActive: command[protocol.GeminiOwnership](),

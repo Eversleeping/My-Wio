@@ -26,3 +26,7 @@ go test ./internal/protocol/...
 测试要求每种操作和上行信封都有样本、每种已注册结果 DTO 有样本；严格拒绝未知字段，重新编码后 JSON 语义必须一致，包括数值精度、字段缺失与 `null` 的差异。动态 CLI 内容及协作工具参数保持原有 `json.RawMessage` 边界。
 
 新增操作的顺序见 `../../doc.go`：常量与清单 → DTO 与注册项 → 真实生产者夹具 → Agent 处理器 → 按需增加能力声明。
+
+## P4-05 新增样本
+
+新增 7 份样本（3 种引擎事件、4 种所有权状态），标记 `P4-05@c8b7d5e`：在这一基线的工作区实现上，通过真实 `emitSessionEvent` / `queue` → `sendLoop` → `negotiatedSessionEnvelope` 采集模拟传输最终收到的载荷。原 158 份夹具不改。事件保留原字段并增加 `engine`；所有权使用 `engine`、`operation_id`、`active`。协商能力 `session.envelopes` 由控制面在 keepalive 中声明，仅对当前连接有效。

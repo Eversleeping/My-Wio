@@ -124,14 +124,18 @@ func (s *fakeAgentStream) kinds() []string {
 	return out
 }
 
-func runSendLoopUntil(t *testing.T, client *Client, stream *fakeAgentStream, until func() bool) error {
+func runSendLoopUntil(t *testing.T, client *Client, stream *fakeAgentStream, until func() bool, negotiated ...*controlPlaneCapabilities) error {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	errs := make(chan error, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		client.sendLoop(ctx, stream, errs)
+		var capabilities *controlPlaneCapabilities
+		if len(negotiated) > 0 {
+			capabilities = negotiated[0]
+		}
+		client.sendLoop(ctx, stream, errs, capabilities)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for !until() {

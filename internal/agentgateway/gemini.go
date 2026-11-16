@@ -8,14 +8,15 @@ import (
 
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/security"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
 
 func (g *Gateway) handleGeminiEvent(ctx context.Context, serverID string, raw json.RawMessage) error {
-	var event protocol.StreamEvent
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return err
-	}
+	return g.handleLegacySessionEvent(ctx, serverID, session.Gemini, raw)
+}
+
+func (g *Gateway) processGeminiEvent(ctx context.Context, serverID string, event protocol.StreamEvent) error {
 	thread, err := g.store.GeminiThread(ctx, event.StreamID)
 	if err != nil {
 		return err

@@ -201,3 +201,54 @@ func TestLegacySessionEnvelopeScenarios(t *testing.T) {
 		t.Run(engine, func(t *testing.T) { runSessionEnvelopeScenario(t, engine, legacySessionEnvelopeForm()) })
 	}
 }
+
+func negotiatedSessionEnvelopeForm() sessionEnvelopeForm {
+	return sessionEnvelopeForm{
+		event: func(engine string, event protocol.StreamEvent) *protocol.AgentEnvelope {
+			raw, _ := json.Marshal(protocol.SessionEvent{Engine: engine, StreamEvent: event})
+			return &protocol.AgentEnvelope{Kind: protocol.AgentKindSessionEvent, PayloadJSON: raw}
+		},
+		ownership: func(engine, operation string, active bool) *protocol.AgentEnvelope {
+			raw, _ := json.Marshal(protocol.SessionOwnership{Engine: engine, OperationID: operation, Active: active})
+			return &protocol.AgentEnvelope{Kind: protocol.AgentKindSessionOwnership, PayloadJSON: raw}
+		},
+	}
+}
+func TestNegotiatedSessionEnvelopesMatchLegacy(t *testing.T) {
+	for _, engine := range []string{session.Codex, session.Gemini, session.Claude} {
+		t.Run(engine, func(t *testing.T) {
+			legacy := runSessionEnvelopeScenario(t, engine, legacySessionEnvelopeForm())
+			negotiated := runSessionEnvelopeScenario(t, engine, negotiatedSessionEnvelopeForm())
+			if !reflect.DeepEqual(legacy, negotiated) {
+				t.Fatalf("envelope changed native behavior\nlegacy %+v\nnew %+v", legacy, negotiated)
+			}
+		})
+	}
+}
+func TestSessionEnvelopesRejectUnknownEngines(t *testing.T) {
+	db, server := gatewayTestServer(t, "unknown-session-engine")
+	g := New(db, realtime.New(), security.DevVault(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, engine := range []string{"", "future-engine"} {
+		event := negotiatedSessionEnvelopeForm().event(engine, protocol.StreamEvent{StreamID: "unknown", Payload: json.RawMessage(`{}`)})
+		if err := g.handle(context.Background(), server.ID, event); err == nil || err.Error() != "unsupported session event engine" {
+			t.Fatalf("unknown event engine accepted: %v", err)
+		}
+	}
+	for _, engine := range []string{"", session.Codex, "future-engine"} {
+		ownership := negotiatedSessionEnvelopeForm().ownership(engine, "unknown", true)
+		if err := g.handle(context.Background(), server.ID, ownership); err == nil || err.Error() != "unsupported session ownership engine" {
+			t.Fatalf("unknown ownership engine accepted: %v", err)
+		}
+	}
+	stream := &keepaliveStream{ctx: context.Background(), sent: make(chan *protocol.ControlEnvelope, 1)}
+	if err := g.sendKeepalive(stream, server.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var keepalive protocol.GeminiKeepalive
+	if err := json.Unmarshal((<-stream.sent).PayloadJSON, &keepalive); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(keepalive.Capabilities, []string{protocol.ControlCapabilitySessionEnvelopes}) {
+		t.Fatalf("missing receive capability: %v", keepalive.Capabilities)
+	}
+}

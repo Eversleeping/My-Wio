@@ -1,0 +1,15 @@
+{
+  "baseline": "P4-05@c8b7d5e",
+  "direction": "upstream",
+  "kind": "session_ownership",
+  "source": [
+    "agent.TestCaptureNegotiatedSessionWireFixtures",
+    "agent.(*Client).sendLoop",
+    "agent.negotiatedSessionEnvelope"
+  ],
+  "payload": {
+    "active": false,
+    "engine": "claude",
+    "operation_id": "operation"
+  }
+}

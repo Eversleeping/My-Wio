@@ -237,7 +237,7 @@ npm --prefix web run typecheck
 | P4-02 | 心跳携带能力列表 | M | P1-04、P2-02、P0-07 | 已完成 | 11-16 Codex | d5543a2、cd293a9 | GPT-6（Codex）；本地验收通过，真实升级待发布 |
 | P4-03 | 最低 Agent 版本基线，删除历史门槛 | M | P4-02、决策 D2 | 待开始 | |  | |
 | P4-04 | 载荷注册表与线上格式夹具 | M | P4-01、P3-04 | 已完成 | 11-16 Codex | dc40819、70d2dc6、3a5d218、6774d1e | GPT-6（Codex，本会话自验） |
-| P4-05 | 统一会话事件信封 | M | P4-02、P2-09 | 进行中 | 11-16 Codex |  | |
+| P4-05 | 统一会话事件信封 | M | P4-02、P2-09 | 已完成 | 11-16 Codex | GPT-6（Codex，自验）；本地通过，真实服务器待发布 | c8b7d5e；实现提交随后回填 |
 | P5-01 | 威胁模型与可达性盘点 | S | 无 | 待开始 | |  | |
 | P5-02 | 子进程环境与凭据收紧 | M | P5-01 | 待开始 | |  | |
 | P5-03 | 隔离技术可行性验证 | M | P5-01、决策 D4 | 待开始 | |  | |
@@ -318,6 +318,7 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-15 | P0-03、P1-04 / P0-08 本地验收 | `web/src/AppSession.test.tsx` 的“returns to sign-in when the session expires while the console is open”间歇性失败：登录页已出现，立即断言 `FakeWebSocket.instances[0].closed` 时仍为 false。P0-03 首次并发编译时遇到一次，本轮串行全量 Vitest 又出现一次；未改源码的定向复验 6 项通过。疑似断言早于 effect 清理完成，尚未认定产品缺陷 | 已按2026-11-15用户授权单独修正测试：用waitFor等待WebSocket关闭，产品代码未变。定向6项、全量478项通过；禁止关闭的反向探测按预期失败。详情见P2执行记录 |
 
 | 2026-11-15 | P2-01 | 旧 HTTP 接口偶然差异：Codex 独有 archived=all/可选分页对象、未知 archived 报错；另两引擎忽略；PATCH 空对象 Codex 400 另两者200；更新/发起成功响应、事件游标错误文本/窗口和存在性检查不同；Claude worktree 分叉不返回 workspace_id。详见 P2-engine-contracts.md | 保留旧路由行为，新增统一路由按 P2-05 契约；不单独修旧接口 |
+| 2026-11-16 | P4-05 全量验收 | Go / Vitest 同时运行时，`GeminiPage.test.tsx` 的 `switches the Gemini action between interrupting and sending a correction` 一次未在默认等待窗口内找到输入框；本轮未改前端源码。源码不变的该文件复验 69 项通过 | 登记偶发测试超时，未改产品代码或测试等待条件；完整复验结果见 P4 执行记录 |
 
 ## 变更记录
 
