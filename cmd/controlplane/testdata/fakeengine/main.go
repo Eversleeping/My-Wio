@@ -10,12 +10,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 )
 
 const fakeSessionID = "550e8400-e29b-41d4-a716-446655440007"
 
 var hangPattern = regexp.MustCompile(`P0-07-HANG=([A-Za-z0-9_-]+)`)
+var environmentPattern = regexp.MustCompile(`P5-02-ENV=([A-Za-z0-9_-]+)`)
 
 func main() {
 	engine := filepath.Base(os.Args[0])
@@ -64,6 +66,26 @@ func hangMarker(input string) string {
 	return string(raw)
 }
 
+// Only variable names are persisted; test prompts supply the temporary report
+// path so the probe does not depend on inheriting a test-only environment name.
+func recordEnvironment(input string) {
+	match := environmentPattern.FindStringSubmatch(input)
+	if len(match) != 2 {
+		return
+	}
+	path, err := base64.RawURLEncoding.DecodeString(match[1])
+	if err != nil {
+		return
+	}
+	var names []string
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		names = append(names, name)
+	}
+	raw, _ := json.Marshal(names)
+	_ = os.WriteFile(string(path), raw, 0600)
+}
+
 func markStarted(path string) {
 	if path != "" {
 		_ = os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600)
@@ -72,6 +94,7 @@ func markStarted(path string) {
 
 func runClaude() {
 	input, _ := io.ReadAll(os.Stdin)
+	recordEnvironment(string(input))
 	encoder := json.NewEncoder(os.Stdout)
 	_ = encoder.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": fakeSessionID})
 	if marker := hangMarker(string(input)); marker != "" {
@@ -115,6 +138,7 @@ func runGeminiACP() {
 			respond(message.ID, map[string]any{"sessionId": "p0-07-gemini-session", "modes": map[string]string{"currentModeId": "default"}, "_meta": map[string]bool{"wioHistoryReplayed": true}})
 			notify(map[string]string{"sessionUpdate": "available_commands_update"})
 		case "session/prompt":
+			recordEnvironment(string(message.Params))
 			if marker := hangMarker(string(message.Params)); marker != "" {
 				markStarted(marker)
 				waitForTermination()
@@ -172,6 +196,7 @@ func runCodex() {
 			}
 			respond(message.ID, map[string]any{"thread": map[string]string{"id": threadID}})
 		case "turn/start":
+			recordEnvironment(string(message.Params))
 			turnNumber++
 			activeTurn = fmt.Sprintf("p0-07-turn-%d", turnNumber)
 			respond(message.ID, map[string]any{"turn": map[string]string{"id": activeTurn}})

@@ -47,9 +47,9 @@ func TestSnapshotIsImmutableAndIdempotent(t *testing.T) {
 }
 
 func TestRunImageInputAndForkArguments(t *testing.T) {
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "success")
+	t.Setenv("CLAUDE_TEST_CHILD", "success")
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", record)
+	t.Setenv("CLAUDE_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	c := protocol.ClaudeTurnCommand{ThreadID: "target", Workspace: t.TempDir(), Prompt: "private image question", PermissionMode: "default", ResumePath: "/safe/snapshot.jsonl", ForkSessionID: "550e8400-e29b-41d4-a716-446655440002", Images: []protocol.TurnImage{{DataURL: "data:image/png;base64,aGVsbG8="}}}
 	if err := Run(context.Background(), binary, "op", c, func(protocol.StreamEvent) error { return nil }); err != nil {

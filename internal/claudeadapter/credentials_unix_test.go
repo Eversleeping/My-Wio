@@ -34,9 +34,9 @@ func recordAPIKeyDelivery(path string) {
 func TestClaudeAPIKeyReachesCLIOnlyThroughDescriptor(t *testing.T) {
 	directory := t.TempDir()
 	keyRecord := filepath.Join(directory, "key.json")
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "success")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(directory, "record.json"))
-	t.Setenv("WIO_CLAUDE_TEST_KEY_RECORD", keyRecord)
+	t.Setenv("CLAUDE_TEST_CHILD", "success")
+	t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(directory, "record.json"))
+	t.Setenv("CLAUDE_TEST_KEY_RECORD", keyRecord)
 	// A key in the Agent's own environment must not leak in either.
 	t.Setenv("ANTHROPIC_API_KEY", "inherited-agent-key")
 	t.Setenv(apiKeyDescriptorVariable, "9")

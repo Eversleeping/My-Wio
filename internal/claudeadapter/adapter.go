@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -422,6 +421,7 @@ const apiKeyDescriptorVariable = "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"
 // the CLI; call it once the process has started or failed to start.
 func configureEnvironment(cmd *exec.Cmd, environment []string) (func(), error) {
 	if len(environment) == 0 {
+		cmd.Env = childprocess.Environment()
 		return func() {}, nil
 	}
 	// Remove inherited values before adding managed credentials and Git
@@ -454,7 +454,7 @@ func configureEnvironment(cmd *exec.Cmd, environment []string) (func(), error) {
 			managed = append(managed, "ANTHROPIC_API_KEY="+apiKey)
 		}
 	}
-	for _, entry := range os.Environ() {
+	for _, entry := range childprocess.Environment() {
 		key, _, _ := strings.Cut(entry, "=")
 		if !overridden[strings.ToUpper(key)] {
 			cmd.Env = append(cmd.Env, entry)

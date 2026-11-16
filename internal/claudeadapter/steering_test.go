@@ -34,7 +34,7 @@ func runSteeringTestChild(mode string) {
 	if json.Unmarshal(line, &input) != nil || input.Type != "user" || input.Priority != "now" || input.Origin.Kind != "human" {
 		os.Exit(2)
 	}
-	_ = os.WriteFile(os.Getenv("WIO_CLAUDE_TEST_RECORD"), line, 0600)
+	_ = os.WriteFile(os.Getenv("CLAUDE_TEST_RECORD"), line, 0600)
 	// A result from the interrupted generation can arrive before the new
 	// instruction's receipt. It must not close the live input stream.
 	previousResult := func() {
@@ -69,7 +69,7 @@ func runSteeringTestChild(mode string) {
 		return
 	}
 	if strings.HasSuffix(mode, "-slow-reply") {
-		pause, _ := time.ParseDuration(os.Getenv("WIO_CLAUDE_TEST_PAUSE"))
+		pause, _ := time.ParseDuration(os.Getenv("CLAUDE_TEST_PAUSE"))
 		time.Sleep(pause)
 	}
 	fmt.Printf("{\"type\":\"stream_event\",\"user_message_uuids\":[%q,%q],\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Adjusted\"}}}\n", first.UUID, input.UUID)
@@ -78,9 +78,9 @@ func runSteeringTestChild(mode string) {
 }
 
 func TestClaudeLiveSteeringReceiptsAndMultipleResults(t *testing.T) {
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "steer-success")
+	t.Setenv("CLAUDE_TEST_CHILD", "steer-success")
 	record := filepath.Join(t.TempDir(), "input.json")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", record)
+	t.Setenv("CLAUDE_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -226,8 +226,8 @@ func TestClaudeLiveSteeringWaitsForBackgroundTasks(t *testing.T) {
 }
 
 func TestClaudeLiveSteeringExitWithoutReceiptIsUnconfirmed(t *testing.T) {
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "steer-no-receipt")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
+	t.Setenv("CLAUDE_TEST_CHILD", "steer-no-receipt")
+	t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
 	binary, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -268,8 +268,8 @@ func TestClaudeLiveSteeringIdleTimeoutKeepsSuccessfulResult(t *testing.T) {
 	previous := steerIdleTimeout
 	steerIdleTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { steerIdleTimeout = previous })
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "steer-idle-after-result")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
+	t.Setenv("CLAUDE_TEST_CHILD", "steer-idle-after-result")
+	t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
 	binary, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -328,9 +328,9 @@ func assertAcknowledgedInstruction(t *testing.T, mode string) {
 	previous := steerIdleTimeout
 	steerIdleTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { steerIdleTimeout = previous })
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", mode)
-	t.Setenv("WIO_CLAUDE_TEST_PAUSE", "1s")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
+	t.Setenv("CLAUDE_TEST_CHILD", mode)
+	t.Setenv("CLAUDE_TEST_PAUSE", "1s")
+	t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
 	binary, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -395,8 +395,8 @@ func assertAcknowledgedInstruction(t *testing.T, mode string) {
 
 // A user interrupt during the idle period is still a cancellation.
 func TestClaudeLiveSteeringInterruptDuringIdleIsCancellation(t *testing.T) {
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "steer-idle-after-result")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
+	t.Setenv("CLAUDE_TEST_CHILD", "steer-idle-after-result")
+	t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "input.json"))
 	binary, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

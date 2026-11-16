@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -1167,7 +1166,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 		}
 	}
 	process := exec.CommandContext(processContext, a.command, args...)
-	process.Env = append(os.Environ(), a.environment...)
+	process.Env = childprocess.Environment(a.environment...)
 	configureProcess(process)
 	stdout, err := process.StdoutPipe()
 	if err != nil {

@@ -102,9 +102,9 @@ func TestNativeGeminiGoalContinuesReportsAndCountsUsage(t *testing.T) {
 }
 
 func TestGoalStopsAtLimitWithoutACompletionReport(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
-	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":5}}`)
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":5}}`)
 	executable, _ := os.Executable()
 	var events []protocol.StreamEvent
 	a := New(executable, func(event protocol.StreamEvent) error { events = append(events, event); return nil })
@@ -120,13 +120,13 @@ func TestGoalStopsAtLimitWithoutACompletionReport(t *testing.T) {
 func TestGoalRepetitionGuardsStopAndReleaseTheCLI(t *testing.T) {
 	for _, kind := range []string{"rounds", "tools"} {
 		t.Run(kind, func(t *testing.T) {
-			t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+			t.Setenv("GEMINI_TEST_CHILD", "acp")
 			record := filepath.Join(t.TempDir(), "prompt.json")
-			t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+			t.Setenv("GEMINI_TEST_RECORD", record)
 			if kind == "rounds" {
-				t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":5}}`)
+				t.Setenv("GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":5}}`)
 			} else {
-				t.Setenv("WIO_GEMINI_TEST_REPEAT_TOOLS", "1")
+				t.Setenv("GEMINI_TEST_REPEAT_TOOLS", "1")
 			}
 			executable, _ := os.Executable()
 			var events []protocol.StreamEvent
@@ -154,12 +154,12 @@ func TestGoalRepetitionGuardsStopAndReleaseTheCLI(t *testing.T) {
 }
 
 func TestGoalDoesNotContinueAfterNonNormalStop(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
 	executable, _ := os.Executable()
 	for _, reason := range []string{"max_tokens", "max_turn_requests", "cancelled"} {
 		t.Run(reason, func(t *testing.T) {
-			t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", fmt.Sprintf(`{"stopReason":%q,"usage":{"inputTokens":10,"outputTokens":5}}`, reason))
+			t.Setenv("GEMINI_TEST_USAGE_RESULT", fmt.Sprintf(`{"stopReason":%q,"usage":{"inputTokens":10,"outputTokens":5}}`, reason))
 			var events []protocol.StreamEvent
 			a := New(executable, func(event protocol.StreamEvent) error { events = append(events, event); return nil })
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -182,9 +182,9 @@ func TestGoalDoesNotContinueAfterNonNormalStop(t *testing.T) {
 }
 
 func TestGoalRetainsCompletedRoundUsageWhenInterrupted(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
-	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":5}}`)
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":5}}`)
 	executable, _ := os.Executable()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

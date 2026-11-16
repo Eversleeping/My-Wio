@@ -24,7 +24,7 @@ func fakeACPCLI() {
 			mode = os.Args[i+1]
 		}
 	}
-	if override := os.Getenv("WIO_GEMINI_TEST_MODE_OVERRIDE"); override != "" {
+	if override := os.Getenv("GEMINI_TEST_MODE_OVERRIDE"); override != "" {
 		mode = override
 	}
 	decoder := json.NewDecoder(os.Stdin)
@@ -45,7 +45,7 @@ func fakeACPCLI() {
 			return
 		}
 		var result any = map[string]any{}
-		if os.Getenv("WIO_GEMINI_TEST_NOISE") == "1" {
+		if os.Getenv("GEMINI_TEST_NOISE") == "1" {
 			// Libraries and extensions occasionally print to stdout.
 			fmt.Println("Loaded cached credentials.")
 			fmt.Println()
@@ -54,8 +54,8 @@ func fakeACPCLI() {
 		case "initialize":
 			result = map[string]any{"protocolVersion": 1}
 		case "session/new", "session/load":
-			if msg.Method == "session/load" && os.Getenv("WIO_GEMINI_TEST_LOAD_RECORD") != "" {
-				_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_LOAD_RECORD"), msg.Params, 0600)
+			if msg.Method == "session/load" && os.Getenv("GEMINI_TEST_LOAD_RECORD") != "" {
+				_ = os.WriteFile(os.Getenv("GEMINI_TEST_LOAD_RECORD"), msg.Params, 0600)
 			}
 			var p struct {
 				Servers []json.RawMessage `json:"mcpServers"`
@@ -64,7 +64,7 @@ func fakeACPCLI() {
 			_ = json.Unmarshal(p.Servers[0], &bridge)
 			result = map[string]any{"sessionId": "native-acp", "modes": map[string]string{"currentModeId": mode}}
 			if msg.Method == "session/load" {
-				result.(map[string]any)["_meta"] = map[string]bool{"wioHistoryReplayed": os.Getenv("WIO_GEMINI_TEST_UNFENCED_HISTORY") != "1"}
+				result.(map[string]any)["_meta"] = map[string]bool{"wioHistoryReplayed": os.Getenv("GEMINI_TEST_UNFENCED_HISTORY") != "1"}
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "OLD_REPLAY_MUST_NOT_APPEAR"}})
 				// The adapted load response must follow every history message.
 				// Commands can still be emitted before or after that response.
@@ -79,8 +79,8 @@ func fakeACPCLI() {
 				continue
 			}
 		case "session/prompt":
-			_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), msg.Params, 0600)
-			if os.Getenv("WIO_GEMINI_TEST_REPEAT_TOOLS") == "1" {
+			_ = os.WriteFile(os.Getenv("GEMINI_TEST_RECORD"), msg.Params, 0600)
+			if os.Getenv("GEMINI_TEST_REPEAT_TOOLS") == "1" {
 				for i := 0; i < goalRepeatedToolLimit; i++ {
 					id := fmt.Sprint(i)
 					notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": "read_file", "status": "in_progress", "rawInput": map[string]string{"path": "same.txt"}, "content": []any{}})
@@ -88,36 +88,36 @@ func fakeACPCLI() {
 				}
 				// Remain alive until the adapter closes stdin during cleanup.
 				_, _ = io.Copy(io.Discard, os.Stdin)
-				_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD")+".exited", []byte("yes"), 0600)
+				_ = os.WriteFile(os.Getenv("GEMINI_TEST_RECORD")+".exited", []byte("yes"), 0600)
 				return
 			}
-			if os.Getenv("WIO_GEMINI_TEST_ACTIVITY") == "1" {
+			if os.Getenv("GEMINI_TEST_ACTIVITY") == "1" {
 				for i := 0; i < 2; i++ {
 					notify(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]string{"type": "text", "text": "PRIVATE_THOUGHT"}})
 				}
 				notify(map[string]any{"sessionUpdate": "usage_update", "used": 100, "size": 1000})
 			}
-			if text := os.Getenv("WIO_GEMINI_TEST_MODE_TEXT"); text != "" {
+			if text := os.Getenv("GEMINI_TEST_MODE_TEXT"); text != "" {
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": text}})
 				result = map[string]any{"stopReason": "end_turn"}
 				break
 			}
-			if size := os.Getenv("WIO_GEMINI_TEST_LARGE_CHUNK"); size != "" {
+			if size := os.Getenv("GEMINI_TEST_LARGE_CHUNK"); size != "" {
 				var length int
 				_, _ = fmt.Sscan(size, &length)
 				notify(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": strings.Repeat("x", length)}})
 			}
-			if sample := os.Getenv("WIO_GEMINI_TEST_USAGE_RESULT"); sample != "" {
+			if sample := os.Getenv("GEMINI_TEST_USAGE_RESULT"); sample != "" {
 				_ = json.Unmarshal([]byte(sample), &result)
 				break
 			}
-			if os.Getenv("WIO_GEMINI_TEST_PERMISSION") == "1" {
+			if os.Getenv("GEMINI_TEST_PERMISSION") == "1" {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": "permission-rpc", "method": "session/request_permission", "params": map[string]any{"toolCall": map[string]any{"toolCallId": "shell-permission", "title": "test command", "content": []any{}}, "options": []any{map[string]string{"optionId": "persist", "name": "Allow for this session", "kind": "allow_always"}, map[string]string{"optionId": "once", "name": "Allow", "kind": "allow_once"}, map[string]string{"optionId": "reject", "name": "Reject", "kind": "reject_once"}}}})
 				var answer acpMessage
 				if decoder.Decode(&answer) != nil {
 					return
 				}
-				_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), answer.Result, 0600)
+				_ = os.WriteFile(os.Getenv("GEMINI_TEST_RECORD"), answer.Result, 0600)
 				result = map[string]any{"stopReason": "end_turn"}
 				break
 			}
@@ -135,7 +135,7 @@ func fakeACPCLI() {
 			}
 			notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "shell-call", "title": "printf ACP_SHELL_OUTPUT", "status": "in_progress", "content": []any{}})
 			// Replay can also arrive after a genuine call has started.
-			if os.Getenv("WIO_GEMINI_TEST_RESUME") == "1" {
+			if os.Getenv("GEMINI_TEST_RESUME") == "1" {
 				notify(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "OLD_REPLAY_LATE", "title": "ReadFile", "status": "completed", "content": []any{}})
 			}
 			// Model CLI 0.65's ACP conversion: terminal-format results are
@@ -155,10 +155,10 @@ func fakeACPCLI() {
 }
 
 func TestACPRejectsUnfencedHistoryBeforeSendingPrompt(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_UNFENCED_HISTORY", "1")
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_UNFENCED_HISTORY", "1")
 	record := filepath.Join(t.TempDir(), "prompt.json")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_TEST_RECORD", record)
 	executable, _ := os.Executable()
 	a := New(executable, func(e protocol.StreamEvent) error {
 		if e.Kind == "gemini.message" {
@@ -178,10 +178,10 @@ func TestACPRejectsUnfencedHistoryBeforeSendingPrompt(t *testing.T) {
 }
 
 func TestACPEmitsThrottledActivityWithoutThoughtContent(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
-	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
-	t.Setenv("WIO_GEMINI_TEST_ACTIVITY", "1")
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
+	t.Setenv("GEMINI_TEST_ACTIVITY", "1")
 	executable, _ := os.Executable()
 	var events []protocol.StreamEvent
 	a := New(executable, func(event protocol.StreamEvent) error { events = append(events, event); return nil })
@@ -205,12 +205,12 @@ func TestACPEmitsThrottledActivityWithoutThoughtContent(t *testing.T) {
 }
 
 func TestACPRewriteLoadsForkAndUsesTurnEnvironment(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
 	loadRecord := filepath.Join(t.TempDir(), "load.json")
 	promptRecord := filepath.Join(t.TempDir(), "prompt.json")
-	t.Setenv("WIO_GEMINI_TEST_LOAD_RECORD", loadRecord)
-	t.Setenv("WIO_GEMINI_TEST_RECORD", promptRecord)
+	t.Setenv("GEMINI_TEST_LOAD_RECORD", loadRecord)
+	t.Setenv("GEMINI_TEST_RECORD", promptRecord)
 	// The turn override must win over the process environment for both forking
 	// the history and launching the CLI.
 	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
@@ -280,8 +280,8 @@ func TestACPRewriteLoadsForkAndUsesTurnEnvironment(t *testing.T) {
 }
 
 func TestACPDistinguishesMissingUsageFromZero(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
 	executable, _ := os.Executable()
 	for _, tc := range []struct {
 		name, response string
@@ -292,7 +292,7 @@ func TestACPDistinguishesMissingUsageFromZero(t *testing.T) {
 		{name: "quota fallback", response: `{"stopReason":"end_turn","usage":{"inputTokens":0,"outputTokens":0},"_meta":{"quota":{"token_count":{"input_tokens":8,"output_tokens":2}}}}`, input: int64Ptr(8), output: int64Ptr(2)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", tc.response)
+			t.Setenv("GEMINI_TEST_USAGE_RESULT", tc.response)
 			var stats map[string]json.RawMessage
 			a := New(executable, func(e protocol.StreamEvent) error {
 				if e.Kind == "gemini.result" {
@@ -326,15 +326,15 @@ func TestACPDistinguishesMissingUsageFromZero(t *testing.T) {
 func int64Ptr(value int64) *int64 { return &value }
 
 func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
 	t.Setenv("GEMINI_PTY_INFO", "node-pty")
 	record := filepath.Join(t.TempDir(), "prompt.json")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_TEST_RECORD", record)
 	executable, _ := os.Executable()
 	for _, session := range []string{"", "native-acp"} {
 		t.Run("session-"+session, func(t *testing.T) {
 			if session != "" {
-				t.Setenv("WIO_GEMINI_TEST_RESUME", "1")
+				t.Setenv("GEMINI_TEST_RESUME", "1")
 			}
 			// Questions are emitted by the bridge and answers by their own
 			// goroutine, so emit runs concurrently with the turn.
@@ -404,12 +404,12 @@ func TestACPImagesQuestionsAndLateHistoryReplay(t *testing.T) {
 
 // One oversized frame or a stray console line must not end an ACP session.
 func TestACPToleratesNoiseAndLargeFrames(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
-	t.Setenv("WIO_GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
-	t.Setenv("WIO_GEMINI_TEST_NOISE", "1")
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "prompt.json"))
+	t.Setenv("GEMINI_TEST_USAGE_RESULT", `{"stopReason":"end_turn"}`)
+	t.Setenv("GEMINI_TEST_NOISE", "1")
 	const size = 9 << 20 // above the previous 8 MiB ACP frame limit
-	t.Setenv("WIO_GEMINI_TEST_LARGE_CHUNK", fmt.Sprint(size))
+	t.Setenv("GEMINI_TEST_LARGE_CHUNK", fmt.Sprint(size))
 	executable, _ := os.Executable()
 	var mu sync.Mutex
 	longest := 0

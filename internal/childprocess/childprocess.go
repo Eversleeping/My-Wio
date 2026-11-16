@@ -18,9 +18,11 @@ import (
 // the command exits or its context is done.
 const WaitDelay = 5 * time.Second
 
-// CommandContext is exec.CommandContext with a bounded Wait.
+// CommandContext is exec.CommandContext with a bounded Wait and a filtered
+// environment. Callers can replace Env using Environment with explicit settings.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = Environment()
 	cmd.WaitDelay = WaitDelay
 	return cmd
 }

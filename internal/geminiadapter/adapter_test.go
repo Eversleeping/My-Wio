@@ -41,10 +41,11 @@ func TestVersionSwitchReservesAdapterWithoutBlockingHeartbeat(t *testing.T) {
 
 // Re-execute the test binary as a portable fake CLI, including on Windows.
 func init() {
-	mode := os.Getenv("WIO_GEMINI_TEST_CHILD")
+	mode := os.Getenv("GEMINI_TEST_CHILD")
 	if mode == "" {
 		return
 	}
+	recordTestEnvironment()
 	if mode == "acp" {
 		fakeACPCLI()
 		os.Exit(0)
@@ -55,7 +56,7 @@ func init() {
 		thinkingSettings = []byte("null")
 	}
 	raw, _ := json.Marshal(map[string]any{"thinkingModel": os.Getenv("WIO_GEMINI_THINKING_MODEL"), "thinkingLevel": os.Getenv("WIO_GEMINI_THINKING_LEVEL"), "thinkingSettings": json.RawMessage(thinkingSettings), "args": os.Args[1:], "stdin": string(stdin), "dir": mustWorkingDir(), "apiKey": os.Getenv("GEMINI_API_KEY"), "endpoint": os.Getenv("GOOGLE_GEMINI_BASE_URL"), "trust": os.Getenv("GEMINI_CLI_TRUST_WORKSPACE")})
-	_ = os.WriteFile(os.Getenv("WIO_GEMINI_TEST_RECORD"), raw, 0600)
+	_ = os.WriteFile(os.Getenv("GEMINI_TEST_RECORD"), raw, 0600)
 	if mode == "untrusted" {
 		fmt.Fprintln(os.Stderr, "private-provider-diagnostic")
 		os.Exit(55)
@@ -89,10 +90,10 @@ func init() {
 func mustWorkingDir() string { dir, _ := os.Getwd(); return dir }
 
 func TestWorkspaceTrustIsProcessScopedAndPreservesApprovalMode(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")
+	t.Setenv("GEMINI_TEST_CHILD", "success")
 	t.Setenv("GEMINI_CLI_TRUST_WORKSPACE", "false")
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	a := New(binary, func(protocol.StreamEvent) error { return nil })
 	for _, mode := range []string{"default", "auto_edit", "yolo"} {
@@ -122,8 +123,8 @@ func TestWorkspaceTrustIsProcessScopedAndPreservesApprovalMode(t *testing.T) {
 }
 
 func TestUntrustedWorkspaceErrorDoesNotExposeStderr(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "untrusted")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record.json"))
+	t.Setenv("GEMINI_TEST_CHILD", "untrusted")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record.json"))
 	binary, _ := os.Executable()
 	a := New(binary, func(protocol.StreamEvent) error { return nil })
 	err := a.Run(context.Background(), "untrusted", protocol.GeminiTurnCommand{Workspace: t.TempDir(), Model: "flash", ApprovalMode: "default", Prompt: "test"})
@@ -133,9 +134,9 @@ func TestUntrustedWorkspaceErrorDoesNotExposeStderr(t *testing.T) {
 }
 
 func TestRunStreamsAndResumesWithoutPuttingPromptInArguments(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")
+	t.Setenv("GEMINI_TEST_CHILD", "success")
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	var events []protocol.StreamEvent
 	a := New(binary, func(event protocol.StreamEvent) error { events = append(events, event); return nil })
@@ -174,8 +175,8 @@ func TestRunStreamsAndResumesWithoutPuttingPromptInArguments(t *testing.T) {
 func TestRunRejectsTruncatedAndInvalidStreams(t *testing.T) {
 	for _, mode := range []string{"missing-result", "invalid"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("WIO_GEMINI_TEST_CHILD", mode)
-			t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+			t.Setenv("GEMINI_TEST_CHILD", mode)
+			t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
 			binary, _ := os.Executable()
 			a := New(binary, func(protocol.StreamEvent) error { return nil })
 			err := a.Run(context.Background(), mode, protocol.GeminiTurnCommand{Workspace: t.TempDir(), Model: "auto", ApprovalMode: "default", Prompt: "test"})
@@ -192,8 +193,8 @@ func TestInterruptBeforeAndDuringStart(t *testing.T) {
 	if err := a.Run(context.Background(), "cancel-before-start", protocol.GeminiTurnCommand{}); err != context.Canceled {
 		t.Fatal(err)
 	}
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "wait")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+	t.Setenv("GEMINI_TEST_CHILD", "wait")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
 	binary, _ := os.Executable()
 	started := make(chan struct{}, 1)
 	a = New(binary, func(protocol.StreamEvent) error { started <- struct{}{}; return nil })
@@ -224,9 +225,9 @@ func TestInterruptBeforeAndDuringStart(t *testing.T) {
 }
 
 func TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")
+	t.Setenv("GEMINI_TEST_CHILD", "success")
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_TEST_RECORD", record)
 	t.Setenv("GEMINI_API_KEY", "inherited-secret")
 	binary, _ := os.Executable()
 	a := New(binary, func(protocol.StreamEvent) error { return nil })
@@ -253,8 +254,8 @@ func TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation(t *testing
 }
 
 func TestRunSkipsConsoleNoiseAndAcceptsLongEvents(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "noisy-long")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record.json"))
+	t.Setenv("GEMINI_TEST_CHILD", "noisy-long")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record.json"))
 	binary, _ := os.Executable()
 	longest := 0
 	var kinds []string

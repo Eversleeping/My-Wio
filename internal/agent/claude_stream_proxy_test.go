@@ -66,7 +66,7 @@ if [ "$1" = "--version" ]; then
     echo "2.1.319"
     exit 0
 fi
-if [ "$WIO_TEST_CLAUDE_FAIL" = "1" ]; then
+if [ "$CLAUDE_TEST_FAIL" = "1" ]; then
     echo '{"type":"system","subtype":"init","session_id":"550e8400-e29b-41d4-a716-446655440001"}'
     echo "crash before completion" >&2
     exit 1
@@ -109,7 +109,7 @@ exit 0
 	if err := os.WriteFile(snapshotPath, []byte("transcript"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("WIO_TEST_CLAUDE_FAIL", "1")
+	t.Setenv("CLAUDE_TEST_FAIL", "1")
 	c := newClient()
 	c.handleOperation(context.Background(), &envelope)
 	if _, statErr := os.Stat(snapshotPath); os.IsNotExist(statErr) {
@@ -117,7 +117,7 @@ exit 0
 	}
 
 	// 2. Run succeeds: snapshot must be deleted
-	t.Setenv("WIO_TEST_CLAUDE_FAIL", "0")
+	t.Setenv("CLAUDE_TEST_FAIL", "0")
 	c2 := newClient()
 	envelope.OperationID = "op-2"
 	c2.handleOperation(context.Background(), &envelope)

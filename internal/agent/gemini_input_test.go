@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	if os.Getenv("WIO_AGENT_GEMINI_INPUT_CHILD") == "" {
+	if os.Getenv("GEMINI_AGENT_INPUT_CHILD") == "" {
 		return
 	}
 	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
@@ -62,7 +62,7 @@ func init() {
 }
 
 func TestGeminiQuestionEventIdentitySurvivesAgentDispatch(t *testing.T) {
-	t.Setenv("WIO_AGENT_GEMINI_INPUT_CHILD", "1")
+	t.Setenv("GEMINI_AGENT_INPUT_CHILD", "1")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	root := t.TempDir()
@@ -97,7 +97,7 @@ func TestGeminiQuestionEventIdentitySurvivesAgentDispatch(t *testing.T) {
 }
 
 func TestGeminiLongTurnCanBeInterruptedWhileWaitingForInput(t *testing.T) {
-	t.Setenv("WIO_AGENT_GEMINI_INPUT_CHILD", "1")
+	t.Setenv("GEMINI_AGENT_INPUT_CHILD", "1")
 	for _, mode := range []string{"parent-cancel", "user-interrupt"} {
 		t.Run(mode, func(t *testing.T) {
 			parent, cancel := context.WithCancel(context.Background())

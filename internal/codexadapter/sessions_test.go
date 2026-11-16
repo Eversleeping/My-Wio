@@ -23,6 +23,7 @@ func init() {
 	if os.Getenv("WIO_TEST_SESSION_SERVER") != "1" {
 		return
 	}
+	recordTestEnvironment()
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Println("codex-cli test")
 		os.Exit(0)

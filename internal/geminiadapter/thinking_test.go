@@ -61,10 +61,10 @@ func TestThinkingAliasPreservesAccountSettingsAndIsIdempotent(t *testing.T) {
 	}
 }
 func TestRunUsesNativeThinkingAliasWithoutChangingWorkspace(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")
+	t.Setenv("GEMINI_TEST_CHILD", "success")
 	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	a := New(binary, func(protocol.StreamEvent) error { return nil })
 	root := t.TempDir()

@@ -92,6 +92,8 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	}
 
 	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WIO_MASTER_KEY", "p5-02-parent-only-key")
+	t.Setenv("WIO_DATABASE_URL", "p5-02-parent-only-database")
 	t.Setenv("WIO_SETUP_TOKEN", acceptanceSetupToken)
 	t.Setenv("WIO_CONTROL_AGENT_URL", "")
 	t.Setenv("WIO_CONTROL_AGENT_SCAN_ROOTS", repositoryRoot)
@@ -206,8 +208,23 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	for _, engine := range engines {
 		engine.create(t, api)
 		assertAcceptanceSessionCapabilities(t, api, engine)
-		engine.start(t, api, "P0-07 normal reply")
+		environmentReport := filepath.Join(root, engine.name+"-environment.json")
+		engine.start(t, api, "P0-07 normal reply P5-02-ENV="+base64.RawURLEncoding.EncodeToString([]byte(environmentReport)))
 		engine.waitFor(t, api, "idle", 1)
+		raw, err := os.ReadFile(environmentReport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		if err := json.Unmarshal(raw, &names); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			switch strings.ToUpper(name) {
+			case "WIO_MASTER_KEY", "WIO_DATABASE_URL", "WIO_SETUP_TOKEN":
+				t.Fatalf("control-plane setting reached the built-in %s CLI: %s", engine.name, name)
+			}
+		}
 
 		marker := filepath.Join(root, engine.name+"-hang")
 		prompt := "P0-07 hang P0-07-HANG=" + base64.RawURLEncoding.EncodeToString([]byte(marker))

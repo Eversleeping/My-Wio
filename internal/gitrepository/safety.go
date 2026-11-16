@@ -198,7 +198,7 @@ func gitCommand(ctx context.Context, directory string, mode gitMode, args ...str
 }
 
 func gitEnvironment() []string {
-	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
+	return childprocess.Environment("GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
 }
 
 // gitArguments builds the global options for a Git command run in directory.

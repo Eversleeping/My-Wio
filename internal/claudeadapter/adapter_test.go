@@ -18,11 +18,12 @@ import (
 const nativeSession = "550e8400-e29b-41d4-a716-446655440000"
 
 func init() {
-	mode := os.Getenv("WIO_CLAUDE_TEST_CHILD")
+	mode := os.Getenv("CLAUDE_TEST_CHILD")
 	if mode == "" {
 		return
 	}
-	if path := os.Getenv("WIO_CLAUDE_TEST_KEY_RECORD"); path != "" {
+	recordTestEnvironment()
+	if path := os.Getenv("CLAUDE_TEST_KEY_RECORD"); path != "" {
 		recordAPIKeyDelivery(path)
 	}
 	if strings.HasPrefix(mode, "skills") {
@@ -35,7 +36,7 @@ func init() {
 	}
 	stdin, _ := io.ReadAll(os.Stdin)
 	raw, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin)})
-	_ = os.WriteFile(os.Getenv("WIO_CLAUDE_TEST_RECORD"), raw, 0600)
+	_ = os.WriteFile(os.Getenv("CLAUDE_TEST_RECORD"), raw, 0600)
 	if mode == "invalid" {
 		fmt.Println("not json")
 		os.Exit(0)
@@ -92,8 +93,8 @@ func TestRunForwardsNativeCompactionStates(t *testing.T) {
 	binary, _ := os.Executable()
 	for _, mode := range []string{"auto", "manual", "failed", "unknown"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("WIO_CLAUDE_TEST_CHILD", "compaction-"+mode)
-			t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+			t.Setenv("CLAUDE_TEST_CHILD", "compaction-"+mode)
+			t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
 			var events []protocol.StreamEvent
 			if err := Run(context.Background(), binary, "operation", protocol.ClaudeTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), PermissionMode: "default"}, func(event protocol.StreamEvent) error {
 				if strings.HasPrefix(event.Kind, "claude.compaction.") {
@@ -138,9 +139,9 @@ func TestRunForwardsNativeCompactionStates(t *testing.T) {
 }
 
 func TestRunStreamsResumesAndKeepsPromptOffArguments(t *testing.T) {
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "success")
+	t.Setenv("CLAUDE_TEST_CHILD", "success")
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", record)
+	t.Setenv("CLAUDE_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	var events []protocol.StreamEvent
 	command := protocol.ClaudeTurnCommand{ThreadID: "thread", Workspace: t.TempDir(), SessionID: nativeSession, Prompt: "private prompt", Model: "sonnet", PermissionMode: "acceptEdits"}
@@ -185,8 +186,8 @@ func TestRunRejectsInvalidOrIncompleteCLIResults(t *testing.T) {
 	binary, _ := os.Executable()
 	for _, mode := range []string{"invalid", "missing-result", "failed", "wrong-session", "stderr"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("WIO_CLAUDE_TEST_CHILD", mode)
-			t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+			t.Setenv("CLAUDE_TEST_CHILD", mode)
+			t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
 			err := Run(context.Background(), binary, "op", protocol.ClaudeTurnCommand{Workspace: t.TempDir(), SessionID: nativeSession, Prompt: "test", PermissionMode: "default"}, func(protocol.StreamEvent) error { return nil })
 			if err == nil || strings.Contains(err.Error(), "private-provider-diagnostic") {
 				t.Fatalf("unexpected error: %v", err)
@@ -196,8 +197,8 @@ func TestRunRejectsInvalidOrIncompleteCLIResults(t *testing.T) {
 }
 
 func TestRunWaitsForProcessExitOnCancellation(t *testing.T) {
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "wait")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+	t.Setenv("CLAUDE_TEST_CHILD", "wait")
+	t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
 	binary, _ := os.Executable()
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
@@ -230,9 +231,9 @@ func TestRunEffortArguments(t *testing.T) {
 	binary, _ := os.Executable()
 	for _, effort := range []string{"", "low", "medium", "high", "xhigh", "max", "ultra", "--help"} {
 		t.Run("effort="+effort, func(t *testing.T) {
-			t.Setenv("WIO_CLAUDE_TEST_CHILD", "success")
+			t.Setenv("CLAUDE_TEST_CHILD", "success")
 			record := filepath.Join(t.TempDir(), "record.json")
-			t.Setenv("WIO_CLAUDE_TEST_RECORD", record)
+			t.Setenv("CLAUDE_TEST_RECORD", record)
 			err := Run(context.Background(), binary, "op", protocol.ClaudeTurnCommand{Workspace: t.TempDir(), PermissionMode: "default", Effort: effort}, func(protocol.StreamEvent) error { return nil })
 			if effort == "ultra" || effort == "--help" {
 				if err == nil {

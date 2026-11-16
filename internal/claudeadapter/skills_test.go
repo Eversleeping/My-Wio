@@ -24,7 +24,7 @@ func runSkillsTestChild(mode string) {
 	}
 	_ = json.Unmarshal(line, &request)
 	raw, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(line)})
-	_ = os.WriteFile(os.Getenv("WIO_CLAUDE_TEST_RECORD"), raw, 0600)
+	_ = os.WriteFile(os.Getenv("CLAUDE_TEST_RECORD"), raw, 0600)
 	if request.Type != "control_request" || request.Request.Subtype != "initialize" || request.ID == "" {
 		os.Exit(2)
 	}
@@ -54,9 +54,9 @@ func runSkillsTestChild(mode string) {
 }
 
 func TestListSkillsInitializesWithoutModelTurnAndFiltersCommands(t *testing.T) {
-	t.Setenv("WIO_CLAUDE_TEST_CHILD", "skills-success")
+	t.Setenv("CLAUDE_TEST_CHILD", "skills-success")
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_CLAUDE_TEST_RECORD", record)
+	t.Setenv("CLAUDE_TEST_RECORD", record)
 	binary, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -84,8 +84,8 @@ func TestListSkillsHidesDiagnosticsAndHonorsCancellation(t *testing.T) {
 	binary, _ := os.Executable()
 	for _, mode := range []string{"skills-invalid", "skills-failed", "skills-wait"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("WIO_CLAUDE_TEST_CHILD", mode)
-			t.Setenv("WIO_CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+			t.Setenv("CLAUDE_TEST_CHILD", mode)
+			t.Setenv("CLAUDE_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			_, err := ListSkills(ctx, binary, t.TempDir())

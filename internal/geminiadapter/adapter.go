@@ -53,7 +53,7 @@ func (a *Adapter) ReconfigureEnvironment(environment []string, model string, app
 }
 
 func mergedEnvironment(overrides []string) []string {
-	env := os.Environ()
+	env := childprocess.Environment()
 	for _, override := range overrides {
 		key, _, _ := strings.Cut(override, "=")
 		kept := env[:0]

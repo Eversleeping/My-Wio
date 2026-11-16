@@ -61,9 +61,9 @@ func TestLegacyRewriteDropsFutureMetadata(t *testing.T) {
 }
 
 func TestRewriteUsesOfficialImportAndPreservesSource(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "success")
+	t.Setenv("GEMINI_TEST_CHILD", "success")
 	record := filepath.Join(t.TempDir(), "record.json")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+	t.Setenv("GEMINI_TEST_RECORD", record)
 	home := t.TempDir()
 	t.Setenv("GEMINI_CLI_HOME", home)
 	workspace := t.TempDir()

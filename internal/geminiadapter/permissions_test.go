@@ -14,13 +14,13 @@ import (
 )
 
 func TestACPApprovalModesAndConfirmedInterruption(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_PERMISSION", "1")
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_PERMISSION", "1")
 	binary, _ := os.Executable()
 	for _, mode := range []string{"yolo", "default", "auto_edit"} {
 		t.Run(mode, func(t *testing.T) {
 			record := filepath.Join(t.TempDir(), "permission.json")
-			t.Setenv("WIO_GEMINI_TEST_RECORD", record)
+			t.Setenv("GEMINI_TEST_RECORD", record)
 			var questions atomic.Int32
 			var adapter *Adapter
 			adapter = New(binary, func(e protocol.StreamEvent) error {
@@ -58,7 +58,7 @@ func TestACPApprovalModesAndConfirmedInterruption(t *testing.T) {
 		})
 	}
 	t.Run("mode-downgrade", func(t *testing.T) {
-		t.Setenv("WIO_GEMINI_TEST_MODE_OVERRIDE", "default")
+		t.Setenv("GEMINI_TEST_MODE_OVERRIDE", "default")
 		adapter := New(binary, func(protocol.StreamEvent) error { t.Error("prompt ran despite approval mode mismatch"); return nil })
 		err := adapter.Run(context.Background(), "op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), Model: "flash", ApprovalMode: "yolo", Prompt: "test"})
 		if err == nil || !strings.Contains(err.Error(), "approval mode") {
@@ -66,7 +66,7 @@ func TestACPApprovalModesAndConfirmedInterruption(t *testing.T) {
 		}
 	})
 	t.Run("plan-mode-mismatch", func(t *testing.T) {
-		t.Setenv("WIO_GEMINI_TEST_MODE_OVERRIDE", "default")
+		t.Setenv("GEMINI_TEST_MODE_OVERRIDE", "default")
 		adapter := New(binary, func(protocol.StreamEvent) error { t.Error("prompt ran despite approval mode mismatch"); return nil })
 		err := adapter.Run(context.Background(), "op", protocol.GeminiTurnCommand{Interactive: true, ThreadID: "thread", Workspace: t.TempDir(), Model: "flash", ApprovalMode: "plan", Prompt: "test"})
 		if err == nil || !strings.Contains(err.Error(), "approval mode") {
@@ -111,9 +111,9 @@ func TestACPApprovalModesAndConfirmedInterruption(t *testing.T) {
 }
 
 func TestACPModelTextCannotChangePermissionMode(t *testing.T) {
-	t.Setenv("WIO_GEMINI_TEST_CHILD", "acp")
-	t.Setenv("WIO_GEMINI_TEST_MODE_TEXT", "[MODE_UPDATE] yolo")
-	t.Setenv("WIO_GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
+	t.Setenv("GEMINI_TEST_CHILD", "acp")
+	t.Setenv("GEMINI_TEST_MODE_TEXT", "[MODE_UPDATE] yolo")
+	t.Setenv("GEMINI_TEST_RECORD", filepath.Join(t.TempDir(), "record"))
 	binary, _ := os.Executable()
 	var changed bool
 	a := New(binary, func(event protocol.StreamEvent) error {
