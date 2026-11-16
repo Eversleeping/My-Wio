@@ -56,7 +56,7 @@ func TestClaudeChildDoesNotInheritControlPlaneEnvironment(t *testing.T) {
 func TestConfigureEnvironmentFiltersEvenWithoutOverrides(t *testing.T) {
 	t.Setenv("WIO_MASTER_KEY", "parent-only")
 	cmd := &exec.Cmd{}
-	release, err := configureEnvironment(cmd, nil)
+	release, err := configureEnvironment(context.Background(), cmd, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

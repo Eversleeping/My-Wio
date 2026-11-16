@@ -239,6 +239,7 @@ func controlPlaneAgentConfig(address, token string) (agent.Config, error) {
 		CodexAPIKeyFile:    env("WIO_CONTROL_AGENT_CODEX_KEY_FILE", "/var/lib/wio-agent/codex.key"),
 		DockerPath:         env("WIO_CONTROL_AGENT_DOCKER_PATH", "docker"),
 		PrerequisiteSocket: env("WIO_CONTROL_AGENT_PREREQUISITE_SOCKET", "/run/wio-prerequisites/helper.sock"),
+		ExtraEnvironment:   envNames("WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT"),
 		InsecureSkipVerify: envBool("WIO_CONTROL_AGENT_INSECURE_SKIP_VERIFY"),
 	}
 	if err := config.Validate(); err != nil {
@@ -308,6 +309,16 @@ func controlPlaneAgentRoots() []string {
 		return []string{"/srv", "/opt", "/home"}
 	}
 	return roots
+}
+
+func envNames(name string) []string {
+	var names []string
+	for _, value := range strings.FieldsFunc(os.Getenv(name), func(r rune) bool { return r == ',' || r == ';' || r == '\n' }) {
+		if value = strings.TrimSpace(value); value != "" {
+			names = append(names, value)
+		}
+	}
+	return names
 }
 
 func env(name, fallback string) string {

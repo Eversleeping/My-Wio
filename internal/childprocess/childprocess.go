@@ -22,7 +22,7 @@ const WaitDelay = 5 * time.Second
 // environment. Callers can replace Env using Environment with explicit settings.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = Environment()
+	cmd.Env = Environment(ctx)
 	cmd.WaitDelay = WaitDelay
 	return cmd
 }

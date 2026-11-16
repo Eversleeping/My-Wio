@@ -20,7 +20,9 @@ Wio 通过官方 Claude Code CLI 的无头模式执行任务，不转换为其�
 2. 官方基础地址为 `https://api.anthropic.com`；代理必须兼容 Anthropic Messages API。
 3. 在 **服务器 → 修改服务器凭据 → Claude API** 应用，等成功后检查绑定。修改 API 地址或密钥后须重新应用；仅修改默认模型时，重新进入会话即可自动刷新。
 
-Agent 将配置保存在受保护的状态文件，启动模型进程时注入 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL`，不写入项目。未应用托管预设时，可使用 Agent 账号已有 CLI 登录或服务环境认证。
+Agent 将配置保存在受保护的状态文件，启动 CLI 时提供 `ANTHROPIC_BASE_URL`；Unix 上托管 API 密钥经匿名管道描述符传入，Windows 使用 `ANTHROPIC_API_KEY` 环境回退，不写入项目。Unix 上的回环 MCP 配置也经独立匿名描述符传入，避免授权令牌出现在进程参数中；其他平台保留 CLI 内联配置。
+
+从 Agent 0.3.29 起，Claude 子进程只继承通用运行、代理/证书、Node/XDG、Git，以及 `CLAUDE_*`、`ANTHROPIC_*`、`AWS_*`、`GOOGLE_*`、`GCLOUD_*`、`CLOUDSDK_*`、`AZURE_*` 和已有执行开关。未应用托管预设时，Agent 账号已有 CLI 登录和这些命名空间下的服务环境认证继续可用；自定义供应商变量可通过 `extra_environment` 放行，配置方法见 [README](../README.md#备份与安全)。服务环境认证中的密钥仍可能进入模型工具环境，状态文件的访问权限也未由白名单隔离。
 
 可用模型从已应用预设的官方 `GET /v1/models` 接口获取并分页，进入/切换会话时刷新，实时消息刷新不重复发现模型。列表失败保留当前选择，可手动输入模型；仅使用 CLI 登录时使用默认别名/自定义模型。已应用过的预设仅修改默认模型时，确认 API 地址和密钥未变后自动刷新列表，新会话和旧会话重新进入时采用新的默认模型。配置未变时保留会话已选择的模型，运行中的任务不切换模型；修改 API 地址或密钥仍须重新应用。
 

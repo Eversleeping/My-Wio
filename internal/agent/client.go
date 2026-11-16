@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/claudeadapter"
 	"github.com/wio-platform/wio/internal/codexadapter"
 	"github.com/wio-platform/wio/internal/deployer"
@@ -82,6 +83,7 @@ func NewClient(config Config, log *slog.Logger) *Client {
 }
 
 func (c *Client) Run(ctx context.Context) error {
+	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
 	ctx, cancel := context.WithCancel(ctx)
 	defer func() {
 		cancel()

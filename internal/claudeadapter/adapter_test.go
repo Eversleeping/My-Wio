@@ -26,6 +26,7 @@ func init() {
 	if path := os.Getenv("CLAUDE_TEST_KEY_RECORD"); path != "" {
 		recordAPIKeyDelivery(path)
 	}
+	recordTestMCPDelivery()
 	if strings.HasPrefix(mode, "skills") {
 		runSkillsTestChild(mode)
 		os.Exit(0)

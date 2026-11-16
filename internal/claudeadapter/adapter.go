@@ -76,10 +76,10 @@ func run(parent context.Context, executable, operationID string, command protoco
 		}
 		args = append(args, "--permission-prompt-tool", "stdio")
 	}
+	var mcpConfiguration []byte
 	if command.CollaborationMCP != nil {
 		name := command.CollaborationMCP["name"].(string)
-		configuration, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{name: map[string]any{"type": "http", "url": command.CollaborationMCP["url"], "headers": command.CollaborationMCP["headers"]}}})
-		args = append(args, "--mcp-config", string(configuration))
+		mcpConfiguration, _ = json.Marshal(map[string]any{"mcpServers": map[string]any{name: map[string]any{"type": "http", "url": command.CollaborationMCP["url"], "headers": command.CollaborationMCP["headers"]}}})
 		allowed := []string{}
 		for _, tool := range sessiontools.Definitions() {
 			allowed = append(allowed, "mcp__"+name+"__"+tool.Name)
@@ -92,11 +92,21 @@ func run(parent context.Context, executable, operationID string, command protoco
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, args...)
-	releaseEnvironment, err := configureEnvironment(cmd, environment)
+	releaseEnvironment, err := configureEnvironment(ctx, cmd, environment)
 	if err != nil {
 		return err
 	}
 	defer releaseEnvironment()
+	releaseMCP := func() {}
+	if mcpConfiguration != nil {
+		source, closeConfiguration, err := mcpConfigArgument(cmd, mcpConfiguration)
+		if err != nil {
+			return fmt.Errorf("pass Claude MCP configuration: %w", err)
+		}
+		releaseMCP = closeConfiguration
+		cmd.Args = append(cmd.Args, "--mcp-config", source)
+	}
+	defer releaseMCP()
 	cmd.Dir = command.Workspace
 	if live == nil {
 		cmd.Stdin = strings.NewReader(input)
@@ -112,6 +122,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 	stdout, err := childprocess.StartStream(cmd)
 	// The CLI holds its own copy of any credential descriptor now.
 	releaseEnvironment()
+	releaseMCP()
 	if err != nil {
 		return fmt.Errorf("start Claude Code CLI (install claude for the Agent account): %w", err)
 	}
@@ -419,9 +430,9 @@ const apiKeyDescriptorVariable = "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"
 // configureEnvironment applies the selected server profile to cmd. The
 // returned function releases the parent's copy of any descriptor passed to
 // the CLI; call it once the process has started or failed to start.
-func configureEnvironment(cmd *exec.Cmd, environment []string) (func(), error) {
+func configureEnvironment(ctx context.Context, cmd *exec.Cmd, environment []string) (func(), error) {
 	if len(environment) == 0 {
-		cmd.Env = childprocess.Environment()
+		cmd.Env = childprocess.Environment(childprocess.WithScope(ctx, childprocess.Claude))
 		return func() {}, nil
 	}
 	// Remove inherited values before adding managed credentials and Git
@@ -454,7 +465,8 @@ func configureEnvironment(cmd *exec.Cmd, environment []string) (func(), error) {
 			managed = append(managed, "ANTHROPIC_API_KEY="+apiKey)
 		}
 	}
-	for _, entry := range childprocess.Environment() {
+	cmd.Env = nil
+	for _, entry := range childprocess.Environment(childprocess.WithScope(ctx, childprocess.Claude)) {
 		key, _, _ := strings.Cut(entry, "=")
 		if !overridden[strings.ToUpper(key)] {
 			cmd.Env = append(cmd.Env, entry)

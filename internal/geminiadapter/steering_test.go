@@ -46,7 +46,7 @@ func TestSteeringHookQueuesPersistsAndRejectsOtherTurns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".gemini", "settings.json"), original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	env, close, err := a.startSteering(ctx, "op", "thread", mergedEnvironment([]string{"GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + system, "GEMINI_CLI_HOME=" + home}))
+	env, close, err := a.startSteering(ctx, "op", "thread", mergedEnvironment(ctx, []string{"GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + system, "GEMINI_CLI_HOME=" + home}))
 	if err != nil {
 		t.Fatal(err)
 	}

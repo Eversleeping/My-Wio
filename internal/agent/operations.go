@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/wio-platform/wio/internal/protocol"
 	"strings"
 	"time"
+
+	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/protocol"
 )
 
 type operationExecution struct {
@@ -156,6 +158,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 // execute preserves the historical error-only entry point used by local callers.
 // In particular Gemini interruption keeps its original parent-context lifetime.
 func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope) error {
+	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
 	if handler, ok := operationHandlers[envelope.Kind]; ok && handler.execute != nil {
 		return handler.execute(c, ctx, envelope)
 	}
@@ -163,6 +166,7 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 }
 
 func (c *Client) dispatchOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (string, json.RawMessage, bool, error) {
+	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
 	if handler, ok := operationHandlerFor(envelope.Kind); ok {
 		return handler(c, ctx, envelope)
 	}

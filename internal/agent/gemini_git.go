@@ -63,7 +63,7 @@ func (c *Client) geminiGitEnvironment(ctx context.Context) ([]string, error) {
 	config := filepath.Join(c.config.StateDir, ".gitconfig")
 	if info, err := os.Lstat(config); err == nil && info.Mode().IsRegular() {
 		for _, key := range []string{"user.name", "user.email"} {
-			raw, err := childprocess.Output(childprocess.CommandContext(ctx, "git", "config", "--file", config, "--no-includes", "--get", key))
+			raw, err := childprocess.Output(childprocess.CommandContext(childprocess.WithScope(ctx, childprocess.Git), "git", "config", "--file", config, "--no-includes", "--get", key))
 			if err != nil {
 				var exit *exec.ExitError
 				if errors.As(err, &exit) && exit.ExitCode() == 1 {

@@ -995,7 +995,7 @@ func run(ctx context.Context, environment []string, command string, args ...stri
 func runIn(ctx context.Context, directory string, environment []string, command string, args ...string) (string, error) {
 	process := childprocess.CommandContext(ctx, command, args...)
 	process.Dir = directory
-	process.Env = childprocess.Environment(environment...)
+	process.Env = childprocess.Environment(childprocess.WithScope(ctx, childprocess.Deployment), environment...)
 	output, err := childprocess.CombinedOutput(process)
 	return truncate(string(output), maximumProcessLogSize), err
 }

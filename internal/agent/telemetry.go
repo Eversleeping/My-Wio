@@ -30,9 +30,10 @@ func (c *Client) refreshInventory(parent context.Context) {
 }
 
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
+	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
 	hostname, _ := os.Hostname()
 	codexPath := c.currentCodexPath()
-	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(ctx, codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
+	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(childprocess.WithScope(ctx, childprocess.Codex), codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
 	geminiPath := c.gemini.Command()
 	heartbeat.GeminiVersion = c.currentGeminiVersion(ctx, geminiPath)
 	heartbeat.GeminiReady = commandAvailable(geminiPath)

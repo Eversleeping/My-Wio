@@ -40,7 +40,9 @@ Agent 将配置保存为受限权限的 `gemini/api.json`，启动 CLI 时单独
 - 在 Agent 服务环境或账号的 `~/.gemini/.env` 中配置 Google AI Studio API Key。
 - Vertex AI 使用对应 ADC、项目、区域及环境配置。
 
-外部 Agent 默认 Home 为 `/var/lib/wio-agent`；内置 Agent 使用控制面进程环境。systemd 不自动读取 `.bashrc`，服务环境修改需重启，账号、Home、PATH 和文件权限须一致。托管 API 预设的模型自动发现不适用于 Google 登录/Vertex AI，可手工输入可用模型。
+外部 Agent 默认 Home 为 `/var/lib/wio-agent`；内置 Agent 使用控制面服务环境中的白名单变量。从 Agent 0.3.29 起，Gemini 子进程保留通用运行、代理/证书、Node/XDG、Git，以及 `GEMINI_*`、`GOOGLE_*`、`GCLOUD_*`、`CLOUDSDK_*` 命名空间；其他引擎及控制面的继承变量不会默认传入。自定义认证或工具链变量用 `extra_environment` 放行，方法见 [README](../README.md#备份与安全)。systemd 不自动读取 `.bashrc`，服务环境修改需重启，账号、Home、PATH 和文件权限须一致。托管 API 预设的模型自动发现不适用于 Google 登录/Vertex AI，可手工输入可用模型。
+
+当前官方 CLI 没有可用的 API 密钥描述符接口，托管 `GEMINI_API_KEY` 仍经环境传入，并可能被模型工具看到。CLI 从登录缓存或 `.env` 重新加载的凭据、同账号文件权限和网络访问也不由启动环境白名单限制。
 
 以相同账号、环境和实际工作区验证无头调用时，可执行以下命令；它会调用模型：
 

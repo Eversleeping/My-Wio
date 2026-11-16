@@ -9,12 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
 var readGeminiUpdateVersion = func(ctx context.Context, executable string) string {
-	return commandVersionWithTimeout(ctx, executable, 15*time.Second)
+	return commandVersionWithTimeout(childprocess.WithScope(ctx, childprocess.Gemini), executable, 15*time.Second)
 }
 
 func (c *Client) currentGeminiVersion(ctx context.Context, executable string) string {
@@ -60,7 +61,7 @@ func (c *Client) installCLI(ctx context.Context, command protocol.CLIInstallComm
 }
 
 var readClaudeUpdateVersion = func(ctx context.Context, executable string) string {
-	return commandVersionWithTimeout(ctx, executable, 15*time.Second)
+	return commandVersionWithTimeout(childprocess.WithScope(ctx, childprocess.Claude), executable, 15*time.Second)
 }
 
 func (c *Client) currentClaudeVersion(ctx context.Context, executable string) string {

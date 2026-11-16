@@ -43,12 +43,12 @@ echo "$*" >> "$DOCKER_LOG"
 case "$1" in
   inspect) echo "app `+newImageID+`" ;;
   image)
-    if [ "$2" = inspect ] && [ -n "$FAIL_IMAGE_INSPECT" ]; then echo "Error: No such image" >&2; exit 1; fi
-    if [ "$2" = rm ] && [ -n "$IMAGE_RM_ERROR" ]; then echo "$IMAGE_RM_ERROR" >&2; exit 1; fi
+    if [ "$2" = inspect ] && [ -n "$DOCKER_TEST_FAIL_IMAGE_INSPECT" ]; then echo "Error: No such image" >&2; exit 1; fi
+    if [ "$2" = rm ] && [ -n "$DOCKER_TEST_IMAGE_RM_ERROR" ]; then echo "$DOCKER_TEST_IMAGE_RM_ERROR" >&2; exit 1; fi
     exit 0 ;;
   compose)
     case "$*" in
-      *" build") if [ -n "$FAIL_BUILD" ]; then echo "build failed" >&2; exit 1; fi; echo built ;;
+      *" build") if [ -n "$DOCKER_TEST_FAIL_BUILD" ]; then echo "build failed" >&2; exit 1; fi; echo built ;;
       *"ps --all --quiet") echo container-1 ;;
       *"ps --format json") echo '[]' ;;
       *) echo compose-output ;;
@@ -192,7 +192,7 @@ func TestDeployFailureWithoutPreviousReleaseStopsFailedRelease(t *testing.T) {
 
 func TestDeployFailureReportsUnsuccessfulRestore(t *testing.T) {
 	docker, dockerLog := installFakeDeployTools(t)
-	t.Setenv("FAIL_IMAGE_INSPECT", "yes")
+	t.Setenv("DOCKER_TEST_FAIL_IMAGE_INSPECT", "yes")
 	releaseRoot := filepath.Join(t.TempDir(), "releases")
 	previous := createCurrentRelease(t, releaseRoot, "target-1")
 	command := deployCommand(releaseRoot)
@@ -210,7 +210,7 @@ func TestDeployFailureReportsUnsuccessfulRestore(t *testing.T) {
 
 func TestDeployBuildFailureLeavesRunningReleaseUntouched(t *testing.T) {
 	docker, dockerLog := installFakeDeployTools(t)
-	t.Setenv("FAIL_BUILD", "yes")
+	t.Setenv("DOCKER_TEST_FAIL_BUILD", "yes")
 	releaseRoot := filepath.Join(t.TempDir(), "releases")
 	previous := createCurrentRelease(t, releaseRoot, "target-1")
 	command := deployCommand(releaseRoot)
@@ -342,7 +342,7 @@ func TestDeleteTargetRemovesRetainedReleaseImages(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			docker, dockerLog := installFakeDeployTools(t)
-			t.Setenv("IMAGE_RM_ERROR", rmError)
+			t.Setenv("DOCKER_TEST_IMAGE_RM_ERROR", rmError)
 			releaseRoot := filepath.Join(t.TempDir(), "releases")
 			targetRoot := filepath.Join(releaseRoot, "target-delete")
 			current := filepath.Join(targetRoot, "releases", "deployment-1")

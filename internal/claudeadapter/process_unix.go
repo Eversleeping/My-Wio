@@ -20,12 +20,26 @@ func configureProcess(cmd *exec.Cmd) {
 // the descriptor number the CLI reads it from, plus a function that closes the
 // parent's copy of the read end.
 func apiKeyDescriptor(cmd *exec.Cmd, key string) (string, func(), error) {
+	return pipeDescriptor(cmd, []byte(key))
+}
+
+// mcpConfigArgument passes private HTTP headers through the CLI's supported
+// JSON file interface without placing their values on the command line.
+func mcpConfigArgument(cmd *exec.Cmd, configuration []byte) (string, func(), error) {
+	descriptor, release, err := pipeDescriptor(cmd, configuration)
+	if err != nil {
+		return "", nil, err
+	}
+	return "/dev/fd/" + descriptor, release, nil
+}
+
+func pipeDescriptor(cmd *exec.Cmd, content []byte) (string, func(), error) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return "", nil, err
 	}
-	// The key is far smaller than a pipe buffer, so this cannot block.
-	if _, err := writer.WriteString(key); err != nil {
+	// Wio's key and generated MCP endpoint configuration fit in a pipe buffer.
+	if _, err := writer.Write(content); err != nil {
 		_ = reader.Close()
 		_ = writer.Close()
 		return "", nil, err

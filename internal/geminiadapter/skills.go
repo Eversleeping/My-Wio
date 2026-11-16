@@ -39,7 +39,7 @@ func (a *Adapter) ListSkills(parent context.Context, operationID, workspace stri
 
 	cmd := exec.CommandContext(ctx, executable, "skills", "list", "--all")
 	cmd.Dir = workspace
-	cmd.Env = mergedEnvironment(environment)
+	cmd.Env = mergedEnvironment(ctx, environment)
 	configureProcess(cmd)
 	var output boundedSkillBuffer
 	cmd.Stdout = &output
@@ -101,7 +101,7 @@ func (a *Adapter) ManageSkill(parent context.Context, command protocol.GeminiSki
 		return protocol.GeminiSkillsResult{}, errors.New("finish active Gemini tasks before managing skills")
 	}
 	a.updating = true
-	executable, environment := a.command, mergedEnvironment(append([]string(nil), a.environment...))
+	executable, environment := a.command, mergedEnvironment(ctx, append([]string(nil), a.environment...))
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); a.updating = false; a.mu.Unlock() }()
 	environment = append(environment, "GEMINI_CLI_TRUST_WORKSPACE=true", "NO_COLOR=1", "FORCE_COLOR=0")

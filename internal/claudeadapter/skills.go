@@ -24,7 +24,7 @@ func ListSkills(parent context.Context, executable, workspace string, environmen
 	}
 	cmd := exec.CommandContext(ctx, executable, "-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--no-session-persistence")
 	cmd.Dir = workspace
-	releaseEnvironment, err := configureEnvironment(cmd, environment)
+	releaseEnvironment, err := configureEnvironment(ctx, cmd, environment)
 	if err != nil {
 		return protocol.ClaudeSkillsResult{}, errors.New("could not prepare Claude credentials for skill discovery")
 	}

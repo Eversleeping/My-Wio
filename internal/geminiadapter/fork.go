@@ -23,7 +23,7 @@ func (a *Adapter) Fork(ctx context.Context, opID string, command protocol.Gemini
 		a.mu.Unlock()
 		return protocol.GeminiForkResult{}, errors.New("Gemini configuration is changing")
 	}
-	environment := mergedEnvironment(a.environment)
+	environment := mergedEnvironment(ctx, a.environment)
 	forkCtx, cancel := context.WithCancel(ctx)
 	a.active[opID] = cancel
 	a.mu.Unlock()

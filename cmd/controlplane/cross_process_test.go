@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -94,6 +95,12 @@ func TestCrossProcessAcceptance(t *testing.T) {
 	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("WIO_MASTER_KEY", "p5-02-parent-only-key")
 	t.Setenv("WIO_DATABASE_URL", "p5-02-parent-only-database")
+	t.Setenv("WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT", "P5_CUSTOM_TOOLCHAIN")
+	t.Setenv("P5_CUSTOM_TOOLCHAIN", "parent-only-toolchain")
+	t.Setenv("P5_UNAPPROVED_TOKEN", "parent-only-token")
+	for _, name := range []string{"CODEX_PARENT_MARKER", "CLAUDE_PARENT_MARKER", "GEMINI_PARENT_MARKER"} {
+		t.Setenv(name, "parent-only-marker")
+	}
 	t.Setenv("WIO_SETUP_TOKEN", acceptanceSetupToken)
 	t.Setenv("WIO_CONTROL_AGENT_URL", "")
 	t.Setenv("WIO_CONTROL_AGENT_SCAN_ROOTS", repositoryRoot)
@@ -223,6 +230,14 @@ func TestCrossProcessAcceptance(t *testing.T) {
 			switch strings.ToUpper(name) {
 			case "WIO_MASTER_KEY", "WIO_DATABASE_URL", "WIO_SETUP_TOKEN":
 				t.Fatalf("control-plane setting reached the built-in %s CLI: %s", engine.name, name)
+			}
+		}
+		if !slices.Contains(names, "P5_CUSTOM_TOOLCHAIN") || slices.Contains(names, "P5_UNAPPROVED_TOKEN") {
+			t.Fatalf("built-in %s CLI did not enforce configured extra environment names", engine.name)
+		}
+		for _, owner := range []string{"codex", "claude", "gemini"} {
+			if slices.Contains(names, strings.ToUpper(owner)+"_PARENT_MARKER") != (owner == engine.name) {
+				t.Fatalf("built-in %s CLI inherited the wrong %s namespace", engine.name, owner)
 			}
 		}
 

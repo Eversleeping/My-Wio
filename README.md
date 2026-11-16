@@ -153,6 +153,7 @@ Linux 控制面默认运行内置“控制机”Agent，该服务器记录不能
 | `WIO_CONTROL_AGENT_CODEX_KEY_FILE` | `/var/lib/wio-agent/codex.key` |
 | `WIO_CONTROL_AGENT_DOCKER_PATH` | `docker` |
 | `WIO_CONTROL_AGENT_PREREQUISITE_SOCKET` | `/run/wio-prerequisites/helper.sock` |
+| `WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT` | 空；需要额外传给子进程的变量名，用逗号分隔 |
 | `WIO_CONTROL_AGENT_INSECURE_SKIP_VERIFY` | `false`，仅可用于临时开发 |
 
 外部 Agent 配置位于 `/etc/wio-agent/config.json`；网页注册负责生成配置和 systemd 服务。默认状态目录为 `/var/lib/wio-agent`，克隆目录为其中的 `projects`，发布目录为其中的 `releases`。
@@ -202,6 +203,18 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec -T postgres \
 SQLite 应停机备份或使用在线备份工具，避免只复制正在写入的主文件。恢复时使用与数据库配套的主密钥，并核对实际 Agent 路径与权限。
 
 Wio 面向可信单管理员环境。SSH 凭据仅用于当前请求；API Key、Git Token 和部署密钥在控制面加密保存，不回显明文。外部 Agent 默认使用专用账号和 systemd 文件系统限制；显式启用免密 sudo 会放宽限制并授予 `NOPASSWD: ALL`。Docker 权限同样接近 root。模型权限设置仍受系统权限约束，删除和中断不会自动回退已经修改的文件。
+
+从 Agent 0.3.29 起，CLI 和辅助子进程的继承环境采用白名单：保留账号、PATH、语言、临时目录、代理、证书、XDG 和 Node 运行设置；Git 使用者保留 `GIT_*`、`GCM_*`、`SSH_AUTH_SOCK`、`SSH_AGENT_PID`。Codex 保留 `CODEX_*` / `OPENAI_*`，Claude 保留 `CLAUDE_*` / `ANTHROPIC_*` 及 AWS、Google、Azure 认证命名空间，Gemini 保留 `GEMINI_*` 及 Google 认证命名空间。Docker、Compose、npm 安装变量只默认传给部署和安装命令。继承的 `WIO_*` 全部剔除，Wio 管理的引擎凭据和兼容变量由 Agent 显式提供；Agent 自更新重新执行自身时保留原环境。
+
+依赖其他服务环境变量的工具，可在外部 Agent 配置中加入变量名并重启 Agent，例如：
+
+```json
+"extra_environment": ["GOCACHE", "GOMODCACHE", "GOPATH", "CUSTOM_PROVIDER_TOKEN"]
+```
+
+内置 Agent 使用 `WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT=GOCACHE,GOMODCACHE,GOPATH,CUSTOM_PROVIDER_TOKEN`，修改后重启控制面。这里保存名字，取值仍来自服务环境，在构造每个命令时读取；不接受赋值、通配符或 `WIO_` 名字。只加入确实需要传给子进程的变量，详细范围见[环境盘点](docs/roadmap/P5-environment-inventory.md)。未应用托管预设时，原生 CLI 登录及对应引擎命名空间下的服务环境认证继续可用。
+
+环境白名单减少无意泄露，文件访问仍由系统账号、服务限制和容器挂载决定。同账号模型进程仍可能读取 Agent 状态文件、Git 凭据、其他工作区和控制面进程资源。Codex、Gemini 的托管 API 密钥以及服务环境认证仍可能被其模型工具看到；Unix 上 Claude 的托管 API 密钥和回环 MCP 配置使用匿名描述符，Codex 的回环 MCP 令牌仍在进程参数中，Windows 上 Claude 保留原有环境 / 内联配置回退。工作区内容可通过网络发给模型服务，同引擎原生历史共享；这些边界不能由环境白名单消除。
 
 ## 仓库结构
 

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/wio-platform/wio/internal/childprocess"
 )
 
 type Config struct {
@@ -19,6 +21,7 @@ type Config struct {
 	CodexAPIKeyFile    string   `json:"codex_api_key_file"`
 	DockerPath         string   `json:"docker_path"`
 	PrerequisiteSocket string   `json:"prerequisite_socket"`
+	ExtraEnvironment   []string `json:"extra_environment,omitempty"`
 	InsecureSkipVerify bool     `json:"insecure_skip_verify,omitempty"`
 }
 
@@ -100,5 +103,5 @@ func (c Config) Validate() error {
 			return errors.New("scan roots must be absolute")
 		}
 	}
-	return nil
+	return childprocess.ValidateExtraEnvironment(c.ExtraEnvironment)
 }

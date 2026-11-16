@@ -432,7 +432,7 @@ func run(ctx context.Context, command string, args ...string) (string, error) {
 		processCtx, cancel = context.WithDeadline(processCtx, deadline)
 		defer cancel()
 	}
-	process := childprocess.CommandContext(processCtx, command, args...)
+	process := childprocess.CommandContext(childprocess.WithScope(processCtx, childprocess.Installation), command, args...)
 	output, err := childprocess.CombinedOutput(process)
 	return strings.TrimSpace(string(output)), err
 }

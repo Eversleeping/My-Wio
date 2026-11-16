@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/wio-platform/wio/internal/agentgateway"
@@ -54,6 +55,18 @@ func TestControlPlaneAgentConfigUsesListenerPort(t *testing.T) {
 	}
 	if config.ControlURL != "http://127.0.0.1:42123" || config.ServerID != store.ControlPlaneServerID {
 		t.Fatalf("unexpected control-plane Agent configuration: %#v", config)
+	}
+}
+
+func TestControlPlaneAgentExtraEnvironmentValidatesVariableNames(t *testing.T) {
+	t.Setenv("WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT", "GOPATH, CUSTOM_TOOLCHAIN ; OTHER_TOOLCHAIN\n")
+	config, err := controlPlaneAgentConfig(":8080", "test-agent-token")
+	if err != nil || !slices.Equal(config.ExtraEnvironment, []string{"GOPATH", "CUSTOM_TOOLCHAIN", "OTHER_TOOLCHAIN"}) {
+		t.Fatal("built-in Agent did not load extra environment names", err)
+	}
+	t.Setenv("WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT", "WIO_MASTER_KEY")
+	if _, err := controlPlaneAgentConfig(":8080", "test-agent-token"); err == nil {
+		t.Fatal("built-in Agent allowed control-plane variable inheritance")
 	}
 }
 

@@ -17,10 +17,12 @@ import (
 const codexCurrentVersionFile = "current-version"
 
 var runCodexUpdateCommand = func(ctx context.Context, name string, args ...string) error {
-	return childprocess.Result(childprocess.CommandContext(ctx, name, args...).Run())
+	return childprocess.Result(childprocess.CommandContext(childprocess.WithScope(ctx, childprocess.Installation), name, args...).Run())
 }
 var findCodexUpdateCommand = exec.LookPath
-var readCodexUpdateVersion = commandVersion
+var readCodexUpdateVersion = func(ctx context.Context, executable string) string {
+	return commandVersion(childprocess.WithScope(ctx, childprocess.Codex), executable)
+}
 
 func (c *Client) updateCodexCLI(ctx context.Context, command protocol.CodexUpdateCommand) error {
 	version := strings.TrimSpace(command.Version)

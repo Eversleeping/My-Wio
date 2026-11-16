@@ -1166,7 +1166,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 		}
 	}
 	process := exec.CommandContext(processContext, a.command, args...)
-	process.Env = childprocess.Environment(a.environment...)
+	process.Env = childprocess.Environment(childprocess.WithScope(ctx, childprocess.Codex), a.environment...)
 	configureProcess(process)
 	stdout, err := process.StdoutPipe()
 	if err != nil {
@@ -1229,7 +1229,7 @@ func (a *Adapter) clientInfo(ctx context.Context) map[string]string {
 	version := "unknown"
 	versionContext, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if output, err := childprocess.Output(childprocess.CommandContext(versionContext, a.command, "--version")); err == nil {
+	if output, err := childprocess.Output(childprocess.CommandContext(childprocess.WithScope(versionContext, childprocess.Codex), a.command, "--version")); err == nil {
 		version = strings.Join(strings.Fields(string(output)), " ")
 		if version == "" {
 			version = "unknown"

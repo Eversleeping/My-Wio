@@ -344,7 +344,7 @@ func Import(ctx context.Context, cloneRoot string, command protocol.GitImportCom
 	if err := os.Chmod(staging, 0o750); err != nil {
 		return "", err
 	}
-	process := childprocess.CommandContext(ctx, "git", "clone", "--", command.RemoteURL, staging)
+	process := childprocess.CommandContext(childprocess.WithScope(ctx, childprocess.Git), "git", "clone", "--", command.RemoteURL, staging)
 	output, err := childprocess.CombinedOutput(process)
 	if err != nil {
 		return "", fmt.Errorf("git clone: %w: %s", err, truncate(string(output), 4096))

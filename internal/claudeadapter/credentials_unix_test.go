@@ -60,7 +60,7 @@ func TestClaudeAPIKeyReachesCLIOnlyThroughDescriptor(t *testing.T) {
 
 func TestConfigureEnvironmentKeepsEmptyKeyAndReleasesDescriptor(t *testing.T) {
 	cmd := newTestCommand()
-	release, err := configureEnvironment(cmd, []string{"ANTHROPIC_API_KEY=", "ANTHROPIC_AUTH_TOKEN="})
+	release, err := configureEnvironment(context.Background(), cmd, []string{"ANTHROPIC_API_KEY=", "ANTHROPIC_AUTH_TOKEN="})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestConfigureEnvironmentKeepsEmptyKeyAndReleasesDescriptor(t *testing.T) {
 		t.Fatalf("an empty key must stay a plain override: %v %d", cmd.Env, len(cmd.ExtraFiles))
 	}
 	cmd = newTestCommand()
-	release, err = configureEnvironment(cmd, []string{"ANTHROPIC_API_KEY=profile-secret"})
+	release, err = configureEnvironment(context.Background(), cmd, []string{"ANTHROPIC_API_KEY=profile-secret"})
 	if err != nil {
 		t.Fatal(err)
 	}

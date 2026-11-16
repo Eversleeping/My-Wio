@@ -40,7 +40,7 @@ func TestPinnedComposeUsesHistoricalImagesAndFailsBeforeStart(t *testing.T) {
 	docker := filepath.Join(t.TempDir(), "docker")
 	writeExecutable(t, docker, `#!/bin/sh
 echo "$@" >> "$DOCKER_LOG"
-if [ "$1" = image ] && [ "$MISSING_IMAGE" = yes ]; then exit 1; fi
+if [ "$1" = image ] && [ "$DOCKER_TEST_MISSING_IMAGE" = yes ]; then exit 1; fi
 `)
 	t.Setenv("DOCKER_LOG", log)
 	d := New(docker)
@@ -56,7 +56,7 @@ if [ "$1" = image ] && [ "$MISSING_IMAGE" = yes ]; then exit 1; fi
 	if err := os.WriteFile(log, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MISSING_IMAGE", "yes")
+	t.Setenv("DOCKER_TEST_MISSING_IMAGE", "yes")
 	if _, err := d.pinnedCompose(context.Background(), release, release, nil, "project", "compose.yaml", "up", "-d"); err == nil {
 		t.Fatal("missing historical image accepted")
 	}

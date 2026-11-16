@@ -52,8 +52,8 @@ func (a *Adapter) ReconfigureEnvironment(environment []string, model string, app
 	return err
 }
 
-func mergedEnvironment(overrides []string) []string {
-	env := childprocess.Environment()
+func mergedEnvironment(ctx context.Context, overrides []string) []string {
+	env := childprocess.Environment(childprocess.WithScope(ctx, childprocess.Gemini))
 	for _, override := range overrides {
 		key, _, _ := strings.Cut(override, "=")
 		kept := env[:0]
@@ -141,7 +141,7 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	if trustedWorkspace {
 		overrides = append(overrides, "GEMINI_CLI_TRUST_WORKSPACE=true")
 	}
-	environment := mergedEnvironment(overrides)
+	environment := mergedEnvironment(ctx, overrides)
 	if (command.Model == "" || command.Model == "auto") && a.defaultModel != "" {
 		command.Model = a.defaultModel
 	}

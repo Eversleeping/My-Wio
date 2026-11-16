@@ -188,7 +188,7 @@ func gitCommand(ctx context.Context, directory string, mode gitMode, args ...str
 		return nil, err
 	}
 	command := childprocess.CommandContext(ctx, "git", commandArgs...)
-	command.Env = gitEnvironment()
+	command.Env = gitEnvironment(ctx)
 	if directory == "" {
 		// Commands without a repository (clone, ls-remote, check-ref-format)
 		// must not pick up a repository from the agent's working directory.
@@ -197,8 +197,8 @@ func gitCommand(ctx context.Context, directory string, mode gitMode, args ...str
 	return command, nil
 }
 
-func gitEnvironment() []string {
-	return childprocess.Environment("GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
+func gitEnvironment(ctx context.Context) []string {
+	return childprocess.Environment(childprocess.WithScope(ctx, childprocess.Git), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
 }
 
 // gitArguments builds the global options for a Git command run in directory.
@@ -261,7 +261,7 @@ func listFilterConfig(ctx context.Context, directory string) ([]byte, bool, erro
 	run := func(extra ...string) ([]byte, error) {
 		args := append(append(append([]string(nil), base...), extra...), query...)
 		command := childprocess.CommandContext(ctx, "git", args...)
-		command.Env = gitEnvironment()
+		command.Env = gitEnvironment(ctx)
 		return childprocess.Output(command)
 	}
 	output, err := run("--show-scope")
