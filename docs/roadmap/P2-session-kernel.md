@@ -580,3 +580,24 @@ internal/store/session_driver_collaboration.go:319:	if t.Engine == "codex" {
 - 已有完整 malformed 命令、重复派发、原生追加 / 问答 / 中断测试及 P0-07 跨进程链路；先单独补齐三引擎启动前的错误优先级与工作区拒绝测试，再引入运行器。事件发送路径已有跨进程测试覆盖，收敛后再补入口契约断言。
 
 - P2-09 前置特性测试：`go test ./internal/agent -run 'TestSessionStartPreparationOrder|TestOperationDispatchRejectsMalformedCommands|TestExecuteRejectsMalformedCommandsBeforeSideEffects' -count=1` 通过；覆盖自更新拒绝先于 JSON 解码、Gemini / Claude 工作区校验先于环境与适配器配置。仅测试和阶段定位更新，单独提交。
+
+### 2026-11-16 P2-09 本地完成
+
+- GPT-6（Codex）验收，main。新增私有 `sessionRunner` 及三种引擎包装实现，统一发起（含原生重发）、追加、中断和提问 / 审批回答入口。原生命令类型、上下文、中断超时及返回数据不变；Gemini / Claude 保留停止回执，Codex 仍依靠原生事件完成。
+- 提取启动前的更新保留检查、宽松 JSON 解码，Gemini / Claude 共用原位置的工作区规范化和协作桥接；Codex 的路径校验、协作与常驻 app-server 生命周期继续由原生适配器负责。保留自更新拒绝先于解码、工作区拒绝先于配置的顺序。
+- 三引擎事件统一从 `emitSessionEvent` 入队，仍发原 `event` / `gemini_event` / `claude_event` 信封，已有事件 ID 保留、缺失 ID 自动生成，原始内容、时间、序号和重要队列标记不变，为 P4-05 提供统一发出位置。
+- Agent 版本同步 0.3.23。附带规范 P4-02 两个文件的导入排序，无逻辑变化。抽取后逐函数比较 `operation_cli.go` / `operation_sessions.go` 中保留的其他操作，忽略空白后全部与前置提交相同。
+
+| 验收 | 实际结果 |
+| --- | --- |
+| `npm --prefix web run build` | 通过，5.32 秒 |
+| `go vet ./...`、`go build ./cmd/controlplane ./cmd/agent` | 通过，无诊断 |
+| `go test ./...` | 全部通过；控制面跨进程用例 7.191 秒、HTTP 309.842 秒、Store 242.080 秒 |
+| Agent、Codex / Gemini / Claude 适配器及控制面包强制重跑 | 全部通过，2.261 / 1.953 / 1.620 / 4.006 / 5.470 秒 |
+| 运行器 / 原有 malformed 派发与准备顺序 | 通过；三引擎控制动作在触及适配器前拒绝错误 JSON |
+| 事件入口契约 | 通过；旧信封、已有 ID、生成 ID 唯一性、完整事件内容不变 |
+| `npm --prefix web test -- --maxWorkers=1` | 73 文件、510 用例通过，160.34 秒 |
+| `npm --prefix web run typecheck` | 通过，无诊断 |
+| `make fmt-check`、Agent 版本护栏、`git diff --check` | 通过；0.3.22 → 0.3.23 |
+
+P0-07 原验收场景和期望值未修改即通过（仅整理 import 排序）；原假引擎尚不支持三种运行中追加，因此未扩充该可选场景。三个原生适配器的追加 / 提问 / 中断集成用例全部通过。没有改 Store 或页面交互，本步不需要另跑 PostgreSQL / E2E。真实服务器三引擎发起、追加、中断、编辑重发尚待明确发布授权，已按步骤允许的方式记录此限制；未推送、未部署，未夹带缺陷修复。

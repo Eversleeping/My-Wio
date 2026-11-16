@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -25,6 +24,7 @@ import (
 	"github.com/wio-platform/wio/internal/deployer"
 	"github.com/wio-platform/wio/internal/geminiadapter"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -69,16 +69,10 @@ func NewClient(config Config, log *slog.Logger) *Client {
 	codexPath := effectiveCodexPath(config)
 	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath, config.PrerequisiteSocket), seen: make(map[string]*operationExecution), codexPath: codexPath}
 	client.codex = codexadapter.NewSessions(codexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
-		if event.EventID == "" {
-			event.EventID = uuid.NewString()
-		}
-		return client.queue(protocol.AgentKindEvent, event, true)
+		return client.emitSessionEvent(session.Codex, event)
 	})
 	client.gemini = geminiadapter.New(effectiveGeminiPath(config.StateDir), func(event protocol.StreamEvent) error {
-		if event.EventID == "" {
-			event.EventID = uuid.NewString()
-		}
-		return client.queue(protocol.AgentKindGeminiEvent, event, true)
+		return client.emitSessionEvent(session.Gemini, event)
 	})
 	if err := client.loadGeminiCredentials(); err != nil {
 		log.Warn("Gemini API configuration could not be loaded")

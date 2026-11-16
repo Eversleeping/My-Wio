@@ -24,9 +24,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/agent"
 	"github.com/wio-platform/wio/internal/agentgateway"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/httpapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"

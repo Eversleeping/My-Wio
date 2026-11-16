@@ -221,7 +221,7 @@ npm --prefix web run typecheck
 | P2-06 | 前端会话外壳 | L | P2-05、P3-07 | 已完成 | 11-15 Codex | GPT-6 | e26e117 |
 | P2-07 | 定时任务与服务器引擎配置合表 | M | P1-04、P2-04 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 91404fa、54c15f2、df004c4 |
 | P2-08 | 线程表合并 | L | P2-07 | 已取消 | 11-15 Codex，按D8评估 | GPT-6（Codex，自验） | fc41aee |
-| P2-09 | Agent 端运行器接口 | M | P2-04、P3-04 | 进行中 | 11-16 Codex |  | |
+| P2-09 | Agent 端运行器接口 | M | P2-04、P3-04 | 已完成 | 11-16 Codex | 1e49742＋本步实现提交（下一步回填） | GPT-6（Codex）；本地通过，真实升级待发布 |
 | P2-10 | 清理旧路由、旧表、旧类型 | M | P2-06、P2-07 | 待开始 | |  | |
 | P3-01 | 路由表按领域拆分 | S | P0-02 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 2653b52 |
 | P3-02 | 拆分 `httpapi/resources.go` | M | P3-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 8a0b175 |

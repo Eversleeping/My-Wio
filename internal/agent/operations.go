@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/session"
 	"strings"
 	"time"
 )
@@ -160,27 +161,28 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 	case protocol.OpGitImport:
 		return c.executeGitImport(ctx, envelope)
 	case protocol.OpGeminiTurnStart, protocol.OpGeminiTurnRewrite:
-		return c.executeGeminiTurnStart(ctx, envelope)
+		return c.sessionRunner(session.Gemini).Start(ctx, envelope)
 	case protocol.OpClaudeTurnStart:
-		return c.executeClaudeTurnStart(ctx, envelope)
+		return c.sessionRunner(session.Claude).Start(ctx, envelope)
 	case protocol.OpClaudeQuestionAnswer:
-		return c.executeClaudeQuestionAnswer(ctx, envelope)
+		return c.sessionRunner(session.Claude).Answer(ctx, envelope)
 	case protocol.OpGeminiQuestionAnswer:
-		return c.executeGeminiQuestionAnswer(ctx, envelope)
+		return c.sessionRunner(session.Gemini).Answer(ctx, envelope)
 	case protocol.OpGeminiTurnInterrupt:
 		return c.executeGeminiTurnInterrupt(ctx, envelope)
 	case protocol.OpGeminiTurnSteer:
-		return c.executeGeminiTurnSteer(ctx, envelope)
+		return c.sessionRunner(session.Gemini).Steer(ctx, envelope)
 	case protocol.OpCodexTurnStart:
-		return c.executeCodexTurnStart(ctx, envelope)
+		return c.sessionRunner(session.Codex).Start(ctx, envelope)
 	case protocol.OpCodexTurnRewrite:
-		return c.executeCodexTurnRewrite(ctx, envelope)
+		return c.sessionRunner(session.Codex).Start(ctx, envelope)
 	case protocol.OpCodexTurnSteer:
-		return c.executeCodexTurnSteer(ctx, envelope)
+		return c.sessionRunner(session.Codex).Steer(ctx, envelope)
 	case protocol.OpCodexTurnInterrupt:
-		return c.executeCodexTurnInterrupt(ctx, envelope)
+		_, err := c.sessionRunner(session.Codex).Interrupt(ctx, envelope)
+		return err
 	case protocol.OpCodexApproval:
-		return c.executeCodexApproval(ctx, envelope)
+		return c.sessionRunner(session.Codex).Answer(ctx, envelope)
 	case protocol.OpGeminiCredentialsConfigure:
 		return c.executeGeminiCredentialsConfigure(ctx, envelope)
 	case protocol.OpClaudeCredentialsConfigure:
@@ -206,11 +208,11 @@ func (c *Client) dispatchOperation(ctx context.Context, envelope *protocol.Contr
 	} else if envelope.Kind == protocol.OpAgentUpdate {
 		return c.runAgentUpdateOperation(ctx, envelope)
 	} else if envelope.Kind == protocol.OpGeminiTurnInterrupt {
-		return c.runGeminiTurnInterruptOperation(ctx, envelope)
+		return runSessionInterrupt(ctx, c.sessionRunner(session.Gemini), envelope)
 	} else if envelope.Kind == protocol.OpClaudeTurnSteer {
-		return c.runClaudeTurnSteerOperation(ctx, envelope)
+		return "", nil, false, c.sessionRunner(session.Claude).Steer(ctx, envelope)
 	} else if envelope.Kind == protocol.OpClaudeTurnInterrupt {
-		return c.runClaudeTurnInterruptOperation(ctx, envelope)
+		return runSessionInterrupt(ctx, c.sessionRunner(session.Claude), envelope)
 	} else if envelope.Kind == protocol.OpGeminiSkillsManage {
 		return c.runGeminiSkillsManageOperation(ctx, envelope)
 	} else if envelope.Kind == protocol.OpClaudeSkillsList {

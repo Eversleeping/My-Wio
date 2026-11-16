@@ -54,54 +54,6 @@ func (c *Client) runCodexThreadForkOperation(ctx context.Context, envelope *prot
 	return
 }
 
-func (c *Client) executeCodexTurnStart(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	if c.agentUpdatePending() {
-		return errors.New("Agent update is in progress; retry the task after it reconnects")
-	}
-	var command protocol.StartTurnCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
-		return err
-	}
-	command.OperationID = envelope.OperationID
-	return c.codex.StartTurn(ctx, command)
-}
-
-func (c *Client) executeCodexTurnRewrite(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	if c.agentUpdatePending() {
-		return errors.New("Agent update is in progress; retry the task after it reconnects")
-	}
-	var command protocol.RewriteTurnCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
-		return err
-	}
-	command.Start.OperationID = envelope.OperationID
-	return c.codex.RewriteTurn(ctx, command)
-}
-
-func (c *Client) executeCodexTurnSteer(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	var command protocol.SteerTurnCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
-		return err
-	}
-	return c.codex.SteerTurn(ctx, command)
-}
-
-func (c *Client) executeCodexTurnInterrupt(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	var command protocol.InterruptTurnCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
-		return err
-	}
-	return c.codex.Interrupt(ctx, command)
-}
-
-func (c *Client) executeCodexApproval(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	var command protocol.ApprovalDecisionCommand
-	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
-		return err
-	}
-	return c.codex.Decide(command)
-}
-
 func (c *Client) executeCredentialsConfigure(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	var command protocol.ConfigureCredentialsCommand
 	if err := json.Unmarshal(envelope.PayloadJSON, &command); err != nil {
