@@ -20,7 +20,15 @@ type Alert struct {
 }
 
 func (s *Store) ListAlerts(ctx context.Context) ([]Alert, error) {
+	return s.ListAlertsPage(ctx, 200, 0)
+}
+
+func (s *Store) ListAlertsPage(ctx context.Context, limit, offset int) ([]Alert, error) {
+	limit = operationListLimit(limit)
+	if offset < 0 {
+		offset = 0
+	}
 	var out []Alert
-	err := s.DB.SelectContext(ctx, &out, `SELECT a.id,COALESCE(a.server_id,'') server_id,a.kind,a.severity,a.title,a.detail,a.status,COALESCE(s.name,'') server_name,a.opened_at,a.resolved_at,a.acknowledged_at FROM alerts a LEFT JOIN servers s ON s.id=a.server_id ORDER BY CASE a.status WHEN 'open' THEN 0 ELSE 1 END,a.opened_at DESC LIMIT 200`)
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT a.id,COALESCE(a.server_id,'') server_id,a.kind,a.severity,a.title,a.detail,a.status,COALESCE(s.name,'') server_name,a.opened_at,a.resolved_at,a.acknowledged_at FROM alerts a LEFT JOIN servers s ON s.id=a.server_id ORDER BY CASE a.status WHEN 'open' THEN 0 ELSE 1 END,a.opened_at DESC,a.id DESC LIMIT ? OFFSET ?`), limit, offset)
 	return out, err
 }

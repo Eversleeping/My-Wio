@@ -1,10 +1,8 @@
 import { engineModule } from "../sessions/engineModules";
 import {
 AlertTriangle,
-ArrowDownToLine,
 CalendarClock,
 Check,
-Clipboard,
 Code2,
 Database,
 GitBranch,
@@ -33,8 +31,7 @@ import { DataTable, ErrorState, PageLoading, Section, Status } from "../componen
 import { useSessionChoices } from "../sessions/useSessionChoices";
 import { useResource, useResourceRevision } from "../data/resources";
 import { settings as settingEndpoints } from "../data/settings";
-import { useAuditList } from "../data/useAuditList";
-import { formatDate, relative, shortSHA } from "../format";
+import { formatDate, relative } from "../format";
 import { useI18n } from "../i18n";
 import type { CredentialProfile, ScheduledTask, SecretSet } from "../types";
 import { ScheduledTaskDialog } from "./ScheduledTaskDialog";
@@ -74,7 +71,6 @@ export function SettingsPage({ notify }: PageProps) {
   const codexSettings = useResource(settingEndpoints.cli("codex"));
   const profiles = useResource(settingEndpoints.profiles());
   const secrets = useResource(settingEndpoints.secrets());
-  const audit = useAuditList();
   const scheduledTasks = useResource(settingEndpoints.scheduledTasks());
   const sessionRevision = useResourceRevision(["settings", "codex", "gemini", "claude"]);
   const sessions = useSessionChoices({}, sessionRevision);
@@ -154,7 +150,6 @@ export function SettingsPage({ notify }: PageProps) {
       <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code" title={profile.endpoint}>{profile.endpoint}</code></td><td>{profile.kind !== "git" ? <code>{profile.model}</code> : <div className="cell-main"><span className="inline"><UserRound size={14} />{profile.username}</span><small>{profile.commit_name && profile.commit_email ? `${profile.commit_name} · ${profile.commit_email}` : t("settings.gitIdentityMissing")}</small></div>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "credential-profile", profile })}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
     </Section>
     <Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setSecretDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "secret-set", secret: item })}><X size={16} /></button></td></tr>)}</DataTable></Section>
-    <Section title={t("settings.auditLog")} icon={<Clipboard size={18} />}><DataTable headers={[t("column.action"), t("column.resource"), t("column.address"), t("column.time")]} empty={t("settings.noAudit")}>{(audit.data ?? []).map(item => <tr key={item.id}><td><code>{item.action}</code></td><td>{item.resource_type}{item.resource_id ? ` · ${shortSHA(item.resource_id)}` : ""}</td><td><code>{item.ip_address}</code></td><td>{formatDate(item.occurred_at)}</td></tr>)}</DataTable>{audit.loadError && <div className="snapshot-notice warning"><AlertTriangle size={15} />{audit.loadError}</div>}{audit.hasMore && <div className="history-loader"><button type="button" className="secondary-button small" disabled={audit.loadingMore} onClick={() => void audit.loadMore()}>{audit.loadingMore ? <LoaderCircle className="spin" size={15} /> : <ArrowDownToLine size={15} />}{t(audit.loadingMore ? "settings.loadingMoreAudit" : "settings.loadMoreAudit")}</button></div>}</Section>
     <Dialog open={profileDialog} title={t(profileForm.id ? "settings.editProfile" : "settings.newProfile")} onClose={() => { if (!profileBusy) setProfileDialog(false); }} wide><form onSubmit={saveProfile}>
       <div className="segmented-control" role="tablist" aria-label={t("settings.type")}><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "codex"} aria-selected={profileForm.kind === "codex"} className={profileForm.kind === "codex" ? "active" : ""} onClick={() => changeProfileKind("codex")}><Code2 size={15} />{t("settings.codexType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "gemini"} aria-selected={profileForm.kind === "gemini"} className={profileForm.kind === "gemini" ? "active" : ""} onClick={() => changeProfileKind("gemini")}><Code2 size={15} />{t("settings.geminiType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "claude"} aria-selected={profileForm.kind === "claude"} className={profileForm.kind === "claude" ? "active" : ""} onClick={() => changeProfileKind("claude")}><Code2 size={15} />{t("settings.claudeType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "git"} aria-selected={profileForm.kind === "git"} className={profileForm.kind === "git" ? "active" : ""} onClick={() => changeProfileKind("git")}><GitBranch size={15} />{t("settings.gitType")}</button></div>
       <div className="form-grid"><Field label={t("settings.name")}><input value={profileForm.name} onChange={e => setProfileForm({ ...profileForm, name: e.target.value })} required /></Field><Field label={t("settings.endpoint")}><input type="url" value={profileForm.endpoint} onChange={e => setProfileForm({ ...profileForm, endpoint: e.target.value })} required /></Field></div>

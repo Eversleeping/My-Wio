@@ -233,6 +233,13 @@ var operationStatuses = map[string]struct{}{
 }
 
 func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([]OperationSummary, error) {
+	return s.ListOperationsPage(ctx, status, limit, 0)
+}
+
+func (s *Store) ListOperationsPage(ctx context.Context, status string, limit, offset int) ([]OperationSummary, error) {
+	if offset < 0 {
+		offset = 0
+	}
 	status = strings.TrimSpace(strings.ToLower(status))
 	if status != "" {
 		if _, ok := operationStatuses[status]; !ok {
@@ -258,9 +265,9 @@ func (s *Store) ListOperations(ctx context.Context, status string, limit int) ([
 		LEFT JOIN workspaces w ON w.id=o.workspace_id
 		LEFT JOIN codex_threads t ON t.id=o.thread_id
 		WHERE (?='' OR (?='canceled' AND o.status IN ('canceled','cancelled')) OR o.status=?)
-		ORDER BY CASE WHEN o.status IN ('queued','waiting','delivered','running') THEN 0 ELSE 1 END,` + updatedAt + ` DESC,o.id DESC LIMIT ?`
+		ORDER BY CASE WHEN o.status IN ('queued','waiting','delivered','running') THEN 0 ELSE 1 END,` + updatedAt + ` DESC,o.id DESC LIMIT ? OFFSET ?`
 	var out []OperationSummary
-	if err := s.DB.SelectContext(ctx, &out, s.Q(query), status, canceledStatus, status, limit); err != nil {
+	if err := s.DB.SelectContext(ctx, &out, s.Q(query), status, canceledStatus, status, limit, offset); err != nil {
 		return nil, err
 	}
 	// Interruption progress is matched by exact key prefix in Go; see

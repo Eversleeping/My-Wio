@@ -174,6 +174,22 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer scans.Close()
+	t.Run("log pagination", func(t *testing.T) {
+		admin, err := sql.Open("pgx", databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		if _, err := admin.Exec("CREATE SCHEMA log_pagination"); err != nil {
+			t.Fatal(err)
+		}
+		logs, err := Open(postgresSchemaURL(t, databaseURL, "log_pagination"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer logs.Close()
+		assertLogPagination(t, logs)
+	})
 	t.Run("heartbeat capabilities", func(t *testing.T) { assertHeartbeatCapabilities(t, scans) })
 	t.Run("heartbeat session isolation", func(t *testing.T) { assertHeartbeatSessionIsolation(t, scans) })
 	t.Run("worktree deletion", func(t *testing.T) { assertWorktreeDeletionCleansSessions(t, scans) })

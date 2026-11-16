@@ -5,7 +5,7 @@ import {
   GitBranch,
   MessageSquare,
   Rocket,
-  ListChecks,
+  ScrollText,
   Activity,
   Settings
 } from "lucide-react";
@@ -18,7 +18,7 @@ export const navigation: Array<{ id: View; labelKey: string; icon: typeof Layout
   { id: "projects", labelKey: "nav.projects", icon: GitBranch },
   { id: "sessions", labelKey: "nav.sessions", icon: MessageSquare },
   { id: "deployments", labelKey: "nav.deployments", icon: Rocket },
-  { id: "operations", labelKey: "nav.operations", icon: ListChecks },
+  { id: "operations", labelKey: "nav.operations", icon: ScrollText },
   { id: "monitoring", labelKey: "nav.monitoring", icon: Activity },
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];

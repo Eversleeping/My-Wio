@@ -280,7 +280,12 @@ func (a *API) deployments(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) operations(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	operations, err := a.store.ListOperations(r.Context(), r.URL.Query().Get("status"), limit)
+	offset, err := parseThreadPageValue(r.URL.Query()["offset"], r.URL.Query().Has("offset"), "offset", 0, false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	operations, err := a.store.ListOperationsPage(r.Context(), r.URL.Query().Get("status"), limit, offset)
 	if errors.Is(err, store.ErrInvalidOperationStatus) {
 		writeError(w, http.StatusBadRequest, "invalid operation status")
 		return

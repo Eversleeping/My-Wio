@@ -24,7 +24,7 @@ const ProjectsPageRoute = lazy(() => import("./pages/ProjectsPage"));
 
 const DeploymentsPageRoute = lazy(() => import("./pages/DeploymentsPage"));
 
-const OperationsPageRoute = lazy(() => import("./pages/OperationsPage"));
+const LogsPageRoute = lazy(() => import("./pages/LogsPage"));
 
 const MonitoringPageRoute = lazy(() => import("./pages/MonitoringPage"));
 
@@ -144,7 +144,7 @@ export default function App() {
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute notify={setToast} /></Suspense>,
     sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage entry={sessionEntry} onEntryConsumed={() => navigateToLocation("sessions", sessionThreadID, true, sessionEngine)} initialFilter={initialFilter} realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && sessionThreadID ? { engine: sessionEngine, id: sessionThreadID } : undefined} onSelect={selectSession} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute notify={setToast} /></Suspense>,
-    operations: <Suspense fallback={<PageLoading />}><OperationsPageRoute /></Suspense>,
+    operations: <Suspense fallback={<PageLoading />}><LogsPageRoute /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute /></Suspense>,
     settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute notify={setToast} /></Suspense>
   }[view];

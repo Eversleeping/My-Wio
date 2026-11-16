@@ -14,7 +14,7 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
   const listRequests: string[] = [];
   await installMockApplication(page, { configured: true, onAPIRequest: request => {
     if (request.path === "/workspaces") return { body: [workspace] };
-    if (request.path === "/servers") return { body: [{ id: "server", status: "online" }] };
+    if (request.path === "/servers") return { body: [{ id: "server", status: "online", session_isolation: { mode: "disabled" } }] };
     if (request.path === "/sessions") { listRequests.push(request.search); return { body: { items: sessions, next_cursor: null, groups: [{ workspace_id: workspace.id, matched_count: 3, project_pinned_at: null }] } }; }
     const thread = sessions.find(item => request.path === `/sessions/${item.engine}/${item.id}`);
     if (thread) return { body: thread };
@@ -33,16 +33,17 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
   await expect(page.locator(".thread-project")).toHaveCount(1);
   await expect(page.locator(".session-engine")).toHaveText(["Codex", "Gemini", "Claude"]);
   // Simulate one HTTP read failing while the realtime connection stays healthy.
-  await expect.poll(() => listRequests.length).toBeGreaterThanOrEqual(2);
-  let failNext = true;
+  await expect(page.locator(".connection")).toContainText("Live");
+  let failReads = true;
   await page.route("**/api/sessions?**", async route => {
-    if (failNext) { failNext = false; await route.abort("failed"); }
+    if (failReads) await route.abort("failed");
     else await route.fallback();
   });
   refresh();
   await expect(page.locator(".refresh-warning")).toBeVisible();
   await expect(page.locator(".thread-select")).toHaveCount(3);
   await expect(page.locator(".thread-items .error-state")).toHaveCount(0);
+  failReads = false;
   await page.screenshot({ path: testInfo.outputPath("session-refresh-warning.png") });
   await expect(page.locator(".refresh-warning")).toHaveCount(0);
   await expect(page.locator(".thread-select")).toHaveCount(3);
@@ -63,6 +64,12 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
     await expect(page).toHaveURL(new RegExp(`view=sessions&engine=${engine}&thread=shared-id`));
     await expect(page.locator(".thread.active")).toHaveCount(1);
     await expect(page.locator(".conversation-stream")).toBeVisible();
+    await expect(page.locator(".session-collaboration")).toBeVisible();
+    await expect.poll(async () => {
+      const collaboration = await page.locator(".session-collaboration").boundingBox();
+      const body = await page.locator(".session-panes").boundingBox();
+      return Boolean(collaboration && body && collaboration.y + collaboration.height <= body.y + 1 && body.height > 100);
+    }).toBe(true);
     const input = page.locator("form.composer textarea");
     const draft = `Unsent ${engine} draft`;
     if (visited.has(engine)) await expect(input).toHaveValue(draft);

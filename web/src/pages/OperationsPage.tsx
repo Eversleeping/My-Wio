@@ -1,6 +1,7 @@
 import { Activity, ExternalLink, RefreshCw, Square } from "lucide-react";
 import { useState } from "react";
-import { DataTable, ErrorState, Section, Status } from "../components/PageUI";
+import { LogPagination, logPageSize } from "../components/LogPagination";
+import { DataTable, ErrorState, PageLoading, Section, Status } from "../components/PageUI";
 import { operations as operationEndpoints } from "../data/operations";
 import { useResource } from "../data/resources";
 import { relative } from "../format";
@@ -39,12 +40,13 @@ function resourceHref(operation: OperationSummary) {
   return `?${params.toString()}`;
 }
 
-export default function OperationsPage() {
+export default function OperationsPage({ active = true }: { active?: boolean }) {
   const { t } = useI18n();
+  const [page, setPage] = useState(0);
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState<string[]>([]);
   const [interruptError, setInterruptError] = useState("");
-  const operations = useResource(operationEndpoints.list(status));
+  const operations = useResource(active ? operationEndpoints.list(status, page * logPageSize, logPageSize + 1) : null);
 
   async function interrupt(operation: OperationSummary) {
     setSubmitting(current => [...current, operation.id]);
@@ -58,9 +60,10 @@ export default function OperationsPage() {
       setSubmitting(current => current.filter(id => id !== operation.id));
     }
   }
+  if (!active) return null;
   return <div className="page-stack operations-page">
     <Section title={t("operation.title")} icon={<Activity size={18} />} action={<div className="operations-toolbar">
-      <select aria-label={t("operation.statusFilter")} value={status} onChange={event => setStatus(event.target.value)}>
+      <select aria-label={t("operation.statusFilter")} value={status} onChange={event => { setStatus(event.target.value); setPage(0); }}>
         <option value="">{t("operation.allStatuses")}</option>
         {statuses.map(value => <option key={value} value={value}>{t(`status.${value}`)}</option>)}
       </select>
@@ -69,8 +72,8 @@ export default function OperationsPage() {
       <div className="operations-intro">{t("operation.intro")}</div>
       {interruptError && <div className="error-banner" role="alert">{interruptError}</div>}
       {operations.error && <ErrorState error={operations.error} reload={operations.reload} />}
-      {!operations.error && <DataTable headers={[t("operation.resource"), t("operation.kind"), t("column.status"), t("operation.result"), t("column.created"), t("operation.updated"), t("common.actions")]} empty={t("operation.noOperations")}>
-        {(operations.data ?? []).map(operation => {
+      {!operations.error && (operations.loading ? <PageLoading /> : <DataTable headers={[t("operation.resource"), t("operation.kind"), t("column.status"), t("operation.result"), t("column.created"), t("operation.updated"), t("common.actions")]} empty={t("operation.noOperations")}>
+        {(operations.data ?? []).slice(0, logPageSize).map(operation => {
           const active = activeStatuses.has(operation.status);
           const stopping = submitting.includes(operation.id) || activeStatuses.has(operation.interrupt_status ?? "");
           return <tr key={operation.id}>
@@ -86,7 +89,8 @@ export default function OperationsPage() {
               onClick={() => void interrupt(operation)}><Square size={13} aria-hidden="true" />{stopping ? t("operation.interrupting") : t("operation.interrupt")}</button>}</td>
           </tr>;
         })}
-      </DataTable>}
+      </DataTable>)}
+      <LogPagination page={page} hasMore={!operations.error && (operations.data?.length ?? 0) > logPageSize} busy={operations.loading} onChange={setPage} />
     </Section>
   </div>;
 }

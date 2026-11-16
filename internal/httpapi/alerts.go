@@ -15,7 +15,18 @@ type auditListPageResponse struct {
 }
 
 func (a *API) alerts(w http.ResponseWriter, r *http.Request) {
-	alerts, err := a.store.ListAlerts(r.Context())
+	query := r.URL.Query()
+	limit, err := parseThreadPageValue(query["limit"], query.Has("limit"), "limit", 200, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	offset, err := parseThreadPageValue(query["offset"], query.Has("offset"), "offset", 0, false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	alerts, err := a.store.ListAlertsPage(r.Context(), limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list alerts")
 		return

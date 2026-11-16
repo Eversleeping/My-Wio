@@ -2,8 +2,6 @@ import {
 AlertTriangle,
 ArrowDownToLine,
 ArrowUpFromLine,
-BellRing,
-Check,
 Cpu,
 Gauge,
 HardDrive,
@@ -14,11 +12,11 @@ Settings as SettingsIcon,
 StickyNote
 } from "lucide-react";
 import { type ReactNode, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } from "react";
-import { DataTable, Section, Status } from "../components/PageUI";
+import { Section, Status } from "../components/PageUI";
 import { monitoring } from "../data/monitoring";
 import { useResource } from "../data/resources";
 import { servers as serverEndpoints } from "../data/servers";
-import { formatDate, relative } from "../format";
+import { formatDate } from "../format";
 import { currentLocale, useI18n } from "../i18n";
 import type { Metric, OperationMetrics, Server } from "../types";
 
@@ -29,7 +27,6 @@ type NetworkRate = { time: string; rx: number; tx: number };
 export function MonitoringPage() {
   const { t } = useI18n();
   const servers = useResource(serverEndpoints.list());
-  const alerts = useResource(monitoring.alerts());
   const [serverID, setServerID] = useState("");
   const [rangeHours, setRangeHours] = useState(24);
   useEffect(() => { if (!serverID && servers.data?.[0]) setServerID(servers.data[0].id); }, [servers.data, serverID]);
@@ -72,7 +69,6 @@ export function MonitoringPage() {
       </div>
       {operationMetrics.error && <div className="snapshot-notice warning"><AlertTriangle size={15} />{operationMetrics.error}</div>}
     </Section>
-    <Section title={t("monitor.alerts")} icon={<BellRing size={18} />}><DataTable headers={[t("column.severity"), t("column.alert"), t("column.server"), t("column.state"), t("column.started"), ""]} empty={t("monitor.noAlerts")}>{(alerts.data ?? []).map(alert => <tr key={alert.id}><td><Status value={alert.severity} /></td><td><div className="cell-main"><strong>{alert.title}</strong><small>{alert.detail}</small></div></td><td>{alert.server_name}</td><td><Status value={alert.status} /></td><td>{relative(alert.opened_at)}</td><td>{!alert.acknowledged_at && <button className="icon-button" title={t("monitor.acknowledge")} onClick={async () => { await monitoring.acknowledge(alert.id); }}><Check size={16} /></button>}</td></tr>)}</DataTable></Section>
   </div>;
 }
 

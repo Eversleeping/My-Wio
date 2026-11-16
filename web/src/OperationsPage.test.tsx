@@ -29,7 +29,7 @@ test("shows recent operations, prioritizes active work, and filters by status", 
   expect(screen.getByRole("option", { name: "Superseded" })).toBeInTheDocument();
   expect(screen.getAllByRole("link", { name: /project/ }).filter(link => link.getAttribute("href") === "?view=deployments")).toHaveLength(1);
   await user.selectOptions(screen.getByRole("combobox", { name: "Filter by status" }), "running");
-  await waitFor(() => expect(requests).toContain("/api/operations?status=running&limit=200"));
+  await waitFor(() => expect(requests).toContain("/api/operations?status=running&limit=51&offset=0"));
 });
 
 test("links operations to their actual resource type", async () => {
