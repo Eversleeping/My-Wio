@@ -1,0 +1,31 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_result",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.(*Client).connect.func9",
+    "github.com/wio-platform/wio/internal/agent.(*Client).startWorker.func1"
+  ],
+  "payload": {
+    "data": {
+      "files": [
+        {
+          "kind": "file",
+          "path": "README.md",
+          "size": 25
+        },
+        {
+          "kind": "file",
+          "path": "reconnected.txt",
+          "size": 26
+        }
+      ],
+      "truncated": false
+    },
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "status": "succeeded"
+  }
+}

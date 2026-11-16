@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_reconcile",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).reconcileOperations",
+    "github.com/wio-platform/wio/internal/agent.TestReconcileOperationsAnswersFromExecutionsReceiptsOrUnknown"
+  ],
+  "payload": {
+    "operation_id": "active",
+    "state": "active"
+  }
+}

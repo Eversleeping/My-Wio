@@ -1,0 +1,22 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_result",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestCrossServerCloneOperationReturnsVerifiedWorkspace"
+  ],
+  "payload": {
+    "data": {
+      "branch": "main",
+      "commit_sha": "31843a554f451c757c47f869f5733985262485bd",
+      "path": "/fixture/work/target",
+      "project_id": "project-1",
+      "workspace_id": "target-workspace"
+    },
+    "operation_id": "clone-1",
+    "status": "succeeded"
+  }
+}

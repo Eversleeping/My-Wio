@@ -1,0 +1,16 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.worktree.cleanup",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/agentgateway.(*Gateway).completeGitWorktreeCreate",
+    "github.com/wio-platform/wio/internal/agentgateway.TestWireFixtureOrphanWorktreeCleanup"
+  ],
+  "payload": {
+    "branch": "branch",
+    "source_path": "/srv/project",
+    "target_path": "/srv/branch"
+  }
+}

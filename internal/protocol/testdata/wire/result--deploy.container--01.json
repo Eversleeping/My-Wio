@@ -1,0 +1,18 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "deploy.container",
+  "source": [
+    "github.com/wio-platform/wio/internal/deployer.(*Deployer).deleteTarget.func1",
+    "github.com/wio-platform/wio/internal/deployer.(*Deployer).deleteTarget",
+    "github.com/wio-platform/wio/internal/deployer.(*Deployer).ContainerAction",
+    "github.com/wio-platform/wio/internal/deployer.TestDeleteTargetRemovesRetainedReleaseImages.func1"
+  ],
+  "payload": {
+    "action": "delete",
+    "content": "compose-output\nremove image tag wio-release:4e0a5d67558aa1b2-a172cedcae47474b: exit status 1: Error response from daemon: conflict: unable to remove repository reference (must force)\nremove image tag wio-release:0c4571488285c271-87eba76e7f316453: exit status 1: Error response from daemon: conflict: unable to remove repository reference (must force)\nremove image tag wio-release:0c4571488285c271-a172cedcae47474b: exit status 1: Error response from daemon: conflict: unable to remove repository reference (must force)",
+    "message": "Docker Compose project and deployment files deleted; some retained release images could not be removed",
+    "state": "removed",
+    "target_id": "target-delete"
+  }
+}

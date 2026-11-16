@@ -1,0 +1,24 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.turn.interrupt",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*codexHTTPDriver).interruptTurn",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).legacySession",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).interruptTurn",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).requireCSRF-fm.(*API).requireCSRF.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).authenticate-fm.(*API).authenticate.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).securityHeaders-fm.(*API).securityHeaders.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).recoverer-fm.(*API).recoverer.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).resolveClientIP-fm.(*API).resolveClientIP.func1",
+    "github.com/wio-platform/wio/cmd/controlplane.controlPlaneHandler.func1",
+    "github.com/wio-platform/wio/cmd/controlplane.controlPlaneHandler.(*controlPlaneLifecycle).Handler.func7"
+  ],
+  "payload": {
+    "codex_thread_id": "p0-07-codex-thread",
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "turn_id": "p0-07-turn-2"
+  }
+}

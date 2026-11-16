@@ -1,0 +1,25 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "metrics",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueueMetrics",
+    "github.com/wio-platform/wio/internal/agent.(*Client).connect",
+    "github.com/wio-platform/wio/internal/agent.(*Client).Run",
+    "github.com/wio-platform/wio/cmd/controlplane.startAcceptanceAgent.func1"
+  ],
+  "payload": {
+    "cpu_percent": 12.5,
+    "disk_percent": 50.5,
+    "disk_total_bytes": 1,
+    "disk_used_bytes": 1,
+    "load_1": 0.75,
+    "memory_percent": 25.25,
+    "memory_total_bytes": 1,
+    "memory_used_bytes": 1,
+    "net_rx_bytes": 1,
+    "net_tx_bytes": 1
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "claude.turn.interrupt",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.(*Client).connect.func9",
+    "github.com/wio-platform/wio/internal/agent.(*Client).startWorker.func1"
+  ],
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "stopped": true
+  }
+}

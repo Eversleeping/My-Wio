@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "claude_ownership_lost",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).reconcileClaudeOperations",
+    "github.com/wio-platform/wio/internal/agent.turnInterruptCases.func1",
+    "github.com/wio-platform/wio/internal/agent.TestTurnInterruptWithoutStartReportsOwnershipLost.func1"
+  ],
+  "payload": {
+    "operation_id": "orphan"
+  }
+}

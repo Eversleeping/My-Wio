@@ -1,0 +1,24 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "claude_event",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).emitSessionEvent",
+    "github.com/wio-platform/wio/internal/agent.TestSessionEventEntryPreservesLegacyWireContract"
+  ],
+  "payload": {
+    "event_id": "00000000-0000-4000-8000-000000000001",
+    "kind": "native.event",
+    "occurred_at": "2026-01-02T03:04:05Z",
+    "payload": {
+      "text": "unchanged",
+      "usage": {
+        "tokens": 3
+      }
+    },
+    "sequence": 42,
+    "stream_id": "session"
+  }
+}

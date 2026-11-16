@@ -1,0 +1,24 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.worktree.create",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/store.testStore.func1"
+  ],
+  "payload": {
+    "base_ref": "main",
+    "branch": "codex/wio-36483426",
+    "codex_thread_id": "native-origin",
+    "cutoff_sequence": 3,
+    "last_turn_id": "keep",
+    "project_id": "00000000-0000-4000-8000-000000000001",
+    "source_path": "/srv/collaboration-00000000-0000-4000-8000-000000000001",
+    "source_thread_id": "00000000-0000-4000-8000-000000000001",
+    "source_workspace_id": "00000000-0000-4000-8000-000000000001",
+    "target_path": "/srv/collaboration-00000000-0000-4000-8000-000000000001-codex-wio-36483426",
+    "target_thread_id": "00000000-0000-4000-8000-000000000001",
+    "target_workspace_id": "00000000-0000-4000-8000-000000000001",
+    "title": "New session (continued)"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.workspace.clone",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/agentgateway.TestGatewayCommitsCrossServerWorkspaceClone.func1"
+  ],
+  "payload": {
+    "branch": "main",
+    "destination": "/srv/managed/copy",
+    "expected_head": "0123456789012345678901234567890123456789",
+    "name": "source-copy",
+    "project_id": "00000000-0000-4000-8000-000000000001",
+    "remote_url": "https://example.com/team/source.git",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

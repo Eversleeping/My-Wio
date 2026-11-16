@@ -1,0 +1,14 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.thread.fork",
+  "source": [
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).forkThread.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).forkThread",
+    "github.com/wio-platform/wio/internal/codexadapter.TestMessageForkTrimsLegacyContextOnlyOnNewThread"
+  ],
+  "payload": {
+    "codex_thread_id": "new-native",
+    "last_turn_id": "keep"
+  }
+}

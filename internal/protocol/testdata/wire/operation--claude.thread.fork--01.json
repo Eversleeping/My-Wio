@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "claude.thread.fork",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "cutoff_sequence": 12,
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "source_thread_id": "00000000-0000-4000-8000-000000000001",
+    "source_workspace": "/srv/claude",
+    "target_thread_id": "00000000-0000-4000-8000-000000000001",
+    "title": "test (continued)",
+    "workspace": "/srv/claude",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

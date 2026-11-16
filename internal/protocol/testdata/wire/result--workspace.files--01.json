@@ -1,0 +1,29 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "workspace.files",
+  "source": [
+    "github.com/wio-platform/wio/internal/scanner.ListWorkspaceFiles.func1",
+    "github.com/wio-platform/wio/internal/scanner.ListWorkspaceFiles",
+    "github.com/wio-platform/wio/internal/scanner.TestListWorkspaceFilesFiltersGeneratedDirectoriesAndEnforcesRoots"
+  ],
+  "payload": {
+    "files": [
+      {
+        "kind": "file",
+        "path": "README.md",
+        "size": 6
+      },
+      {
+        "kind": "directory",
+        "path": "src"
+      },
+      {
+        "kind": "file",
+        "path": "src/main.ts",
+        "size": 9
+      }
+    ],
+    "truncated": false
+  }
+}

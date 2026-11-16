@@ -1,0 +1,16 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "git.workspace.lifecycle",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/store.testStore.func1"
+  ],
+  "payload": {
+    "action": "copy",
+    "source_path": "/srv/managed/lifecycle-race",
+    "target_path": "/srv/managed/copy",
+    "target_workspace_id": "00000000-0000-4000-8000-000000000001",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

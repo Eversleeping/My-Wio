@@ -1,0 +1,41 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.models.list",
+  "source": [
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.TestModelsListPaginatesFiltersAndUsesModelSlug"
+  ],
+  "payload": {
+    "codex_version": "0.159.3",
+    "data": [
+      {
+        "defaultReasoningEffort": "ultra",
+        "description": "",
+        "displayName": "New Model",
+        "hidden": false,
+        "id": "picker-id",
+        "isDefault": false,
+        "model": "new-model",
+        "supportedReasoningEfforts": [
+          {
+            "description": "Maximum depth",
+            "reasoningEffort": "ultra"
+          }
+        ]
+      },
+      {
+        "defaultReasoningEffort": "",
+        "description": "",
+        "displayName": "another-model",
+        "hidden": false,
+        "id": "another-model",
+        "isDefault": false,
+        "model": "another-model",
+        "supportedReasoningEfforts": null
+      }
+    ],
+    "supported": true
+  }
+}

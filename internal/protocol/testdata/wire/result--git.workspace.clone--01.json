@@ -1,0 +1,16 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "git.workspace.clone",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestCrossServerCloneOperationReturnsVerifiedWorkspace"
+  ],
+  "payload": {
+    "branch": "main",
+    "commit_sha": "31843a554f451c757c47f869f5733985262485bd",
+    "path": "/fixture/work/target",
+    "project_id": "project-1",
+    "workspace_id": "target-workspace"
+  }
+}

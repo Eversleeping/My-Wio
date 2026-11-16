@@ -1,0 +1,12 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "gemini.skills.manage",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "skills": []
+  }
+}

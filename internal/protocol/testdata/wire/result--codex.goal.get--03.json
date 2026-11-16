@@ -1,0 +1,26 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.goal.get",
+  "source": [
+    "github.com/wio-platform/wio/internal/codexadapter.statusCapability.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.statusCapability",
+    "github.com/wio-platform/wio/internal/codexadapter.codexStatusOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.TestStatusSnapshotReadsRateLimitsForChatGPTAccount"
+  ],
+  "payload": {
+    "data": {
+      "account_type": "chatgpt",
+      "rate_limits": [
+        {
+          "name": "Codex  primary",
+          "resets_at": "2026-01-02T03:04:05Z",
+          "used_percent": 18
+        }
+      ],
+      "rate_limits_available": true
+    },
+    "supported": true
+  }
+}

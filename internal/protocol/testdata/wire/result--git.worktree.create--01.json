@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "git.worktree.create",
+  "source": [
+    "github.com/wio-platform/wio/internal/gitworktree.Create.func1",
+    "github.com/wio-platform/wio/internal/gitworktree.Create",
+    "github.com/wio-platform/wio/internal/gitworktree.TestCreateAndRemove"
+  ],
+  "payload": {
+    "branch": "feature/test",
+    "commit_sha": "793c70e9e0541214e3a3c568b8d82ef53b664eb8",
+    "path": "/fixture/work/repo-feature"
+  }
+}

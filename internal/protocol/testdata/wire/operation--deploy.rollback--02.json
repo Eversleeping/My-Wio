@@ -1,0 +1,22 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "deploy.rollback",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueOperation",
+    "github.com/wio-platform/wio/internal/store.TestWireFixtureOptionalVariants"
+  ],
+  "payload": {
+    "compose_file": "compose.yaml",
+    "deployment_id": "00000000-0000-4000-8000-000000000001",
+    "environment": {
+      "API_TOKEN": "historical-value"
+    },
+    "public_url": "https://example.com",
+    "release_deployment_id": "00000000-0000-4000-8000-000000000001",
+    "release_root": "/var/lib/wio-agent/releases",
+    "target_id": "00000000-0000-4000-8000-000000000001",
+    "working_dir": "app"
+  }
+}

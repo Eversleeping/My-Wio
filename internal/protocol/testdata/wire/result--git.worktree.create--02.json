@@ -1,0 +1,17 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "git.worktree.create",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.TestWireFixtureOptionalVariants"
+  ],
+  "payload": {
+    "branch": "feature/test",
+    "claude_snapshot_id": "claude-snapshot",
+    "codex_thread_id": "codex-thread",
+    "commit_sha": "793c70e9e0541214e3a3c568b8d82ef53b664eb8",
+    "gemini_session_id": "gemini-session",
+    "last_turn_id": "native-turn",
+    "path": "/fixture/work/repo-feature"
+  }
+}

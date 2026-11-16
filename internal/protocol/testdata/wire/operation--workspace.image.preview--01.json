@@ -1,0 +1,20 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "workspace.image.preview",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).requestWorkspacePreview",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).requestWorkspaceImagePreview",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestWorkspaceFilePreviewQueuesAgentReadAndReturnsContent"
+  ],
+  "payload": {
+    "path": "screen-one.png",
+    "root": "/srv/project",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

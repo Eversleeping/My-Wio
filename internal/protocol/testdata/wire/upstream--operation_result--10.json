@@ -1,0 +1,21 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_result",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.TestWireFixtureOptionalVariants"
+  ],
+  "payload": {
+    "data": {
+      "branch": "trunk",
+      "commit_sha": "c5cacb3cc8507dd5ca06b0f48a11eeb7103f0265",
+      "path": "/fixture/work/state/projects/Sample-Service",
+      "remote_url": "https://example.com/project.git",
+      "unborn": false
+    },
+    "operation_id": "optional-variant",
+    "status": "succeeded"
+  }
+}

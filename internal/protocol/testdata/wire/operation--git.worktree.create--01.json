@@ -1,0 +1,27 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.worktree.create",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "branch": "contract-branch",
+    "gemini_fork": {
+      "cutoff_sequence": 1,
+      "session_id": "native-source",
+      "source_thread_id": "00000000-0000-4000-8000-000000000001",
+      "source_workspace": "/srv/contract",
+      "target_thread_id": "00000000-0000-4000-8000-000000000001",
+      "title": "Gemini (continued)",
+      "workspace": "/srv/contract-branch",
+      "workspace_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "project_id": "00000000-0000-4000-8000-000000000001",
+    "source_path": "/srv/contract",
+    "source_workspace_id": "00000000-0000-4000-8000-000000000001",
+    "target_path": "/srv/contract-branch",
+    "target_workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

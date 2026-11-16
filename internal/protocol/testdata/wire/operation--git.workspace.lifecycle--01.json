@@ -1,0 +1,18 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.workspace.lifecycle",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/store.testStore.func1"
+  ],
+  "payload": {
+    "action": "copy",
+    "project_id": "00000000-0000-4000-8000-000000000001",
+    "source_path": "/srv/managed/moved",
+    "target_path": "/srv/managed/copied",
+    "target_workspace_id": "00000000-0000-4000-8000-000000000001",
+    "workspace_id": "00000000-0000-4000-8000-000000000001",
+    "workspace_kind": "primary"
+  }
+}

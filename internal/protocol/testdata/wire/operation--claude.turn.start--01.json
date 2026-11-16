@@ -1,0 +1,25 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "claude.turn.start",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "model": "sonnet",
+    "permission_mode": "default",
+    "prompt": "replacement",
+    "questions": true,
+    "rewrite": {
+      "event_id": "00000000-0000-4000-8000-000000000001",
+      "message_id": "00000000-0000-4000-8000-000000000001",
+      "prompt": "original",
+      "started_at": "2026-01-02T03:04:05Z"
+    },
+    "session_id": "native-original",
+    "steer": true,
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/contract"
+  }
+}

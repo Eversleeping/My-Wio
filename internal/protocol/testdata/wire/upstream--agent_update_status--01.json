@@ -1,0 +1,14 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "agent_update_status",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.TestWireFixtureUpdateProducer"
+  ],
+  "payload": {
+    "status": "healthy",
+    "version": "0.3.23"
+  }
+}

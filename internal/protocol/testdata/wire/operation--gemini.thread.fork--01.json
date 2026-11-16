@@ -1,0 +1,23 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.thread.fork",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "before": {
+      "event_id": "00000000-0000-4000-8000-000000000001",
+      "started_at": "2026-01-02T03:04:05Z"
+    },
+    "cutoff_sequence": 4,
+    "session_id": "native-original",
+    "source_thread_id": "00000000-0000-4000-8000-000000000001",
+    "source_workspace": "/srv/fork",
+    "target_thread_id": "00000000-0000-4000-8000-000000000001",
+    "title": "Gemini (branch)",
+    "workspace": "/srv/fork",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

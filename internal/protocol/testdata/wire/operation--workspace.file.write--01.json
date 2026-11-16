@@ -1,0 +1,25 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "workspace.file.write",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).writeWorkspaceFile",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).requireCSRF-fm.(*API).requireCSRF.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).authenticate-fm.(*API).authenticate.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).securityHeaders-fm.(*API).securityHeaders.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).recoverer-fm.(*API).recoverer.func1",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).resolveClientIP-fm.(*API).resolveClientIP.func1",
+    "github.com/wio-platform/wio/internal/httpapi.TestWorkspaceFileWritesThroughAuthenticatedRouter.func1",
+    "github.com/wio-platform/wio/internal/httpapi.TestWorkspaceFileWritesThroughAuthenticatedRouter"
+  ],
+  "payload": {
+    "content": "ZWRpdGVk",
+    "create": false,
+    "expected_hash": "8fe398fcbb297af30d291a24e54ed6f1a879e9b301a4fce5663ab67fd7f65dc5",
+    "path": "docs/new.txt",
+    "root": "/srv/files",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

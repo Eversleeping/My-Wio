@@ -1,0 +1,14 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_started",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestOperationInterruptReplayRestoresTargetReceiptAfterRestart"
+  ],
+  "payload": {
+    "operation_id": "interrupt-before-restart"
+  }
+}

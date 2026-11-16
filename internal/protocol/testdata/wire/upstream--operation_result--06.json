@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_result",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestGeminiLongTurnCanBeInterruptedWhileWaitingForInput.func1"
+  ],
+  "payload": {
+    "data": {
+      "operation_id": "turn",
+      "stopped": true
+    },
+    "operation_id": "stop",
+    "status": "succeeded"
+  }
+}

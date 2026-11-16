@@ -1,0 +1,14 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "gemini_ownership_active",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).reconcileGeminiOperations",
+    "github.com/wio-platform/wio/internal/agent.TestGeminiReconciliationDoesNotRestartOrInterruptTurns"
+  ],
+  "payload": {
+    "operation_id": "active"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_result",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).interruptOperation",
+    "github.com/wio-platform/wio/internal/agent.(*Client).runOperationInterruptOperation",
+    "github.com/wio-platform/wio/internal/agent.(*Client).dispatchOperation",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestOperationInterruptReplayRestoresTargetReceiptAfterRestart"
+  ],
+  "payload": {
+    "message": "No active execution on Agent; pending or recovered operation cancelled",
+    "operation_id": "target-before-restart",
+    "status": "cancelled"
+  }
+}

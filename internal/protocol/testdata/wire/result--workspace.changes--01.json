@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "workspace.changes",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/agentgateway.TestWorkspaceFilesOperationStoresAgentSnapshot.func1"
+  ],
+  "payload": {
+    "changes": [
+      {
+        "path": "README.md",
+        "staged": false,
+        "status": "modified",
+        "unstaged": true
+      }
+    ]
+  }
+}

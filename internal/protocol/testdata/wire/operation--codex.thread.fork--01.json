@@ -1,0 +1,27 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.thread.fork",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*codexHTTPDriver).forkThread",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).legacySession",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).forkThread",
+    "github.com/wio-platform/wio/internal/httpapi.threadResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.threadResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestMessageForkQueuesExactBoundaryAndGuardsOldAgents.func1",
+    "github.com/wio-platform/wio/internal/httpapi.TestMessageForkQueuesExactBoundaryAndGuardsOldAgents"
+  ],
+  "payload": {
+    "codex_thread_id": "source-native",
+    "cutoff_sequence": 2,
+    "last_turn_id": "keep",
+    "source_thread_id": "00000000-0000-4000-8000-000000000001",
+    "target_thread_id": "00000000-0000-4000-8000-000000000001",
+    "title": "Source (branch)",
+    "workspace": "/srv/fork",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

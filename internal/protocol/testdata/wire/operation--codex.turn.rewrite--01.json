@@ -1,0 +1,28 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.turn.rewrite",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "cutoff_sequence": 1,
+    "edit_event_id": "00000000-0000-4000-8000-000000000001",
+    "num_turns": 0,
+    "replacement_event_id": "00000000-0000-4000-8000-000000000001",
+    "replacement_payload": {
+      "image_count": 0,
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "text": "replacement"
+    },
+    "start": {
+      "approval_mode": "on-request",
+      "codex_thread_id": "native-original",
+      "prompt": "replacement",
+      "thread_id": "00000000-0000-4000-8000-000000000001",
+      "workspace": "/srv/contract",
+      "workspace_id": "00000000-0000-4000-8000-000000000001"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.turn.rewrite",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "approval_mode": "default",
+    "interactive": true,
+    "model": "auto",
+    "prompt": "replacement",
+    "rewrite": {
+      "event_id": "00000000-0000-4000-8000-000000000001",
+      "started_at": "2026-01-02T03:04:05Z"
+    },
+    "session_id": "native-original",
+    "steering": true,
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/contract"
+  }
+}

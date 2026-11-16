@@ -1,0 +1,18 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.skills.manage",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueOperation",
+    "github.com/wio-platform/wio/internal/store.TestWireFixtureOptionalVariants"
+  ],
+  "payload": {
+    "action": "install",
+    "name": "fixture-skill",
+    "path": "skills/fixture",
+    "scope": "workspace",
+    "source": "https://github.com/example/skills.git",
+    "workspace": "/srv/other"
+  }
+}

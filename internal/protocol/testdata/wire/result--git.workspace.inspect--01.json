@@ -1,0 +1,69 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "git.workspace.inspect",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestWorkspaceGitInspectReturnsStatusBranchesRemotesAndCommits"
+  ],
+  "payload": {
+    "branches": [
+      {
+        "commit_sha": "52ae5cadcc3afa23fa9f36b9ac49c271edbed9fe",
+        "current": true,
+        "full_name": "refs/heads/main",
+        "kind": "local",
+        "name": "main"
+      }
+    ],
+    "changes": [
+      {
+        "path": "README.md",
+        "staged": false,
+        "status": "modified",
+        "unstaged": true
+      },
+      {
+        "path": "new.txt",
+        "staged": false,
+        "status": "untracked",
+        "unstaged": true
+      }
+    ],
+    "commits": [
+      {
+        "author_email": "inspect@example.com",
+        "author_name": "Inspect User",
+        "authored_at": "2026-11-16T08:48:46+08:00",
+        "parents": [],
+        "sha": "52ae5cadcc3afa23fa9f36b9ac49c271edbed9fe",
+        "title": "inspect"
+      }
+    ],
+    "has_more": false,
+    "remotes": [
+      {
+        "fetch_urls": [
+          "https://example.com/team/repository.git"
+        ],
+        "name": "origin",
+        "push_urls": [
+          "https://example.com/team/repository.git"
+        ]
+      }
+    ],
+    "status": {
+      "ahead": 0,
+      "behind": 0,
+      "branch": "main",
+      "detached": false,
+      "dirty": true,
+      "head": "52ae5cadcc3afa23fa9f36b9ac49c271edbed9fe",
+      "staged": 0,
+      "unborn": false,
+      "unstaged": 1,
+      "untracked": 1
+    },
+    "workspace_id": "workspace-1"
+  }
+}

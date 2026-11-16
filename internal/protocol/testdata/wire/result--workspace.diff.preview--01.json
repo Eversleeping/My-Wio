@@ -1,0 +1,17 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "workspace.diff.preview",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/agentgateway.TestWorkspaceFilesOperationStoresAgentSnapshot.func1"
+  ],
+  "payload": {
+    "additions": 1,
+    "binary": false,
+    "content": "@@ -1 +1 @@\n-old\n+new\n",
+    "deletions": 1,
+    "path": "README.md",
+    "truncated": false
+  }
+}

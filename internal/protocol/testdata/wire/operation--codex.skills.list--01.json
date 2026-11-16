@@ -1,0 +1,22 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.skills.list",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).queueCodex",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).queueWorkspaceCodex",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).refreshWorkspaceCodexSkills",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestCodexSnapshotProducersPreserveWireScope.func1"
+  ],
+  "payload": {
+    "codex_version": "0.159.3",
+    "scope_id": "00000000-0000-4000-8000-000000000001",
+    "scope_type": "workspace",
+    "workspace": "/srv/project"
+  }
+}

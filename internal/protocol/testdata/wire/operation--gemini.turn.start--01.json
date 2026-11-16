@@ -1,0 +1,26 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.turn.start",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "approval_mode": "default",
+    "goal": {
+      "continuations": 0,
+      "id": "00000000-0000-4000-8000-000000000001",
+      "max_continuations": 5,
+      "max_seconds": 600,
+      "objective": "Verify the tests"
+    },
+    "interactive": true,
+    "model": "flash",
+    "prompt": "Continue the active goal and verify the remaining work.",
+    "session_id": "",
+    "steering": true,
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/allowance-7"
+  }
+}

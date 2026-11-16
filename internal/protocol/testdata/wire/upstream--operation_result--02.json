@@ -1,0 +1,56 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "operation_result",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestWireFixtureWorkspaceWrite"
+  ],
+  "payload": {
+    "data": {
+      "action": "remote.add",
+      "snapshot": {
+        "branches": [
+          {
+            "commit_sha": "",
+            "current": true,
+            "full_name": "refs/heads/main",
+            "kind": "local",
+            "name": "main"
+          }
+        ],
+        "changes": [],
+        "commits": [],
+        "has_more": false,
+        "remotes": [
+          {
+            "fetch_urls": [
+              "https://example.com/project.git"
+            ],
+            "name": "origin",
+            "push_urls": [
+              "https://example.com/project.git"
+            ]
+          }
+        ],
+        "status": {
+          "ahead": 0,
+          "behind": 0,
+          "branch": "main",
+          "detached": false,
+          "dirty": false,
+          "staged": 0,
+          "unborn": true,
+          "unstaged": 0,
+          "untracked": 0
+        },
+        "workspace_id": "workspace"
+      },
+      "workspace_id": "workspace"
+    },
+    "operation_id": "write",
+    "status": "succeeded"
+  }
+}

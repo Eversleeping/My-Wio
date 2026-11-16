@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.import",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "destination": "projects/shared-a",
+    "name": "shared",
+    "project_id": "00000000-0000-4000-8000-000000000001",
+    "remote_url": "https://example.com/shared.git"
+  }
+}

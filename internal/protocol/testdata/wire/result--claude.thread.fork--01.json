@@ -1,0 +1,13 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "claude.thread.fork",
+  "source": [
+    "github.com/wio-platform/wio/internal/claudeadapter.Snapshot.func1",
+    "github.com/wio-platform/wio/internal/claudeadapter.Snapshot",
+    "github.com/wio-platform/wio/internal/claudeadapter.TestSnapshotIsImmutableAndIdempotent"
+  ],
+  "payload": {
+    "snapshot_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

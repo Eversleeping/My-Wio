@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "agent.update",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "packages": {
+      "amd64": {
+        "sha256": "4c9c409e8aba0f885cbe85e30af05c1157d7153f749bdfbcb8f3361566b47d7e",
+        "size": 11,
+        "url": "/api/agent/update-package/amd64?version=0.3.23"
+      }
+    },
+    "version": "0.3.23"
+  }
+}

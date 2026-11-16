@@ -1,0 +1,26 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "inventory",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueueInventory",
+    "github.com/wio-platform/wio/internal/agent.(*Client).refreshInventory",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation.func1",
+    "github.com/wio-platform/wio/internal/agent.(*Client).startWorker.func1"
+  ],
+  "payload": {
+    "repositories": [
+      {
+        "branch": "trunk",
+        "commit_sha": "c5cacb3cc8507dd5ca06b0f48a11eeb7103f0265",
+        "dirty": false,
+        "discovered_at": "2026-01-02T03:04:05Z",
+        "name": "Sample-Service",
+        "path": "/fixture/work/state/projects/Sample-Service",
+        "remote_url": ""
+      }
+    ]
+  }
+}

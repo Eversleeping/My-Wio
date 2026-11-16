@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.workspace.inspect",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).refreshWorkspaceGit",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestWorkspaceGitRefreshQueuesInspectAndReadsSnapshot"
+  ],
+  "payload": {
+    "commit_limit": 50,
+    "path": "/srv/workspace-git",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

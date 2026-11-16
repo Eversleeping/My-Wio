@@ -1,0 +1,21 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.goal.get",
+  "source": [
+    "github.com/wio-platform/wio/internal/codexadapter.statusCapability.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.statusCapability",
+    "github.com/wio-platform/wio/internal/codexadapter.codexStatusOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.TestStatusSnapshotSkipsChatGPTRateLimitsForAPIKeyAccount"
+  ],
+  "payload": {
+    "codex_version": "codex-cli 0.145.0",
+    "data": {
+      "account_type": "apiKey",
+      "rate_limits": [],
+      "rate_limits_available": false
+    },
+    "supported": true
+  }
+}

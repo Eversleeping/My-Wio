@@ -1,0 +1,32 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "gemini_event",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).emitSessionEvent",
+    "github.com/wio-platform/wio/internal/agent.NewClient.func2",
+    "github.com/wio-platform/wio/internal/geminiadapter.(*Adapter).ask",
+    "github.com/wio-platform/wio/internal/geminiadapter.(*Adapter).questionServer.func1"
+  ],
+  "payload": {
+    "event_id": "00000000-0000-4000-8000-000000000001",
+    "kind": "gemini.question",
+    "occurred_at": "2026-01-02T03:04:05Z",
+    "payload": {
+      "operation_id": "turn",
+      "questions": [
+        {
+          "header": "",
+          "id": "q",
+          "isOther": false,
+          "options": null,
+          "question": "Continue?"
+        }
+      ]
+    },
+    "sequence": 0,
+    "stream_id": "thread"
+  }
+}

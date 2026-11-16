@@ -1,0 +1,17 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "workspace.image.preview",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "content": "AAAA",
+    "encoding": "base64",
+    "mime_type": "image/png",
+    "path": "screen-one.png",
+    "size": 3,
+    "truncated": false
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "gemini.skills.list",
+  "source": [
+    "github.com/wio-platform/wio/internal/geminiadapter.parseGeminiSkills.func1",
+    "github.com/wio-platform/wio/internal/geminiadapter.parseGeminiSkills",
+    "github.com/wio-platform/wio/internal/geminiadapter.TestParseGeminiSkills"
+  ],
+  "payload": {
+    "skills": [
+      {
+        "builtin": false,
+        "description": "First skill",
+        "enabled": true,
+        "name": "local-skill"
+      },
+      {
+        "builtin": true,
+        "description": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "enabled": false,
+        "name": "built_in"
+      }
+    ]
+  }
+}

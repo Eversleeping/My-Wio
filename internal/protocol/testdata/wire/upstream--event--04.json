@@ -1,0 +1,25 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "event",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).emitSessionEvent",
+    "github.com/wio-platform/wio/internal/agent.NewClient.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Sessions).acquire.func2",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).deliver",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).deliverEvents"
+  ],
+  "payload": {
+    "event_id": "00000000-0000-4000-8000-000000000001",
+    "kind": "turn.accepted",
+    "occurred_at": "2026-01-02T03:04:05Z",
+    "payload": {
+      "codex_thread_id": "p0-07-codex-thread",
+      "turn_id": "p0-07-turn-1"
+    },
+    "sequence": 0,
+    "stream_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

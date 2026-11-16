@@ -1,0 +1,39 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "claude_event",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).emitSessionEvent",
+    "github.com/wio-platform/wio/internal/agent.claudeSessionRunner.Start.func2",
+    "github.com/wio-platform/wio/internal/claudeadapter.run.func1",
+    "github.com/wio-platform/wio/internal/claudeadapter.run",
+    "github.com/wio-platform/wio/internal/claudeadapter.Run",
+    "github.com/wio-platform/wio/internal/claudeadapter.(*Sessions).Run",
+    "github.com/wio-platform/wio/internal/agent.claudeSessionRunner.Start",
+    "github.com/wio-platform/wio/internal/agent.(*Client).execute",
+    "github.com/wio-platform/wio/internal/agent.(*Client).dispatchOperation",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.(*Client).connect.func9",
+    "github.com/wio-platform/wio/internal/agent.(*Client).startWorker.func1"
+  ],
+  "payload": {
+    "event_id": "00000000-0000-4000-8000-000000000001",
+    "kind": "claude.result",
+    "occurred_at": "2026-01-02T03:04:05Z",
+    "payload": {
+      "errors": null,
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "permission_denials": [],
+      "result_id": "p0-07-result",
+      "success": true,
+      "usage": {
+        "input_tokens": 1,
+        "output_tokens": 1
+      }
+    },
+    "sequence": 0,
+    "stream_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

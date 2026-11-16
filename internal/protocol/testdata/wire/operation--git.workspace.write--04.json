@@ -1,0 +1,27 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.workspace.write",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueOperation",
+    "github.com/wio-platform/wio/internal/store.TestWireFixtureOptionalVariants"
+  ],
+  "payload": {
+    "action": "discard",
+    "branch": "feature",
+    "detach": true,
+    "force": true,
+    "include_staged": true,
+    "new_branch": "renamed",
+    "path": "/srv/workspace-git-write",
+    "paths": [
+      "src/staged.ts"
+    ],
+    "ref": "main",
+    "set_upstream": true,
+    "start_point": "main",
+    "url": "https://example.com/project.git",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

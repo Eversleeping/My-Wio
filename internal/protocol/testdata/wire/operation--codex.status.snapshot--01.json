@@ -1,0 +1,24 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.status.snapshot",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).queueCodex",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).queueThreadCodex",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).refreshThreadCodexStatus",
+    "github.com/wio-platform/wio/internal/httpapi.threadResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.threadResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestCodexSnapshotProducersPreserveWireScope.func1"
+  ],
+  "payload": {
+    "codex_thread_id": "native-thread",
+    "codex_version": "0.159.3",
+    "scope_id": "00000000-0000-4000-8000-000000000001",
+    "scope_type": "thread",
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/project"
+  }
+}

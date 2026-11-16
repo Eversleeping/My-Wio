@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.turn.start",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/cmd/controlplane.TestCrossProcessAcceptance.func1"
+  ],
+  "payload": {
+    "approval_mode": "default",
+    "interactive": true,
+    "model": "flash",
+    "prompt": "P0-07 hang P0-07-HANG=L3RtcC9UZXN0Q3Jvc3NQcm9jZXNzQWNjZXB0YW5jZTkwODI4NDMwNC8wMDEvZ2VtaW5pLWhhbmc",
+    "session_id": "p0-07-gemini-session",
+    "steering": true,
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/fixture/work/repositories/acceptance"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.thread.compact",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).compactThread",
+    "github.com/wio-platform/wio/internal/httpapi.threadResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.threadResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestCodexCompactQueuesThreadOperation"
+  ],
+  "payload": {
+    "codex_thread_id": "codex-compact",
+    "codex_version": "codex-cli 0.145.0",
+    "scope_id": "00000000-0000-4000-8000-000000000001",
+    "scope_type": "thread",
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/project"
+  }
+}

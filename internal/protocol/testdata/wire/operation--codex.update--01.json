@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.update",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).updateCodexCLI",
+    "github.com/wio-platform/wio/internal/httpapi.codexUpdateRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestCodexUpdateQueuesConfiguredTargetVersion"
+  ],
+  "payload": {
+    "version": "0.144.4"
+  }
+}

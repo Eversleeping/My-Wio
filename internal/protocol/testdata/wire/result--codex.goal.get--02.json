@@ -1,0 +1,27 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.goal.get",
+  "source": [
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).CodexOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Sessions).CodexOperation.func2",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Sessions).withSession",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Sessions).CodexOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.TestSessionsReclaimOnlyIdleProcessesAndResumeHistory"
+  ],
+  "payload": {
+    "data": {
+      "created_at": 0,
+      "objective": "process:306151",
+      "status": "",
+      "thread_id": "persisted-thread",
+      "time_used_seconds": 0,
+      "token_budget": null,
+      "tokens_used": 0,
+      "updated_at": 0
+    },
+    "supported": true
+  }
+}

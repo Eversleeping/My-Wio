@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "git.project.create",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/store.testStore.func1"
+  ],
+  "payload": {
+    "destination": "remote-partial",
+    "initial_branch": "main",
+    "initialize_readme": false,
+    "name": "remote-partial",
+    "project_id": "00000000-0000-4000-8000-000000000001",
+    "remote_url": "https://gitee.com/team/remote-partial.git",
+    "require_empty_remote": true,
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

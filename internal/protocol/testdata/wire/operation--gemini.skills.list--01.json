@@ -1,0 +1,18 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.skills.list",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).refreshWorkspaceGeminiSkills",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestGeminiSkillDiscoveryChecksVersionsAndWorkspace.func1",
+    "github.com/wio-platform/wio/internal/httpapi.TestGeminiSkillDiscoveryChecksVersionsAndWorkspace"
+  ],
+  "payload": {
+    "workspace": "/srv/other"
+  }
+}

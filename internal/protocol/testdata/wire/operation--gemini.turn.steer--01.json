@@ -1,0 +1,20 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.turn.steer",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "images": [
+      {
+        "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+      }
+    ],
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "prompt": "Inspect the image",
+    "request_id": "00000000-0000-4000-8000-000000000001",
+    "thread_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

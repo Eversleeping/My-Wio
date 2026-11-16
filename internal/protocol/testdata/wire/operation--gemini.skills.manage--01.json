@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.skills.manage",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "action": "install",
+    "scope": "workspace",
+    "source": "https://github.com/example/skills.git",
+    "workspace": "/srv/other"
+  }
+}

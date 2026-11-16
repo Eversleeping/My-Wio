@@ -1,0 +1,16 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "inventory",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueueInventory",
+    "github.com/wio-platform/wio/internal/agent.(*Client).refreshInventory",
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation.func1",
+    "github.com/wio-platform/wio/internal/agent.(*Client).startWorker.func1"
+  ],
+  "payload": {
+    "repositories": []
+  }
+}

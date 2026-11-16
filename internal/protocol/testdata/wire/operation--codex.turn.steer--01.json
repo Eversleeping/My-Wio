@@ -1,0 +1,20 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.turn.steer",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "codex_thread_id": "native-thread",
+    "expected_turn_id": "active-turn",
+    "images": [
+      {
+        "data_url": "data:image/png;base64,iVBORw0KGgo="
+      }
+    ],
+    "prompt": "Focus on tests",
+    "thread_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

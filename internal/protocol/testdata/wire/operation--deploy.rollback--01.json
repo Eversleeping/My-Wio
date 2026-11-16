@@ -1,0 +1,24 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "deploy.rollback",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueEncryptedResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).rollbackDeployment",
+    "github.com/wio-platform/wio/internal/httpapi.deploymentResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.deploymentResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestRollbackUsesEncryptedHistoricalSecretVersionAndRequiresCapableAgent"
+  ],
+  "payload": {
+    "compose_file": "compose.yaml",
+    "deployment_id": "00000000-0000-4000-8000-000000000001",
+    "environment": {
+      "API_TOKEN": "historical-value"
+    },
+    "release_deployment_id": "00000000-0000-4000-8000-000000000001",
+    "release_root": "/var/lib/wio-agent/releases",
+    "target_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

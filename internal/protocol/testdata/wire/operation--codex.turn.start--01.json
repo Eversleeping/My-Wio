@@ -1,0 +1,23 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.turn.start",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "approval_mode": "on-request",
+    "images": [
+      {
+        "data_url": "data:image/png;base64,iVBORw0KGgo="
+      }
+    ],
+    "model": "gpt-5.6-sol",
+    "prompt": "hello",
+    "reasoning_effort": "high",
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/model-project",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "deploy.start",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueEncryptedResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).startDeployment",
+    "github.com/wio-platform/wio/internal/httpapi.deploymentResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.deploymentResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestStartDeploymentCarriesConfiguredAndFallbackPublicAddressInputs"
+  ],
+  "payload": {
+    "build_mode": "build",
+    "commit_ref": "main",
+    "compose_file": "compose.yaml",
+    "deployment_id": "00000000-0000-4000-8000-000000000001",
+    "deployment_mode": "auto",
+    "public_url": "http://203.0.113.10:5010",
+    "release_root": "/var/lib/wio-agent/releases",
+    "repository": "https://example.com/public-address-command.git",
+    "server_address": "203.0.113.10",
+    "source_type": "remote",
+    "target_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

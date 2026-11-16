@@ -1,0 +1,23 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "session_tool_request",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).callSessionTool",
+    "github.com/wio-platform/wio/internal/agent.TestSessionToolProducerPreservesCallAndMatchesReply.func1"
+  ],
+  "payload": {
+    "arguments": {
+      "limit": 5,
+      "request_id": "request"
+    },
+    "id": "00000000-0000-4000-8000-000000000001",
+    "name": "list_sessions",
+    "operation_id": "source-operation",
+    "source": {
+      "engine": "claude",
+      "id": "source-thread"
+    }
+  }
+}

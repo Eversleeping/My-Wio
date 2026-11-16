@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.goal.get",
+  "source": [
+    "github.com/wio-platform/wio/internal/codexadapter.codexModelsOperation.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.codexModelsOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.TestModelsListUnsupportedAndInvalidPagination.func1"
+  ],
+  "payload": {
+    "codex_version": "0.159.3",
+    "data": [],
+    "supported": true
+  }
+}

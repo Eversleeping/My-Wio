@@ -1,0 +1,44 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "deploy.start",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueOperation",
+    "github.com/wio-platform/wio/internal/store.TestWireFixtureOptionalVariants"
+  ],
+  "payload": {
+    "build_mode": "build",
+    "commit_ref": "main",
+    "compose_file": "new.yaml",
+    "deployment_id": "00000000-0000-4000-8000-000000000001",
+    "deployment_mode": "auto",
+    "environment": {
+      "API_TOKEN": "new-recovery-secret"
+    },
+    "health_checks": [
+      {
+        "address": "https://example.com/health",
+        "timeout_seconds": 5,
+        "type": "http"
+      }
+    ],
+    "public_url": "http://example.com:4000",
+    "recovery": {
+      "compose_file": "old.yaml",
+      "environment": {
+        "API_TOKEN": "historical-recovery-secret"
+      },
+      "public_url": "http://example.com:4000",
+      "release_deployment_id": "00000000-0000-4000-8000-000000000001",
+      "working_dir": "old-app"
+    },
+    "release_root": "/var/lib/wio-agent/releases",
+    "repository": "https://example.com/recovery.git",
+    "source_path": "/srv/project",
+    "source_type": "remote",
+    "target_id": "00000000-0000-4000-8000-000000000001",
+    "template_id": "template",
+    "working_dir": "new-app"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "gemini.turn.start",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "approval_mode": "default",
+    "images": [
+      {
+        "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+      }
+    ],
+    "interactive": true,
+    "model": "flash",
+    "prompt": "",
+    "session_id": "",
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/images"
+  }
+}

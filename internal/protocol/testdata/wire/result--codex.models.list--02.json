@@ -1,0 +1,13 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.models.list",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/agentgateway.TestModelsOperationResultUpdatesWorkspaceSnapshot.func1"
+  ],
+  "payload": {
+    "reason": "model/list unsupported",
+    "supported": false
+  }
+}

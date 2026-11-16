@@ -1,0 +1,27 @@
+{
+  "baseline": "25596d0",
+  "direction": "upstream",
+  "kind": "heartbeat",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueueHeartbeat",
+    "github.com/wio-platform/wio/internal/agent.TestWireFixtureLegacyHeartbeat"
+  ],
+  "payload": {
+    "agent_version": "0.3.21",
+    "claude_ready": false,
+    "claude_version": "",
+    "codex_ready": false,
+    "codex_version": "",
+    "gemini_ready": false,
+    "gemini_version": "",
+    "hostname": "fixture-agent",
+    "managed_roots": [
+      "/srv/fixture"
+    ],
+    "scan_roots": [
+      "/srv/fixture"
+    ]
+  }
+}

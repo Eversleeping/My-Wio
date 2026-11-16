@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "codex.thread.compact",
+  "source": [
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation.func1",
+    "github.com/wio-platform/wio/internal/codexadapter.(*Adapter).codexOperation",
+    "github.com/wio-platform/wio/internal/codexadapter.TestCompactOperationUsesCurrentCodexThread"
+  ],
+  "payload": {
+    "codex_version": "codex-cli 0.145.0",
+    "data": {},
+    "supported": true
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "codex.approval",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).Close",
+    "github.com/wio-platform/wio/internal/httpapi.openBootstrapTestStore.func1"
+  ],
+  "payload": {
+    "answers": {
+      "q": {
+        "answers": [
+          "B"
+        ]
+      }
+    },
+    "decision": "answered",
+    "request_id": "7",
+    "thread_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

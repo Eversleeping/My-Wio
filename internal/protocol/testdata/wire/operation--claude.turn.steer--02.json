@@ -1,0 +1,21 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "claude.turn.steer",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueOperation",
+    "github.com/wio-platform/wio/internal/store.TestWireFixtureOptionalVariants"
+  ],
+  "payload": {
+    "images": [
+      {
+        "data_url": "data:image/png;base64,aGVsbG8="
+      }
+    ],
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "prompt": "correct",
+    "request_id": "00000000-0000-4000-8000-000000000001",
+    "thread_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

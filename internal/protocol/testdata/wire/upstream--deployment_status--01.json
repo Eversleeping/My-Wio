@@ -1,0 +1,19 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "deployment_status",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).runDeployment.func1",
+    "github.com/wio-platform/wio/internal/deployer.(*Deployer).Deploy",
+    "github.com/wio-platform/wio/internal/agent.(*Client).runDeployment",
+    "github.com/wio-platform/wio/internal/agent.TestDeploymentProducerPublishesFailureStatus"
+  ],
+  "payload": {
+    "content": "Missing Git, Docker, Docker Compose, or the Docker daemon will be configured automatically when supported.",
+    "deployment_id": "deployment",
+    "message": "installing missing deployment prerequisites",
+    "status": "preparing"
+  }
+}

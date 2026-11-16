@@ -617,6 +617,12 @@ type OperationResult struct {
 	Data        json.RawMessage `json:"data,omitempty"`
 }
 
+// AgentUpdateStatus confirms the version running after an Agent restart.
+type AgentUpdateStatus struct {
+	Version string `json:"version"`
+	Status  string `json:"status"`
+}
+
 type OperationStarted struct {
 	OperationID string `json:"operation_id"`
 }

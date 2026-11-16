@@ -1,0 +1,20 @@
+{
+  "baseline": "510b0cc",
+  "direction": "operation",
+  "kind": "workspace.diff.preview",
+  "source": [
+    "github.com/wio-platform/wio/internal/store.(*Store).queueOperationPayload",
+    "github.com/wio-platform/wio/internal/store.(*Store).QueueResourceOperation",
+    "github.com/wio-platform/wio/internal/httpapi.(*API).requestWorkspaceDiffPreview",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest.func1",
+    "github.com/wio-platform/wio/internal/httpapi.directJSONRequest",
+    "github.com/wio-platform/wio/internal/httpapi.workspaceResourceRequest",
+    "github.com/wio-platform/wio/internal/httpapi.TestWorkspaceChangesAndDiffPreviewQueueAgentReads"
+  ],
+  "payload": {
+    "old_path": "src/old.ts",
+    "path": "src/main.ts",
+    "root": "/srv/project",
+    "workspace_id": "00000000-0000-4000-8000-000000000001"
+  }
+}

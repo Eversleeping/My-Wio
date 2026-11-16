@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "git.project.delete",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestGitProjectDeleteReturnsStructuredResult"
+  ],
+  "payload": {
+    "path": "/fixture/work/service",
+    "project_id": "project-1",
+    "removed": true,
+    "workspace_id": "workspace-1"
+  }
+}

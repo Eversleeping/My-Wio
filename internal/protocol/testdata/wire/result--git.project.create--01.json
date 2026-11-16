@@ -1,0 +1,15 @@
+{
+  "baseline": "510b0cc",
+  "direction": "result",
+  "kind": "git.project.create",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).handleOperation",
+    "github.com/wio-platform/wio/internal/agent.TestGitProjectCreateReturnsStructuredResultAndRefreshesInventory"
+  ],
+  "payload": {
+    "branch": "trunk",
+    "commit_sha": "c5cacb3cc8507dd5ca06b0f48a11eeb7103f0265",
+    "path": "/fixture/work/state/projects/Sample-Service",
+    "unborn": false
+  }
+}

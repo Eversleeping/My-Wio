@@ -1,0 +1,62 @@
+{
+  "baseline": "510b0cc",
+  "direction": "upstream",
+  "kind": "heartbeat",
+  "source": [
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).queue",
+    "github.com/wio-platform/wio/internal/agent.(*Client).enqueueHeartbeat",
+    "github.com/wio-platform/wio/internal/agent.(*Client).connect",
+    "github.com/wio-platform/wio/internal/agent.(*Client).Run",
+    "github.com/wio-platform/wio/cmd/controlplane.startAcceptanceAgent.func1"
+  ],
+  "payload": {
+    "agent_version": "0.3.23",
+    "capabilities": [
+      "agent.self_update",
+      "codex.cli_update",
+      "deploy.rollback_exact",
+      "codex.steer",
+      "workspace.file_write",
+      "codex.fork_at_message",
+      "gemini.sessions",
+      "cli.manage",
+      "gemini.credentials",
+      "gemini.fork",
+      "gemini.thinking",
+      "gemini.yolo",
+      "gemini.input",
+      "gemini.steer",
+      "gemini.skills",
+      "gemini.plan",
+      "gemini.goal",
+      "gemini.rewrite",
+      "gemini.steer_images",
+      "gemini.skills_manage",
+      "claude.sessions",
+      "claude.manage",
+      "claude.effort",
+      "claude.input",
+      "claude.skills",
+      "operation.interrupt",
+      "claude.rewrite",
+      "credentials.scoped",
+      "session.collaboration"
+    ],
+    "claude_ready": true,
+    "claude_version": "1.0.0",
+    "codex_ready": true,
+    "codex_version": "codex-cli 0.1.0",
+    "gemini_ready": true,
+    "gemini_version": "0.66.0",
+    "hostname": "fixture-agent",
+    "managed_roots": [
+      "/fixture/work/repositories",
+      "/fixture/work/clones"
+    ],
+    "scan_roots": [
+      "/fixture/work/repositories",
+      "/fixture/work/clones"
+    ]
+  }
+}
