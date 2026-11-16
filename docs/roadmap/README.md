@@ -161,6 +161,8 @@ P7 分三批交付：先实现明确计划下的依赖调度与基础工作台�
 
 2026-11-16 用户在 M6 本地完成后要求“继续”：按路线图推进 M7（P5），沿用逐步骤验收后自动本地提交的授权。先完成可达性盘点与环境收紧，再按 D4 的验证结论决定隔离实现；不推送或部署。P5 的威胁边界、技术结论和真实隔离会话验收仍按阶段文件核对。
 
+2026-11-16 用户在会话 `1df0a763` 接续 M7 时明确选择“纳入独立修复，继续 M7”：授权将已登记的 Gemini 0.68 历史恢复兼容问题作为独立修复纳入本轮。该修复与 P5-04 隔离原型分别验证，保留既定的威胁边界和产品接入前置；不增加推送或部署范围。
+
 ### 并行
 
 - 多个 Agent 同时工作时各用独立 worktree，并且只领取互不重叠的步骤。下表列出会互相冲突的组合。
@@ -247,7 +249,7 @@ npm --prefix web run typecheck
 | P5-01 | 威胁模型与可达性盘点 | S | 无 | 已完成 | 11-16 Codex 615eb944 | GPT-6（Codex，本会话自验） | 6db31a9 |
 | P5-02 | 子进程环境与凭据收紧 | M | P5-01 | 已完成 | 11-16 Codex 615eb944 | gpt-6.1-sol（Codex，自验） | 58ea71b、bdad111 |
 | P5-03 | 隔离技术可行性验证 | M | P5-01、决策 D4 | 已完成 | 11-16 Codex 615eb944 | gpt-6.1-sol（Codex，自验）；用户已确认重设计 | ae64984、761d65b；确认记录见 P5 |
-| P5-04 | 可选的会话隔离模式 | L | P5-03、P2-09 | 进行中 | 11-16 Codex 615eb944；仅前置原型验证 |  | |
+| P5-04 | 可选的会话隔离模式 | L | P5-03、P2-09 | 进行中 | 11-16 Codex 615eb944；1df0a763 接续；仅前置原型验证 |  | |
 | P5-05 | 界面呈现与文档 | S | P5-04 | 待开始 | |  | |
 | P6-01 | 交互方案确认与差异盘点 | S | 无 | 已完成 | 11-13 Codex | claude-fable-5-2 | 07bec2c、ae9f4fc |
 | P6-02 | 统一会话页面（与旧入口并存） | L | P2-06、P6-01 | 已完成 | 11-15 Codex | GPT-6（Codex，自验） | 84f516b |
@@ -300,6 +302,7 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-16 | D4（验证顺序） | 用户确认先验证 Landlock，不满足要求再验证 bubblewrap；使用临时原型和合成凭据。技术可行性结论待 P5-03 的实际结果，不将验证顺序等同于已选定产品实现。 |
 | 2026-11-16 | D4（实验结论，待确认） | Landlock 原型和三个真实 CLI 的模型工具均不能阻止两个合成特权 socket；最小原型的 abstract socket 和跨域信号也可用。bubblewrap 临时非特权入口在 uid map 初始化处失败。Codex/Gemini 自身环境密钥仍有泄露路径。建议保留 P5-02，先重设计并重新验证凭据、IPC 和进程边界；P5-03 等用户确认，P5-04/05 保持待开始。结果及通用环境范围见 [P5-03 实验结论](P5-isolation-feasibility.md)。 |
 | 2026-11-16 | D4（重设计，已确认） | 用户明确选择“按报告重设计凭据与进程边界，验证通过后继续 M7”。P5-03 结论已确认并关闭；P5-04 领取前置原型验证，先保护上游凭据，再验证完整进程规则。保留原威胁边界、默认关闭、失败拒绝、sudo 互斥和真实部署验收要求；不取消 P5-04/05，不将部分保护作为产品隔离。 |
+| 2026-11-16 | D4（重设计验证进展） | 固定上游凭据代理、bubblewrap 命名空间/只读挂载及 Landlock ABI 6 scopes 的组合在临时真实内核通过两种启动形态的文件、元数据、socket、进程和回环边界；三引擎 API/服务环境的图片、工具/MCP及三种合成原生登录通过。完整恢复、编辑、分叉、中断、worktree 和跨工作区子 CLI 协作仍在补验，产品尚未接入，真实目标服务器未验收。详细证据及未支持认证见 [P5-04 重设计验证](P5-isolation-redesign.md)。 |
 
 ## 发现的问题
 
@@ -320,7 +323,7 @@ D10、D11 已由用户确认，结论见下方“决策记录”，不再按暂�
 | 2026-11-13 | P6-01 | 协作任务对话框（`web/src/components/CollaborationTaskDialog.tsx`）始终列出三种目标引擎，只检查源会话是否支持协作、授权和目标权限映射；`ReadCollaborationState`（`internal/store/session_collaboration.go`）也不返回目标引擎的 CLI、凭据和版本是否可用。这与 P6 新建对话框“不可用的引擎禁用并写明原因”不是同一套判断 | P6-03 已让协作与新建共用后端工作区引擎可用性，保留原有协作授权与目标权限检查 |
 | 2026-11-13 | P0-02、P0-06 | 本机负载高时，Vitest 有用例超过默认的 5 秒超时而失败。两个会话各自遇到过：同一台 4 核机器上另有 Go 全量测试或另一组 Vitest 在跑时，`web/src/GeminiPage.test.tsx` 的“exports all pages of a conversation rather than only the visible recent history”和 `web/src/DeploymentsPage.test.tsx` 的“creates and edits public access settings, manages containers, and exposes deployment links”超时。没有并发负载时两个文件都通过，GitHub 托管运行器上的运行也都通过 | 暂不处理，本机验收时不要让几组重任务同时运行。如果 CI 上也出现，再给这两个用例单独放宽超时。由用户决定 |
 | 2026-11-13 | P0-07 审阅 | `internal/geminiadapter` 的 `TestAPIEnvironmentAndDefaultModelAreAppliedWithoutGlobalMutation`（`adapter_test.go`）没有隔离用户主目录。测试配置了自定义接口地址和默认模型，适配器因此调用 `ensureLoopAliases`，在运行账号的 `~/.gemini/settings.json` 里写入 `modelConfigs.customAliases` 下的 `loop-detection` 和 `loop-detection-double-check`。把 `HOME` 指到空目录后逐个运行该包的 52 个测试，只有这一个留下文件；`internal/agent`、`internal/claudeadapter`、`internal/codexadapter` 整包运行后主目录里没有新增文件。写入的值与产品写入的相同，所以在已经运行 Wio Agent 的账号下没有实际变化；在没有用过 Wio 的开发机上，跑一次 `go test ./...` 会改动个人的 Gemini CLI 配置 | 建议在这个测试里把 `HOME` 指到临时目录，只改测试代码。由用户决定 |
-| 2026-11-13 | P0-06 执行期间 | Wio 里的 Gemini 子会话第一轮正常结束后，再追加消息会立即失败，报错“Gemini CLI cannot synchronize restored history; update Wio's Gemini compatibility adapter before retrying”。报错出自 `internal/geminiadapter/acp.go`：`session/load` 的返回里没有 `_meta.wioHistoryReplayed` 标记，而这个标记由 `internal/geminiadapter/history-loader.mjs` 注入。出现问题的服务器上受管的 Gemini CLI 是 0.68.0。原因没有查明，可能是这个版本与注入方式不兼容 | 没有处理。在修好之前，Gemini 会话交回后的返工只能另开会话。由用户决定何时排查 |
+| 2026-11-13；2026-11-16 复核 | P0-06 执行期间；M7 前置验证 | Gemini 0.68 已改为 `await session.streamHistory(messages)`，原兼容钩子只匹配旧的未等待调用，因而没有注入 `_meta.wioHistoryReplayed`，续聊和编辑重发被 Wio 明确拒绝 | 已按用户授权独立修复并本地提交 `e392caa`（Agent 0.3.30）。兼容新旧回放、拒绝重复或混合实现；实际代码的原生续聊、编辑、回放 race 与通用验收通过。完整结果见 P5 执行记录 |
 | 2026-11-14 | P0-07 审阅 | 使用 SQLite 时，一次被取消的请求可以让数据库在控制面重启之前无法写入。触发条件是某个事务的 context 在查询已经取到首行之后被取消，例如 Agent 断线时网关正在用流的 context 追加事件（`SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?`）。原因有三层：`modernc.org/sqlite` v1.31.1 的 `stmt.query` 在 context 取消时丢弃已经打开的结果集，没有关闭它；驱动没有实现 `ResetSession` 和 `IsValid`，`database/sql` 因此丢弃事务被取消的连接；`sqlite3_close_v2` 遇到未结束的语句只把连接留作僵尸，读锁不释放。之后连接池新开的连接每次写入都等满 5 秒 `busy_timeout` 再失败，接口返回 500。证据：P0-07 的断线重连用例在 `-race` 下三轮共 110 次迭代失败 15 次；给驱动加日志的那一轮 40 次里 6 次失败，每次失败前都有一次被丢弃的结果集，没有失败的迭代里没有；用 `go test -overlay` 让驱动关闭这个结果集后，40 次全部通过，期间这种情况出现了 3 次。另有 1 次失败是断线后的请求立即返回 401，原因没有查明 | 没有处理。可以考虑的修法：升级驱动（先确认哪个版本修了这两处），或者不把可取消的 context 传给 SQLite 上的事务。修复之前 P0-07 的断线重连用例需要绕开它。由用户决定 |
 | 2026-11-14 | P0-07 审阅 | 控制面收到 SIGINT 或 SIGTERM 时，如果还有 Agent 连着，会 panic 而不是正常退出。`cmd/controlplane/main.go` 的 `run` 在收尾时调用 `grpcServer.GracefulStop()`，而 Agent 的流是经 `grpcServer.ServeHTTP` 接入的；grpc-go v1.65.0 对这种流的 `Drain` 实现是 `panic("Drain() is not implemented")` | 已修复（当前工作区，0.3.14）：HTTP 接入的 gRPC 使用 Stop 并等待 RPC 处理器；SIGTERM、SIGINT 的真实进程退出回归覆盖活动 Agent 流与 WebSocket，原关闭路径已反向验证会 panic |
 | 2026-11-14 | P0-07 审阅 | 控制面收尾时不等待网关的处理函数。`Gateway.Connect` 退出时的 `removeConnection`（`internal/agentgateway/connections.go`）用后台 context 更新 `servers.status`，`receiveWithTools` 启动后也没有被等待；`http.Server.Shutdown` 不等待经 h2c 接管的连接，`grpc.Server.Stop` 不等待处理函数。所以 `Store.Close()` 返回之后仍可能有写入落到数据库 | 已修复（当前工作区，0.3.14）：关闭请求入口并取消请求与后台任务，等待 HTTP/WebSocket、RPC、网关接收与协作工具、维护任务及内置 Agent 收尾后再关闭数据库；退出超时则报告错误，不在存活任务下关闭数据库 |
