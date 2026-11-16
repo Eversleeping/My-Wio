@@ -214,7 +214,9 @@ Wio 面向可信单管理员环境。SSH 凭据仅用于当前请求；API Key�
 
 内置 Agent 使用 `WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT=GOCACHE,GOMODCACHE,GOPATH,CUSTOM_PROVIDER_TOKEN`，修改后重启控制面。这里保存名字，取值仍来自服务环境，在构造每个命令时读取；不接受赋值、通配符或 `WIO_` 名字。只加入确实需要传给子进程的变量，详细范围见[环境盘点](docs/roadmap/P5-environment-inventory.md)。未应用托管预设时，原生 CLI 登录及对应引擎命名空间下的服务环境认证继续可用。
 
-环境白名单减少无意泄露，文件访问仍由系统账号、服务限制和容器挂载决定。同账号模型进程仍可能读取 Agent 状态文件、Git 凭据、其他工作区和控制面进程资源。Codex、Gemini 的托管 API 密钥以及服务环境认证仍可能被其模型工具看到；Unix 上 Claude 的托管 API 密钥和回环 MCP 配置使用匿名描述符，Codex 的回环 MCP 令牌仍在进程参数中，Windows 上 Claude 保留原有环境 / 内联配置回退。工作区内容可通过网络发给模型服务，同引擎原生历史共享；这些边界不能由环境白名单消除。
+未开启会话隔离时，环境白名单减少无意泄露，文件访问仍由系统账号、服务限制和容器挂载决定。同账号模型进程仍可能读取 Agent 状态文件、Git 凭据、其他工作区和控制面进程资源。Codex、Gemini 的托管 API 密钥以及服务环境认证仍可能被其模型工具看到；Unix 上 Claude 的托管 API 密钥和回环 MCP 配置使用匿名描述符，Codex 的回环 MCP 令牌仍在进程参数中，Windows 上 Claude 保留原有环境 / 内联配置回退。工作区内容可通过网络发给模型服务，同引擎原生历史共享；这些边界不能由环境白名单消除。
+
+Agent 0.3.31 增加默认关闭的会话隔离：在支持 Landlock ABI 9 及完整 bubblewrap 命名空间的 Linux 上，CLI 只获得当前工作区和必要原生状态，上游认证由 Agent 代理，外部凭据、其他工作区和特权 socket 不向模型开放。免密 sudo 与隔离互斥；root 内置 Agent 必须先降权。网络出口及同引擎原生历史共享的残余风险保留。当前真实服务器验收尚未完成，配置、认证范围和限制见[会话隔离](docs/SESSION_ISOLATION.md)。
 
 ## 仓库结构
 

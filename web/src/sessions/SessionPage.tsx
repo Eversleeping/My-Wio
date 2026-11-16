@@ -3,11 +3,13 @@ import { type CSSProperties,type ReactNode,useEffect,useState } from "react";
 import type { FilePreviewSelection } from "../codexContent";
 import { ErrorState } from "../components/PageUI";
 import { SessionCollaboration } from "../components/SessionCollaboration";
+import { SessionIsolation } from "../components/SessionIsolation";
 import { SessionPreviewPanels,SessionPreviewTabs,useSessionPreviews } from "../components/SessionPreviews";
 import { SidebarHeightDivider,readSidebarHeight } from "../components/SidebarHeightDivider";
 import { useI18n } from "../i18n";
 import { WorkspaceFilesPanel } from "../workspace/WorkspaceFilesPanel";
 import type { Engine,SessionSummary } from "./types";
+import type { SessionIsolationStatus } from "../types";
 
 type Props = {
   engine: Engine; thread?: (SessionSummary & { operation_id?: string }) | null;
@@ -17,11 +19,12 @@ type Props = {
   children: (openFile: (selection: FilePreviewSelection) => void) => ReactNode;
   welcome: ReactNode; dialogs?: ReactNode; error?: string; reload: () => void;
   writable?: boolean;
+  isolation?: SessionIsolationStatus;
 };
 
 export function readUnifiedSidebarHeight() { return readSidebarHeight("wio_sessions_sidebar_height"); }
 
-export function SessionPage({ engine, thread, selectedID, onSelect, revision, collaborationRevision, notify, sidebar, children, welcome, dialogs, error, reload, writable = true }: Props) {
+export function SessionPage({ engine, thread, selectedID, onSelect, revision, collaborationRevision, notify, sidebar, children, welcome, dialogs, error, reload, writable = true, isolation }: Props) {
   const { t } = useI18n();
   const codex = engine === "codex";
   const [mobile, setMobile] = useState(selectedID && codex ? "conversation" : "sessions");
@@ -34,6 +37,7 @@ export function SessionPage({ engine, thread, selectedID, onSelect, revision, co
   const openFile = (selection: FilePreviewSelection) => { previews.open(selection); setMobile("conversation"); };
   const select = (id: string) => { onSelect(id); setMobile(id || !codex ? "conversation" : "sessions"); };
   const content = thread || codex ? <>
+    {thread && isolation && <div className="session-isolation-indicator"><SessionIsolation status={isolation} compact /></div>}
     <SessionPreviewTabs previews={previews} />
     {thread && <SessionCollaboration key={`collaboration:${engine}:${thread.id}`} engine={engine} id={thread.id} workspaceID={thread.workspace_id} projectID={thread.project_id} revision={collaborationRevision} />}
     <SessionPreviewPanels previews={previews} workspaceID={thread?.workspace_id ?? ""} workspaceRoot={thread?.path ?? ""} writable={writable} realtime={revision} notify={notify} onOpenFile={openFile}>{children(openFile)}</SessionPreviewPanels>

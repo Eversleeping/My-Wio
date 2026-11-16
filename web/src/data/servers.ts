@@ -3,7 +3,7 @@ import { postStream } from "./api";
 import { invalidateResources, mutation, query, readResource, writeResource } from "./resources";
 
 type SSHAccess = {host: string; port: number; user: string; auth_method: string; password: string; private_key: string; private_key_passphrase: string; host_key_fingerprint: string};
-type Bootstrap = SSHAccess & {name: string; scan_roots: string[]; configuration: string; notes: string; codex_profile_id: string; git_profile_id: string; allow_sudo: boolean};
+type Bootstrap = SSHAccess & {name: string; scan_roots: string[]; configuration: string; notes: string; codex_profile_id: string; git_profile_id: string; allow_sudo: boolean; session_isolation?: boolean};
 export const servers = {
   list: () => query<Server[]>("/servers", ["servers", "monitoring", "projects", "deployments", "settings"]),
   read: () => readResource(servers.list()),

@@ -42,7 +42,7 @@ Agent 将配置保存为受限权限的 `gemini/api.json`，启动 CLI 时单独
 
 外部 Agent 默认 Home 为 `/var/lib/wio-agent`；内置 Agent 使用控制面服务环境中的白名单变量。从 Agent 0.3.29 起，Gemini 子进程保留通用运行、代理/证书、Node/XDG、Git，以及 `GEMINI_*`、`GOOGLE_*`、`GCLOUD_*`、`CLOUDSDK_*` 命名空间；其他引擎及控制面的继承变量不会默认传入。自定义认证或工具链变量用 `extra_environment` 放行，方法见 [README](../README.md#备份与安全)。systemd 不自动读取 `.bashrc`，服务环境修改需重启，账号、Home、PATH 和文件权限须一致。托管 API 预设的模型自动发现不适用于 Google 登录/Vertex AI，可手工输入可用模型。
 
-当前官方 CLI 没有可用的 API 密钥描述符接口，托管 `GEMINI_API_KEY` 仍经环境传入，并可能被模型工具看到。CLI 从登录缓存或 `.env` 重新加载的凭据、同账号文件权限和网络访问也不由启动环境白名单限制。
+未开启会话隔离时，当前官方 CLI 没有可用的 API 密钥描述符接口，托管 `GEMINI_API_KEY` 仍经环境传入，并可能被模型工具看到。CLI 从登录缓存或 `.env` 重新加载的凭据、同账号文件权限和网络访问也不由启动环境白名单限制。
 
 以相同账号、环境和实际工作区验证无头调用时，可执行以下命令；它会调用模型：
 
@@ -87,3 +87,7 @@ Wio 保存原生 session ID 并通过 CLI 恢复上下文；应保留 Agent 账�
 - [工作区信任](https://geminicli.com/docs/cli/trusted-folders/)
 - [模型配置](https://geminicli.com/docs/reference/configuration/#modelconfigs)
 - [原生模型列表 API](https://ai.google.dev/api/models)
+
+## 会话隔离
+
+Gemini 审批模式与系统隔离分别设置。Agent 0.3.31 提供默认关闭的[会话隔离](SESSION_ISOLATION.md)：API 认证由可信 Agent 代理，CLI 和工具只获得临时凭据；Google 登录需要可信项目及有效、可判断到期时间的 access token，刷新在可信账号侧完成。Vertex、ADC、service account 和 workload identity 当前明确拒绝。隔离开启时不提供 Gemini 技能安装管理，已有技能发现及使用仍走隔离进程。Docker、宿主凭据和其他工作区不向会话开放，网络出口及同引擎历史共享保留；真实服务器和真实账户验收尚未完成。

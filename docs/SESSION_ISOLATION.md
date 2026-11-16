@@ -1,0 +1,73 @@
+# 会话隔离
+
+会话隔离从 Agent 0.3.31 起提供，默认关闭。当前实现已进入本地验收，真实目标服务器的三引擎完整流程仍待验收，进度见 [P5](roadmap/P5-execution-isolation.md)。开启前先检查目标服务器支持条件。
+
+## 保护范围
+
+开启后，官方 CLI 和模型工具只获得当前工作区、worktree 所需的主仓库 Git 元数据、该引擎必要的原生历史及专用临时目录。系统和 CLI 运行库只读。Agent 注册配置、上游认证文件、Git 凭据、其他工作区、控制面进程环境和特权 socket 不向会话开放；工作区里已有的外部 socket 别名也被拒绝。
+
+上游 API 或登录认证由可信 Agent 持有。CLI 只获得本进程的临时推理凭据，通过固定接口代理请求；进程结束、启动失败或原生登录到期时撤销。Claude 的匿名认证描述符也只含临时凭据。会话无法借用这些凭据调用账户管理接口或转发到任意地址。
+
+这项功能防范模型误操作及外来内容诱导，适用于可信单管理员环境。同一引擎仍共享允许的原生历史目录；同一工作区的会话仍共享文件。网络出口保持开放，模型能够发送自己的工作区内容。模型权限模式、worktree 和环境白名单各有用途，均不能单独提供这里的系统隔离。
+
+| 部署形态 | 未开启会话隔离 | 开启会话隔离 |
+| --- | --- | --- |
+| 外部 Agent，默认服务权限 | 子进程仍使用 Agent 账号，可触及该账号的凭据、其他工作区及授权 socket | CLI 受上述边界限制；Agent 自身保留 Git 和部署权限 |
+| 外部 Agent，免密 sudo | 模型命令可能使用 sudo，Docker 权限也接近 root | 与隔离互斥，必须先取消免密 sudo |
+| root 内置 Agent | 模型命令受容器挂载和 root 权限影响；环境白名单不能阻止读取其他进程资源 | CLI 必须降到配置的非 root 账号、清除附加组和 capabilities，再应用完整边界；容器不支持时拒绝运行 |
+
+## 支持条件
+
+- Linux 启用 Landlock，实际支持 **ABI 9 或更新版本**。需要 pathname UNIX socket 的 `LANDLOCK_ACCESS_FS_RESOLVE_UNIX`，以及 abstract socket 和 signal scopes；仅具备 ABI 6 不满足条件。
+- 可用的 bubblewrap，支持用户、挂载、PID、IPC、UTS、cgroup 命名空间、禁用嵌套用户命名空间和按描述符绑定挂载。系统、容器和服务策略须允许这些操作。
+- 根进程配置非零隔离 UID/GID；该账号已有权限访问工作区、Git 元数据和持久化原生历史。Wio 不会递归更改已有文件的属主或权限。
+- CLI 及运行库须在只读公开范围内。额外运行库用 `runtime_paths` 明确指定，不能包含账号 HOME、整个 Agent 状态、凭据、特权 socket 或宿主进程/设备目录。
+
+Agent 会实际启动包装器探测能力。内核版本号、已安装 bubblewrap 或配置开关本身均不能证明隔离可用。缺少任何必要条件时报告“不支持”及原因，CLI 拒绝运行；Git、部署等可信 Agent 操作继续使用原有权限。
+
+## 开启与关闭
+
+注册或 SSH 修复服务器时，勾选“启用会话隔离”；该选项与“允许免密 sudo”互斥。新装服务器仍须具备上面的内核及 bubblewrap 条件。
+
+已有外部 Agent 可在配置中增加以下片段，保留其他字段，然后重启服务：
+
+```json
+"session_isolation": {
+  "enabled": true
+}
+```
+
+可选字段为 `bubblewrap`（可执行文件绝对路径）、`runtime_paths`（只读公开目录或文件列表），以及 root 启动时必需的 `uid` 和 `gid`。按管理员配置的实际账号填写数字，不能使用 0。
+
+内置 Agent 使用以下控制面服务环境变量，修改后重启控制面：
+
+| 变量 | 用途 |
+| --- | --- |
+| `WIO_CONTROL_AGENT_SESSION_ISOLATION=true` | 开启完整边界 |
+| `WIO_CONTROL_AGENT_ISOLATION_UID` / `WIO_CONTROL_AGENT_ISOLATION_GID` | root 降权账号的非零 UID/GID |
+| `WIO_CONTROL_AGENT_ISOLATION_BWRAP` | 可选的 bubblewrap 路径 |
+| `WIO_CONTROL_AGENT_ISOLATION_RUNTIME_PATHS` | 可选的逗号分隔只读运行库路径 |
+
+默认控制面镜像和宿主安全策略不保证满足支持条件。不要为使开关生效而放行整个 HOME、状态目录或 Docker socket；在容器不能建立完整边界时，优先使用支持条件明确的外部 Agent。
+
+关闭外部 Agent 的 `enabled` 或移除内置开关后重启服务即可停用。切换前先停止活动会话，重新启动后以新心跳为准。
+
+## 状态与使用限制
+
+服务器页面显示“已启用”“未启用”“不支持”或“未知”。旧 Agent 没有上报时显示未知；会话页显示服务器最近上报的启用或不支持状态。启用状态表示基础边界探测通过，具体认证或运行库配置仍可能让单个会话启动失败。
+
+模型可在工作区和 worktree 内修改文件、提交；需要认证的推送通过 Wio Git 面板由 Agent 完成。会话不能使用 Docker、宿主 SSH/Git 凭据或外部 socket。Gemini 技能安装管理在隔离开启时不提供；技能发现和已有技能的使用仍走隔离进程。部署、Git 面板及依赖安装助手属于可信 Agent 操作，权限保持原有范围。
+
+跨工作区协作仍由已授权的 Wio 工具创建目标会话；目标 CLI 只获得自己的工作区，通过 MCP 返回成果。来源 CLI 不能直接读取目标工作区。协作范围、Git 提交/推送授权和工具审批规则继续生效。
+
+## 认证范围
+
+| 认证 | 当前处理 |
+| --- | --- |
+| 三引擎托管 API 预设、受支持的服务环境 API 认证 | Agent 解析后代理；工具环境及私有配置使用临时认证 |
+| Codex、Claude 原生登录 | 读取可信登录的现有 access token，绑定账户及到期时间；不向 CLI 提供 refresh token |
+| Gemini Google 登录 | 需要可信项目与可用、可判断到期时间的 access token；代理约束项目和资源，不支持只靠 CLI 自己刷新缓存 |
+| Claude Bedrock / Vertex / Foundry；Gemini Vertex / ADC / service account / workload identity | 当前不支持，明确拒绝；不能透传原始云凭据 |
+| 自定义 Codex/Claude 认证头、无法判断有效期或已到期的原生认证 | 明确拒绝；在可信账号侧完成认证或刷新后重试 |
+
+真实账户的认证、刷新及目标服务器兼容性仍须部署验收；合成账户的本地通过结果不能替代它们。自定义接口只允许受支持的推理和必要查询路径，不保证所有供应商扩展可用。

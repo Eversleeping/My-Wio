@@ -211,3 +211,11 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 | `controlplane` 无法连接 PostgreSQL | 对比 `.env` 中的 `POSTGRES_PASSWORD` 与 URL 编码后的 `WIO_DATABASE_URL`，再检查 `postgres` 容器健康状态。 |
 | WebSocket 连接失败但页面可打开 | 宿主机代理必须将 Upgrade 请求单独按 HTTP/1.1 转发；不要把 WebSocket 请求强制走 h2c。 |
 | 容器可启动但无法扫描或部署宿主机项目 | 检查专用工作区目录是否存在、是否映射到 `srv`/`opt`/`home`，并确认 Docker socket 挂载及部署账户权限。 |
+
+## 可选会话隔离
+
+Agent 0.3.31 提供默认关闭的完整会话边界，要求 Linux 实际支持 Landlock ABI 9 的 pathname socket 限制和 IPC/信号 scopes，以及允许 bubblewrap 建立全部所需命名空间。仅安装 bubblewrap 或使用较新内核不能代替启动探测；不支持时 CLI 明确拒绝运行。
+
+root 内置 Agent 还必须配置非零隔离 UID/GID，清空附加组和 capabilities，并由管理员事先保证工作区与原生历史的访问权限。默认容器镜像及宿主策略不保证满足要求，不能通过放行整个 HOME、Agent 状态或 Docker socket 弥补；优先在支持条件明确的外部 Agent 上试用。免密 sudo 与隔离互斥。具体变量、配置、认证限制和关闭方式见[会话隔离](SESSION_ISOLATION.md)。
+
+本次 schema 6 是扩展迁移，增加独立的服务器隔离状态表，不删除原有数据。数据库版本保护仍适用：仅支持 schema 5 的控制面不能直接连接已升级数据库；回退到旧制品须按既有备份恢复流程处理。关闭隔离开关不需要回退 schema。当前真实外部 Agent、控制面容器及真实账户验收尚未完成，临时支持内核的结果不代表生产环境支持。

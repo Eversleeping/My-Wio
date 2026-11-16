@@ -2616,3 +2616,9 @@ button.file-tree-row:hover { color: #ffffff; background: #131a26; }
 .session-engine-choices { display: flex; flex-wrap: wrap; gap: 10px; }
 
 .thread-project-toggle.workspace-focused { box-shadow: inset 3px 0 var(--cyan, #22d3ee); }
+.agent-isolation-option { display: flex; align-items: flex-start; gap: 10px; margin: 14px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.agent-isolation-option span { display: flex; flex-direction: column; gap: 5px; }
+.agent-isolation-option small { color: var(--muted); line-height: 1.5; }
+.session-isolation { width: fit-content; max-width: 280px; flex-wrap: wrap; }
+.session-isolation small { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+.session-isolation-indicator { padding: 8px 14px 0; }

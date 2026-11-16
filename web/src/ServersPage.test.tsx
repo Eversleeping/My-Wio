@@ -36,6 +36,46 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+test("enrolls isolated sessions with passwordless sudo mutually exclusive", async () => {
+  localStorage.setItem("wio_language", "en");
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    if (init.method === "POST") requests.push({ url, body: JSON.parse(String(init.body)) });
+    if (url.endsWith("bootstrap-stream")) return new Response(JSON.stringify({ type: "complete", result: { server_id: server.id, hostname: "synthetic-node", architecture: "amd64", warnings: [] } }) + "\n");
+    const data = url === "/api/servers" ? [server] : url === "/api/credential-profiles" ? [{ id: "codex", kind: "codex", name: "Codex", model: "gpt-6.1-sol" }] : url.endsWith("ssh/probe") ? { fingerprint: "SHA256:synthetic", key_type: "ssh-ed25519" } : [];
+    return new Response(JSON.stringify(data));
+  }));
+  render(<I18nProvider><DataProvider revisions={{ servers: 0 }}><ServersPage notify={vi.fn()} /></DataProvider></I18nProvider>);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Enroll server" }));
+  const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  const isolation = within(dialog).getByRole("checkbox", { name: /Enable session isolation/ });
+  const sudo = within(dialog).getByRole("checkbox", { name: /Allow passwordless sudo/ });
+  expect(isolation).not.toBeChecked();
+  await user.click(isolation);
+  expect(sudo).toBeDisabled();
+  await user.click(isolation);
+  await user.click(sudo);
+  expect(isolation).toBeDisabled();
+  await user.click(sudo);
+  await user.click(isolation);
+  await user.type(within(dialog).getByRole("textbox", { name: "Server name" }), "isolated-node");
+  await user.type(within(dialog).getByRole("textbox", { name: "SSH host or IP" }), "node.example.test");
+  await user.selectOptions(within(dialog).getByRole("combobox", { name: "Authentication" }), "none");
+  await user.click(within(dialog).getByRole("button", { name: "Check fingerprint" }));
+  await user.click(await screen.findByRole("button", { name: "Confirm and install" }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/servers/ssh/bootstrap-stream", body: expect.objectContaining({ session_isolation: true, allow_sudo: false }) }));
+});
+
+test("shows an unsupported server isolation reason", async () => {
+  localStorage.setItem("wio_language", "en");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === "/api/servers" ? [{ ...server, session_isolation: { mode: "unsupported", reason: "Required namespaces are unavailable" } }] : []))));
+  render(<I18nProvider><DataProvider revisions={{ servers: 0 }}><ServersPage notify={vi.fn()} /></DataProvider></I18nProvider>);
+  expect(await screen.findByText("Isolation unavailable")).toBeInTheDocument();
+  expect(screen.getByText("Required namespaces are unavailable")).toBeInTheDocument();
+});
+
 test("displays the Codex version without the CLI prefix", async () => {
   window.localStorage.setItem("wio_language", "en");
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === "/api/servers" ? [{ ...server, codex_version: "codex-cli 0.165.0" }] : []))));
