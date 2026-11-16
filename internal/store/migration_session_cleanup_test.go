@@ -35,8 +35,13 @@ func TestSessionCleanupMigration(t *testing.T) {
 	assertSessionCleanupMigration(t, db, "sqlite")
 }
 
-// Historical-state tests must construct schema 4 before injecting old rows.
-// Re-running the frozen baseline on a contracted database would recreate copies.
+// Historical-state fixtures retain the schema 4 source tables, with the
+// additive isolation table required by today's server projection. Migration 5
+// remains pending so Open still performs the cleanup after old rows are added.
+func retainedSessionFixtureMigrations() []migration {
+	return append(append([]migration(nil), schemaMigrations[:4]...), schemaMigrations[5])
+}
+
 func openPreCleanupTestStore(dsn string) (*Store, error) {
 	driver := "sqlite"
 	if strings.HasPrefix(dsn, "postgres") {
@@ -47,7 +52,7 @@ func openPreCleanupTestStore(dsn string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err = runMigrations(context.Background(), db, driver, schemaMigrations[:4]); err != nil {
+	if _, err = runMigrations(context.Background(), db, driver, retainedSessionFixtureMigrations()); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -109,6 +114,9 @@ func sessionCleanupSnapshot(t *testing.T, db *sqlx.DB, driver string) map[string
 func assertSessionCleanupMigration(t *testing.T, db *sqlx.DB, driver string) {
 	t.Helper()
 	ctx := context.Background()
+	// Keep this historical migration's rollback and retained-data oracle fixed
+	// at schema 5; newer extension migrations have their own regression tests.
+	cleanupMigrations := schemaMigrations[:5]
 	if _, err := runMigrations(ctx, db, driver, schemaMigrations[:4]); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +153,7 @@ func assertSessionCleanupMigration(t *testing.T, db *sqlx.DB, driver string) {
 	before := sessionCleanupSnapshot(t, db, driver)
 	// Execute every destructive statement and then fail: both databases must roll
 	// the dropped structures back together with migration history and live data.
-	injected := append([]migration(nil), schemaMigrations...)
+	injected := append([]migration(nil), cleanupMigrations...)
 	injected[len(injected)-1].up = func(ctx context.Context, tx *sqlx.Tx, driver string) error {
 		if err := migrateSessionCleanup(ctx, tx, driver); err != nil {
 			return err
@@ -169,7 +177,7 @@ func assertSessionCleanupMigration(t *testing.T, db *sqlx.DB, driver string) {
 		t.Fatal("failed cleanup changed retained data")
 	}
 	for range 2 {
-		if _, err := runMigrations(ctx, db, driver, schemaMigrations); err != nil {
+		if _, err := runMigrations(ctx, db, driver, cleanupMigrations); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -201,6 +209,9 @@ func assertSessionCleanupMigration(t *testing.T, db *sqlx.DB, driver string) {
 	}
 	if _, err := runMigrations(ctx, db, driver, schemaMigrations[:4]); err == nil || !strings.Contains(err.Error(), "newer than supported") {
 		t.Fatalf("old control plane accepted contracted schema: %v", err)
+	}
+	if _, err := runMigrations(ctx, db, driver, schemaMigrations); err != nil {
+		t.Fatal(err)
 	}
 	s := &Store{DB: db, driver: driver}
 	if err := s.Heartbeat(ctx, "cleanup-server", protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("new-cli", "new-cli"), CodexVersion: "new-cli", GeminiVersion: "new-cli", ClaudeVersion: "new-cli"}); err != nil {

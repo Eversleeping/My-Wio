@@ -11,6 +11,7 @@ import (
 	"github.com/wio-platform/wio/internal/claudeadapter"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 type claudeSessionRunner struct{ client *Client }
@@ -42,6 +43,7 @@ func (r claudeSessionRunner) Interrupt(ctx context.Context, envelope *protocol.C
 
 func (r claudeSessionRunner) Start(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
+	ctx = c.processContext(ctx)
 	var command protocol.ClaudeTurnCommand
 	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, &command.Workspace); err != nil {
 		return err
@@ -68,6 +70,7 @@ func (r claudeSessionRunner) Start(ctx context.Context, envelope *protocol.Contr
 			return err
 		}
 	}
+	ctx = sessionisolation.WithReadPaths(ctx, command.ResumePath)
 	environment, err := c.claudeEnvironment()
 	if err != nil {
 		return err

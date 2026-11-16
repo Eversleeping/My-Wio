@@ -26,6 +26,7 @@ import (
 	"github.com/wio-platform/wio/internal/geminiadapter"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/session"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -40,6 +41,7 @@ type Client struct {
 	codex              *codexadapter.Sessions
 	gemini             *geminiadapter.Adapter
 	deployer           *deployer.Deployer
+	isolation          *sessionisolation.Manager
 	seenMu             sync.Mutex
 	seen               map[string]*operationExecution
 	updatePending      bool
@@ -69,6 +71,7 @@ type Client struct {
 func NewClient(config Config, log *slog.Logger) *Client {
 	codexPath := effectiveCodexPath(config)
 	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath, config.PrerequisiteSocket), seen: make(map[string]*operationExecution), codexPath: codexPath}
+	client.isolation = sessionisolation.New(config.SessionIsolation, config.StateDir, config.configPath, codexAPIKeyPath(config), config.PrerequisiteSocket)
 	client.codex = codexadapter.NewSessions(codexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
 		return client.emitSessionEvent(session.Codex, event)
 	})
@@ -83,7 +86,7 @@ func NewClient(config Config, log *slog.Logger) *Client {
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
+	ctx = c.processContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
 	defer func() {
 		cancel()
@@ -113,6 +116,10 @@ func (c *Client) Run(ctx context.Context) error {
 			backoff *= 2
 		}
 	}
+}
+
+func (c *Client) processContext(ctx context.Context) context.Context {
+	return c.isolation.Context(childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment))
 }
 
 func (c *Client) startWorker(work func()) {

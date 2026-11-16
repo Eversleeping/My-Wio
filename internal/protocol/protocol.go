@@ -30,17 +30,18 @@ type ControlEnvelope struct {
 }
 
 type Heartbeat struct {
-	Capabilities  []string `json:"capabilities,omitempty"`
-	Hostname      string   `json:"hostname"`
-	AgentVersion  string   `json:"agent_version"`
-	CodexVersion  string   `json:"codex_version"`
-	CodexReady    bool     `json:"codex_ready"`
-	GeminiVersion string   `json:"gemini_version"`
-	GeminiReady   bool     `json:"gemini_ready"`
-	ClaudeVersion string   `json:"claude_version"`
-	ClaudeReady   bool     `json:"claude_ready"`
-	ScanRoots     []string `json:"scan_roots"`
-	ManagedRoots  []string `json:"managed_roots,omitempty"`
+	SessionIsolation *SessionIsolationStatus `json:"session_isolation,omitempty"`
+	Capabilities     []string                `json:"capabilities,omitempty"`
+	Hostname         string                  `json:"hostname"`
+	AgentVersion     string                  `json:"agent_version"`
+	CodexVersion     string                  `json:"codex_version"`
+	CodexReady       bool                    `json:"codex_ready"`
+	GeminiVersion    string                  `json:"gemini_version"`
+	GeminiReady      bool                    `json:"gemini_ready"`
+	ClaudeVersion    string                  `json:"claude_version"`
+	ClaudeReady      bool                    `json:"claude_ready"`
+	ScanRoots        []string                `json:"scan_roots"`
+	ManagedRoots     []string                `json:"managed_roots,omitempty"`
 }
 
 type Metrics struct {

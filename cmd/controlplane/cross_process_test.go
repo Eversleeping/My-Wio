@@ -612,8 +612,11 @@ func assertAcceptanceCapabilityDeclarations(t *testing.T, api *acceptanceAPI, da
 		t.Fatal(err)
 	}
 	// Fake Gemini is 0.66.0; fake Claude is 1.0.0 (no steer/questions).
-	if len(server.DeclaredCapabilities) != 29 || !capabilities.Supports(protocol.CapabilityGeminiGoal, server.AgentVersion, server.DeclaredCapabilities) || capabilities.Supports(protocol.CapabilityClaudeSteer, server.AgentVersion, server.DeclaredCapabilities) {
+	if len(server.DeclaredCapabilities) != 30 || !capabilities.Supports(protocol.CapabilityGeminiGoal, server.AgentVersion, server.DeclaredCapabilities) || capabilities.Supports(protocol.CapabilityClaudeSteer, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilitySessionIsolation, server.AgentVersion, server.DeclaredCapabilities) {
 		t.Fatalf("real heartbeat declaration=%v", server.DeclaredCapabilities)
+	}
+	if server.SessionIsolation == nil || server.SessionIsolation.Mode != protocol.IsolationDisabled {
+		t.Fatal("default Agent heartbeat did not report isolation as disabled")
 	}
 	response, err := api.request(http.MethodGet, "/api/servers", nil)
 	if err != nil || response.status != http.StatusOK {

@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tailscale/hujson"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 //go:embed steering-hook.cjs
@@ -209,7 +210,7 @@ func (a *Adapter) readSteeringImages(op, thread, requestID string) ([]any, error
 // not change Gemini's native transcript. The next Wio turn carries the applied
 // updates into its prompt, where the CLI records them in native history.
 func (a *Adapter) startSteering(ctx context.Context, op, thread string, env []string) ([]string, func(), error) {
-	dir, err := os.MkdirTemp("", "wio-gemini-steering-")
+	dir, err := os.MkdirTemp(sessionisolation.TempDir(ctx), "wio-gemini-steering-")
 	if err != nil {
 		return nil, nil, err
 	}

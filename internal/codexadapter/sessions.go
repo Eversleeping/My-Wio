@@ -11,6 +11,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/mcpbridge"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -237,6 +238,19 @@ func (p *Sessions) CodexOperation(ctx context.Context, kind string, payload json
 	}
 	threadID := base.ThreadID
 	if kind == protocol.OpCodexModelsList || kind == protocol.OpCodexSkillsList || kind == protocol.OpCodexStatusSnapshot {
+		if sessionisolation.Enabled(ctx) {
+			p.lifecycle.RLock()
+			defer p.lifecycle.RUnlock()
+			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				return result, errors.New("Codex sessions are closed")
+			}
+			a := NewWithEnvironment(p.command, p.env, p.log, p.emit)
+			p.mu.Unlock()
+			defer a.Close()
+			return a.CodexOperation(ctx, kind, payload)
+		}
 		threadID = ""
 	}
 	err = p.withSession(threadID, func(a *Adapter) error {

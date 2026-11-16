@@ -18,6 +18,7 @@ const fakeSessionID = "550e8400-e29b-41d4-a716-446655440007"
 
 var hangPattern = regexp.MustCompile(`P0-07-HANG=([A-Za-z0-9_-]+)`)
 var environmentPattern = regexp.MustCompile(`P5-02-ENV=([A-Za-z0-9_-]+)`)
+var isolationPattern = regexp.MustCompile(`P5-04-PROBE=([A-Za-z0-9_-]+)`)
 
 func main() {
 	engine := filepath.Base(os.Args[0])
@@ -69,6 +70,7 @@ func hangMarker(input string) string {
 // Only variable names are persisted; test prompts supply the temporary report
 // path so the probe does not depend on inheriting a test-only environment name.
 func recordEnvironment(input string) {
+	recordIsolation(input)
 	match := environmentPattern.FindStringSubmatch(input)
 	if len(match) != 2 {
 		return
@@ -84,6 +86,39 @@ func recordEnvironment(input string) {
 	}
 	raw, _ := json.Marshal(names)
 	_ = os.WriteFile(string(path), raw, 0600)
+}
+
+func recordIsolation(input string) {
+	match := isolationPattern.FindStringSubmatch(input)
+	if len(match) != 2 {
+		return
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(match[1])
+	var request struct{ Outside, Report string }
+	if err != nil || json.Unmarshal(raw, &request) != nil {
+		os.Exit(31)
+	}
+	file, readErr := os.Open(request.Outside)
+	if readErr == nil {
+		file.Close()
+	}
+	// Probe the existing host file. O_CREATE could instead create a harmless
+	// shadow in the sandbox's private /tmp and misreport a boundary failure.
+	output, writeErr := os.OpenFile(request.Outside, os.O_WRONLY|os.O_TRUNC, 0)
+	if writeErr == nil {
+		_, writeErr = output.Write([]byte("attempted synthetic mutation"))
+		output.Close()
+	}
+	result := map[string]bool{"outside_read_denied": readErr != nil, "outside_write_denied": writeErr != nil, "control_environment_hidden": os.Getenv("WIO_MASTER_KEY") == "" && os.Getenv("WIO_DATABASE_URL") == ""}
+	data, _ := json.Marshal(result)
+	if os.WriteFile(request.Report, data, 0600) != nil {
+		os.Exit(32)
+	}
+	for i, name := range []string{"outside_read_denied", "outside_write_denied", "control_environment_hidden"} {
+		if !result[name] {
+			os.Exit(33 + i)
+		}
+	}
 }
 
 func markStarted(path string) {

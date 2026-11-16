@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 const maxGeminiSkillsOutput = 512 << 10
@@ -44,7 +46,7 @@ func (a *Adapter) ListSkills(parent context.Context, operationID, workspace stri
 	var output boundedSkillBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
+	if err := childprocess.RunContext(childprocess.WithScope(ctx, childprocess.Gemini), cmd); err != nil {
 		if ctx.Err() != nil {
 			return protocol.GeminiSkillsResult{}, ctx.Err()
 		}
@@ -90,6 +92,9 @@ func skillSnapshot(output, workspace string, environment []string) (protocol.Gem
 // Configuration changes reserve the entire Gemini adapter, including other
 // workspaces on this account. No running CLI loses its skill configuration.
 func (a *Adapter) ManageSkill(parent context.Context, command protocol.GeminiSkillManageCommand) (protocol.GeminiSkillsResult, error) {
+	if sessionisolation.Enabled(parent) {
+		return protocol.GeminiSkillsResult{}, errors.New("Gemini account skill management is unavailable while session isolation is enabled")
+	}
 	if err := protocol.ValidateGeminiSkillManagement(command); err != nil {
 		return protocol.GeminiSkillsResult{}, err
 	}
@@ -113,7 +118,7 @@ func (a *Adapter) ManageSkill(parent context.Context, command protocol.GeminiSki
 		// The official CLI writes mutation confirmations to stderr, even on success.
 		// Keep both streams bounded and use them only for local verification.
 		cmd.Stdout, cmd.Stderr = &output, &output
-		if err := cmd.Run(); err != nil {
+		if err := childprocess.RunContext(childprocess.WithScope(ctx, childprocess.Gemini), cmd); err != nil {
 			return "", errors.New("Gemini skill command failed; check the source, CLI and account permissions")
 		}
 		return output.String(), nil

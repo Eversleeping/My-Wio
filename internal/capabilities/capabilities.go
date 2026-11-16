@@ -83,6 +83,7 @@ var gates = []gate{
 	{protocol.CapabilityClaudeQuestions, claudeInteractive},
 	{protocol.CapabilityCredentialsScoped, nil},
 	{protocol.CapabilitySessionCollaboration, nil},
+	{protocol.CapabilitySessionIsolation, nil},
 }
 
 // Supports requires a supported Agent and its explicit declaration. Unknown

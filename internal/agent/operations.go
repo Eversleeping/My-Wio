@@ -38,6 +38,7 @@ func operationContext(parent context.Context, kind string) (context.Context, con
 }
 
 func (c *Client) handleOperation(parent context.Context, envelope *protocol.ControlEnvelope) {
+	parent = c.processContext(parent)
 	if envelope.OperationID == "" {
 		return
 	}

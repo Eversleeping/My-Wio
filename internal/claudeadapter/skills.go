@@ -11,12 +11,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 // ListSkills asks the native SDK initialization protocol for commands visible
 // to this account and workspace. It sends no user prompt or model request.
 func ListSkills(parent context.Context, executable, workspace string, environment ...string) (protocol.ClaudeSkillsResult, error) {
+	parent = sessionisolation.WithWorkspace(parent, workspace)
 	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
 	defer cancel()
 	if executable == "" {
@@ -30,6 +33,11 @@ func ListSkills(parent context.Context, executable, workspace string, environmen
 	}
 	defer releaseEnvironment()
 	configureProcess(cmd)
+	releaseIsolation, err := childprocess.Prepare(childprocess.WithScope(ctx, childprocess.Claude), cmd)
+	if err != nil {
+		return protocol.ClaudeSkillsResult{}, err
+	}
+	defer releaseIsolation()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return protocol.ClaudeSkillsResult{}, errors.New("could not create Claude discovery input")

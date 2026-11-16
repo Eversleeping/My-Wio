@@ -74,6 +74,9 @@ func assertServerEngineMigration(t *testing.T, db *sqlx.DB, driver string) {
 	if err := db.Get(&count, "SELECT COUNT(*) FROM server_engines WHERE server_id='unbound' AND updated_at IS NULL"); err != nil || count != 3 {
 		t.Fatalf("absent binding count=%d: %v", count, err)
 	}
+	if _, err := runMigrations(ctx, db, driver, retainedSessionFixtureMigrations()); err != nil {
+		t.Fatal(err)
+	}
 	bound, err := s.Server(ctx, "bound")
 	if err != nil || bound.CodexVersion != "codex-old" || bound.ClaudeVersion != "claude-old" || bound.GeminiVersion != "gemini-old" || bound.CodexProfileID != "codex" || bound.GitProfileID != "git" || bound.ClaudeProfileModel != "applied-snapshot" {
 		t.Fatalf("server projection changed: %+v %v", bound, err)

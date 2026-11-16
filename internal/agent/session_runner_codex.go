@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/scanner"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 type codexSessionRunner struct{ client *Client }
@@ -14,9 +16,17 @@ func (r codexSessionRunner) Start(ctx context.Context, envelope *protocol.Contro
 		return r.rewrite(ctx, envelope)
 	}
 	c := r.client
+	ctx = c.processContext(ctx)
 	var command protocol.StartTurnCommand
 	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, nil); err != nil {
 		return err
+	}
+	if sessionisolation.Enabled(ctx) {
+		root, err := scanner.ResolveWorkspaceRoot(command.Workspace, c.inventoryRoots())
+		if err != nil {
+			return err
+		}
+		command.Workspace = root
 	}
 	command.OperationID = envelope.OperationID
 	return c.codex.StartTurn(ctx, command)
@@ -24,9 +34,17 @@ func (r codexSessionRunner) Start(ctx context.Context, envelope *protocol.Contro
 
 func (r codexSessionRunner) rewrite(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
+	ctx = c.processContext(ctx)
 	var command protocol.RewriteTurnCommand
 	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, nil); err != nil {
 		return err
+	}
+	if sessionisolation.Enabled(ctx) {
+		root, err := scanner.ResolveWorkspaceRoot(command.Start.Workspace, c.inventoryRoots())
+		if err != nil {
+			return err
+		}
+		command.Start.Workspace = root
 	}
 	command.Start.OperationID = envelope.OperationID
 	return c.codex.RewriteTurn(ctx, command)

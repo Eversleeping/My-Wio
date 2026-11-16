@@ -26,7 +26,9 @@ const (
 )
 
 type Server struct {
-	DeclaredCapabilities capabilities.Declaration `db:"declared_capabilities" json:"-"`
+	DeclaredCapabilities capabilities.Declaration         `db:"declared_capabilities" json:"-"`
+	IsolationJSON        string                           `db:"session_isolation_json" json:"-"`
+	SessionIsolation     *protocol.SessionIsolationStatus `db:"-" json:"session_isolation,omitempty"`
 
 	ID                         string              `db:"id" json:"id"`
 	Name                       string              `db:"name" json:"name"`
@@ -81,19 +83,20 @@ type ServerMetadata struct {
 
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	var out []Server
-	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+serverCapabilitySelect+`,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.is_control_plane DESC,s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
+	err := s.DB.SelectContext(ctx, &out, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+serverCapabilitySelect+`,`+serverIsolationSelect+`,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.revoked_at IS NULL ORDER BY s.is_control_plane DESC,s.name`), time.Now().UTC().Add(-ServerOnlineGracePeriod))
 	if err != nil {
 		return nil, err
 	}
 	for i := range out {
 		out[i].setAgentBaseline()
+		out[i].loadIsolationStatus()
 	}
 	return out, s.loadServerGitCredentialProfiles(ctx, out)
 }
 
 func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	var server Server
-	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+serverCapabilitySelect+`,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
+	err := s.DB.GetContext(ctx, &server, s.Q(`SELECT s.id,s.name,s.hostname,s.is_control_plane,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END status,s.agent_version,`+serverCapabilitySelect+`,`+serverIsolationSelect+`,`+codexEngineVersion+` AS codex_version,`+codexEngineReady+` AS codex_ready,`+geminiEngineVersion+` AS gemini_version,`+geminiEngineReady+` AS gemini_ready,COALESCE(ccli.version,'') claude_version,COALESCE(ccli.ready,0) claude_ready,s.scan_roots,s.managed_roots,COALESCE(m.address,'') address,COALESCE(m.configuration,'') configuration,COALESCE(m.notes,'') notes,s.last_seen_at,s.created_at,COALESCE(gcp.profile_id,'') gemini_profile_id,COALESCE(gemini.name,'') gemini_profile_name,COALESCE(ccp.profile_id,'') claude_profile_id,COALESCE(claude.name,'') claude_profile_name,COALESCE(ccp.model,'') claude_profile_model,COALESCE(ce.credential_profile_id,'') codex_profile_id,COALESCE(codex.name,'') codex_profile_name,COALESCE(cp.git_profile_id,'') git_profile_id,COALESCE(git.name,'') git_profile_name FROM servers s LEFT JOIN `+claudeEngineCLI+` ccli ON ccli.server_id=s.id LEFT JOIN `+claudeEngineBinding+` ccp ON ccp.server_id=s.id LEFT JOIN credential_profiles claude ON claude.id=ccp.profile_id LEFT JOIN `+geminiEngineBinding+` gcp ON gcp.server_id=s.id LEFT JOIN credential_profiles gemini ON gemini.id=gcp.profile_id LEFT JOIN server_metadata m ON m.server_id=s.id LEFT JOIN server_credential_profiles cp ON cp.server_id=s.id LEFT JOIN server_engines ce ON ce.server_id=s.id AND ce.engine='codex' LEFT JOIN credential_profiles codex ON codex.id=ce.credential_profile_id LEFT JOIN credential_profiles git ON git.id=cp.git_profile_id WHERE s.id=? AND s.revoked_at IS NULL`), time.Now().UTC().Add(-ServerOnlineGracePeriod), id)
 	if err != nil {
 		return Server{}, err
 	}
@@ -105,6 +108,7 @@ func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	}
 	server.GitProfiles = profiles
 	server.setAgentBaseline()
+	server.loadIsolationStatus()
 	return server, nil
 }
 
@@ -422,6 +426,9 @@ func (s *Store) Heartbeat(ctx context.Context, serverID string, h protocol.Heart
 		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO server_capabilities(server_id,capabilities) SELECT id,? FROM servers WHERE id=? AND revoked_at IS NULL ON CONFLICT(server_id) DO UPDATE SET capabilities=excluded.capabilities`), string(declaration), serverID)
 	}
 	if err != nil {
+		return err
+	}
+	if err := saveIsolationStatus(ctx, tx, s.Q, serverID, h.SessionIsolation); err != nil {
 		return err
 	}
 	return tx.Commit()

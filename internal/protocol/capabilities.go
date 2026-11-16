@@ -34,4 +34,5 @@ const (
 	CapabilityClaudeQuestions      = "claude.questions"
 	CapabilityCredentialsScoped    = "credentials.scoped"
 	CapabilitySessionCollaboration = "session.collaboration"
+	CapabilitySessionIsolation     = "session.isolation"
 )

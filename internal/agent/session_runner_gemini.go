@@ -28,6 +28,7 @@ func (r geminiSessionRunner) Interrupt(ctx context.Context, envelope *protocol.C
 
 func (r geminiSessionRunner) Start(ctx context.Context, envelope *protocol.ControlEnvelope) error {
 	c := r.client
+	ctx = c.processContext(ctx)
 	var command protocol.GeminiTurnCommand
 	if err := prepareSessionCommand(c, envelope.PayloadJSON, &command, &command.Workspace); err != nil {
 		return err

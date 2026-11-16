@@ -81,6 +81,7 @@ type InstallRequest struct {
 	GitCommitName       string
 	GitCommitEmail      string
 	AllowSudo           bool
+	SessionIsolation    bool
 	Progress            func(InstallProgress)
 }
 
@@ -330,7 +331,7 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	request.report("enrolling_agent", 0, 0)
 	// The token travels on the SSH session's standard input: a command-line
 	// argument would be visible to every local user of the target in ps.
-	output, err := runWithInput(client, elevated(root, enrollCommand(request.ControlURL, codexPath)), []byte(request.EnrollmentToken+"\n"))
+	output, err := runWithInput(client, elevated(root, enrollCommandOptions(request.ControlURL, codexPath, request.SessionIsolation, request.AllowSudo)), []byte(request.EnrollmentToken+"\n"))
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: agent enrollment was rejected", ErrInstallation)
 	}
@@ -612,6 +613,9 @@ func (request InstallRequest) report(step string, current, total int64) {
 }
 
 func validateInstallRequest(request InstallRequest) error {
+	if request.AllowSudo && request.SessionIsolation {
+		return ErrIsolationSudoConflict
+	}
 	if _, err := normalizeTarget(request.Target); err != nil {
 		return err
 	}
@@ -1119,6 +1123,19 @@ var enrolledServerPattern = regexp.MustCompile(`Enrolled server ([0-9a-fA-F-]+);
 // to /usr/local/bin/wio-agent before it enrolls.
 func enrollCommand(controlURL, codexPath string) string {
 	return "/usr/local/bin/wio-agent enroll --url " + shellQuote(controlURL) + " --token-file - --codex " + shellQuote(codexPath)
+}
+
+var ErrIsolationSudoConflict = errors.New("session isolation and passwordless sudo are mutually exclusive")
+
+func enrollCommandOptions(controlURL, codexPath string, isolation, allowSudo bool) string {
+	command := enrollCommand(controlURL, codexPath)
+	if isolation {
+		command += " --session-isolation"
+	}
+	if allowSudo {
+		command += " --allow-sudo"
+	}
+	return command
 }
 
 func enrollmentServerID(output string) string {

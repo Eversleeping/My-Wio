@@ -8,21 +8,25 @@ import (
 	"strings"
 
 	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 type Config struct {
-	ControlURL         string   `json:"control_url"`
-	ServerID           string   `json:"server_id"`
-	AgentToken         string   `json:"agent_token"`
-	ScanRoots          []string `json:"scan_roots"`
-	CloneRoot          string   `json:"clone_root"`
-	StateDir           string   `json:"state_dir"`
-	CodexPath          string   `json:"codex_path"`
-	CodexAPIKeyFile    string   `json:"codex_api_key_file"`
-	DockerPath         string   `json:"docker_path"`
-	PrerequisiteSocket string   `json:"prerequisite_socket"`
-	ExtraEnvironment   []string `json:"extra_environment,omitempty"`
-	InsecureSkipVerify bool     `json:"insecure_skip_verify,omitempty"`
+	configPath         string
+	ControlURL         string                   `json:"control_url"`
+	ServerID           string                   `json:"server_id"`
+	AgentToken         string                   `json:"agent_token"`
+	ScanRoots          []string                 `json:"scan_roots"`
+	CloneRoot          string                   `json:"clone_root"`
+	StateDir           string                   `json:"state_dir"`
+	CodexPath          string                   `json:"codex_path"`
+	CodexAPIKeyFile    string                   `json:"codex_api_key_file"`
+	DockerPath         string                   `json:"docker_path"`
+	PrerequisiteSocket string                   `json:"prerequisite_socket"`
+	ExtraEnvironment   []string                 `json:"extra_environment,omitempty"`
+	SessionIsolation   *sessionisolation.Config `json:"session_isolation,omitempty"`
+	AllowSudo          bool                     `json:"allow_sudo,omitempty"`
+	InsecureSkipVerify bool                     `json:"insecure_skip_verify,omitempty"`
 }
 
 func LoadConfig(filename string) (Config, error) {
@@ -32,6 +36,10 @@ func LoadConfig(filename string) (Config, error) {
 	}
 	var config Config
 	if err := json.Unmarshal(raw, &config); err != nil {
+		return Config{}, err
+	}
+	config.configPath, err = filepath.Abs(filename)
+	if err != nil {
 		return Config{}, err
 	}
 	config.defaults()
@@ -101,6 +109,14 @@ func (c Config) Validate() error {
 	for _, root := range c.ScanRoots {
 		if !filepath.IsAbs(root) {
 			return errors.New("scan roots must be absolute")
+		}
+	}
+	if c.SessionIsolation != nil {
+		if c.SessionIsolation.Enabled && c.AllowSudo {
+			return errors.New("session isolation and passwordless sudo are mutually exclusive")
+		}
+		if err := c.SessionIsolation.Validate(); err != nil {
+			return err
 		}
 	}
 	return childprocess.ValidateExtraEnvironment(c.ExtraEnvironment)

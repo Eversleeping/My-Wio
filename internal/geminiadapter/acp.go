@@ -14,7 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -85,7 +87,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 
 	if command.SessionID != "" {
 		var cleanup func()
-		environment, cleanup, err = acpHistoryEnvironment(environment)
+		environment, cleanup, err = acpHistoryEnvironmentIn(environment, sessionisolation.TempDir(ctx))
 		if err != nil {
 			return fmt.Errorf("prepare Gemini history synchronization: %w", err)
 		}
@@ -98,6 +100,11 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 	// This only affects this ACP process, preserving account shell settings.
 	cmd.Env = append(environment, "GEMINI_PTY_INFO=child_process")
 	configureProcess(cmd)
+	releaseIsolation, err := childprocess.Prepare(childprocess.WithScope(ctx, childprocess.Gemini), cmd)
+	if err != nil {
+		return err
+	}
+	defer releaseIsolation()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -25,6 +26,8 @@ func Run(parent context.Context, executable, operationID string, command protoco
 }
 
 func run(parent context.Context, executable, operationID string, command protocol.ClaudeTurnCommand, emit func(protocol.StreamEvent) error, live *liveTurn, environment ...string) error {
+	parent = sessionisolation.WithWorkspace(parent, command.Workspace)
+	parent = sessionisolation.WithReadPaths(parent, command.ResumePath)
 	if executable == "" {
 		executable = "claude"
 	}
@@ -118,6 +121,11 @@ func run(parent context.Context, executable, operationID string, command protoco
 		live.start(stdin, cancel, nil)
 	}
 	configureProcess(cmd)
+	releaseIsolation, err := childprocess.Prepare(childprocess.WithScope(ctx, childprocess.Claude), cmd)
+	if err != nil {
+		return err
+	}
+	defer releaseIsolation()
 	// Stderr can contain credentials; do not persist it in operation errors.
 	stdout, err := childprocess.StartStream(cmd)
 	// The CLI holds its own copy of any credential descriptor now.

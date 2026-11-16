@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ func (c *Client) refreshInventory(parent context.Context) {
 }
 
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
-	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
+	ctx = c.processContext(ctx)
 	hostname, _ := os.Hostname()
 	codexPath := c.currentCodexPath()
 	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(childprocess.WithScope(ctx, childprocess.Codex), codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
@@ -41,6 +42,11 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	heartbeat.ClaudeVersion = c.currentClaudeVersion(ctx, claudePath)
 	heartbeat.ClaudeReady = commandAvailable(claudePath)
 	heartbeat.Capabilities = capabilities.AgentDeclaration(heartbeat.GeminiVersion, heartbeat.ClaudeVersion)
+	status := c.isolation.Status(ctx)
+	heartbeat.SessionIsolation = &status
+	if c.config.SessionIsolation != nil && c.config.SessionIsolation.Enabled {
+		heartbeat.Capabilities = slices.DeleteFunc(heartbeat.Capabilities, func(name string) bool { return name == protocol.CapabilityGeminiSkillsManage })
+	}
 	return c.queue(protocol.AgentKindHeartbeat, heartbeat, false)
 }
 
@@ -120,7 +126,7 @@ func commandVersion(ctx context.Context, command string) string {
 func commandVersionWithTimeout(ctx context.Context, command string, timeout time.Duration) string {
 	versionContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	output, err := childprocess.Output(childprocess.CommandContext(versionContext, command, "--version"))
+	output, err := childprocess.OutputContext(versionContext, childprocess.CommandContext(versionContext, command, "--version"))
 	if err != nil {
 		return ""
 	}

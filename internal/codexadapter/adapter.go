@@ -20,6 +20,7 @@ import (
 	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 type EmitFunc func(protocol.StreamEvent) error
@@ -32,13 +33,15 @@ type Adapter struct {
 	log             *slog.Logger
 	emit            EmitFunc
 
-	startMu sync.Mutex
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	process *exec.Cmd
-	stdin   io.WriteCloser
-	cancel  context.CancelFunc
-	nextID  atomic.Int64
+	startMu        sync.Mutex
+	scopeWorkspace string
+	scopePinned    bool
+	writeMu        sync.Mutex
+	mu             sync.Mutex
+	process        *exec.Cmd
+	stdin          io.WriteCloser
+	cancel         context.CancelFunc
+	nextID         atomic.Int64
 	// launching is non-zero while ensureStarted brings up a new app-server.
 	launching atomic.Int32
 	pending   map[string]chan rpcMessage
@@ -121,6 +124,7 @@ func NewWithEnvironment(command string, environment []string, log *slog.Logger, 
 }
 
 func (a *Adapter) StartTurn(ctx context.Context, command protocol.StartTurnCommand) error {
+	ctx = sessionisolation.WithWorkspace(ctx, command.Workspace)
 	if err := a.ensureStarted(ctx); err != nil {
 		return err
 	}
@@ -135,6 +139,7 @@ func (a *Adapter) Warm(ctx context.Context) error {
 }
 
 func (a *Adapter) RewriteTurn(ctx context.Context, command protocol.RewriteTurnCommand) error {
+	ctx = sessionisolation.WithWorkspace(ctx, command.Start.Workspace)
 	if err := a.ensureStarted(ctx); err != nil {
 		return err
 	}
@@ -142,6 +147,7 @@ func (a *Adapter) RewriteTurn(ctx context.Context, command protocol.RewriteTurnC
 }
 
 func (a *Adapter) ForkThread(ctx context.Context, command protocol.ForkThreadCommand) (protocol.ForkThreadResult, error) {
+	ctx = sessionisolation.WithWorkspace(ctx, command.Workspace)
 	if err := a.ensureStarted(ctx); err != nil {
 		return protocol.ForkThreadResult{}, err
 	}
@@ -180,6 +186,13 @@ func (a *Adapter) forkThread(ctx context.Context, command protocol.ForkThreadCom
 }
 
 func (a *Adapter) CodexOperation(ctx context.Context, kind string, payload json.RawMessage) (protocol.CodexCapabilityResult, error) {
+	if sessionisolation.Enabled(ctx) {
+		var scope protocol.CodexSnapshotCommand
+		if err := json.Unmarshal(payload, &scope); err != nil {
+			return protocol.CodexCapabilityResult{}, err
+		}
+		ctx = sessionisolation.WithWorkspace(ctx, scope.Workspace)
+	}
 	if err := a.ensureStarted(ctx); err != nil {
 		return protocol.CodexCapabilityResult{}, err
 	}
@@ -1142,6 +1155,22 @@ func (a *Adapter) stopLocked(reason error) {
 func (a *Adapter) ensureStarted(ctx context.Context) error {
 	a.startMu.Lock()
 	defer a.startMu.Unlock()
+	workspace := sessionisolation.Workspace(ctx)
+	if sessionisolation.Enabled(ctx) {
+		if workspace != "" {
+			var err error
+			workspace, err = sessionisolation.ResolveWorkspace(workspace)
+			if err != nil {
+				return err
+			}
+		} else if a.scopePinned {
+			workspace = a.scopeWorkspace
+		}
+		if a.scopePinned && workspace != a.scopeWorkspace {
+			return errors.New("an isolated Codex process cannot change workspace; use a target session or worktree fork")
+		}
+		ctx = sessionisolation.WithWorkspace(ctx, workspace)
+	}
 	a.mu.Lock()
 	running := a.process != nil
 	a.mu.Unlock()
@@ -1168,6 +1197,17 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	process := exec.CommandContext(processContext, a.command, args...)
 	process.Env = childprocess.Environment(childprocess.WithScope(ctx, childprocess.Codex), a.environment...)
 	configureProcess(process)
+	releaseIsolation, err := childprocess.Prepare(childprocess.WithScope(ctx, childprocess.Codex), process)
+	if err != nil {
+		cancel()
+		return err
+	}
+	started := false
+	defer func() {
+		if !started {
+			releaseIsolation()
+		}
+	}()
 	stdout, err := process.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -1187,6 +1227,10 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 		cancel()
 		return fmt.Errorf("start codex app-server: %w", err)
 	}
+	started = true
+	if sessionisolation.Enabled(ctx) {
+		a.scopePinned, a.scopeWorkspace = true, workspace
+	}
 	a.mu.Lock()
 	a.process = process
 	a.stdin = stdin
@@ -1204,6 +1248,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	}()
 	go a.stderrLoop(stderr)
 	go func() {
+		defer releaseIsolation()
 		err := process.Wait()
 		cancel()
 		a.log.Warn("Codex app-server exited", "error", err)
@@ -1229,7 +1274,8 @@ func (a *Adapter) clientInfo(ctx context.Context) map[string]string {
 	version := "unknown"
 	versionContext, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if output, err := childprocess.Output(childprocess.CommandContext(childprocess.WithScope(versionContext, childprocess.Codex), a.command, "--version")); err == nil {
+	versionContext = childprocess.WithScope(versionContext, childprocess.Codex)
+	if output, err := childprocess.OutputContext(versionContext, childprocess.CommandContext(versionContext, a.command, "--version")); err == nil {
 		version = strings.Join(strings.Fields(string(output)), " ")
 		if version == "" {
 			version = "unknown"

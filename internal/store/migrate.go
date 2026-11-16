@@ -26,6 +26,7 @@ var schemaMigrations = []migration{
 	{version: 3, name: "unified_server_engines", up: migrateServerEngines},
 	{version: 4, name: "agent_capabilities", up: migrateServerCapabilities},
 	{version: 5, name: "retire_session_compatibility_storage", up: migrateSessionCleanup},
+	{version: 6, name: "session_isolation_status", up: migrateSessionIsolation},
 }
 
 // PostgreSQL advisory locks are scoped to a database. All Wio schemas in one

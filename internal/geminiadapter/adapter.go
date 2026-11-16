@@ -16,6 +16,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 type Adapter struct {
@@ -130,6 +131,11 @@ func (a *Adapter) RunInTrustedWorkspaceWithEnvironment(parent context.Context, o
 func (a *Adapter) run(parent context.Context, operationID string, command protocol.GeminiTurnCommand, trustedWorkspace bool, extraEnvironment []string) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	ctx, releaseTemporary, err := sessionisolation.Temporary(sessionisolation.WithWorkspace(ctx, command.Workspace))
+	if err != nil {
+		return err
+	}
+	defer releaseTemporary()
 	a.mu.Lock()
 	if a.updating {
 		a.mu.Unlock()
@@ -177,7 +183,10 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 		ctx, stop = context.WithTimeout(ctx, time.Duration(command.Goal.MaxSeconds)*time.Second)
 		defer stop()
 	}
-	environment, err := loopModelEnvironment(environment, command.Model)
+	if err = sessionisolation.PrepareGeminiHome(ctx, environment); err != nil {
+		return err
+	}
+	environment, err = loopModelEnvironment(environment, command.Model)
 	if err != nil {
 		return err
 	}
@@ -210,6 +219,11 @@ func (a *Adapter) run(parent context.Context, operationID string, command protoc
 	cmd.Env = environment
 	cmd.Stdin = strings.NewReader(command.Prompt)
 	configureProcess(cmd)
+	releaseIsolation, err := childprocess.Prepare(childprocess.WithScope(ctx, childprocess.Gemini), cmd)
+	if err != nil {
+		return err
+	}
+	defer releaseIsolation()
 	// stderr may include credentials or provider diagnostics. The structured
 	// stream carries user-facing errors; never persist raw stderr in operations.
 	stdout, err := childprocess.StartStream(cmd)

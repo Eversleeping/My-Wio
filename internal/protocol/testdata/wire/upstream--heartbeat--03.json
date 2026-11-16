@@ -1,0 +1,20 @@
+{
+  "baseline": "29de234+P5-04",
+  "direction": "upstream",
+  "kind": "heartbeat",
+  "source": ["github.com/wio-platform/wio/internal/agent.(*Client).enqueueHeartbeat"],
+  "payload": {
+    "session_isolation": {"mode": "unsupported", "reason": "Landlock ABI 6 or later is required for session IPC and signal scopes"},
+    "capabilities": ["agent.self_update", "session.isolation"],
+    "hostname": "fixture-agent",
+    "agent_version": "0.3.31",
+    "codex_version": "",
+    "codex_ready": false,
+    "gemini_version": "",
+    "gemini_ready": false,
+    "claude_version": "",
+    "claude_ready": false,
+    "scan_roots": ["/fixture/workspace"],
+    "managed_roots": ["/fixture/workspace"]
+  }
+}

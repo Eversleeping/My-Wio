@@ -51,6 +51,23 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		assertPostgresFixtureSchemaConsistency(t, databaseURL)
 	})
 	t.Run("versioned migrations", func(t *testing.T) { assertPostgresMigrationRunner(t, databaseURL) })
+	t.Run("session isolation migration", func(t *testing.T) {
+		admin, err := sqlx.Connect("pgx", databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		if _, err := admin.Exec("CREATE SCHEMA session_isolation_migration"); err != nil {
+			t.Fatal(err)
+		}
+		db, err := sqlx.Connect("pgx", postgresSchemaURL(t, databaseURL, "session_isolation_migration"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		db.SetMaxOpenConns(1)
+		assertSessionIsolationMigration(t, db, "pgx")
+	})
 	t.Run("scheduled migration", func(t *testing.T) { assertPostgresScheduledTaskMigration(t, databaseURL) })
 	t.Run("session cleanup migration", func(t *testing.T) {
 		admin, err := sqlx.Connect("pgx", databaseURL)
@@ -158,6 +175,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	}
 	defer scans.Close()
 	t.Run("heartbeat capabilities", func(t *testing.T) { assertHeartbeatCapabilities(t, scans) })
+	t.Run("heartbeat session isolation", func(t *testing.T) { assertHeartbeatSessionIsolation(t, scans) })
 	t.Run("worktree deletion", func(t *testing.T) { assertWorktreeDeletionCleansSessions(t, scans) })
 	assertPostgresInteractiveConnections(t, scans)
 	assertWorkspaceFileScanTimeoutAndRetry(t, scans)
