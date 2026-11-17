@@ -48,6 +48,8 @@ func (api *API) registerSummaryRoutes(private chi.Router) {
 }
 
 func (api *API) registerCollaborationRoutes(private chi.Router) {
+	private.Get("/settings/collaboration", api.collaborationSettings)
+	private.Put("/settings/collaboration", api.updateCollaborationSettings)
 	private.Get("/sessions/{engine}/{threadID}/collaboration", api.sessionCollaboration)
 	private.Put("/sessions/{engine}/{threadID}/collaboration", api.updateSessionCollaboration)
 	private.Post("/sessions/{engine}/{threadID}/collaboration/read", api.markSessionCollaborationRead)
@@ -84,6 +86,7 @@ func (api *API) registerServerRoutes(private chi.Router) {
 	private.Post("/servers/{serverID}/ssh/repair", api.repairServerSSH)
 	private.Post("/servers/{serverID}/ssh/repair-stream", api.streamRepairServerSSH)
 	private.Post("/servers/{serverID}/ssh/uninstall", api.uninstallServerSSH)
+	private.Post("/servers/{serverID}/ssh/access-settings", api.serverAccess)
 	private.Delete("/servers/{serverID}", api.revokeServer)
 	private.Get("/servers/{serverID}/metrics", api.metrics)
 	private.Get("/servers/{serverID}/operation-metrics", api.operationMetrics)

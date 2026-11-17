@@ -55,6 +55,7 @@ func run(log *slog.Logger, args []string) error {
 		codexPath := flags.String("codex", "codex", "Codex CLI executable")
 		dockerPath := flags.String("docker", "docker", "Docker CLI executable")
 		isolation := flags.Bool("session-isolation", false, "require complete Linux session isolation")
+		preserveAccess := flags.Bool("preserve-access-settings", false, "preserve installed access settings during repair")
 		allowSudo := flags.Bool("allow-sudo", false, "service is configured for passwordless sudo (incompatible with isolation)")
 		insecure := flags.Bool("insecure-skip-verify", false, "skip TLS certificate verification (development only)")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -73,7 +74,17 @@ func run(log *slog.Logger, args []string) error {
 		if *isolation {
 			isolationConfig = &sessionisolation.Config{Enabled: true}
 		}
-		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, SessionIsolation: isolationConfig, AllowSudo: *allowSudo})
+		allowSudoValue := *allowSudo
+		if *preserveAccess {
+			previous, loadErr := agent.LoadConfig(*configPath)
+			if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+				return errors.New("could not read installed access settings")
+			}
+			if loadErr == nil {
+				isolationConfig, allowSudoValue = previous.SessionIsolation, previous.AllowSudo
+			}
+		}
+		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, SessionIsolation: isolationConfig, AllowSudo: allowSudoValue})
 		if err != nil {
 			return err
 		}

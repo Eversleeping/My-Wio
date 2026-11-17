@@ -36,7 +36,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test("enrolls isolated sessions with passwordless sudo mutually exclusive", async () => {
+test("enrolls without server runtime settings in the registration dialog", async () => {
   localStorage.setItem("wio_language", "en");
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -50,22 +50,13 @@ test("enrolls isolated sessions with passwordless sudo mutually exclusive", asyn
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
   const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
-  const isolation = within(dialog).getByRole("checkbox", { name: /Enable session isolation/ });
-  const sudo = within(dialog).getByRole("checkbox", { name: /Allow passwordless sudo/ });
-  expect(isolation).not.toBeChecked();
-  await user.click(isolation);
-  expect(sudo).toBeDisabled();
-  await user.click(isolation);
-  await user.click(sudo);
-  expect(isolation).toBeDisabled();
-  await user.click(sudo);
-  await user.click(isolation);
+  expect(within(dialog).queryByRole("checkbox", {name:/session isolation|passwordless sudo/i})).not.toBeInTheDocument();
   await user.type(within(dialog).getByRole("textbox", { name: "Server name" }), "isolated-node");
   await user.type(within(dialog).getByRole("textbox", { name: "SSH host or IP" }), "node.example.test");
   await user.selectOptions(within(dialog).getByRole("combobox", { name: "Authentication" }), "none");
   await user.click(within(dialog).getByRole("button", { name: "Check fingerprint" }));
   await user.click(await screen.findByRole("button", { name: "Confirm and install" }));
-  await waitFor(() => expect(requests).toContainEqual({ url: "/api/servers/ssh/bootstrap-stream", body: expect.objectContaining({ session_isolation: true, allow_sudo: false }) }));
+  await waitFor(() => expect(requests).toContainEqual({ url: "/api/servers/ssh/bootstrap-stream", body: expect.not.objectContaining({ session_isolation: expect.anything(), allow_sudo: expect.anything() }) }));
 });
 
 test("shows an unsupported server isolation reason", async () => {

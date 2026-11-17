@@ -87,7 +87,7 @@ export function ServersPage({ notify }: ServersPageProps) {
   const [metadataForm, setMetadataForm] = useState({ address: "", configuration: "", notes: "" });
   const [form, setForm] = useState({
     name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key",
-    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: "", gitProfileID: "", allowSudo: false, sessionIsolation: false
+    password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: "", gitProfileID: ""
   });
   useEffect(() => {
     const firstCodexProfile = credentialProfiles.data?.find(profile => profile.kind === "codex");
@@ -95,13 +95,13 @@ export function ServersPage({ notify }: ServersPageProps) {
   }, [credentialProfiles.data, dialog]);
   const reset = () => {
     setStep("form"); setError(""); setHostKey(null); setResult(null); setInstallLogs([]); setBusy(false);
-    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: codexProfiles[0]?.id ?? "", gitProfileID: "", allowSudo: false, sessionIsolation: false });
+    setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: codexProfiles[0]?.id ?? "", gitProfileID: "" });
   };
   const open = () => { reset(); setRepairingServer(null); setDialog(true); };
   const repair = (server: Server) => {
 	reset();
 	setRepairingServer(server);
-	setForm(current => ({ ...current, name: server.name, host: server.address, configuration: server.configuration, notes: server.notes, codexProfileID: server.codex_profile_id || codexProfiles[0]?.id || "", gitProfileID: server.git_profile_id, allowSudo: false, sessionIsolation: server.session_isolation?.mode === "enabled" || server.session_isolation?.mode === "unsupported" }));
+	setForm(current => ({ ...current, name: server.name, host: server.address, configuration: server.configuration, notes: server.notes, codexProfileID: server.codex_profile_id || codexProfiles[0]?.id || "", gitProfileID: server.git_profile_id }));
 	setDialog(true);
   };
   const close = () => { if (busy) return; setDialog(false); setRepairingServer(null); reset(); };
@@ -137,7 +137,7 @@ export function ServersPage({ notify }: ServersPageProps) {
         private_key_passphrase: form.authMethod === "private_key" ? form.privateKeyPassphrase : "",
         configuration: form.configuration.trim(), notes: form.notes.trim(),
         host_key_fingerprint: hostKey.fingerprint,
-        codex_profile_id: form.codexProfileID, git_profile_id: form.gitProfileID, allow_sudo: form.allowSudo, session_isolation: form.sessionIsolation
+        codex_profile_id: form.codexProfileID, git_profile_id: form.gitProfileID
       }, event => {
         if (event.type === "progress" && event.step) {
           setInstallLogs(current => {
@@ -263,8 +263,6 @@ export function ServersPage({ notify }: ServersPageProps) {
     {form.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={e => void choosePrivateKey(e.target.files?.[0])} required={!form.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={form.privateKeyPassphrase} onChange={e => setForm({ ...form, privateKeyPassphrase: e.target.value })} placeholder={t("common.optional")} /></Field></div> : form.authMethod === "none" ? <p className="security-notice">{t("server.authNoneHelp")}</p> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field>}
     <div className="form-divider"><span>{t("server.credentialProfiles")}</span></div>
     <div className="form-grid"><Field label={t("server.codexProfile")}><select value={form.codexProfileID} onChange={e => setForm({ ...form, codexProfileID: e.target.value })} required><option value="">{t(codexProfiles.length ? "server.selectCodexProfile" : "server.noCodexProfiles")}</option>{codexProfiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} &middot; {profile.model}</option>)}</select></Field><Field label={t("server.gitProfile")}><select value={form.gitProfileID} onChange={e => setForm({ ...form, gitProfileID: e.target.value })}><option value="">{t("server.noGitProfile")}</option>{gitProfiles.map(profile => { const ready = Boolean(profile.commit_name && profile.commit_email); return <option value={profile.id} key={profile.id} disabled={!ready}>{profile.name} &middot; {profile.username}{ready ? "" : ` ${String.fromCharCode(183)} ${t("settings.gitIdentityMissing")}`}</option>; })}</select></Field></div>
-    <label className={`agent-access-option ${form.allowSudo ? "enabled" : ""} ${form.sessionIsolation ? "disabled" : ""}`}><input type="checkbox" checked={form.allowSudo} disabled={form.sessionIsolation} onChange={event => setForm({ ...form, allowSudo: event.target.checked })} /><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
-    <label className={`agent-access-option ${form.sessionIsolation ? "enabled" : ""} ${form.allowSudo ? "disabled" : ""}`}><input type="checkbox" checked={form.sessionIsolation} disabled={form.allowSudo} onChange={event => setForm({ ...form, sessionIsolation: event.target.checked })} /><span><strong>{t("server.sessionIsolation")}</strong><small>{t("server.sessionIsolationHelp")}</small></span></label>
     <DialogActions><button type="button" className="secondary-button" onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{busy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
   </form> : step === "fingerprint" && hostKey ? <div className="enrollment-step">
     {error && <ErrorBanner text={error} />}

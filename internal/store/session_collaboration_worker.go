@@ -140,7 +140,7 @@ func (s *Store) advanceCollaboration(ctx context.Context, id string) error {
 		}
 		return tx.Commit()
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), r.SourceKey); err != nil {
+	if err = s.lockCollaborationGrant(ctx, tx, r.SourceKey); err != nil {
 		return err
 	}
 	source, e := s.collaborationSession(ctx, tx, refFromKey(r.SourceKey))
@@ -317,7 +317,7 @@ func (s *Store) notifyCollaborationPair(ctx context.Context, sourceKey, targetKe
 	} else if !errors.Is(e, sql.ErrNoRows) {
 		return false, e
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), root); err != nil {
+	if err = s.lockCollaborationGrant(ctx, tx, root); err != nil {
 		return false, err
 	}
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_subscriptions SET auto_continue=auto_continue WHERE source_key=? AND target_key=?"), sourceKey, targetKey); err != nil {
@@ -427,11 +427,11 @@ func (s *Store) continueCollaboration(ctx context.Context, sourceKey string) err
 	}
 	defer tx.Rollback()
 	// Same lock order as tool calls: the root grant first, then the caller's.
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), root); err != nil {
+	if err = s.lockCollaborationGrant(ctx, tx, root); err != nil {
 		return err
 	}
 	if root != sourceKey {
-		if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), sourceKey); err != nil {
+		if err = s.lockCollaborationGrant(ctx, tx, sourceKey); err != nil {
 			return err
 		}
 	}
@@ -614,7 +614,7 @@ func (s *Store) ResetCollaborationContinuations(ctx context.Context, session ses
 		return err
 	}
 	// Serialize with tool calls and continuations of this root.
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), root); err != nil {
+	if err = s.lockCollaborationGrant(ctx, tx, root); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_subscriptions SET continuation_count=0 WHERE continuation_count<>0 AND EXISTS (SELECT 1 FROM session_links l WHERE l.target_key=session_subscriptions.target_key AND l.source_key=session_subscriptions.source_key AND l.root_key=?)"), root); err != nil {

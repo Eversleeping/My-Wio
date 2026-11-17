@@ -2,11 +2,14 @@ import type { Engine } from "../sessions/types";
 import type { AuditEntry, CodexCLISettings, CredentialProfile, ScheduledTask, SecretSet } from "../types";
 import { mutation, query, writeResource } from "./resources";
 
+export type CollaborationGrant = { enabled: boolean; workspace_ids: string[] | null; session_refs: { engine: Engine; id: string }[] | null; all_project_sessions?: boolean; worktree: boolean; auto_continue: boolean; delegate: boolean; target_modes: Partial<Record<Engine, string>> | null; show_unread_results?: boolean; show_creation_results?: boolean };
 export type AuditListPage = {items: AuditEntry[]; has_more: boolean; next: number | null};
 export const auditListPageSize = 50;
 export type ScheduledTaskInput = Pick<ScheduledTask, "agent_kind" | "thread_id" | "name" | "prompt" | "schedule" | "timezone" | "enabled" | "model" | "reasoning_effort" | "approval_mode" | "thinking_level">;
 export type CredentialProfileInput = Omit<CredentialProfile, "updated_at"> & {secret: string};
 export const settings = {
+  collaboration: () => query<CollaborationGrant>("/settings/collaboration", ["settings", "codex", "claude", "gemini"]),
+  saveCollaboration: (input: CollaborationGrant) => writeResource(mutation("/settings/collaboration", "PUT", ["settings", "codex", "claude", "gemini"]), input),
   profiles: () => query<CredentialProfile[]>("/credential-profiles", ["settings", "servers"]),
   secrets: () => query<SecretSet[]>("/secret-sets", ["settings", "deployments"]),
   cli: (engine: Engine) => query<CodexCLISettings>(`/settings/${engine}-cli`, ["settings"]),

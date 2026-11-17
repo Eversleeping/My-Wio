@@ -65,7 +65,7 @@ test("requires collaboration to be enabled", async () => {
   localStorage.setItem("wio_language", "zh-CN");
   stubAPI(grant({ enabled: false }));
   render(<I18nProvider><CollaborationTaskDialog open engine="gemini" sessionID="source" workspaceID="workspace" onClose={() => undefined} onSubmit={() => undefined} /></I18nProvider>);
-  expect(await screen.findByRole("alert")).toHaveTextContent("当前会话未开启会话协作");
+  expect(await screen.findByRole("alert")).toHaveTextContent("会话协作尚未开启");
   expect(screen.getByRole("button", { name: /交给模型创建/ })).toBeDisabled();
 });
 

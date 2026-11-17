@@ -68,21 +68,23 @@ type HostKeyResult struct {
 }
 
 type InstallRequest struct {
-	Target              Target
-	ExpectedFingerprint string
-	ControlURL          string
-	EnrollmentToken     string
-	CodexAPIURL         string
-	CodexAPIKey         string
-	CodexModel          string
-	GitEndpoint         string
-	GitUsername         string
-	GitToken            string
-	GitCommitName       string
-	GitCommitEmail      string
-	AllowSudo           bool
-	SessionIsolation    bool
-	Progress            func(InstallProgress)
+	Target                 Target
+	ExpectedFingerprint    string
+	ControlURL             string
+	EnrollmentToken        string
+	CodexAPIURL            string
+	CodexAPIKey            string
+	CodexModel             string
+	GitEndpoint            string
+	GitUsername            string
+	GitToken               string
+	GitCommitName          string
+	GitCommitEmail         string
+	AllowSudo              bool
+	ExpectedServerID       string
+	PreserveAccessSettings bool
+	SessionIsolation       bool
+	Progress               func(InstallProgress)
 }
 
 type InstallProgress struct {
@@ -188,7 +190,6 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: %v", ErrAssetsUnavailable, err)
 	}
-	unit = agentServiceUnit(unit, request.AllowSudo)
 	prerequisiteUnit, err := os.ReadFile(filepath.Join(s.assetDir, "wio-prerequisite.service"))
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: %v", ErrAssetsUnavailable, err)
@@ -200,12 +201,28 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	}
 
 	root := isRoot(client)
+	if request.PreserveAccessSettings {
+		raw, readErr := run(client, elevated(root, "if [ -f /etc/wio-agent/config.json ]; then cat /etc/wio-agent/config.json; fi"))
+		if readErr != nil {
+			return InstallResult{}, ErrAccessSettings
+		}
+		if strings.TrimSpace(raw) != "" {
+			previous, _, readErr := decodeAccess([]byte(raw), request.ExpectedServerID)
+			if readErr != nil {
+				return InstallResult{}, readErr
+			}
+			request.AllowSudo, request.SessionIsolation = previous.AllowSudo, previous.SessionIsolation
+		} else {
+			request.AllowSudo, request.SessionIsolation = false, false
+		}
+	}
 	request.report("uploading_agent", 0, int64(len(agentBinary)))
 	if err := upload(client, root, "/usr/local/bin/wio-agent", "0755", agentBinary, func(current, total int64) {
 		request.report("uploading_agent", current, total)
 	}); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not install agent binary: %v", ErrInstallation, err)
 	}
+	unit = agentServiceUnit(unit, request.AllowSudo)
 	request.report("uploading_service", 0, int64(len(unit)))
 	if err := upload(client, root, "/etc/systemd/system/wio-agent.service", "0644", unit, func(current, total int64) {
 		request.report("uploading_service", current, total)
@@ -219,7 +236,7 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 		return InstallResult{}, fmt.Errorf("%w: could not install prerequisite helper: %v", ErrInstallation, err)
 	}
 	request.report("preparing_account", 0, 0)
-	setup := agentSetupScript(request.AllowSudo)
+	setup := agentSetupScript(request.AllowSudo) + "\nrm -f /etc/systemd/system/wio-agent.service.d/90-wio-access.conf"
 	if _, err := run(client, elevated(root, setup)); err != nil {
 		return InstallResult{}, fmt.Errorf("%w: could not prepare service account", ErrInstallation)
 	}
@@ -331,7 +348,11 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	request.report("enrolling_agent", 0, 0)
 	// The token travels on the SSH session's standard input: a command-line
 	// argument would be visible to every local user of the target in ps.
-	output, err := runWithInput(client, elevated(root, enrollCommandOptions(request.ControlURL, codexPath, request.SessionIsolation, request.AllowSudo)), []byte(request.EnrollmentToken+"\n"))
+	enrollCommand := enrollCommandOptions(request.ControlURL, codexPath, request.SessionIsolation, request.AllowSudo)
+	if request.PreserveAccessSettings {
+		enrollCommand += " --preserve-access-settings"
+	}
+	output, err := runWithInput(client, elevated(root, enrollCommand), []byte(request.EnrollmentToken+"\n"))
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("%w: agent enrollment was rejected", ErrInstallation)
 	}

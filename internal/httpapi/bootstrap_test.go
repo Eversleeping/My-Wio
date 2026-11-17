@@ -208,8 +208,8 @@ func TestRepairBootstrapCreatesEnrollmentForExistingServer(t *testing.T) {
 	if repair.ServerID != server.ID {
 		t.Fatalf("repair enrollment targets %q, want %q", repair.ServerID, server.ID)
 	}
-	if !fake.installRequest.AllowSudo {
-		t.Fatal("repair did not preserve the optional sudo setting")
+	if !fake.installRequest.PreserveAccessSettings || fake.installRequest.ExpectedServerID != server.ID {
+		t.Fatal("repair must preserve the installed access settings and verify server identity")
 	}
 }
 

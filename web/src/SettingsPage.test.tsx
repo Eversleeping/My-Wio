@@ -24,6 +24,7 @@ function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Re
     const method = init.method ?? "GET";
     requests.push({ url, method });
     if (method === "DELETE") return onDelete?.(url) ?? jsonResponse({});
+    if (url === "/api/settings/collaboration") return jsonResponse({ enabled: false, target_modes: {} });
     if (url === "/api/settings/codex-cli") return jsonResponse({ target_version: "1.0.0", versions: ["1.0.0"] });
     if (url === "/api/settings/gemini-cli") return jsonResponse({ target_version: "0.65.0", versions: ["0.65.0"] });
     if (url === "/api/servers") return jsonResponse([]);

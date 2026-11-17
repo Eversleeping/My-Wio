@@ -48,13 +48,28 @@ func (s *Store) decorateCollaborationSession(ctx context.Context, db sqlx.Querye
 }
 
 func (s *Store) collaborationGrant(ctx context.Context, db sqlx.QueryerContext, key string) (sessiontools.Grant, int, error) {
+	global, version, err := s.globalCollaboration(ctx, db)
+	if err != nil {
+		return sessiontools.Grant{}, 0, err
+	}
+	if version != 0 {
+		var depth int
+		err = sqlx.GetContext(ctx, db, &depth, s.Q("SELECT depth FROM session_links WHERE target_key=?"), key)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return global, -version, err
+		}
+		if depth > 0 && !global.Delegate {
+			global.Enabled = false
+		}
+		return global, -version, nil
+	}
 	var row struct {
 		JSON          string `db:"grant_json"`
 		Version       int    `db:"version"`
 		Parent        string `db:"parent_key"`
 		ParentVersion int    `db:"parent_version"`
 	}
-	err := sqlx.GetContext(ctx, db, &row, s.Q("SELECT grant_json,version,parent_key,parent_version FROM session_tool_grants WHERE source_key=?"), key)
+	err = sqlx.GetContext(ctx, db, &row, s.Q("SELECT grant_json,version,parent_key,parent_version FROM session_tool_grants WHERE source_key=?"), key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sessiontools.Grant{}, 0, nil
 	}
@@ -361,7 +376,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 		return sessiontools.Reply{Status: "succeeded", Data: map[string]any{"session": source, "grant": grant, "engines": []string{session.Codex, session.Claude, session.Gemini}, "limits": map[string]any{"active_children": 2, "total_sessions": nil, "delegation_depth": 2, "wait_ms": 30000}, "shared_directory": true}}
 	}
 	if !grant.Enabled {
-		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration in this session's settings first"))
+		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration on the global Settings page first"))
 	}
 	if !sessiontools.Mutating(call.Name) {
 		reply, observed, e := s.readCollaboration(ctx, tx, source, grant, call.Name, p)
@@ -380,7 +395,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 
 	// Lock the root grant before any per-session mutation, serializing limits
 	// and revocation across sibling tool calls (also on PostgreSQL).
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE session_tool_grants SET version=version WHERE source_key=?"), root); err != nil {
+	if err = s.lockCollaborationGrant(ctx, tx, root); err != nil {
 		return collaborationError(p.RequestID, err)
 	}
 	if root != call.Source.Key() {
@@ -393,7 +408,7 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 		return collaborationError(p.RequestID, err)
 	}
 	if !grant.Enabled {
-		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration in this session's settings first"))
+		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "enable model collaboration on the global Settings page first"))
 	}
 	canonical, _ := json.Marshal(p)
 	var request CollaborationRequest

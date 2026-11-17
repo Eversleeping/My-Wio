@@ -79,6 +79,26 @@ func TestCollaborationBrowserAuthorization(t *testing.T) {
 	if w := request("PUT", path, `{"enabled":false}`, true, true); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":false`) {
 		t.Fatalf("revoke: %d %s", w.Code, w.Body.String())
 	}
+	globalPath := "/api/settings/collaboration"
+	if w := request("GET", globalPath, "", false, false); w.Code != 401 {
+		t.Fatalf("anonymous global read: %d", w.Code)
+	}
+	if w := request("PUT", globalPath, `{"enabled":true}`, true, false); w.Code != 403 {
+		t.Fatalf("global missing CSRF: %d", w.Code)
+	}
+	if w := request("PUT", globalPath, `{"enabled":true,"worktree":true}`, true, true); w.Code != 200 {
+		t.Fatalf("global save: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", path, "", true, false); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":true`) {
+		t.Fatalf("global not effective: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("PUT", globalPath, `{"enabled":false}`, true, true); w.Code != 200 {
+		t.Fatalf("global revoke: %d", w.Code)
+	}
+	if w := request("PUT", path, `{"enabled":true}`, true, true); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":false`) {
+		t.Fatalf("legacy route bypassed global revoke: %d %s", w.Code, w.Body.String())
+	}
+
 }
 
 // Every route by which the signed-in user sends a session a message gives its

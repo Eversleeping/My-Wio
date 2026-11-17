@@ -86,8 +86,8 @@ export function CollaborationTaskDialog({ open, engine, sessionID, workspaceID, 
   const blocker = availability.error ? availability.error : state.error ? state.error
     : !state.data ? ""
     : !state.data.supported ? text("请升级此服务器的 Agent 后使用协作工具。", "Update this server's Agent to use collaboration tools.")
-    : !grant?.enabled ? text("当前会话未开启会话协作，请先在会话协作设置中允许模型创建和管理子会话。", "Collaboration is off for this session. Enable it in the collaboration settings first.")
-    : !sameEngine && !grant.target_modes?.[target] ? text(`未授权创建 ${engineNames[target]} 会话，请先在会话协作设置中授予跨模型执行权限。`, `Creating ${engineNames[target]} sessions is not granted. Grant cross-model permissions in the collaboration settings first.`)
+    : !grant?.enabled ? text("会话协作尚未开启，请先在全局设置页开启，对所有会话生效。", "Collaboration is off. Enable it for all sessions on the global Settings page.")
+    : !sameEngine && !grant.target_modes?.[target] ? text(`未授权创建 ${engineNames[target]} 会话，请先在全局设置页授予跨模型执行权限。`, `Creating ${engineNames[target]} sessions is not granted. Grant cross-model permissions on the global Settings page first.`)
     : "";
   const worktreeAllowed = Boolean(grant?.worktree);
   useEffect(() => { if (!worktreeAllowed && directoryMode === "worktree") setDirectoryMode("shared"); }, [worktreeAllowed, directoryMode]);

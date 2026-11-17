@@ -51,6 +51,7 @@ const summary = {
 };
 
 function defaultResponse(path: string, method: string, configured: boolean): MockAPIResponse | undefined {
+  if (path === "/settings/collaboration" && method === "GET") return { body: { enabled: false, target_modes: {} } };
   if (path === "/health" && method === "GET") return { body: {} };
   if (path === "/setup/status" && method === "GET") return { body: { configured, auth_mode: "password" } };
   if (path === "/auth/session" && method === "GET") return { body: session };

@@ -346,21 +346,23 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 	}
 
 	result, err := a.bootstrapper.Install(r.Context(), sshbootstrap.InstallRequest{
-		Target:              input.target(),
-		ExpectedFingerprint: strings.TrimSpace(input.HostKeyFingerprint),
-		ControlURL:          a.agentControlURL(r),
-		EnrollmentToken:     token,
-		CodexAPIURL:         strings.TrimSpace(input.CodexAPIURL),
-		CodexAPIKey:         input.CodexAPIKey,
-		CodexModel:          strings.TrimSpace(input.CodexModel),
-		GitEndpoint:         input.GitEndpoint,
-		GitUsername:         input.GitUsername,
-		GitToken:            input.GitToken,
-		GitCommitName:       input.GitCommitName,
-		GitCommitEmail:      input.GitCommitEmail,
-		AllowSudo:           input.AllowSudo,
-		SessionIsolation:    input.SessionIsolation,
-		Progress:            progress,
+		Target:                 input.target(),
+		ExpectedFingerprint:    strings.TrimSpace(input.HostKeyFingerprint),
+		ControlURL:             a.agentControlURL(r),
+		EnrollmentToken:        token,
+		CodexAPIURL:            strings.TrimSpace(input.CodexAPIURL),
+		CodexAPIKey:            input.CodexAPIKey,
+		CodexModel:             strings.TrimSpace(input.CodexModel),
+		GitEndpoint:            input.GitEndpoint,
+		GitUsername:            input.GitUsername,
+		GitToken:               input.GitToken,
+		GitCommitName:          input.GitCommitName,
+		GitCommitEmail:         input.GitCommitEmail,
+		AllowSudo:              input.AllowSudo,
+		ExpectedServerID:       serverID,
+		PreserveAccessSettings: serverID != "",
+		SessionIsolation:       input.SessionIsolation,
+		Progress:               progress,
 	})
 	if err != nil {
 		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)

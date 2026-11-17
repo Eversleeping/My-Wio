@@ -89,3 +89,26 @@ func (a *API) updateSessionCollaboration(w http.ResponseWriter, r *http.Request)
 	a.hub.Publish(protocol.StreamEvent{StreamID: ref.ID, Kind: protocol.EventSessionCollaborationGrantUpdated})
 	a.sessionCollaboration(w, r)
 }
+
+func (a *API) collaborationSettings(w http.ResponseWriter, r *http.Request) {
+	grant, err := a.store.CollaborationSettings(r.Context())
+	if err != nil {
+		writeError(w, 500, "could not load collaboration settings")
+		return
+	}
+	writeJSON(w, 200, grant)
+}
+
+func (a *API) updateCollaborationSettings(w http.ResponseWriter, r *http.Request) {
+	var grant sessiontools.Grant
+	if !decodeJSON(w, r, &grant) {
+		return
+	}
+	if err := a.store.SetCollaborationSettings(r.Context(), grant); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "settings.collaboration.update", "settings", "collaboration", grant, clientIP(r))
+	a.hub.Publish(protocol.StreamEvent{Kind: protocol.EventSessionCollaborationGrantUpdated})
+	a.collaborationSettings(w, r)
+}

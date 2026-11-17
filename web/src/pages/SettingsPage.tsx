@@ -1,3 +1,5 @@
+import { ServerAccessSettings } from "../components/ServerAccessSettings";
+import { CollaborationSettings } from "../components/CollaborationSettings";
 import { engineModule } from "../sessions/engineModules";
 import {
 AlertTriangle,
@@ -136,6 +138,8 @@ export function SettingsPage({ notify }: PageProps) {
     try { await settingEndpoints.removeSecret(secret.id); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
   };
   return <div className="page-stack">
+    <CollaborationSettings notify={notify} />
+    <ServerAccessSettings />
     <Section title={t("settings.codexCLIManagement")} icon={<SquareTerminal size={18} />}>
       <div className="codex-version-control"><div className="codex-version-summary"><small>{t("settings.codexTargetVersion")}</small><strong>{codexSettings.data?.target_version ?? "-"}</strong><span><ShieldCheck size={14} />{t("settings.codexStableRelease")}</span></div><div className="codex-version-actions"><select aria-label={t("settings.selectCodexVersion")} value={selectedCodexVersion} disabled={codexTargetBusy || !codexVersions.length} onChange={event => setSelectedCodexVersion(event.target.value)}>{codexVersions.map((version, index) => <option key={version} value={version}>{index === 0 ? t("settings.latestCodexVersion", { version }) : version}</option>)}</select><button className="secondary-button" disabled={codexTargetBusy || !selectedCodexVersion || selectedCodexVersion === codexSettings.data?.target_version} onClick={() => void applyCodexVersion()}><Check size={16} />{t("settings.applyCodexVersion")}</button><button className="primary-button" disabled={codexTargetBusy || !codexSettings.data} onClick={() => void checkCodexUpdates()}>{codexTargetBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{t(codexTargetBusy ? "settings.checkingCodexUpdates" : "settings.checkCodexUpdates")}</button></div></div>
     </Section>
