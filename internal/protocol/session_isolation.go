@@ -6,8 +6,8 @@ const (
 	IsolationUnsupported = "unsupported"
 )
 
-// SessionIsolationStatus is additive. An absent status identifies an Agent
-// which has not reported this feature; it must never be treated as enabled.
+// SessionIsolationStatus decodes historical heartbeats and wire fixtures only.
+// Current Agents omit it and the control plane ignores it.
 type SessionIsolationStatus struct {
 	Mode   string `json:"mode"`
 	Reason string `json:"reason,omitempty"`

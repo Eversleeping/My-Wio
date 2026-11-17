@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,10 +62,7 @@ func (s *Store) QueueAgentAccessUpdate(ctx context.Context, serverID string, com
 func (s *Store) QueueAgentRestart(ctx context.Context, serverID string, command protocol.AgentAccessCommand) (string, error) {
 	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentRestart, command, "agent-restart:")
 }
-func (s *Store) QueueAgentIsolationInstall(ctx context.Context, serverID string, command protocol.AgentAccessCommand) (string, error) {
-	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentIsolationInstall, command, "agent-isolation-install:", command.RequestID)
-}
-func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, command any, keyPrefix string, requestID ...string) (string, error) {
+func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, command any, keyPrefix string) (string, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -84,23 +80,6 @@ func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, co
 		return "", err
 	}
 	key := keyPrefix + serverID + ":" + NewID()
-	if len(requestID) > 0 {
-		key = keyPrefix + serverID + ":" + requestID[0]
-		var existing struct {
-			ID      string
-			Payload string
-		}
-		err = tx.GetContext(ctx, &existing, s.Q("SELECT id,payload FROM agent_operations WHERE idempotency_key=?"), key)
-		if err == nil {
-			if existing.Payload != string(payload) {
-				return "", errors.New("installation request identity already belongs to another plan")
-			}
-			return existing.ID, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return "", err
-		}
-	}
 	for _, kind := range []string{"codex", "gemini", "claude"} {
 		blockers, err := s.cliInstallBlockers(ctx, tx, serverID, kind)
 		if err != nil {

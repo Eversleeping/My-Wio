@@ -297,6 +297,12 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 		return err
 	}
 	for _, op := range ops {
+		if op.Kind == protocol.OpAgentIsolationPlan || op.Kind == protocol.OpAgentIsolationInstall {
+			if err := g.handleOperationResult(stream.Context(), serverID, protocol.OperationResult{OperationID: op.ID, Status: "failed", Message: "Session isolation has been removed; this legacy operation will not be sent to the Agent"}, op.Status != "queued" || op.DeliveredAt != nil); err != nil {
+				return err
+			}
+			continue
+		}
 		if op.Kind != protocol.OpAgentUpdate && !buildinfo.MeetsAgentMinimum(agentVersion) {
 			message := fmt.Sprintf("Agent %q requires upgrade to %s or newer before this operation can run", agentVersion, buildinfo.MinimumAgentVersion)
 			if err := g.failDeploymentOperation(stream.Context(), op, message); err != nil {
@@ -319,6 +325,15 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				// Use normal result handling for container and credential state,
 				// rather than only terminating the transport operation.
 				if err := g.handleOperationResult(stream.Context(), serverID, result, false); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if op.Kind == protocol.OpAgentAccessUpdate {
+			var command protocol.AgentAccessCommand
+			if json.Unmarshal(payload, &command) == nil && command.Settings != nil && command.Settings.SessionIsolation {
+				if err := g.handleOperationResult(stream.Context(), serverID, protocol.OperationResult{OperationID: op.ID, Status: "failed", Message: "Session isolation has been removed; this legacy setting will not be applied"}, op.Status != "queued" || op.DeliveredAt != nil); err != nil {
 					return err
 				}
 				continue

@@ -14,7 +14,7 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
   const listRequests: string[] = [];
   await installMockApplication(page, { configured: true, onAPIRequest: request => {
     if (request.path === "/workspaces") return { body: [workspace] };
-    if (request.path === "/servers") return { body: [{ id: "server", status: "online", session_isolation: { mode: "disabled" } }] };
+    if (request.path === "/servers") return { body: [{ id: "server", status: "online" }] };
     if (request.path === "/sessions") { listRequests.push(request.search); return { body: { items: sessions, next_cursor: null, groups: [{ workspace_id: workspace.id, matched_count: 3, project_pinned_at: null }] } }; }
     const thread = sessions.find(item => request.path === `/sessions/${item.engine}/${item.id}`);
     if (thread) return { body: thread };

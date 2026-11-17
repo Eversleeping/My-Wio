@@ -70,31 +70,6 @@ func TestControlPlaneAgentExtraEnvironmentValidatesVariableNames(t *testing.T) {
 	}
 }
 
-func TestControlPlaneSessionIsolationConfig(t *testing.T) {
-	t.Setenv("WIO_CONTROL_AGENT_SESSION_ISOLATION", "false")
-	config, err := controlPlaneAgentConfig(":8080", "test-agent-token")
-	if err != nil || config.SessionIsolation != nil {
-		t.Fatal("built-in isolation default changed", err)
-	}
-	t.Setenv("WIO_CONTROL_AGENT_SESSION_ISOLATION", "true")
-	t.Setenv("WIO_CONTROL_AGENT_ISOLATION_UID", "1000")
-	t.Setenv("WIO_CONTROL_AGENT_ISOLATION_GID", "1001")
-	t.Setenv("WIO_CONTROL_AGENT_ISOLATION_RUNTIME_PATHS", "/opt/public-node, /opt/public-tools")
-	config, err = controlPlaneAgentConfig(":8080", "test-agent-token")
-	if err != nil || config.SessionIsolation == nil || !config.SessionIsolation.Enabled || config.SessionIsolation.UID != 1000 || config.SessionIsolation.GID != 1001 || len(config.SessionIsolation.RuntimePaths) != 2 {
-		t.Fatal("built-in isolation configuration was not loaded", err)
-	}
-	t.Setenv("WIO_CONTROL_AGENT_ISOLATION_UID", "invalid")
-	if _, err := controlPlaneAgentConfig(":8080", "test-agent-token"); err == nil {
-		t.Fatal("invalid isolation account was accepted")
-	}
-	t.Setenv("WIO_CONTROL_AGENT_ISOLATION_UID", "1000")
-	t.Setenv("WIO_CONTROL_AGENT_ISOLATION_RUNTIME_PATHS", "/")
-	if _, err := controlPlaneAgentConfig(":8080", "test-agent-token"); err == nil {
-		t.Fatal("unrestricted built-in runtime mount was accepted")
-	}
-}
-
 func TestQueueDefaultControlPlaneCredentials(t *testing.T) {
 	ctx := context.Background()
 	database, err := store.Open(filepath.Join(t.TempDir(), "wio.db") + "?_pragma=foreign_keys(1)")

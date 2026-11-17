@@ -83,7 +83,6 @@ type InstallRequest struct {
 	AllowSudo              bool
 	ExpectedServerID       string
 	PreserveAccessSettings bool
-	SessionIsolation       bool
 	Progress               func(InstallProgress)
 }
 
@@ -211,9 +210,9 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 			if readErr != nil {
 				return InstallResult{}, readErr
 			}
-			request.AllowSudo, request.SessionIsolation = previous.AllowSudo, previous.SessionIsolation
+			request.AllowSudo = previous.AllowSudo
 		} else {
-			request.AllowSudo, request.SessionIsolation = false, false
+			request.AllowSudo = false
 		}
 	}
 	request.report("uploading_agent", 0, int64(len(agentBinary)))
@@ -348,7 +347,7 @@ func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallR
 	request.report("enrolling_agent", 0, 0)
 	// The token travels on the SSH session's standard input: a command-line
 	// argument would be visible to every local user of the target in ps.
-	enrollCommand := enrollCommandOptions(request.ControlURL, codexPath, request.SessionIsolation, request.AllowSudo)
+	enrollCommand := enrollCommandOptions(request.ControlURL, codexPath, request.AllowSudo)
 	if request.PreserveAccessSettings {
 		enrollCommand += " --preserve-access-settings"
 	}
@@ -634,9 +633,6 @@ func (request InstallRequest) report(step string, current, total int64) {
 }
 
 func validateInstallRequest(request InstallRequest) error {
-	if request.AllowSudo && request.SessionIsolation {
-		return ErrIsolationSudoConflict
-	}
 	if _, err := normalizeTarget(request.Target); err != nil {
 		return err
 	}
@@ -1146,13 +1142,8 @@ func enrollCommand(controlURL, codexPath string) string {
 	return "/usr/local/bin/wio-agent enroll --url " + shellQuote(controlURL) + " --token-file - --codex " + shellQuote(codexPath)
 }
 
-var ErrIsolationSudoConflict = errors.New("session isolation and passwordless sudo are mutually exclusive")
-
-func enrollCommandOptions(controlURL, codexPath string, isolation, allowSudo bool) string {
+func enrollCommandOptions(controlURL, codexPath string, allowSudo bool) string {
 	command := enrollCommand(controlURL, codexPath)
-	if isolation {
-		command += " --session-isolation"
-	}
 	if allowSudo {
 		command += " --allow-sudo"
 	}

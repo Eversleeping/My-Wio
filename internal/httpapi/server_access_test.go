@@ -29,7 +29,7 @@ func (f *fakeAccessManager) Access(_ context.Context, request sshbootstrap.Acces
 func TestServerAccessReadApplyAndGuards(t *testing.T) {
 	db := openBootstrapTestStore(t)
 	server, _ := enrollBootstrapTestServer(t, db, "access-node")
-	if err := db.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{AgentVersion: buildinfo.Version, Capabilities: []string{protocol.CapabilitySessionIsolation}}); err != nil {
+	if err := db.Heartbeat(context.Background(), server.ID, protocol.Heartbeat{AgentVersion: buildinfo.Version, Capabilities: []string{protocol.CapabilityAgentAccess}}); err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeAccessManager{}
@@ -44,11 +44,11 @@ func TestServerAccessReadApplyAndGuards(t *testing.T) {
 	if status := call(server.ID); status != 200 || !fake.called || fake.request.ExpectedServerID != server.ID || fake.request.Settings != nil {
 		t.Fatalf("read: %d %+v", status, fake.request)
 	}
-	input["settings"] = sshbootstrap.AccessSettings{SessionIsolation: true, Revision: strings.Repeat("a", 64)}
-	if status := call(server.ID); status != 200 || fake.request.Settings == nil || !fake.request.Settings.SessionIsolation {
+	input["settings"] = sshbootstrap.AccessSettings{AllowSudo: true, Revision: strings.Repeat("a", 64)}
+	if status := call(server.ID); status != 200 || fake.request.Settings == nil || !fake.request.Settings.AllowSudo {
 		t.Fatalf("apply: %d", status)
 	}
-	for _, settings := range []sshbootstrap.AccessSettings{{AllowSudo: true, SessionIsolation: true, Revision: strings.Repeat("a", 64)}, {AllowSudo: true}} {
+	for _, settings := range []sshbootstrap.AccessSettings{{AllowSudo: true, Revision: "stale"}, {AllowSudo: true}} {
 		fake.called = false
 		input["settings"] = settings
 		if status := call(server.ID); status != 400 || fake.called {

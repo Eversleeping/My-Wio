@@ -11,12 +11,9 @@ import (
 	"net/url"
 	"os"
 	"time"
-
-	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 type EnrollmentOptions struct {
-	SessionIsolation   *sessionisolation.Config
 	AllowSudo          bool
 	ControlURL         string
 	EnrollmentToken    string
@@ -29,14 +26,6 @@ type EnrollmentOptions struct {
 }
 
 func Enroll(ctx context.Context, options EnrollmentOptions) (Config, error) {
-	if options.SessionIsolation != nil {
-		if options.AllowSudo && options.SessionIsolation.Enabled {
-			return Config{}, errors.New("session isolation and passwordless sudo are mutually exclusive")
-		}
-		if err := options.SessionIsolation.Validate(); err != nil {
-			return Config{}, err
-		}
-	}
 	parsed, err := url.Parse(options.ControlURL)
 	if err != nil || parsed.Host == "" || parsed.Path != "" && parsed.Path != "/" {
 		return Config{}, errors.New("control URL must contain only scheme and host")
@@ -73,7 +62,7 @@ func Enroll(ctx context.Context, options EnrollmentOptions) (Config, error) {
 		return Config{}, fmt.Errorf("enrollment failed: %s", result.Error)
 	}
 	config := Config{ControlURL: options.ControlURL, ServerID: result.ServerID, AgentToken: result.AgentToken, ScanRoots: result.ScanRoots, CloneRoot: options.CloneRoot, StateDir: options.StateDir, CodexPath: options.CodexPath, DockerPath: options.DockerPath, InsecureSkipVerify: options.InsecureSkipVerify}
-	config.SessionIsolation, config.AllowSudo = options.SessionIsolation, options.AllowSudo
+	config.AllowSudo = options.AllowSudo
 	config.defaults()
 	if err := SaveConfig(options.ConfigPath, config); err != nil {
 		return Config{}, err

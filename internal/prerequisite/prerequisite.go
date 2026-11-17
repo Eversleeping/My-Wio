@@ -203,13 +203,7 @@ func (c *coordinator) handle(ctx context.Context, connection net.Conn) {
 	if err := json.NewDecoder(connection).Decode(&input); err != nil {
 		return
 	}
-	if (input.Action == runtimeaccess.HelperAction || input.Action == "runtime-access-v4" || input.Action == "runtime-access-v3" || input.Action == "runtime-access-v2" || input.Action == "runtime-access") && input.Access != nil {
-		if input.Access.Action == "isolation-plan" {
-			_ = connection.SetDeadline(time.Now().Add(5 * time.Minute))
-		}
-		if input.Access.Action == "isolation-install" {
-			_ = connection.SetDeadline(time.Now().Add(30 * time.Minute))
-		}
+	if (input.Action == runtimeaccess.HelperAction || input.Action == "runtime-access-v5" || input.Action == "runtime-access-v4" || input.Action == "runtime-access-v3" || input.Action == "runtime-access-v2" || input.Action == "runtime-access") && input.Access != nil {
 		settings, err := (runtimeaccess.Helper{Root: "/"}).Handle(ctx, *input.Access)
 		reply := runtimeaccess.Reply{Settings: settings}
 		if err != nil {

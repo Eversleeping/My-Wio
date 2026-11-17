@@ -5,7 +5,6 @@ import (
 
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/capabilities"
-	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 )
 
@@ -19,9 +18,6 @@ func TestResolveEngineAvailability(t *testing.T) {
 		{"ready", "ready", func(*store.Server) {}, []string{"", "", ""}},
 		{"workspace", "pending", func(*store.Server) {}, []string{"workspace_not_ready", "workspace_not_ready", "workspace_not_ready"}},
 		{"offline", "ready", func(s *store.Server) { s.Status = "offline" }, []string{"server_offline", "server_offline", "server_offline"}},
-		{"isolation", "ready", func(s *store.Server) {
-			s.SessionIsolation = &protocol.SessionIsolationStatus{Mode: protocol.IsolationUnsupported}
-		}, []string{"isolation_unavailable", "isolation_unavailable", "isolation_unavailable"}},
 		{"agent", "ready", func(s *store.Server) { s.AgentVersion = "0.1.0" }, []string{"agent_update", "agent_update", "agent_update"}},
 		{"CLI", "ready", func(s *store.Server) { s.GeminiReady = 0 }, []string{"", "cli_missing", ""}},
 		{"credentials", "ready", func(s *store.Server) { s.ClaudeProfileID = "" }, []string{"", "", "credentials_missing"}},

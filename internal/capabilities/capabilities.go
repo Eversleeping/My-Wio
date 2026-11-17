@@ -54,8 +54,6 @@ func claudeInteractive(_, claude string) bool {
 var gates = []gate{
 	{protocol.CapabilityAgentAccess, nil},
 	{protocol.CapabilityAgentRestart, nil},
-	{protocol.CapabilityAgentIsolationSetup, nil},
-	{protocol.CapabilityAgentIsolationUserspace, nil},
 	{protocol.CapabilityAgentSelfUpdate, nil},
 	{protocol.CapabilityCodexCLIUpdate, nil},
 	{protocol.CapabilityDeployRollbackExact, nil},
@@ -87,7 +85,6 @@ var gates = []gate{
 	{protocol.CapabilityClaudeQuestions, claudeInteractive},
 	{protocol.CapabilityCredentialsScoped, nil},
 	{protocol.CapabilitySessionCollaboration, nil},
-	{protocol.CapabilitySessionIsolation, nil},
 }
 
 // Supports requires a supported Agent and its explicit declaration. Unknown

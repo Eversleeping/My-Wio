@@ -1,6 +1,7 @@
 package protocol
 
-// AgentAccessSettings contains no host credentials or advanced isolation values.
+// AgentAccessSettings contains no host credentials. Isolation fields are
+// retained solely for published wire compatibility; enabling is rejected.
 type AgentAccessSettings struct {
 	AllowSudo            bool                   `json:"allow_sudo"`
 	SessionIsolation     bool                   `json:"session_isolation"`

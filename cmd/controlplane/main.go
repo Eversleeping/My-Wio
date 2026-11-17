@@ -27,22 +27,13 @@ import (
 	"github.com/wio-platform/wio/internal/httpapi"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
-	"github.com/wio-platform/wio/internal/sandbox"
 	"github.com/wio-platform/wio/internal/scheduler"
 	"github.com/wio-platform/wio/internal/security"
-	"github.com/wio-platform/wio/internal/sessionisolation"
 	"github.com/wio-platform/wio/internal/store"
 	webassets "github.com/wio-platform/wio/web"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == sandbox.Command {
-		if err := sandbox.Run(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(log); err != nil {
 		log.Error("control plane stopped", "error", err)
@@ -250,27 +241,6 @@ func controlPlaneAgentConfig(address, token string) (agent.Config, error) {
 		PrerequisiteSocket: env("WIO_CONTROL_AGENT_PREREQUISITE_SOCKET", "/run/wio-prerequisites/helper.sock"),
 		ExtraEnvironment:   envNames("WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT"),
 		InsecureSkipVerify: envBool("WIO_CONTROL_AGENT_INSECURE_SKIP_VERIFY"),
-	}
-	if envBool("WIO_CONTROL_AGENT_SESSION_ISOLATION") {
-		isolation := &sessionisolation.Config{Enabled: true, Bwrap: strings.TrimSpace(os.Getenv("WIO_CONTROL_AGENT_ISOLATION_BWRAP"))}
-		for _, field := range []struct {
-			name   string
-			target *uint32
-		}{{"WIO_CONTROL_AGENT_ISOLATION_UID", &isolation.UID}, {"WIO_CONTROL_AGENT_ISOLATION_GID", &isolation.GID}} {
-			if raw := strings.TrimSpace(os.Getenv(field.name)); raw != "" {
-				value, err := strconv.ParseUint(raw, 10, 32)
-				if err != nil {
-					return agent.Config{}, errors.New("invalid control-plane session isolation UID or GID")
-				}
-				*field.target = uint32(value)
-			}
-		}
-		if raw := strings.TrimSpace(os.Getenv("WIO_CONTROL_AGENT_ISOLATION_RUNTIME_PATHS")); raw != "" {
-			for _, path := range strings.Split(raw, ",") {
-				isolation.RuntimePaths = append(isolation.RuntimePaths, strings.TrimSpace(path))
-			}
-		}
-		config.SessionIsolation = isolation
 	}
 	if err := config.Validate(); err != nil {
 		return agent.Config{}, err

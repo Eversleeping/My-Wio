@@ -12,37 +12,6 @@ func TestRuntimeAccessSerializesRestartAndBlocksMaintenance(t *testing.T) {
 	assertRuntimeAccessSerializesRestartAndBlocksMaintenance(t, testStore(t))
 }
 
-func TestIsolationInstallationLocksAndDeduplicates(t *testing.T) {
-	assertIsolationInstallationLocksAndDeduplicates(t, testStore(t))
-}
-func assertIsolationInstallationLocksAndDeduplicates(t *testing.T, db *Store) {
-	ctx := context.Background()
-	server := enrollProjectImportTestServer(t, db, "isolation-install-lock")
-	command := protocol.AgentAccessCommand{ServerID: server.ID, PlanID: "plan", RequestID: "request-one"}
-	id, err := db.QueueAgentIsolationInstall(ctx, server.ID, command)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replay, err := db.QueueAgentIsolationInstall(ctx, server.ID, command)
-	if err != nil || replay != id {
-		t.Fatalf("replay queued another install: %s %v", replay, err)
-	}
-	other := command
-	other.RequestID = "request-two"
-	if _, err := db.QueueAgentIsolationInstall(ctx, server.ID, other); !errors.Is(err, ErrAgentUpdateBusy) {
-		t.Fatalf("parallel installation allowed: %v", err)
-	}
-	if _, err := db.QueueAgentRestart(ctx, server.ID, protocol.AgentAccessCommand{ServerID: server.ID}); !errors.Is(err, ErrAgentUpdateBusy) {
-		t.Fatalf("restart during install: %v", err)
-	}
-	if _, err := db.QueueCLIInstall(ctx, server.ID, protocol.CLIInstallCommand{Kind: "codex", Version: "1.0.0"}); !errors.Is(err, ErrCLIInstallBusy) {
-		t.Fatalf("CLI install during environment maintenance: %v", err)
-	}
-	command.PlanID = "different-plan"
-	if _, err := db.QueueAgentIsolationInstall(ctx, server.ID, command); err == nil {
-		t.Fatal("reused request identity accepted a different plan")
-	}
-}
 func assertRuntimeAccessSerializesRestartAndBlocksMaintenance(t *testing.T, db *Store) {
 	ctx := context.Background()
 	server := enrollProjectImportTestServer(t, db, "runtime-access-lock")

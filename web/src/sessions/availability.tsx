@@ -13,6 +13,6 @@ export function useWorkspaceEngines(workspaceID: string) {
 }
 export function EngineUnavailable({ reason }: { reason: string }) {
   const { t } = useI18n();
-  const settings = reason === "credentials_missing" || reason === "isolation_unavailable";
+  const settings = reason === "credentials_missing";
   return <p className="error-banner" role="alert"><span>{t(`sessions.unavailable.${reason}`)}</span> <a href={locationFor(settings ? "settings" : "servers")}>{t(settings ? "nav.settings" : "nav.servers")}</a></p>;
 }

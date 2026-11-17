@@ -28,7 +28,6 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/runtimeaccess"
 	"github.com/wio-platform/wio/internal/session"
-	"github.com/wio-platform/wio/internal/sessionisolation"
 	"github.com/wio-platform/wio/internal/sessiontools"
 )
 
@@ -46,7 +45,6 @@ type Client struct {
 	codex              *codexadapter.Sessions
 	gemini             *geminiadapter.Adapter
 	deployer           *deployer.Deployer
-	isolation          *sessionisolation.Manager
 	seenMu             sync.Mutex
 	seen               map[string]*operationExecution
 	updatePending      bool
@@ -81,7 +79,6 @@ func (c *Client) runtimeInstanceID() string {
 func NewClient(config Config, log *slog.Logger) *Client {
 	codexPath := effectiveCodexPath(config)
 	client := &Client{config: config, log: log, outbound: make(chan *protocol.AgentEnvelope, 4096), deployer: deployer.New(config.DockerPath, config.PrerequisiteSocket), seen: make(map[string]*operationExecution), codexPath: codexPath}
-	client.isolation = sessionisolation.New(config.SessionIsolation, config.StateDir, config.configPath, codexAPIKeyPath(config), config.PrerequisiteSocket)
 	client.codex = codexadapter.NewSessions(codexPath, codexEnvironment(config, log), log, func(event protocol.StreamEvent) error {
 		return client.emitSessionEvent(session.Codex, event)
 	})
@@ -129,7 +126,7 @@ func (c *Client) Run(ctx context.Context) error {
 }
 
 func (c *Client) processContext(ctx context.Context) context.Context {
-	return c.isolation.Context(childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment))
+	return childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
 }
 
 func (c *Client) startWorker(work func()) {

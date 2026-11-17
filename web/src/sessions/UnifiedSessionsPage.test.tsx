@@ -6,7 +6,6 @@ import { DataProvider } from "../data/resources";
 import { I18nProvider } from "../i18n";
 import { locationFor, readLocationState, type SessionEntry } from "../navigation";
 import type { SessionRef } from "./types";
-import type { SessionIsolationStatus } from "../types";
 import { readUnifiedSidebarHeight } from "./SessionPage";
 import UnifiedSessionsPage from "./UnifiedSessionsPage";
 
@@ -17,7 +16,7 @@ vi.mock("../components/SessionCollaboration", () => ({ SessionCollaboration: () 
 vi.mock("../workspace/WorkspaceFilesPanel", () => ({ WorkspaceFilesPanel: () => null }));
 const workspace = { id: "w", project_id: "p", project_name: "Project", server_id: "s", server_name: "Server", path: "/srv/project", display_name: "Feature", status: "ready", management_mode: "managed" };
 const rows = ["codex", "gemini", "claude"].map((engine, index) => ({ id: "same", engine, native_id: `native-${engine}`, workspace_id: "w", project_id: "p", project_name: "Project", server_id: "s", server_name: "Server", server_status: "online", path: workspace.path, title: `${engine} title`, status: "idle", updated_at: `2026-11-15T00:00:0${index}Z`, archived_at: null, capabilities: {} }));
-function setup(initial?: SessionRef, entry?: SessionEntry, isolation?: SessionIsolationStatus) {
+function setup(initial?: SessionRef, entry?: SessionEntry) {
   localStorage.setItem("wio_language", "en");
   const failures = new Map<string, number>();
   const requests: { path: string; method: string; body: unknown }[] = [];
@@ -30,7 +29,7 @@ function setup(initial?: SessionRef, entry?: SessionEntry, isolation?: SessionIs
     if (init.method === "DELETE") { const index = data.findIndex(row => path === `/sessions/${row.engine}/${row.id}`); if (index >= 0) data.splice(index, 1); }
     let body: unknown = {};
     if (path === "/workspaces") body = [workspace, { ...workspace, id: "empty", path: "/srv/empty", display_name: "Empty" }];
-    else if (path === "/servers") body = [{ id: "s", status: "online", session_isolation: isolation }];
+    else if (path === "/servers") body = [{ id: "s", status: "online" }];
     else if (path === "/sessions") { const query = parsed.searchParams; const items = data.filter(row => (!query.get("engine") || row.engine === query.get("engine")) && Boolean(row.archived_at) === (query.get("archived") === "true") && (!query.get("q") || row.title.includes(query.get("q")!))); body = { items, next_cursor: null, groups: items.length ? [{ workspace_id: "w", matched_count: items.length, project_pinned_at: null }] : [] }; }
     else if (/^\/sessions\/[^/]+\/same$/.test(path)) body = data.find(row => path === `/sessions/${row.engine}/${row.id}`);
     return new Response(JSON.stringify(body ?? {}), { status: 200 });
@@ -45,11 +44,6 @@ function setup(initial?: SessionRef, entry?: SessionEntry, isolation?: SessionIs
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, "", "/"); });
 
-test("marks the selected conversation with its server's reported isolation state", async () => {
-  setup({ engine: "gemini", id: "same" }, undefined, { mode: "enabled" });
-  await screen.findByText("Gemini conversation");
-  expect(await screen.findByText("Session isolated")).toBeInTheDocument();
-});
 
 test("opens three engines in one workspace, preserving identity for equal IDs", async () => {
   const { user } = setup();

@@ -32,6 +32,3 @@
 .session-engine-choices { display: flex; flex-wrap: wrap; gap: 10px; }
 
 .thread-project-toggle.workspace-focused { box-shadow: inset 3px 0 var(--cyan, #22d3ee); }
-.session-isolation { width: fit-content; max-width: 280px; flex-wrap: wrap; }
-.session-isolation small { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
-.session-isolation-indicator { padding: 8px 14px 0; }

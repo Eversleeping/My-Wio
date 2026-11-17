@@ -14,52 +14,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/runtimeaccess"
-	"github.com/wio-platform/wio/internal/sessionisolation"
 )
-
-func TestRuntimeAccessRejectsUnsupportedIsolationBeforeWriting(t *testing.T) {
-	dir := t.TempDir()
-	c := &Client{config: Config{ServerID: "node"}, seen: map[string]*operationExecution{}, isolation: sessionisolation.New(&sessionisolation.Config{Bwrap: filepath.Join(dir, "missing-bwrap")}, dir)}
-	c.runtimeAccessCall = func(context.Context, runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
-		t.Fatal("unsupported isolation reached the system settings helper")
-		return protocol.AgentAccessSettings{}, nil
-	}
-	command := protocol.AgentAccessCommand{ServerID: "node", Settings: &protocol.AgentAccessSettings{SessionIsolation: true, Revision: strings.Repeat("a", 64), IsolationSupport: &protocol.AgentIsolationSupport{Supported: true}}}
-	raw, _ := json.Marshal(command)
-	restart, _, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: protocol.OpAgentAccessUpdate, PayloadJSON: raw})
-	if err == nil || !strings.Contains(err.Error(), "cannot enable session isolation") || restart != "" || c.agentUpdatePending() {
-		t.Fatalf("unsupported isolation was not safely rejected: restart=%q error=%v", restart, err)
-	}
-}
-
-func TestRuntimeAccessReportsUnsupportedWhileDisabledAndAllowsRecovery(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		dir := t.TempDir()
-		config := &sessionisolation.Config{Enabled: enabled, Bwrap: filepath.Join(dir, "missing-bwrap")}
-		c := &Client{config: Config{ServerID: "node", SessionIsolation: config}, seen: map[string]*operationExecution{}, isolation: sessionisolation.New(config, dir)}
-		c.runtimeAccessCall = func(_ context.Context, request runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
-			if enabled && (request.Action != "apply" || request.Settings.SessionIsolation) || !enabled && request.Action != "read" {
-				t.Fatal("unexpected configuration mutation")
-			}
-			return protocol.AgentAccessSettings{Revision: strings.Repeat("a", 64), RestartRequired: enabled}, nil
-		}
-		kind := protocol.OpAgentAccessRead
-		command := protocol.AgentAccessCommand{ServerID: "node"}
-		if enabled {
-			kind = protocol.OpAgentAccessUpdate
-			command.Settings = &protocol.AgentAccessSettings{Revision: strings.Repeat("a", 64)}
-		}
-		raw, _ := json.Marshal(command)
-		restart, data, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: kind, PayloadJSON: raw})
-		var result protocol.AgentAccessSettings
-		if err != nil || json.Unmarshal(data, &result) != nil || result.IsolationSupport == nil || result.IsolationSupport.Supported || result.IsolationSupport.Reason == "" || result.SessionIsolation {
-			t.Fatalf("missing support check or blocked recovery: data=%s error=%v", data, err)
-		}
-		if (restart != "") != enabled {
-			t.Fatalf("unexpected recovery restart: %q", restart)
-		}
-	}
-}
 
 func TestRuntimeAccessSavesReceiptBeforeRestartAndReplays(t *testing.T) {
 	c := &Client{config: Config{ServerID: "node", StateDir: t.TempDir()}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), seen: map[string]*operationExecution{}, outbound: make(chan *protocol.AgentEnvelope, 8)}
@@ -133,35 +88,6 @@ func TestRuntimeAccessFailureReleasesMaintenanceReservation(t *testing.T) {
 	raw, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: "node", Settings: &protocol.AgentAccessSettings{AllowSudo: true}})
 	if _, _, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: protocol.OpAgentAccessUpdate, PayloadJSON: raw}); err == nil || c.agentUpdatePending() {
 		t.Fatal("failed change kept Agent locked")
-	}
-}
-
-func TestIsolationInstallIsMaintenanceAndRechecksRealBoundary(t *testing.T) {
-	for _, state := range []string{"verify", "reboot_required", "failed"} {
-		t.Run(state, func(t *testing.T) {
-			dir := t.TempDir()
-			c := &Client{config: Config{ServerID: "node"}, seen: map[string]*operationExecution{}, isolation: sessionisolation.New(&sessionisolation.Config{Bwrap: filepath.Join(dir, "missing-bwrap")}, dir)}
-			c.seen["install"] = &operationExecution{kind: protocol.OpAgentIsolationInstall, done: make(chan struct{})}
-			c.runtimeAccessCall = func(_ context.Context, r runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
-				if !c.agentUpdatePending() || r.Action != "isolation-install" || r.Settings != nil || r.PlanID != strings.Repeat("b", 64) || !r.UserspaceOnly || r.Source != "" {
-					t.Fatalf("unsafe helper call: %+v", r)
-				}
-				return protocol.AgentAccessSettings{Revision: strings.Repeat("a", 64), IsolationEnvironment: &protocol.IsolationEnvironment{State: state}, IsolationSupport: &protocol.AgentIsolationSupport{Supported: true}}, nil
-			}
-			raw, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: "node", PlanID: strings.Repeat("b", 64), RequestID: "request", UserspaceOnly: true})
-			restart, data, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: protocol.OpAgentIsolationInstall, PayloadJSON: raw})
-			var got protocol.AgentAccessSettings
-			if err != nil || restart != "" || c.agentUpdatePending() || json.Unmarshal(data, &got) != nil || got.IsolationSupport.Supported {
-				t.Fatalf("installation bypassed boundary or leaked maintenance lock: %s %v", data, err)
-			}
-			want := state
-			if state == "verify" {
-				want = "blocked"
-			}
-			if got.IsolationEnvironment.State != want {
-				t.Fatalf("unverified install reported usable: %+v", got)
-			}
-		})
 	}
 }
 
@@ -264,5 +190,20 @@ func TestRuntimeAccessDockerUsesLocalHostProcessIdentity(t *testing.T) {
 	}
 	if strings.Contains(args, "\n--privileged\n") {
 		t.Fatal("system helper must keep its bounded capabilities")
+	}
+}
+
+func TestRetiredOperationsFailWithoutInvokingTheHelper(t *testing.T) {
+	for _, kind := range []string{protocol.OpAgentIsolationPlan, protocol.OpAgentIsolationInstall} {
+		c := &Client{}
+		c.runtimeAccessCall = func(context.Context, runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
+			t.Fatal("retired command reached helper")
+			return protocol.AgentAccessSettings{}, nil
+		}
+		handler := operationHandlers[kind]
+		restart, data, refresh, err := handler.run(c, context.Background(), &protocol.ControlEnvelope{Kind: kind, PayloadJSON: json.RawMessage(`{"server_id":"node"}`)})
+		if err == nil || !strings.Contains(err.Error(), "has been removed") || restart != "" || len(data) != 0 || refresh {
+			t.Fatalf("retired command accepted: %q %s %v", restart, data, err)
+		}
 	}
 }

@@ -3,12 +3,10 @@ package main
 import (
 	"fmt"
 	"github.com/wio-platform/wio/internal/agent"
-	"github.com/wio-platform/wio/internal/sessionisolation"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -82,18 +80,17 @@ func TestRepairEnrollmentPreservesAccessConfiguration(t *testing.T) {
 			}))
 			defer server.Close()
 			path := filepath.Join(t.TempDir(), "config.json")
-			isolation := &sessionisolation.Config{Enabled: !allowSudo, UID: 1234, GID: 1235, Bwrap: "/custom/bwrap", RuntimePaths: []string{"/custom/runtime"}}
-			previous := agent.Config{ControlURL: server.URL, ServerID: "server-1", AgentToken: "old-synthetic-token", AllowSudo: allowSudo, SessionIsolation: isolation}
+			previous := agent.Config{ControlURL: server.URL, ServerID: "server-1", AgentToken: "old-synthetic-token", AllowSudo: allowSudo}
 			if err := agent.SaveConfig(path, previous); err != nil {
 				t.Fatal(err)
 			}
 			// Conflicting enrollment defaults must not override the installed policy.
-			args := []string{"enroll", "--url", server.URL, "--token", "synthetic-enrollment", "--config", path, "--preserve-access-settings", "--allow-sudo=" + fmt.Sprint(!allowSudo), "--session-isolation=" + fmt.Sprint(allowSudo)}
+			args := []string{"enroll", "--url", server.URL, "--token", "synthetic-enrollment", "--config", path, "--preserve-access-settings", "--allow-sudo=" + fmt.Sprint(!allowSudo)}
 			if err := run(nil, args); err != nil {
 				t.Fatal(err)
 			}
 			next, err := agent.LoadConfig(path)
-			if err != nil || next.AllowSudo != allowSudo || !reflect.DeepEqual(next.SessionIsolation, isolation) {
+			if err != nil || next.AllowSudo != allowSudo {
 				t.Fatalf("installed access policy lost during repair: %v", err)
 			}
 			if next.AgentToken != "new-synthetic-token" {

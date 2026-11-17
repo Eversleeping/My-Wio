@@ -27,7 +27,7 @@ func installed(t *testing.T) (Helper, []byte) {
 	return h, raw
 }
 func TestRuntimeAccessPreservesConfigurationAndRollsBack(t *testing.T) {
-	for _, scenario := range []string{"sudo", "isolation", "reload-fails", "restart-fails"} {
+	for _, scenario := range []string{"sudo", "reload-fails", "restart-fails"} {
 		t.Run(scenario, func(t *testing.T) {
 			h, original := installed(t)
 			ctx := context.Background()
@@ -39,8 +39,7 @@ func TestRuntimeAccessPreservesConfigurationAndRollsBack(t *testing.T) {
 			if strings.Contains(string(encoded), "synthetic-private") {
 				t.Fatal("secret in settings reply")
 			}
-			current.AllowSudo = scenario != "isolation"
-			current.SessionIsolation = scenario == "isolation"
+			current.AllowSudo = true
 			failed := false
 			h.Run = func(_ context.Context, name string, args ...string) error {
 				if name == "systemctl" && len(args) > 0 && !failed && (scenario == "reload-fails" && args[0] == "daemon-reload" || scenario == "restart-fails" && args[0] == "restart") {
@@ -100,6 +99,7 @@ func TestRuntimeAccessRejectsStaleConflictIdentityAndUnknownActions(t *testing.T
 	current, _ := h.Handle(ctx, Request{Action: "read", ServerID: "node"})
 	for _, r := range []Request{
 		{Action: "read", ServerID: "other"}, {Action: "shell", ServerID: "node"},
+		{Action: "isolation-plan", ServerID: "node"}, {Action: "isolation-install", ServerID: "node"},
 		{Action: "apply", ServerID: "node", Settings: &protocol.AgentAccessSettings{AllowSudo: true, Revision: strings.Repeat("0", 64)}},
 		{Action: "apply", ServerID: "node", Settings: &protocol.AgentAccessSettings{AllowSudo: true, SessionIsolation: true, Revision: current.Revision}},
 		{Action: "restart", ServerID: "node", Revision: strings.Repeat("0", 64)},
@@ -119,8 +119,13 @@ func TestRuntimeAccessRecoversAfterApplyAndRollbackReloadBothFail(t *testing.T) 
 	ctx := context.Background()
 	current, _ := h.Handle(ctx, Request{Action: "read", ServerID: "node"})
 	next := current
-	next.SessionIsolation = true
-	h.Run = func(context.Context, string, ...string) error { return errors.New("system bus unavailable") }
+	next.AllowSudo = true
+	h.Run = func(_ context.Context, name string, _ ...string) error {
+		if name == "sudo" {
+			return nil
+		}
+		return errors.New("system bus unavailable")
+	}
 	if _, err := h.Handle(ctx, Request{Action: "apply", ServerID: "node", Settings: &next}); err == nil {
 		t.Fatal("failed apply reported success")
 	}
@@ -138,7 +143,7 @@ func TestRuntimeAccessRecoversAfterApplyAndRollbackReloadBothFail(t *testing.T) 
 	// recovery file by hand or losing the original rollback configuration.
 	h.Run = func(context.Context, string, ...string) error { return nil }
 	saved, err := h.Handle(ctx, Request{Action: "apply", ServerID: "node", Settings: &next})
-	if err != nil || !saved.RestartRequired || !saved.SessionIsolation {
+	if err != nil || !saved.RestartRequired || !saved.AllowSudo {
 		t.Fatalf("retry after restored rollback: %+v %v", saved, err)
 	}
 	if _, err := h.Handle(ctx, Request{Action: "restart", ServerID: "node", Revision: saved.Revision}); err != nil {
@@ -150,8 +155,13 @@ func TestRuntimeAccessDoesNotDiscardRecoveryAfterUnrelatedFileChange(t *testing.
 	h, _ := installed(t)
 	ctx := context.Background()
 	next, _ := h.Handle(ctx, Request{Action: "read", ServerID: "node"})
-	next.SessionIsolation = true
-	h.Run = func(context.Context, string, ...string) error { return errors.New("system bus unavailable") }
+	next.AllowSudo = true
+	h.Run = func(_ context.Context, name string, _ ...string) error {
+		if name == "sudo" {
+			return nil
+		}
+		return errors.New("system bus unavailable")
+	}
 	_, _ = h.Handle(ctx, Request{Action: "apply", ServerID: "node", Settings: &next})
 	const edited = "independent administrator change\n"
 	if err := os.WriteFile(h.path(overrideFile), []byte(edited), 0600); err != nil {

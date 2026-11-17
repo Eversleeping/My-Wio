@@ -287,8 +287,8 @@ func decodeSSHBootstrapInput(w http.ResponseWriter, r *http.Request) (sshBootstr
 	if !decodeJSON(w, r, &input) {
 		return sshBootstrapInput{}, false
 	}
-	if input.AllowSudo && input.SessionIsolation {
-		writeBootstrapCode(w, http.StatusBadRequest, "isolation_sudo_conflict", "session isolation and passwordless sudo are mutually exclusive")
+	if input.SessionIsolation {
+		writeBootstrapCode(w, http.StatusBadRequest, "feature_removed", "session isolation has been removed")
 		return sshBootstrapInput{}, false
 	}
 	input.Name = strings.TrimSpace(input.Name)
@@ -361,7 +361,6 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 		AllowSudo:              input.AllowSudo,
 		ExpectedServerID:       serverID,
 		PreserveAccessSettings: serverID != "",
-		SessionIsolation:       input.SessionIsolation,
 		Progress:               progress,
 	})
 	if err != nil {
@@ -381,7 +380,7 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 	_ = a.store.Audit(r.Context(), session.UserID, "server.ssh.bootstrap", "server", result.ServerID, map[string]any{
 		"name": input.Name, "host": strings.TrimSpace(input.Host), "port": input.Port, "user": strings.TrimSpace(input.User), "repair": serverID != "",
 		"architecture": result.Architecture, "scan_roots": input.ScanRoots, "codex_api_url": strings.TrimSpace(input.CodexAPIURL), "codex_model": strings.TrimSpace(input.CodexModel),
-		"codex_profile_id": input.CodexProfileID, "codex_profile_name": input.CodexProfileName, "git_profile_id": input.GitProfileID, "git_profile_name": input.GitProfileName, "allow_sudo": input.AllowSudo, "session_isolation": input.SessionIsolation, "warnings": result.Warnings,
+		"codex_profile_id": input.CodexProfileID, "codex_profile_name": input.CodexProfileName, "git_profile_id": input.GitProfileID, "git_profile_name": input.GitProfileName, "allow_sudo": input.AllowSudo, "warnings": result.Warnings,
 	}, clientIP(r))
 	return result, nil
 }
@@ -446,8 +445,6 @@ func (a *API) writeBootstrapError(w http.ResponseWriter, err error) {
 
 func bootstrapErrorInfo(err error) (int, string, string) {
 	switch {
-	case errors.Is(err, sshbootstrap.ErrIsolationSudoConflict):
-		return http.StatusBadRequest, "isolation_sudo_conflict", "session isolation and passwordless sudo are mutually exclusive"
 	case errors.Is(err, errCredentialProfile):
 		return http.StatusBadRequest, "credential_profile_invalid", "the selected credential profile is unavailable or invalid"
 	case errors.Is(err, errEnrollmentToken):

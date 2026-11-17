@@ -20,9 +20,7 @@ func TestProcessLaunchAndEnvironmentSourcesAreReviewed(t *testing.T) {
 		t.Fatal("cannot locate repository")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
-	// The sandbox wrapper re-execs only the explicitly filtered environment
-	// provided by the parent command; it never constructs a service environment.
-	expectedEnviron := map[string]int{"internal/childprocess/environment.go": 1, "internal/agent/exec_linux.go": 1, "internal/sandbox/sandbox_linux.go": 2}
+	expectedEnviron := map[string]int{"internal/childprocess/environment.go": 1, "internal/agent/exec_linux.go": 1}
 	expectedCommands := map[string]int{
 		"internal/childprocess/childprocess.go": 1,
 		"internal/codexadapter/adapter.go":      1,
@@ -31,7 +29,6 @@ func TestProcessLaunchAndEnvironmentSourcesAreReviewed(t *testing.T) {
 		"internal/geminiadapter/adapter.go":     1,
 		"internal/geminiadapter/acp.go":         1,
 		"internal/geminiadapter/skills.go":      2,
-		"internal/sandbox/sandbox_linux.go":     1,
 	}
 	environ, commands := map[string]int{}, map[string]int{}
 	for _, directory := range []string{"cmd", "internal"} {

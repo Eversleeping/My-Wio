@@ -1,4 +1,4 @@
-// Package runtimeaccess manages only the installed Agent's two runtime options.
+// Package runtimeaccess manages only the installed Agent's sudo setting.
 // Helpers accept no caller-provided paths, programs, environment or shell text.
 package runtimeaccess
 
@@ -13,17 +13,14 @@ import (
 
 // HelperAction makes Agents require the recovery-capable helper. An older
 // installed helper rejects it, so the Agent uses its current local helper.
-const HelperAction = "runtime-access-v5"
+const HelperAction = "runtime-access-v6"
 
 type Request struct {
-	Action        string                        `json:"action"`
-	ServerID      string                        `json:"server_id"`
-	Settings      *protocol.AgentAccessSettings `json:"settings,omitempty"`
-	Revision      string                        `json:"revision,omitempty"`
-	Force         bool                          `json:"force,omitempty"`
-	PlanID        string                        `json:"plan_id,omitempty"`
-	UserspaceOnly bool                          `json:"userspace_only,omitempty"`
-	Source        string                        `json:"source,omitempty"`
+	Action   string                        `json:"action"`
+	ServerID string                        `json:"server_id"`
+	Settings *protocol.AgentAccessSettings `json:"settings,omitempty"`
+	Revision string                        `json:"revision,omitempty"`
+	Force    bool                          `json:"force,omitempty"`
 }
 type Reply struct {
 	Settings protocol.AgentAccessSettings `json:"settings"`
@@ -39,9 +36,6 @@ func Call(ctx context.Context, socket string, request Request) (protocol.AgentAc
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
 	timeout := 2 * time.Minute
-	if request.Action == "isolation-install" {
-		timeout = 30 * time.Minute
-	}
 	_ = c.SetDeadline(time.Now().Add(timeout))
 	if err = json.NewEncoder(c).Encode(struct {
 		Action string  `json:"action"`

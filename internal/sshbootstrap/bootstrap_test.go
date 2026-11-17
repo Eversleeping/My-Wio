@@ -115,19 +115,6 @@ func TestValidateInstallRequest(t *testing.T) {
 	}
 }
 
-func TestIsolationEnrollmentOptionsKeepSudoMutuallyExclusive(t *testing.T) {
-	if !errors.Is(validateInstallRequest(InstallRequest{AllowSudo: true, SessionIsolation: true}), ErrIsolationSudoConflict) {
-		t.Fatal("installation allowed isolation with passwordless sudo")
-	}
-	command := enrollCommandOptions("https://wio.example.test", "/opt/public/codex", true, false)
-	if !strings.Contains(command, "--session-isolation") || strings.Contains(command, "--allow-sudo") || !strings.Contains(command, "--token-file -") {
-		t.Fatal("installer did not preserve the isolated enrollment choice")
-	}
-	if command := enrollCommandOptions("https://wio.example.test", "codex", false, true); !strings.Contains(command, "--allow-sudo") || strings.Contains(command, "--session-isolation") {
-		t.Fatal("ordinary sudo enrollment changed")
-	}
-}
-
 func TestValidateUninstallRequest(t *testing.T) {
 	request := UninstallRequest{
 		Target:              Target{Host: "192.0.2.10", Port: 22, User: "root", AuthMethod: "password", Password: "ssh-password"},

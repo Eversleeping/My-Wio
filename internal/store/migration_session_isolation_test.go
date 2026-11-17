@@ -32,10 +32,14 @@ func assertSessionIsolationMigration(t *testing.T, db *sqlx.DB, driver string) {
 		t.Fatal(err)
 	}
 	row, err := s.Server(ctx, server.ID)
-	if err != nil || row.Name != server.Name || row.SessionIsolation != nil {
-		t.Fatal("extension migration changed an existing server or implied isolation")
+	if err != nil || row.Name != server.Name {
+		t.Fatal("legacy migration changed an existing server")
 	}
-	status := protocol.SessionIsolationStatus{Mode: protocol.IsolationEnabled}
+	legacy := `{"mode":"unsupported","reason":"old isolation check"}`
+	if _, err := db.Exec(s.Q("INSERT INTO server_session_isolation(server_id,status) VALUES(?,?)"), server.ID, legacy); err != nil {
+		t.Fatal(err)
+	}
+	status := protocol.SessionIsolationStatus{Mode: protocol.IsolationUnsupported}
 	if err := s.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.31", SessionIsolation: &status}); err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +47,12 @@ func assertSessionIsolationMigration(t *testing.T, db *sqlx.DB, driver string) {
 		t.Fatal(err)
 	}
 	row, err = s.Server(ctx, server.ID)
-	if err != nil || row.SessionIsolation == nil || row.SessionIsolation.Mode != protocol.IsolationEnabled {
-		t.Fatal("reopening the upgraded schema lost isolation status")
+	if err != nil || row.Name != server.Name {
+		t.Fatal("reopening the upgraded schema lost the existing server")
+	}
+	var saved string
+	if err := db.Get(&saved, s.Q("SELECT status FROM server_session_isolation WHERE server_id=?"), server.ID); err != nil || saved != legacy {
+		t.Fatal("retired status was read or overwritten", err)
 	}
 	var count int
 	if err := db.Get(&count, "SELECT COUNT(*) FROM schema_migrations WHERE version=6"); err != nil || count != 1 {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
 )
 
@@ -45,14 +44,6 @@ func (a *API) serverAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Settings != nil {
-		if input.Settings.AllowSudo && input.Settings.SessionIsolation {
-			a.writeBootstrapError(w, sshbootstrap.ErrIsolationSudoConflict)
-			return
-		}
-		if input.Settings.SessionIsolation && !server.Supports(protocol.CapabilitySessionIsolation) {
-			writeError(w, 409, "upgrade this server's Agent before enabling session isolation")
-			return
-		}
 		if len(input.Settings.Revision) != 64 {
 			writeError(w, 400, "read server settings before applying changes")
 			return
@@ -90,7 +81,7 @@ func (a *API) serverAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Settings != nil {
-		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.access.update", "server", serverID, map[string]bool{"allow_sudo": settings.AllowSudo, "session_isolation": settings.SessionIsolation}, clientIP(r))
+		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.access.update", "server", serverID, map[string]bool{"allow_sudo": settings.AllowSudo}, clientIP(r))
 	}
 	writeJSON(w, 200, settings)
 }

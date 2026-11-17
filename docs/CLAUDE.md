@@ -74,7 +74,3 @@ Claude Code 通常拒绝 root 使用 bypassPermissions。内置控制机在容�
 - [会话与分支](https://code.claude.com/docs/en/sessions)
 - [技能](https://code.claude.com/docs/en/skills)
 - [Agent SDK 会话内提问](https://code.claude.com/docs/en/agent-sdk/user-input)
-
-## 会话隔离
-
-Claude 的权限模式和 `IS_SANDBOX=1` 不提供系统隔离。Agent 0.3.31 可另外开启默认关闭的[会话隔离](SESSION_ISOLATION.md)：CLI 及其工具只能访问当前工作区、必要历史与临时配置，上游认证由可信 Agent 代理，匿名描述符中也只含临时凭据。原生登录需在可信账号侧刷新，Bedrock、Vertex 和 Foundry 当前明确拒绝。外部 socket、Docker 和宿主 Git 凭据不可用，需要认证的推送使用 Wio Git 面板。网络出口和同引擎历史共享仍保留，真实服务器验收尚未完成。

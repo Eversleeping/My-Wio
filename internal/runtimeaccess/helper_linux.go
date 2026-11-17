@@ -25,9 +25,8 @@ const backupFile = "/etc/wio-agent/.runtime-access-backup.json"
 
 type Runner func(context.Context, string, ...string) error
 type Helper struct {
-	Root        string
-	Run         Runner
-	Environment *EnvironmentInstaller
+	Root string
+	Run  Runner
 }
 type snapshot struct {
 	Data   []byte
@@ -129,15 +128,12 @@ func decode(raw []byte, id string) (protocol.AgentAccessSettings, map[string]jso
 	var c struct {
 		ServerID  string `json:"server_id"`
 		AllowSudo bool   `json:"allow_sudo"`
-		Isolation struct {
-			Enabled bool `json:"enabled"`
-		} `json:"session_isolation"`
 	}
 	if json.Unmarshal(raw, &m) != nil || m == nil || json.Unmarshal(raw, &c) != nil || id == "" || c.ServerID != id {
 		return protocol.AgentAccessSettings{}, nil, errors.New("installed Agent identity or configuration is invalid")
 	}
 	sum := sha256.Sum256(raw)
-	return protocol.AgentAccessSettings{AllowSudo: c.AllowSudo, SessionIsolation: c.Isolation.Enabled, Revision: hex.EncodeToString(sum[:])}, m, nil
+	return protocol.AgentAccessSettings{AllowSudo: c.AllowSudo, Revision: hex.EncodeToString(sum[:])}, m, nil
 }
 func validRevision(s string) bool { v, e := hex.DecodeString(s); return e == nil && len(v) == 32 }
 func (h Helper) read(id string) (protocol.AgentAccessSettings, map[string]json.RawMessage, error) {
@@ -201,21 +197,6 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	if r.Force && r.Action != "restart" {
 		return current, errors.New("only an explicit Agent restart may be forced")
 	}
-	if (r.PlanID != "" || r.Source != "" || r.UserspaceOnly) && r.Action != "isolation-install" {
-		return current, errors.New("unexpected isolation installation plan")
-	}
-	if (r.Action == "isolation-plan" || r.Action == "isolation-install") && (r.Settings != nil || r.Revision != "" || r.Force || r.Action == "isolation-plan" && r.PlanID != "") {
-		return current, errors.New("invalid isolation environment request")
-	}
-	if r.Action == "isolation-plan" {
-		env := EnvironmentInstaller{Root: h.Root}
-		if h.Environment != nil {
-			env = *h.Environment
-		}
-		plan := env.Plan(ctx, current.Revision)
-		current.IsolationEnvironment = &plan
-		return current, nil
-	}
 	if r.Action == "read" && r.Settings == nil && r.Revision == "" {
 		pending, err := h.pending(r.ServerID)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -224,7 +205,7 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 		current.RestartRequired = err == nil && pending.NextRevision == current.Revision
 		return current, nil
 	}
-	if r.Action != "apply" && r.Action != "restart" && r.Action != "isolation-install" {
+	if r.Action != "apply" && r.Action != "restart" {
 		return current, errors.New("unsupported runtime settings action")
 	}
 	lock, err := os.OpenFile(h.path("/etc/wio-agent/.runtime-access.lock"), os.O_CREATE|os.O_RDWR, 0600)
@@ -243,21 +224,6 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	previous, backupErr := h.pending(r.ServerID)
 	if backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
 		return current, backupErr
-	}
-	if r.Action == "isolation-install" {
-		if backupErr == nil {
-			return current, errors.New("finish the pending Agent restart before installing isolation dependencies")
-		}
-		env := EnvironmentInstaller{Root: h.Root}
-		if h.Environment != nil {
-			env = *h.Environment
-		}
-		if !r.UserspaceOnly || r.Source != "" {
-			return current, errors.New("only explicitly confirmed installations without server reboot are allowed")
-		}
-		plan := env.Install(ctx, current.Revision, r.PlanID)
-		current.IsolationEnvironment = &plan
-		return current, nil
 	}
 	if r.Action == "restart" {
 		if !validRevision(r.Revision) || r.Revision != current.Revision || r.Settings != nil {
@@ -302,8 +268,8 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	if next == nil || !validRevision(next.Revision) || next.Revision != current.Revision {
 		return current, errors.New("server settings changed; read them again before applying")
 	}
-	if next.AllowSudo && next.SessionIsolation {
-		return current, errors.New("session isolation and passwordless sudo are mutually exclusive")
+	if next.SessionIsolation {
+		return current, errors.New("session isolation has been removed")
 	}
 	if backupErr == nil {
 		if h.restored(previous) {
@@ -316,14 +282,14 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 			if err := os.Remove(h.path(backupFile)); err != nil {
 				return current, err
 			}
-		} else if previous.NextRevision == current.Revision && next.AllowSudo == current.AllowSudo && next.SessionIsolation == current.SessionIsolation {
+		} else if previous.NextRevision == current.Revision && next.AllowSudo == current.AllowSudo {
 			current.RestartRequired = true
 			return current, nil
 		} else {
 			return current, errors.New("finish the pending Agent restart before changing settings")
 		}
 	}
-	if next.AllowSudo == current.AllowSudo && next.SessionIsolation == current.SessionIsolation {
+	if next.AllowSudo == current.AllowSudo {
 		return current, nil
 	}
 	if _, err = os.Stat(h.path("/etc/systemd/system/wio-agent.service")); err != nil {
@@ -335,17 +301,6 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 		}
 	}
 	fields["allow_sudo"], _ = json.Marshal(next.AllowSudo)
-	var isolation map[string]json.RawMessage
-	if v := fields["session_isolation"]; len(v) > 0 && string(v) != "null" {
-		if json.Unmarshal(v, &isolation) != nil {
-			return current, errors.New("invalid advanced isolation configuration")
-		}
-	}
-	if isolation == nil {
-		isolation = map[string]json.RawMessage{}
-	}
-	isolation["enabled"], _ = json.Marshal(next.SessionIsolation)
-	fields["session_isolation"], _ = json.Marshal(isolation)
 	nextRaw, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return current, err

@@ -45,13 +45,8 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	heartbeat.Capabilities = capabilities.AgentDeclaration(heartbeat.GeminiVersion, heartbeat.ClaudeVersion)
 	if runtime.GOOS != "linux" || c.config.configPath != "/etc/wio-agent/config.json" {
 		heartbeat.Capabilities = slices.DeleteFunc(heartbeat.Capabilities, func(name string) bool {
-			return name == protocol.CapabilityAgentAccess || name == protocol.CapabilityAgentRestart || name == protocol.CapabilityAgentIsolationSetup || name == protocol.CapabilityAgentIsolationUserspace
+			return name == protocol.CapabilityAgentAccess || name == protocol.CapabilityAgentRestart
 		})
-	}
-	status := c.isolation.Status(ctx)
-	heartbeat.SessionIsolation = &status
-	if c.config.SessionIsolation != nil && c.config.SessionIsolation.Enabled {
-		heartbeat.Capabilities = slices.DeleteFunc(heartbeat.Capabilities, func(name string) bool { return name == protocol.CapabilityGeminiSkillsManage })
 	}
 	return c.queue(protocol.AgentKindHeartbeat, heartbeat, false)
 }
@@ -132,7 +127,7 @@ func commandVersion(ctx context.Context, command string) string {
 func commandVersionWithTimeout(ctx context.Context, command string, timeout time.Duration) string {
 	versionContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	output, err := childprocess.OutputContext(versionContext, childprocess.CommandContext(versionContext, command, "--version"))
+	output, err := childprocess.Output(childprocess.CommandContext(versionContext, command, "--version"))
 	if err != nil {
 		return ""
 	}

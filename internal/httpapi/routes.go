@@ -89,8 +89,6 @@ func (api *API) registerServerRoutes(private chi.Router) {
 	private.Post("/servers/{serverID}/ssh/uninstall", api.uninstallServerSSH)
 	private.Post("/servers/{serverID}/ssh/access-settings", api.serverAccess)
 	private.Post("/servers/{serverID}/access-settings/read", api.agentAccess)
-	private.Post("/servers/{serverID}/isolation/environment/read", api.agentAccess)
-	private.Post("/servers/{serverID}/isolation/environment/install", api.agentAccess)
 	private.Put("/servers/{serverID}/access-settings", api.agentAccess)
 	private.Get("/servers/{serverID}/access-settings/operations/{operationID}", api.agentAccessResult)
 	private.Delete("/servers/{serverID}", api.revokeServer)

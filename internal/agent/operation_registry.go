@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/wio-platform/wio/internal/protocol"
@@ -42,8 +43,8 @@ var operationHandlers = map[string]operationHandler{
 	protocol.OpAgentAccessRead:            {run: (*Client).runRuntimeAccess},
 	protocol.OpAgentAccessUpdate:          {run: (*Client).runRuntimeAccess},
 	protocol.OpAgentRestart:               {run: (*Client).runRuntimeAccess},
-	protocol.OpAgentIsolationPlan:         {run: (*Client).runRuntimeAccess},
-	protocol.OpAgentIsolationInstall:      {run: (*Client).runRuntimeAccess},
+	protocol.OpAgentIsolationPlan:         {run: (*Client).runRetiredOperation},
+	protocol.OpAgentIsolationInstall:      {run: (*Client).runRetiredOperation},
 	protocol.OpAgentUpdate:                {run: (*Client).runAgentUpdateOperation},
 	protocol.OpCLIInstall:                 commandOperation((*Client).executeCLIInstall),
 	protocol.OpClaudeCredentialsConfigure: commandOperation((*Client).executeClaudeCredentialsConfigure),
@@ -124,4 +125,12 @@ func operationHandlerFor(kind string) (operationFunc, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (c *Client) runRetiredOperation(_ context.Context, envelope *protocol.ControlEnvelope) (string, json.RawMessage, bool, error) {
+	var legacy protocol.AgentAccessCommand
+	if err := json.Unmarshal(envelope.PayloadJSON, &legacy); err != nil {
+		return "", nil, false, err
+	}
+	return "", nil, false, errors.New("session isolation has been removed")
 }

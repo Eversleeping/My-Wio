@@ -16,9 +16,8 @@ var ErrAccessSettings = errors.New("could not apply server access settings")
 var ErrAccessChanged = errors.New("server settings changed; read them again before applying")
 
 type AccessSettings struct {
-	AllowSudo        bool   `json:"allow_sudo"`
-	SessionIsolation bool   `json:"session_isolation"`
-	Revision         string `json:"revision"`
+	AllowSudo bool   `json:"allow_sudo"`
+	Revision  string `json:"revision"`
 }
 
 type AccessRequest struct {
@@ -36,9 +35,6 @@ func decodeAccess(raw []byte, expectedID string) (AccessSettings, map[string]jso
 	var config struct {
 		ServerID  string `json:"server_id"`
 		AllowSudo bool   `json:"allow_sudo"`
-		Isolation struct {
-			Enabled bool `json:"enabled"`
-		} `json:"session_isolation"`
 	}
 	if json.Unmarshal(raw, &config) != nil {
 		return AccessSettings{}, nil, ErrAccessSettings
@@ -47,13 +43,10 @@ func decodeAccess(raw []byte, expectedID string) (AccessSettings, map[string]jso
 		return AccessSettings{}, nil, ErrServerMismatch
 	}
 	digest := sha256.Sum256(raw)
-	return AccessSettings{AllowSudo: config.AllowSudo, SessionIsolation: config.Isolation.Enabled, Revision: hex.EncodeToString(digest[:])}, fields, nil
+	return AccessSettings{AllowSudo: config.AllowSudo, Revision: hex.EncodeToString(digest[:])}, fields, nil
 }
 
 func patchAccess(raw []byte, expectedID string, next AccessSettings) ([]byte, error) {
-	if next.AllowSudo && next.SessionIsolation {
-		return nil, ErrInvalidTarget
-	}
 	current, fields, err := decodeAccess(raw, expectedID)
 	if err != nil {
 		return nil, err
@@ -62,31 +55,17 @@ func patchAccess(raw []byte, expectedID string, next AccessSettings) ([]byte, er
 		return nil, ErrAccessChanged
 	}
 	fields["allow_sudo"], _ = json.Marshal(next.AllowSudo)
-	var isolation map[string]json.RawMessage
-	if value := fields["session_isolation"]; len(value) != 0 && string(value) != "null" {
-		if json.Unmarshal(value, &isolation) != nil {
-			return nil, ErrAccessSettings
-		}
-	}
-	if isolation == nil {
-		isolation = map[string]json.RawMessage{}
-	}
-	isolation["enabled"], _ = json.Marshal(next.SessionIsolation)
-	fields["session_isolation"], _ = json.Marshal(isolation)
 	return json.MarshalIndent(fields, "", "  ")
 }
 
 // Access reads the installed configuration over the same verified, privileged
-// SSH connection as enrollment. Only the two options and a digest leave here.
+// SSH connection as enrollment. Only the sudo option and a digest leave here.
 func (s *Service) Access(ctx context.Context, request AccessRequest) (AccessSettings, error) {
 	target, err := normalizeTarget(request.Target)
 	if err != nil {
 		return AccessSettings{}, err
 	}
 	if !validServerID(request.ExpectedServerID) || strings.TrimSpace(request.ExpectedFingerprint) == "" {
-		return AccessSettings{}, ErrInvalidTarget
-	}
-	if request.Settings != nil && request.Settings.AllowSudo && request.Settings.SessionIsolation {
 		return AccessSettings{}, ErrInvalidTarget
 	}
 	client, _, err := connect(ctx, target, request.ExpectedFingerprint)

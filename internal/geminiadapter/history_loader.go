@@ -13,11 +13,7 @@ import (
 var historyLoader []byte
 
 func acpHistoryEnvironment(environment []string) ([]string, func(), error) {
-	return acpHistoryEnvironmentIn(environment, "")
-}
-
-func acpHistoryEnvironmentIn(environment []string, temporary string) ([]string, func(), error) {
-	directory, err := os.MkdirTemp(temporary, "wio-gemini-history-*")
+	directory, err := os.MkdirTemp("", "wio-gemini-history-*")
 	if err != nil {
 		return nil, nil, err
 	}

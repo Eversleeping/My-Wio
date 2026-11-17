@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -34,14 +33,9 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	restarting := strings.HasSuffix(r.URL.Path, "/agent-restart")
-	planning := strings.HasSuffix(r.URL.Path, "/isolation/environment/read")
-	installing := strings.HasSuffix(r.URL.Path, "/isolation/environment/install")
 	capability := protocol.CapabilityAgentAccess
 	if restarting {
 		capability = protocol.CapabilityAgentRestart
-	}
-	if planning || installing {
-		capability = protocol.CapabilityAgentIsolationUserspace
 	}
 	if !server.Supports(capability) {
 		writeError(w, 409, "upgrade this server's Agent to configure runtime settings")
@@ -50,28 +44,7 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	command := protocol.AgentAccessCommand{ServerID: id}
 	kind := protocol.OpAgentAccessRead
 	var operation string
-	if installing {
-		var input struct {
-			PlanID        string `json:"plan_id"`
-			UserspaceOnly bool   `json:"userspace_only"`
-			Source        string `json:"source"`
-			RequestID     string `json:"request_id"`
-		}
-		if !decodeJSON(w, r, &input) {
-			return
-		}
-		digest, e := hex.DecodeString(input.PlanID)
-		if !input.UserspaceOnly || input.Source != "" || e != nil || len(digest) != 32 || !regexp.MustCompile(`^[A-Za-z0-9-]{16,80}$`).MatchString(input.RequestID) {
-			writeError(w, 400, "invalid installation plan or request identity")
-			return
-		}
-		command.PlanID, command.RequestID, command.UserspaceOnly = input.PlanID, input.RequestID, true
-		kind = protocol.OpAgentIsolationInstall
-		operation, err = a.store.QueueAgentIsolationInstall(r.Context(), id, command)
-	} else if planning {
-		kind = protocol.OpAgentIsolationPlan
-		operation, err = a.store.QueueResourceOperation(r.Context(), id, kind, command, "agent-isolation-plan:"+store.NewID(), store.OperationResource{}, false)
-	} else if restarting {
+	if restarting {
 		kind = protocol.OpAgentRestart
 		operation, err = a.store.QueueAgentRestart(r.Context(), id, command)
 	} else if r.Method == http.MethodPut {
@@ -80,7 +53,7 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		revision, e := hex.DecodeString(settings.Revision)
-		if e != nil || len(revision) != 32 || settings.AllowSudo && settings.SessionIsolation {
+		if e != nil || len(revision) != 32 || settings.SessionIsolation {
 			writeError(w, 400, "invalid runtime settings or revision")
 			return
 		}
@@ -100,19 +73,16 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	a.gateway.Wake(id)
 	if kind == protocol.OpAgentAccessUpdate {
-		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.access.update", "server", id, map[string]any{"operation_id": operation, "allow_sudo": command.Settings.AllowSudo, "session_isolation": command.Settings.SessionIsolation}, clientIP(r))
+		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.access.update", "server", id, map[string]any{"operation_id": operation, "allow_sudo": command.Settings.AllowSudo}, clientIP(r))
 	}
 	if kind == protocol.OpAgentRestart {
 		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "agent.restart", "server", id, map[string]string{"operation_id": operation}, clientIP(r))
-	}
-	if kind == protocol.OpAgentIsolationInstall {
-		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "agent.isolation.install", "server", id, map[string]string{"operation_id": operation, "plan_id": command.PlanID}, clientIP(r))
 	}
 	writeJSON(w, 202, map[string]string{"operation_id": operation})
 }
 func (a *API) agentAccessResult(w http.ResponseWriter, r *http.Request) {
 	op, err := a.store.Operation(r.Context(), chi.URLParam(r, "operationID"))
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.ServerID != chi.URLParam(r, "serverID") || (op.Kind != protocol.OpAgentAccessRead && op.Kind != protocol.OpAgentAccessUpdate && op.Kind != protocol.OpAgentRestart && op.Kind != protocol.OpAgentIsolationPlan && op.Kind != protocol.OpAgentIsolationInstall)) {
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.ServerID != chi.URLParam(r, "serverID") || (op.Kind != protocol.OpAgentAccessRead && op.Kind != protocol.OpAgentAccessUpdate && op.Kind != protocol.OpAgentRestart)) {
 		writeError(w, 404, "runtime settings operation not found")
 		return
 	}
@@ -137,5 +107,5 @@ func (a *API) agentAccessResult(w http.ResponseWriter, r *http.Request) {
 
 func validAgentAccessResult(settings protocol.AgentAccessSettings) bool {
 	revision, err := hex.DecodeString(settings.Revision)
-	return err == nil && len(revision) == 32 && !(settings.AllowSudo && settings.SessionIsolation)
+	return err == nil && len(revision) == 32 && !settings.SessionIsolation
 }

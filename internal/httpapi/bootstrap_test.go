@@ -79,28 +79,6 @@ func TestSSHConnectionInputWithoutExtraCredentials(t *testing.T) {
 	}
 }
 
-func TestBootstrapSessionIsolationRejectsSudoBeforeEnrollment(t *testing.T) {
-	fake := &fakeServerBootstrapper{}
-	api := &API{bootstrapper: fake}
-	input := bootstrapInput()
-	input["allow_sudo"], input["session_isolation"] = true, true
-	response := directJSONRequest(t, http.MethodPost, "/api/servers/ssh/bootstrap", input, &store.Session{UserID: "test-user"}, api.bootstrapServerSSH)
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "isolation_sudo_conflict") || fake.installRequest.EnrollmentToken != "" {
-		t.Fatal("conflicting isolation options reached enrollment")
-	}
-}
-
-func TestBootstrapPassesSessionIsolationToInstaller(t *testing.T) {
-	fake := &fakeServerBootstrapper{installResult: sshbootstrap.InstallResult{ServerID: "server-id", Hostname: "synthetic-node", Architecture: "amd64"}}
-	api := &API{store: openBootstrapTestStore(t), bootstrapper: fake, publicURL: "https://wio.example.test", log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	input := bootstrapInput()
-	input["session_isolation"] = true
-	response := directJSONRequest(t, http.MethodPost, "/api/servers/ssh/bootstrap", input, &store.Session{UserID: "test-user"}, api.bootstrapServerSSH)
-	if response.Code != http.StatusCreated || !fake.installRequest.SessionIsolation || fake.installRequest.AllowSudo {
-		t.Fatal("server isolation choice did not reach installation")
-	}
-}
-
 func TestBootstrapServerSSHDoesNotEchoSecrets(t *testing.T) {
 	database := openBootstrapTestStore(t)
 	fake := &fakeServerBootstrapper{installResult: sshbootstrap.InstallResult{ServerID: "server-id", Hostname: "node-1", Architecture: "arm64"}}

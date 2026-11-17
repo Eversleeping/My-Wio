@@ -200,6 +200,7 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 - 库结构比程序更新时，启动报错形如 `database schema version 2 is newer than supported schema version 1 (control plane <版本>); use a control plane supporting schema version 2 or later`。按升级说明选择支持该结构的控制面，不要删除或修改版本记录绕过检查。此保护仅存在于包含 P1-03 的新制品，早期旧制品无法识别新库；破坏性迁移必须在升级说明标出最低可回滚版本，并与扩展迁移至少间隔一个发布版本。编写与验证规则见[数据库迁移](OPERATIONS.md#数据库迁移)。
 - 包含 P2-07 的 M4 制品会将结构从 1 升到 3，迁移定时任务与服务器引擎配置。旧表保留但不再承接对应的新写入；原 M3 制品只支持结构 1，不能直接连接升级库。发布时记录支持结构 3 的实际制品作为最低可用版本。若退回 M3，必须同时恢复升级前数据库备份；恢复会丢失升级后的变更，除非先完成增量协调。上线前用最新备份在隔离实例中确认任务数量、下次运行时间、启用状态和引擎凭据绑定一致。
 - **P2-10 / schema 5 是破坏性迁移**：启动支持此迁移的制品后，将删除 `codex_scheduled_tasks`、`gemini_scheduled_tasks`、`claude_scheduled_tasks`、`server_gemini_credential_profiles`、`server_claude_credential_profiles`、`server_claude_cli` 六张停用表，以及 `servers` 的 `codex_version` / `codex_ready` / `gemini_version` / `gemini_ready` 和 `server_credential_profiles.codex_profile_id` 五列。当前任务和引擎配置从统一表读取；原生线程表、Git 绑定和凭据更新追溯保留。schema 5 的首个已验收发布制品为 `e3d9d78`（Agent 0.3.26）；具体环境状态以部署记录及实际迁移版本为准。
+- 当前数据库最高迁移版本为 schema 6。已发布的迁移继续保留，移除功能不回退迁移号或删除历史数据；回滚镜像必须支持实际数据库版本。
 - **schema 5 的最低可回滚制品必须支持 schema 5**。M3（schema 1）、M5（schema 3）和只支持 schema 4 的制品均不能直接连接升级库；同一个 Agent 版本号也不能证明控制面 schema 兼容。发布前记录实际 Git 提交和镜像摘要，并用升级前备份在隔离实例演练升级、重复启动、任务与凭据绑定核对及旧制品拒绝启动。需要退回旧制品时，须同步恢复升级前备份，并明确升级后增量的丢失或协调方式；禁止补造已删除的表或修改迁移记录绕过保护。
 - 丢失 `WIO_MASTER_KEY` 将使 Vault 中加密的 TOTP 密钥、凭据预设和部分 Agent 状态无法恢复，不能用新的随机值无损替换。
 
@@ -211,11 +212,3 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 | `controlplane` 无法连接 PostgreSQL | 对比 `.env` 中的 `POSTGRES_PASSWORD` 与 URL 编码后的 `WIO_DATABASE_URL`，再检查 `postgres` 容器健康状态。 |
 | WebSocket 连接失败但页面可打开 | 宿主机代理必须将 Upgrade 请求单独按 HTTP/1.1 转发；不要把 WebSocket 请求强制走 h2c。 |
 | 容器可启动但无法扫描或部署宿主机项目 | 检查专用工作区目录是否存在、是否映射到 `srv`/`opt`/`home`，并确认 Docker socket 挂载及部署账户权限。 |
-
-## 可选会话隔离
-
-Agent 0.3.31 提供默认关闭的完整会话边界，要求 Linux 实际支持 Landlock ABI 9 的 pathname socket 限制和 IPC/信号 scopes，以及允许 bubblewrap 建立全部所需命名空间。仅安装 bubblewrap 或使用较新内核不能代替启动探测；不支持时 CLI 明确拒绝运行。
-
-root 内置 Agent 还必须配置非零隔离 UID/GID，清空附加组和 capabilities，并由管理员事先保证工作区与原生历史的访问权限。默认容器镜像及宿主策略不保证满足要求，不能通过放行整个 HOME、Agent 状态或 Docker socket 弥补；优先在支持条件明确的外部 Agent 上试用。免密 sudo 与隔离互斥。具体变量、配置、认证限制和关闭方式见[会话隔离](SESSION_ISOLATION.md)。
-
-本次 schema 6 是扩展迁移，增加独立的服务器隔离状态表，不删除原有数据。数据库版本保护仍适用：仅支持 schema 5 的控制面不能直接连接已升级数据库；回退到旧制品须按既有备份恢复流程处理。关闭隔离开关不需要回退 schema。当前开启隔离后的真实外部 Agent、控制面容器及真实账户验收尚未完成，临时支持内核的结果不代表生产环境支持。

@@ -59,13 +59,6 @@ test("enrolls without server runtime settings in the registration dialog", async
   await waitFor(() => expect(requests).toContainEqual({ url: "/api/servers/ssh/bootstrap-stream", body: expect.not.objectContaining({ session_isolation: expect.anything(), allow_sudo: expect.anything() }) }));
 });
 
-test("shows an unsupported server isolation reason", async () => {
-  localStorage.setItem("wio_language", "en");
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === "/api/servers" ? [{ ...server, session_isolation: { mode: "unsupported", reason: "Required namespaces are unavailable" } }] : []))));
-  render(<I18nProvider><DataProvider revisions={{ servers: 0 }}><ServersPage notify={vi.fn()} /></DataProvider></I18nProvider>);
-  expect(await screen.findByText("Isolation unavailable")).toBeInTheDocument();
-  expect(screen.getByText("Required namespaces are unavailable")).toBeInTheDocument();
-});
 
 test("displays the Codex version without the CLI prefix", async () => {
   window.localStorage.setItem("wio_language", "en");
@@ -357,12 +350,11 @@ test("shows the minimum Agent requirement in the list and details while keeping 
   expect(within(dialog).getByText(text)).toBeInTheDocument();
 });
 
-test("keeps installed engines distinct from failed version checks under unavailable isolation",async()=>{
+test("keeps installed engines distinct from failed version checks",async()=>{
  localStorage.setItem("wio_language","en");
- const unavailable={...server,codex_version:"",gemini_version:"",gemini_ready:1,claude_version:"",claude_ready:1,cli_management_supported:true,claude_credentials_supported:true,session_isolation:{mode:"unsupported",reason:"Landlock ABI 9 is required"}};
+ const unavailable={...server,codex_version:"",gemini_version:"",gemini_ready:1,claude_version:"",claude_ready:1,cli_management_supported:true,claude_credentials_supported:true};
  vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>new Response(JSON.stringify(String(input)==="/api/servers"?[unavailable]:[]))));
  render(<I18nProvider><DataProvider revisions={{servers:0}}><ServersPage notify={vi.fn()}/></DataProvider></I18nProvider>);
  await waitFor(()=>expect(screen.getAllByText("Installed; version check unavailable")).toHaveLength(3));
  expect(screen.queryByText("Not installed")).not.toBeInTheDocument();
- expect(screen.getByText("Isolation unavailable")).toBeInTheDocument();
 });

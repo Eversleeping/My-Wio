@@ -18,18 +18,9 @@ import (
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/prerequisite"
 	"github.com/wio-platform/wio/internal/runtimeaccess"
-	"github.com/wio-platform/wio/internal/sandbox"
-	"github.com/wio-platform/wio/internal/sessionisolation"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == sandbox.Command {
-		if err := sandbox.Run(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	if err := run(log, os.Args[1:]); err != nil {
 		log.Error("agent stopped", "error", err)
@@ -55,9 +46,8 @@ func run(log *slog.Logger, args []string) error {
 		stateDir := flags.String("state-dir", "/var/lib/wio-agent", "agent state directory")
 		codexPath := flags.String("codex", "codex", "Codex CLI executable")
 		dockerPath := flags.String("docker", "docker", "Docker CLI executable")
-		isolation := flags.Bool("session-isolation", false, "require complete Linux session isolation")
 		preserveAccess := flags.Bool("preserve-access-settings", false, "preserve installed access settings during repair")
-		allowSudo := flags.Bool("allow-sudo", false, "service is configured for passwordless sudo (incompatible with isolation)")
+		allowSudo := flags.Bool("allow-sudo", false, "service is configured for passwordless sudo")
 		insecure := flags.Bool("insecure-skip-verify", false, "skip TLS certificate verification (development only)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
@@ -71,10 +61,6 @@ func run(log *slog.Logger, args []string) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		var isolationConfig *sessionisolation.Config
-		if *isolation {
-			isolationConfig = &sessionisolation.Config{Enabled: true}
-		}
 		allowSudoValue := *allowSudo
 		if *preserveAccess {
 			previous, loadErr := agent.LoadConfig(*configPath)
@@ -82,10 +68,10 @@ func run(log *slog.Logger, args []string) error {
 				return errors.New("could not read installed access settings")
 			}
 			if loadErr == nil {
-				isolationConfig, allowSudoValue = previous.SessionIsolation, previous.AllowSudo
+				allowSudoValue = previous.AllowSudo
 			}
 		}
-		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, SessionIsolation: isolationConfig, AllowSudo: allowSudoValue})
+		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, AllowSudo: allowSudoValue})
 		if err != nil {
 			return err
 		}
