@@ -108,13 +108,22 @@ func (c *Client) dockerRuntimeAccess(ctx context.Context, r runtimeaccess.Reques
 		return protocol.AgentAccessSettings{}, errors.New("invalid local helper image")
 	}
 	mount := "type=bind,src=/,dst=/host"
-	if r.Action == "read" {
+	if r.Action == "read" || r.Action == "isolation-plan" {
 		mount += ",readonly"
 	}
 	// systemd authenticates the caller using its process identity. Share the
 	// host PID namespace to match the host /proc mounted by the chroot; a
 	// container PID namespace makes sd-bus authentication fail with ENODATA.
-	command := invoke("run", "--pull", "never", "--rm", "--sig-proxy=false", "--read-only", "--network", "none", "--pid", "host", "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "SYS_CHROOT", "--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--security-opt", "no-new-privileges=true", "--pids-limit", "32", "--mount", mount, "-i", imageID, "runtime-access-helper", "--host-root")
+	network, pids := "none", "32"
+	var extraCaps []string
+	if r.Action == "isolation-install" {
+		network, pids = "host", "256"
+		extraCaps = []string{"--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "FSETID"}
+	}
+	args := []string{"run", "--pull", "never", "--rm", "--sig-proxy=false", "--read-only", "--network", network, "--pid", "host", "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "SYS_CHROOT", "--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--security-opt", "no-new-privileges=true", "--pids-limit", pids}
+	args = append(args, extraCaps...)
+	args = append(args, "--mount", mount, "-i", imageID, "runtime-access-helper", "--host-root")
+	command := invoke(args...)
 	input, _ := json.Marshal(r)
 	command.Stdin = bytes.NewReader(input)
 	output, err := command.Output()
@@ -140,7 +149,23 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 		return
 	}
 	request := runtimeaccess.Request{Action: "read", ServerID: command.ServerID}
-	if envelope.Kind == protocol.OpAgentAccessUpdate || envelope.Kind == protocol.OpAgentRestart {
+	installing := envelope.Kind == protocol.OpAgentIsolationInstall
+	planning := envelope.Kind == protocol.OpAgentIsolationPlan
+	if installing || planning {
+		if command.Settings != nil || planning && (command.PlanID != "" || command.RequestID != "") || installing && (len(command.PlanID) != 64 || command.RequestID == "") {
+			err = errors.New("invalid isolation environment command")
+			return
+		}
+		request.Action = "isolation-plan"
+		if installing {
+			request.Action = "isolation-install"
+			request.PlanID = command.PlanID
+		}
+	} else if command.PlanID != "" || command.RequestID != "" {
+		err = errors.New("unexpected isolation environment parameters")
+		return
+	}
+	if envelope.Kind == protocol.OpAgentAccessUpdate || envelope.Kind == protocol.OpAgentRestart || installing {
 		if envelope.Kind == protocol.OpAgentAccessUpdate && (command.Settings == nil || command.Settings.AllowSudo && command.Settings.SessionIsolation) || envelope.Kind == protocol.OpAgentRestart && command.Settings != nil {
 			err = errors.New("invalid runtime settings")
 			return
@@ -190,6 +215,17 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 	if supportErr := c.isolation.CheckSupport(ctx); supportErr != nil {
 		settings.IsolationSupport.Supported = false
 		settings.IsolationSupport.Reason = supportErr.Error()
+	}
+	if env := settings.IsolationEnvironment; env != nil {
+		env.Checks = append(env.Checks, protocol.IsolationCheck{ID: "agent_boundary", OK: settings.IsolationSupport.Supported, Detail: settings.IsolationSupport.Reason})
+		if env.State == "verify" {
+			if settings.IsolationSupport.Supported {
+				env.State = "ready"
+			} else {
+				env.State = "blocked"
+				env.Error = settings.IsolationSupport.Reason
+			}
+		}
 	}
 	data, err = json.Marshal(settings)
 	if envelope.Kind == protocol.OpAgentRestart {

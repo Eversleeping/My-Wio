@@ -1,0 +1,38 @@
+{
+  "baseline": "0.3.36",
+  "direction": "result",
+  "kind": "agent.isolation.install",
+  "source": [
+    "internal/protocol/agent_access.go"
+  ],
+  "payload": {
+    "allow_sudo": false,
+    "session_isolation": false,
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "applied": true,
+    "restart_required": false,
+    "isolation_environment": {
+      "plan_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "state": "failed",
+      "can_install": false,
+      "requires_reboot": false,
+      "packages": [
+        {
+          "name": "bubblewrap",
+          "version": "0.11.0-1"
+        }
+      ],
+      "checks": [
+        {
+          "id": "landlock",
+          "ok": true,
+          "detail": "Landlock ABI 9; required: 9+"
+        }
+      ],
+      "logs": [
+        "Installation confirmed."
+      ],
+      "error": "The package manager is busy."
+    }
+  }
+}

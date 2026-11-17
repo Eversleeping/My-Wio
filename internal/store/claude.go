@@ -146,7 +146,7 @@ func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread Clau
 		return protocol.StreamEvent{}, err
 	}
 	var configuring int
-	if err := tx.GetContext(ctx, &configuring, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('claude.credentials.configure','cli.install','agent.update') AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
+	if err := tx.GetContext(ctx, &configuring, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('claude.credentials.configure','cli.install','agent.update','agent.isolation.install') AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
 		return protocol.StreamEvent{}, err
 	}
 	if configuring != 0 {

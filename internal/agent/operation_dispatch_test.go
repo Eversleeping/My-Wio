@@ -16,7 +16,7 @@ import (
 // are touched, including when the result is replayed after redelivery.
 func TestOperationDispatchRejectsMalformedCommands(t *testing.T) {
 	kinds := []string{
-		protocol.OpOperationInterrupt, protocol.OpAgentUpdate, protocol.OpAgentAccessRead, protocol.OpAgentAccessUpdate, protocol.OpAgentRestart,
+		protocol.OpOperationInterrupt, protocol.OpAgentUpdate, protocol.OpAgentAccessRead, protocol.OpAgentAccessUpdate, protocol.OpAgentRestart, protocol.OpAgentIsolationPlan, protocol.OpAgentIsolationInstall,
 		protocol.OpGeminiTurnInterrupt, protocol.OpClaudeTurnSteer, protocol.OpClaudeTurnInterrupt,
 		protocol.OpGeminiSkillsManage, protocol.OpClaudeSkillsList, protocol.OpGeminiSkillsList,
 		protocol.OpWorkspaceFiles, protocol.OpWorkspaceFileWrite, protocol.OpWorkspaceFilePreview,

@@ -55,7 +55,7 @@ func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread Gemin
 		return "", "", err
 	}
 	var updating int
-	if err = tx.GetContext(ctx, &updating, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind='agent.update' AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
+	if err = tx.GetContext(ctx, &updating, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('agent.update','agent.isolation.install') AND status IN ('queued','delivered','running')"), thread.ServerID); err != nil {
 		return "", "", err
 	}
 	if updating != 0 {

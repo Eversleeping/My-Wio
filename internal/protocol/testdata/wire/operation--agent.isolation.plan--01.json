@@ -1,0 +1,11 @@
+{
+  "baseline": "0.3.36",
+  "direction": "operation",
+  "kind": "agent.isolation.plan",
+  "source": [
+    "internal/protocol/agent_access.go"
+  ],
+  "payload": {
+    "server_id": "node"
+  }
+}

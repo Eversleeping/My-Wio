@@ -4,6 +4,7 @@ import { useResource } from "../data/resources";
 import { servers as endpoints, type AgentAccessSettings } from "../data/servers";
 import { useI18n } from "../i18n";
 import { Section } from "./PageUI";
+import { IsolationEnvironmentSetup } from "./IsolationEnvironmentSetup";
 
 export function ServerAccessSettings() {
  const { t, language } = useI18n();
@@ -13,6 +14,7 @@ export function ServerAccessSettings() {
  const server = servers.data?.find(item => item.id === id);
  const [access,setAccess] = useState<AgentAccessSettings|null>(null);
  const [busy,setBusy] = useState(false);
+ const [environmentBusy,setEnvironmentBusy] = useState(false);
  const [upgrading,setUpgrading] = useState(false);
  const [error,setError] = useState("");
  const [notice,setNotice] = useState("");
@@ -111,19 +113,21 @@ export function ServerAccessSettings() {
   {server?.is_control_plane ? <p>{text("内置 Agent 由控制面部署管理。会话隔离通过部署变量 WIO_CONTROL_AGENT_SESSION_ISOLATION 配置并重启生效；sudo 权限由部署环境的运行账户管理。", "The built-in Agent is managed by the control-plane deployment. Configure isolation with WIO_CONTROL_AGENT_SESSION_ISOLATION and restart the deployment. Its runtime account controls sudo access.")}</p> : server && <>
    {server.status!=="online" && <p role="status">{text("服务器离线，等待 Agent 连接后可配置", "Server offline; settings are available when the Agent connects")}</p>}
    {!server.agent_access_supported && <p>{text("请先升级此服务器的 Agent，以支持直接配置运行设置。", "Upgrade this server's Agent to configure runtime settings directly.")}</p>}
-   {server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):text("升级 Agent","Upgrade Agent")}</button>}
-   <fieldset className="settings-fields" disabled={busy||!access||server.status!=="online"||!server.agent_access_supported}>
+   {server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||busy||environmentBusy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):text("升级 Agent","Upgrade Agent")}</button>}
+   <fieldset className="settings-fields" disabled={busy||environmentBusy||upgrading||!access||server.status!=="online"||!server.agent_access_supported}>
     <label className={`agent-access-option ${access?.allow_sudo?"enabled":""}`}><input type="checkbox" checked={access?.allow_sudo??false} disabled={access?.session_isolation||access?.restart_required} onChange={event=>{if(access)setAccess({...access,allow_sudo:event.target.checked});}}/><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
     <label className={`agent-access-option ${access?.session_isolation?"enabled":""}`}><input type="checkbox" checked={access?.session_isolation??false} disabled={access?.allow_sudo||access?.restart_required||(!access?.session_isolation&&!access?.isolation_support?.supported)} onChange={event=>{if(access)setAccess({...access,session_isolation:event.target.checked});}}/><span><strong>{t("server.sessionIsolation")}</strong><small>{t("server.sessionIsolationHelp")}</small></span></label>
     <button className="primary-button" onClick={()=>void apply()}>{text("应用服务器设置","Apply server settings")}</button>
    </fieldset>
    {access&&!access.isolation_support&&<p role="status">{text("请升级此服务器的 Agent，以检查环境是否支持隔离。", "Upgrade this server's Agent to check isolation support.")}</p>}
    {access?.isolation_support&&!access.isolation_support.supported&&<p role="status">{text("此服务器不支持会话隔离：", "Session isolation is unavailable on this server: ")}{access.isolation_support.reason}{access.session_isolation&&text("。请关闭隔离并应用设置，恢复会话使用。", ". Turn isolation off and apply settings to restore sessions.")}</p>}
+   {access&&server.agent_isolation_setup_supported&&<IsolationEnvironmentSetup key={id} id={id} disabled={busy||upgrading||server.status!=="online"||access.restart_required} onBusy={setEnvironmentBusy} onChecked={value=>setAccess(previous=>previous?{...previous,isolation_support:value.isolation_support}:previous)}/>}
+   {access&&!server.agent_isolation_setup_supported&&!access.isolation_support?.supported&&<p>{text("升级此服务器的 Agent 后，可检测并确认安装缺少的隔离环境。","Upgrade this server's Agent to check and install missing isolation components.")}</p>}
    {access?.restart_required&&!busy&&<p role="status">{text("上次设置仍待完成重启，请点击“应用服务器设置”完成后再调整开关。", "The previous change still needs a restart. Apply the server settings to finish before changing the switches.")}</p>}
    {access&&!access.applied&&!access.restart_required&&!busy&&<p role="status">{text("已保存的设置尚未由当前 Agent 确认生效，可重新应用。", "The running Agent has not confirmed the saved settings; apply them again to finish.")}</p>}
-   <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{text("重启 Agent","Restart Agent")}</button>
+   <button className="secondary-button" disabled={busy||environmentBusy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{text("重启 Agent","Restart Agent")}</button>
    {!server.agent_restart_supported&&server.agent_access_supported&&<p>{text("请升级此服务器的 Agent，以使用独立重启按钮。", "Upgrade this server's Agent to use the restart button.")}</p>}
-   <button className="secondary-button" disabled={busy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{text("重新读取设置","Read settings again")}</button>
+   <button className="secondary-button" disabled={busy||environmentBusy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{text("重新读取设置","Read settings again")}</button>
   </>}
   {busy&&<p role="status">{t("common.loading")}</p>}
   {error&&<p role="alert">{error}</p>}

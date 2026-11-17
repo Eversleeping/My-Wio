@@ -25,8 +25,9 @@ const backupFile = "/etc/wio-agent/.runtime-access-backup.json"
 
 type Runner func(context.Context, string, ...string) error
 type Helper struct {
-	Root string
-	Run  Runner
+	Root        string
+	Run         Runner
+	Environment *EnvironmentInstaller
 }
 type snapshot struct {
 	Data   []byte
@@ -200,6 +201,21 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	if r.Force && r.Action != "restart" {
 		return current, errors.New("only an explicit Agent restart may be forced")
 	}
+	if r.PlanID != "" && r.Action != "isolation-install" {
+		return current, errors.New("unexpected isolation installation plan")
+	}
+	if (r.Action == "isolation-plan" || r.Action == "isolation-install") && (r.Settings != nil || r.Revision != "" || r.Force || r.Action == "isolation-plan" && r.PlanID != "") {
+		return current, errors.New("invalid isolation environment request")
+	}
+	if r.Action == "isolation-plan" {
+		env := EnvironmentInstaller{Root: h.Root}
+		if h.Environment != nil {
+			env = *h.Environment
+		}
+		plan := env.Plan(ctx, current.Revision)
+		current.IsolationEnvironment = &plan
+		return current, nil
+	}
 	if r.Action == "read" && r.Settings == nil && r.Revision == "" {
 		pending, err := h.pending(r.ServerID)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -208,7 +224,7 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 		current.RestartRequired = err == nil && pending.NextRevision == current.Revision
 		return current, nil
 	}
-	if r.Action != "apply" && r.Action != "restart" {
+	if r.Action != "apply" && r.Action != "restart" && r.Action != "isolation-install" {
 		return current, errors.New("unsupported runtime settings action")
 	}
 	lock, err := os.OpenFile(h.path("/etc/wio-agent/.runtime-access.lock"), os.O_CREATE|os.O_RDWR, 0600)
@@ -227,6 +243,18 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	previous, backupErr := h.pending(r.ServerID)
 	if backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
 		return current, backupErr
+	}
+	if r.Action == "isolation-install" {
+		if backupErr == nil {
+			return current, errors.New("finish the pending Agent restart before installing isolation dependencies")
+		}
+		env := EnvironmentInstaller{Root: h.Root}
+		if h.Environment != nil {
+			env = *h.Environment
+		}
+		plan := env.Install(ctx, current.Revision, r.PlanID)
+		current.IsolationEnvironment = &plan
+		return current, nil
 	}
 	if r.Action == "restart" {
 		if !validRevision(r.Revision) || r.Revision != current.Revision || r.Settings != nil {

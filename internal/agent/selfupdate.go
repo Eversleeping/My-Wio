@@ -111,7 +111,7 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 // The running agent.update itself is exempt; updatePending serializes those.
 func (c *Client) agentUpdateBlocker() error {
 	for _, execution := range c.seen {
-		if execution.kind == protocol.OpAgentUpdate || execution.kind == protocol.OpAgentAccessUpdate || execution.kind == protocol.OpAgentRestart || protocol.SafeDuringAgentRestart(execution.kind) {
+		if execution.kind == protocol.OpAgentUpdate || execution.kind == protocol.OpAgentAccessUpdate || execution.kind == protocol.OpAgentRestart || execution.kind == protocol.OpAgentIsolationInstall || protocol.SafeDuringAgentRestart(execution.kind) {
 			continue
 		}
 		select {

@@ -34,6 +34,8 @@ const (
 	OpAgentAccessRead            = "agent.access.read"
 	OpAgentAccessUpdate          = "agent.access.update"
 	OpAgentRestart               = "agent.restart"
+	OpAgentIsolationPlan         = "agent.isolation.plan"
+	OpAgentIsolationInstall      = "agent.isolation.install"
 	OpAgentUpdate                = "agent.update"
 	OpClaudeCredentialsConfigure = "claude.credentials.configure"
 	OpClaudeQuestionAnswer       = "claude.question.answer"

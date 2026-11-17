@@ -31,7 +31,7 @@ func operationContext(parent context.Context, kind string) (context.Context, con
 	timeout := 10 * time.Minute
 	if strings.HasPrefix(kind, protocol.OpDeployPrefix) {
 		timeout = time.Hour
-	} else if kind == protocol.OpAgentUpdate || kind == protocol.OpCodexUpdate {
+	} else if kind == protocol.OpAgentUpdate || kind == protocol.OpCodexUpdate || kind == protocol.OpAgentIsolationInstall {
 		timeout = 30 * time.Minute
 	}
 	return context.WithTimeout(parent, timeout)

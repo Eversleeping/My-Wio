@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,7 +63,10 @@ func (s *Store) QueueAgentAccessUpdate(ctx context.Context, serverID string, com
 func (s *Store) QueueAgentRestart(ctx context.Context, serverID string, command protocol.AgentAccessCommand) (string, error) {
 	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentRestart, command, "agent-restart:")
 }
-func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, command any, keyPrefix string) (string, error) {
+func (s *Store) QueueAgentIsolationInstall(ctx context.Context, serverID string, command protocol.AgentAccessCommand) (string, error) {
+	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentIsolationInstall, command, "agent-isolation-install:", command.RequestID)
+}
+func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, command any, keyPrefix string, requestID ...string) (string, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -74,6 +78,28 @@ func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, co
 	}
 	if n, err := r.RowsAffected(); err != nil || n != 1 {
 		return "", errors.New("server unavailable")
+	}
+	payload, err := json.Marshal(command)
+	if err != nil {
+		return "", err
+	}
+	key := keyPrefix + serverID + ":" + NewID()
+	if len(requestID) > 0 {
+		key = keyPrefix + serverID + ":" + requestID[0]
+		var existing struct {
+			ID      string
+			Payload string
+		}
+		err = tx.GetContext(ctx, &existing, s.Q("SELECT id,payload FROM agent_operations WHERE idempotency_key=?"), key)
+		if err == nil {
+			if existing.Payload != string(payload) {
+				return "", errors.New("installation request identity already belongs to another plan")
+			}
+			return existing.ID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
 	}
 	for _, kind := range []string{"codex", "gemini", "claude"} {
 		blockers, err := s.cliInstallBlockers(ctx, tx, serverID, kind)
@@ -91,12 +117,8 @@ func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, co
 	if len(operations) != 0 {
 		return "", agentUpdateBusyError{message: fmt.Sprintf("%s (%s is %s)", agentUpdateOperationsBusyMessage, operations[0].Kind, operations[0].Status)}
 	}
-	payload, err := json.Marshal(command)
-	if err != nil {
-		return "", err
-	}
 	id := NewID()
-	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), id, serverID, kind, string(payload), keyPrefix+serverID+":"+id, time.Now().UTC())
+	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), id, serverID, kind, string(payload), key, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}

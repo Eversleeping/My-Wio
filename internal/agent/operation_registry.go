@@ -42,6 +42,8 @@ var operationHandlers = map[string]operationHandler{
 	protocol.OpAgentAccessRead:            {run: (*Client).runRuntimeAccess},
 	protocol.OpAgentAccessUpdate:          {run: (*Client).runRuntimeAccess},
 	protocol.OpAgentRestart:               {run: (*Client).runRuntimeAccess},
+	protocol.OpAgentIsolationPlan:         {run: (*Client).runRuntimeAccess},
+	protocol.OpAgentIsolationInstall:      {run: (*Client).runRuntimeAccess},
 	protocol.OpAgentUpdate:                {run: (*Client).runAgentUpdateOperation},
 	protocol.OpCLIInstall:                 commandOperation((*Client).executeCLIInstall),
 	protocol.OpClaudeCredentialsConfigure: commandOperation((*Client).executeClaudeCredentialsConfigure),

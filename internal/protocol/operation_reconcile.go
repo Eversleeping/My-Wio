@@ -31,6 +31,7 @@ func SafeDuringAgentRestart(kind string) bool {
 // sides refuse an update for the same set of active operations.
 var AgentRestartSafeKinds = []string{
 	OpAgentAccessRead,
+	OpAgentIsolationPlan,
 	OpInventoryScan,
 	OpWorkspaceFiles,
 	OpWorkspaceFilePreview,

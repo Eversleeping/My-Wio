@@ -5,6 +5,7 @@ package protocol
 const (
 	CapabilityAgentAccess          = "agent.access"
 	CapabilityAgentRestart         = "agent.restart"
+	CapabilityAgentIsolationSetup  = "agent.isolation.setup"
 	CapabilityAgentSelfUpdate      = "agent.self_update"
 	CapabilityCodexCLIUpdate       = "codex.cli_update"
 	CapabilityDeployRollbackExact  = "deploy.rollback_exact"

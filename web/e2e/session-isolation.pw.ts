@@ -4,10 +4,11 @@ import { assertMockApplication, installMockApplication } from "./support/mock-ap
 test.afterEach(({ page }) => assertMockApplication(page));
 
 test("configures server runtime access and global collaboration from Settings", async ({ page }, testInfo) => {
- const server = { id: "isolated-node", name: "Isolated node", hostname: "node.example.test", status: "online", agent_access_supported:true,agent_restart_supported:true,agent_version: "0.3.35", agent_target_version: "0.3.35", codex_ready: 1, codex_version: "1.0.0", codex_target_version: "1.0.0", address: "node.example.test", configuration: "", notes: "", session_isolation: { mode: "unsupported", reason: "Required namespaces are unavailable" } };
+ const server = { id: "isolated-node", name: "Isolated node", hostname: "node.example.test", status: "online", agent_access_supported:true,agent_restart_supported:true,agent_isolation_setup_supported:true,agent_version: "0.3.36", agent_target_version: "0.3.36", codex_ready: 1, codex_version: "1.0.0", codex_target_version: "1.0.0", address: "node.example.test", configuration: "", notes: "", session_isolation: { mode: "unsupported", reason: "Required namespaces are unavailable" } };
  let collaboration = {enabled:false,target_modes:{}};
  let access = {allow_sudo:false,session_isolation:false,revision:"a".repeat(64),applied:true,restart_required:false,instance_id:"before",isolation_support:{supported:true,reason:""}};
  let restartReceipt=access;
+ let environment={plan_id:"b".repeat(64),state:"install_required",can_install:true,requires_reboot:false,packages:[{name:"bubblewrap",version:"0.11.0-1"}],checks:[{id:"bubblewrap",ok:false,detail:"not installed"}],logs:[] as string[]};
  const writes: unknown[] = [];
  await installMockApplication(page, {configured:true,onAPIRequest:request => {
   if (request.path === "/servers" && request.method === "GET") return {body:[server]};
@@ -19,9 +20,15 @@ test("configures server runtime access and global collaboration from Settings", 
   if (["/credential-profiles","/secret-sets","/scheduled-tasks","/projects","/workspaces"].includes(request.path) && request.method === "GET") return {body:[]};
   if (request.path === "/sessions" && request.method === "GET") return {body:{items:[],has_more:false,next:null}};
   if (request.path.endsWith("/access-settings/read"))return {status:202,body:{operation_id:"read"}};
+  if (request.path.endsWith("/isolation/environment/read"))return {status:202,body:{operation_id:"environment-plan"}};
+  if (request.path.endsWith("/isolation/environment/install")) {
+   writes.push({action:"install",...JSON.parse(request.body||"{}")});
+   environment={...environment,state:"ready",can_install:false,checks:[{id:"agent_boundary",ok:true,detail:"verified"}],logs:["Installed and verified: bubblewrap 0.11.0-1"]};access={...access,isolation_support:{supported:true,reason:""}};
+   return {status:202,body:{operation_id:"environment-install"}};
+  }
   if (request.path.endsWith("/agent-restart")) {restartReceipt={...access};access={...access,instance_id:"after"};writes.push({action:"restart"});return {status:202,body:{operation_id:"restart"}};}
   if (request.path.endsWith("/access-settings") && request.method==="PUT") {const next=JSON.parse(request.body||"{}");writes.push(next);access={...next,restart_required:false,applied:true};return {status:202,body:{operation_id:"apply"}};}
-  if (request.path.includes("/access-settings/operations/"))return {body:{status:"succeeded",settings:request.path.endsWith("/restart")?restartReceipt:access}};
+  if (request.path.includes("/access-settings/operations/"))return {body:{status:"succeeded",settings:request.path.includes("/environment-")?{...access,isolation_environment:environment}:request.path.endsWith("/restart")?restartReceipt:access}};
   return undefined;
  }});
  await page.goto("/?view=servers");
@@ -80,4 +87,19 @@ test("configures server runtime access and global collaboration from Settings", 
  await expect(page.getByText(/Settings applied and confirmed by the Agent/)).toBeVisible();
  await expect(isolation).toBeDisabled();
  expect(writes.at(-1)).toEqual(expect.objectContaining({session_isolation:false}));
+ await page.getByRole("button",{name:"Check and install isolation environment",exact:true}).click();
+ await expect(page.getByText("bubblewrap 0.11.0-1",{exact:true})).toBeVisible();
+ await page.getByRole("button",{name:"Install missing components…",exact:true}).click();
+ await expect(page.getByRole("group",{name:"Confirm isolation installation"})).toBeVisible();
+ expect(writes.some(value=>(value as {action?:string}).action==="install")).toBe(false);
+ for(const theme of ["dark","light"]) {
+  await page.evaluate(theme=>document.documentElement.setAttribute("data-theme",theme),theme);
+  await page.getByRole("button",{name:"Confirm installation",exact:true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path:testInfo.outputPath(`isolation-install-confirm-${theme}.png`)});
+ }
+ await page.getByRole("button",{name:"Confirm installation",exact:true}).click();
+ await expect(page.getByText(/The full isolation check passed/)).toBeVisible();
+ await expect(isolation).toBeEnabled();
+ expect(writes.at(-1)).toEqual(expect.objectContaining({action:"install",plan_id:"b".repeat(64),request_id:expect.any(String)}));
+ await expect(isolation).not.toBeChecked();
 });

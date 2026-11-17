@@ -46,7 +46,7 @@ func (s *Store) queueClaudeForkTx(ctx context.Context, tx *sqlx.Tx, t ClaudeThre
 		return "", "", err
 	}
 	var busy int
-	if err = tx.GetContext(ctx, &busy, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('claude.credentials.configure','cli.install','agent.update') AND status IN ('queued','delivered','running')"), t.ServerID); err != nil {
+	if err = tx.GetContext(ctx, &busy, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('claude.credentials.configure','cli.install','agent.update','agent.isolation.install') AND status IN ('queued','delivered','running')"), t.ServerID); err != nil {
 		return "", "", err
 	}
 	if busy > 0 {

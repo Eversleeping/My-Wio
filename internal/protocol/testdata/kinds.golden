@@ -8,6 +8,8 @@
 .turn.start
 agent.access.read
 agent.access.update
+agent.isolation.install
+agent.isolation.plan
 agent.restart
 agent.update
 agent.updated

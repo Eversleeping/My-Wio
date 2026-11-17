@@ -39,4 +39,7 @@
 .settings-content { display: grid; gap: 14px; padding: 16px; min-width: 0; }
 .settings-content > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .settings-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.isolation-environment-setup { min-width: 0; margin: 12px 0; color: var(--ink); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.isolation-environment-setup [role="group"] { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.isolation-environment-setup button { margin: 4px 8px 4px 0; }
 .settings-content .fingerprint-value { word-break: break-all; }

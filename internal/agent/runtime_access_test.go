@@ -136,6 +136,35 @@ func TestRuntimeAccessFailureReleasesMaintenanceReservation(t *testing.T) {
 	}
 }
 
+func TestIsolationInstallIsMaintenanceAndRechecksRealBoundary(t *testing.T) {
+	for _, state := range []string{"verify", "reboot_required", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			dir := t.TempDir()
+			c := &Client{config: Config{ServerID: "node"}, seen: map[string]*operationExecution{}, isolation: sessionisolation.New(&sessionisolation.Config{Bwrap: filepath.Join(dir, "missing-bwrap")}, dir)}
+			c.seen["install"] = &operationExecution{kind: protocol.OpAgentIsolationInstall, done: make(chan struct{})}
+			c.runtimeAccessCall = func(_ context.Context, r runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
+				if !c.agentUpdatePending() || r.Action != "isolation-install" || r.Settings != nil || r.PlanID != strings.Repeat("b", 64) {
+					t.Fatalf("unsafe helper call: %+v", r)
+				}
+				return protocol.AgentAccessSettings{Revision: strings.Repeat("a", 64), IsolationEnvironment: &protocol.IsolationEnvironment{State: state}, IsolationSupport: &protocol.AgentIsolationSupport{Supported: true}}, nil
+			}
+			raw, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: "node", PlanID: strings.Repeat("b", 64), RequestID: "request"})
+			restart, data, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: protocol.OpAgentIsolationInstall, PayloadJSON: raw})
+			var got protocol.AgentAccessSettings
+			if err != nil || restart != "" || c.agentUpdatePending() || json.Unmarshal(data, &got) != nil || got.IsolationSupport.Supported {
+				t.Fatalf("installation bypassed boundary or leaked maintenance lock: %s %v", data, err)
+			}
+			want := state
+			if state == "verify" {
+				want = "blocked"
+			}
+			if got.IsolationEnvironment.State != want {
+				t.Fatalf("unverified install reported usable: %+v", got)
+			}
+		})
+	}
+}
+
 func TestRuntimeAccessReadNeverRestartsPendingChange(t *testing.T) {
 	c := &Client{config: Config{ServerID: "node"}, seen: map[string]*operationExecution{}}
 	c.runtimeAccessCall = func(_ context.Context, r runtimeaccess.Request) (protocol.AgentAccessSettings, error) {

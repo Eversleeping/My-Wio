@@ -25,6 +25,8 @@ var operations = map[string]Contract{
 	protocol.OpAgentAccessRead:            operation[protocol.AgentAccessCommand, protocol.AgentAccessSettings](),
 	protocol.OpAgentAccessUpdate:          operation[protocol.AgentAccessCommand, protocol.AgentAccessSettings](),
 	protocol.OpAgentRestart:               operation[protocol.AgentAccessCommand, protocol.AgentAccessSettings](),
+	protocol.OpAgentIsolationPlan:         operation[protocol.AgentAccessCommand, protocol.AgentAccessSettings](),
+	protocol.OpAgentIsolationInstall:      operation[protocol.AgentAccessCommand, protocol.AgentAccessSettings](),
 	protocol.OpAgentUpdate:                command[protocol.AgentUpdateCommand](),
 	protocol.OpCLIInstall:                 command[protocol.CLIInstallCommand](),
 	protocol.OpClaudeCredentialsConfigure: command[protocol.ConfigureClaudeCredentialsCommand](),

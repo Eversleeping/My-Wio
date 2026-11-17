@@ -5,9 +5,12 @@ import { invalidateResources, mutation, query, readResource, writeResource } fro
 export type SSHAccess = {host: string; port: number; user: string; auth_method: string; password: string; private_key: string; private_key_passphrase: string; host_key_fingerprint: string};
 type Bootstrap = SSHAccess & {name: string; scan_roots: string[]; configuration: string; notes: string; codex_profile_id: string; git_profile_id: string; allow_sudo?: boolean; session_isolation?: boolean};
 export type ServerAccessSettings = { allow_sudo: boolean; session_isolation: boolean; revision: string };
-export type AgentAccessSettings = ServerAccessSettings & {applied: boolean; restart_required: boolean; instance_id?:string; isolation_support?:{supported:boolean;reason?:string}};
+export type IsolationEnvironment = {plan_id:string;state:string;can_install:boolean;requires_reboot:boolean;packages:{name:string;version:string}[];checks:{id:string;ok:boolean;detail:string}[];logs?:string[];error?:string};
+export type AgentAccessSettings = ServerAccessSettings & {applied: boolean; restart_required: boolean; instance_id?:string; isolation_support?:{supported:boolean;reason?:string};isolation_environment?:IsolationEnvironment};
 export type AgentAccessProgress = {status:string;settings?:AgentAccessSettings;error?:string};
 export const servers = {
+ isolationPlan: (id:string) => post<{operation_id:string}>(`/servers/${id}/isolation/environment/read`,{}),
+ isolationInstall: (id:string,plan_id:string,request_id:string) => post<{operation_id:string}>(`/servers/${id}/isolation/environment/install`,{plan_id,request_id}),
  restartAgent: (id:string) => post<{operation_id:string}>(`/servers/${id}/agent-restart`,{}),
  runtimeRead: (id:string) => post<{operation_id:string}>(`/servers/${id}/access-settings/read`,{}),
  runtimeApply: (id:string,settings:AgentAccessSettings) => put<{operation_id:string}>(`/servers/${id}/access-settings`,settings),

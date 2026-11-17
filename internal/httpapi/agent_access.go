@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -33,9 +34,14 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	restarting := strings.HasSuffix(r.URL.Path, "/agent-restart")
+	planning := strings.HasSuffix(r.URL.Path, "/isolation/environment/read")
+	installing := strings.HasSuffix(r.URL.Path, "/isolation/environment/install")
 	capability := protocol.CapabilityAgentAccess
 	if restarting {
 		capability = protocol.CapabilityAgentRestart
+	}
+	if planning || installing {
+		capability = protocol.CapabilityAgentIsolationSetup
 	}
 	if !server.Supports(capability) {
 		writeError(w, 409, "upgrade this server's Agent to configure runtime settings")
@@ -44,7 +50,26 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	command := protocol.AgentAccessCommand{ServerID: id}
 	kind := protocol.OpAgentAccessRead
 	var operation string
-	if restarting {
+	if installing {
+		var input struct {
+			PlanID    string `json:"plan_id"`
+			RequestID string `json:"request_id"`
+		}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		digest, e := hex.DecodeString(input.PlanID)
+		if e != nil || len(digest) != 32 || !regexp.MustCompile(`^[A-Za-z0-9-]{16,80}$`).MatchString(input.RequestID) {
+			writeError(w, 400, "invalid installation plan or request identity")
+			return
+		}
+		command.PlanID, command.RequestID = input.PlanID, input.RequestID
+		kind = protocol.OpAgentIsolationInstall
+		operation, err = a.store.QueueAgentIsolationInstall(r.Context(), id, command)
+	} else if planning {
+		kind = protocol.OpAgentIsolationPlan
+		operation, err = a.store.QueueResourceOperation(r.Context(), id, kind, command, "agent-isolation-plan:"+store.NewID(), store.OperationResource{}, false)
+	} else if restarting {
 		kind = protocol.OpAgentRestart
 		operation, err = a.store.QueueAgentRestart(r.Context(), id, command)
 	} else if r.Method == http.MethodPut {
@@ -78,11 +103,14 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	if kind == protocol.OpAgentRestart {
 		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "agent.restart", "server", id, map[string]string{"operation_id": operation}, clientIP(r))
 	}
+	if kind == protocol.OpAgentIsolationInstall {
+		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "agent.isolation.install", "server", id, map[string]string{"operation_id": operation, "plan_id": command.PlanID}, clientIP(r))
+	}
 	writeJSON(w, 202, map[string]string{"operation_id": operation})
 }
 func (a *API) agentAccessResult(w http.ResponseWriter, r *http.Request) {
 	op, err := a.store.Operation(r.Context(), chi.URLParam(r, "operationID"))
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.ServerID != chi.URLParam(r, "serverID") || (op.Kind != protocol.OpAgentAccessRead && op.Kind != protocol.OpAgentAccessUpdate && op.Kind != protocol.OpAgentRestart)) {
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.ServerID != chi.URLParam(r, "serverID") || (op.Kind != protocol.OpAgentAccessRead && op.Kind != protocol.OpAgentAccessUpdate && op.Kind != protocol.OpAgentRestart && op.Kind != protocol.OpAgentIsolationPlan && op.Kind != protocol.OpAgentIsolationInstall)) {
 		writeError(w, 404, "runtime settings operation not found")
 		return
 	}
