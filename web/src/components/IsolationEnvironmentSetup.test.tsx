@@ -26,22 +26,22 @@ test("requires a concrete confirmation, installs through Agent and displays actu
  await user.click(screen.getByRole("button",{name:"Install missing components…"}));
  await user.click(screen.getByRole("button",{name:"Confirm installation"}));
  expect(await screen.findByText(/The full isolation check passed/)).toBeInTheDocument();
- expect(writes).toEqual([{plan_id:plan.plan_id,request_id:expect.any(String)}]);
+ expect(writes).toEqual([{plan_id:plan.plan_id,request_id:expect.any(String),userspace_only:true}]);
  expect(checked).toHaveBeenLastCalledWith(expect.objectContaining({isolation_support:{supported:true}}));
  expect(localStorage.getItem("wio-isolation-install:node")).toBeNull();
 });
 
 test("keeps and retries the same confirmed request after a lost installation response",async()=>{
- const saved={plan_id:plan.plan_id,request_id:"11111111-1111-4111-8111-111111111111"};
+ const saved={plan_id:plan.plan_id,request_id:"11111111-1111-4111-8111-111111111111",userspace_only:true};
  localStorage.setItem("wio-isolation-install:node",JSON.stringify(saved));
  const writes:unknown[]=[];
  vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
   if(String(input).endsWith("/environment/install")){writes.push(JSON.parse(String(options.body)));if(writes.length===1)throw Error("lost response");return new Response(JSON.stringify({operation_id:"original-install"}));}
-  return reply({...plan,state:"reboot_required",can_install:false,requires_reboot:true,logs:["Kernel package verified."]});
+  return reply({...plan,state:"failed",can_install:false,error:"The package manager is busy.",logs:["Repository refresh failed."]});
  }));
  mount();const user=userEvent.setup();
  await user.click(await screen.findByRole("button",{name:"Continue checking installation"}));
- expect(await screen.findByText(/Restarting the Agent does not load a new kernel/)).toBeInTheDocument();
+ expect(await screen.findByText("The package manager is busy.")).toBeInTheDocument();
  expect(writes).toEqual([saved,saved]);expect(screen.queryByText(/The full isolation check passed/)).not.toBeInTheDocument();
 });
 
@@ -55,27 +55,18 @@ test("restores the saved operation result without queuing another installation",
  expect(screen.queryByRole("button",{name:"Confirm installation"})).not.toBeInTheDocument();
 });
 
-test("shows the official kernel source and preserves its explicit approval across a lost response",async()=>{
- const kernel: IsolationEnvironment={...plan,source:"debian-backports",requires_reboot:true,packages:[...plan.packages,{name:"linux-image-amd64",version:"7.2.12-1~bpo13+1"}]};
- const writes:Record<string,unknown>[]=[];
- vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
-  const path=String(input);
-  if(path.endsWith("/environment/read"))return new Response(JSON.stringify({operation_id:"plan"}));
-  if(path.endsWith("/environment/install")){writes.push(JSON.parse(String(options.body)));if(writes.length===1)throw Error("lost response");return new Response(JSON.stringify({operation_id:"kernel-install"}));}
-  return reply(path.endsWith("/kernel-install")?{...kernel,state:"reboot_required",can_install:false,logs:["Kernel package verified."]}:kernel);
- }));
- const view=mount();const user=userEvent.setup();
- await user.click(screen.getByRole("button",{name:"Check and install isolation environment"}));
- expect(await screen.findByText(/Source: official Debian trixie-backports/)).toBeInTheDocument();
- expect(screen.getByText(/permanent repositories remain unchanged/)).toBeInTheDocument();
- expect(screen.getByText("linux-image-amd64 7.2.12-1~bpo13+1")).toBeInTheDocument();
- expect(screen.getByText(/The server will not restart automatically/)).toBeInTheDocument();
- await user.click(screen.getByRole("button",{name:"Install missing components…"}));expect(writes).toEqual([]);
- await user.click(screen.getByRole("button",{name:"Confirm installation"}));
- await screen.findByText(/lost response/);
- const saved=JSON.parse(localStorage.getItem("wio-isolation-install:node")||"{}");expect(saved.source).toBe("debian-backports");
- view.unmount();mount();
- expect(await screen.findByText(/Restarting the Agent does not load a new kernel/)).toBeInTheDocument();
- expect(writes).toEqual([saved,saved]);
- expect(screen.queryByText(/The full isolation check passed/)).not.toBeInTheDocument();
+
+test("never offers an old kernel or reboot plan even if an Agent marks it installable",async()=>{
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>String(input).endsWith("/environment/read")?new Response(JSON.stringify({operation_id:"legacy-plan"})):reply({...plan,source:"debian-backports",requires_reboot:true,packages:[{name:"linux-image-amd64",version:"7.2.12-1~bpo13+1"}]})));
+ mount();const user=userEvent.setup();await user.click(screen.getByRole("button",{name:"Check and install isolation environment"}));
+ expect(await screen.findByText(/This plan involves kernel or system changes/)).toBeInTheDocument();
+ expect(screen.queryByRole("button",{name:"Install missing components…"})).not.toBeInTheDocument();
+ expect(screen.queryByText(/linux-image-amd64/)).not.toBeInTheDocument();
+});
+
+test("does not resume an unacknowledged installation from the old reboot-capable flow",async()=>{
+ localStorage.setItem("wio-isolation-install:node",JSON.stringify({plan_id:plan.plan_id,request_id:"legacy",source:"debian-backports"}));
+ const fetch=vi.fn();vi.stubGlobal("fetch",fetch);mount();
+ expect(await screen.findByText(/previous installation plan will not be resumed/)).toBeInTheDocument();
+ expect(fetch).not.toHaveBeenCalled();expect(localStorage.getItem("wio-isolation-install:node")).toBeNull();
 });

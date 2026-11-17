@@ -201,7 +201,7 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	if r.Force && r.Action != "restart" {
 		return current, errors.New("only an explicit Agent restart may be forced")
 	}
-	if (r.PlanID != "" || r.Source != "") && r.Action != "isolation-install" {
+	if (r.PlanID != "" || r.Source != "" || r.UserspaceOnly) && r.Action != "isolation-install" {
 		return current, errors.New("unexpected isolation installation plan")
 	}
 	if (r.Action == "isolation-plan" || r.Action == "isolation-install") && (r.Settings != nil || r.Revision != "" || r.Force || r.Action == "isolation-plan" && r.PlanID != "") {
@@ -252,7 +252,10 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 		if h.Environment != nil {
 			env = *h.Environment
 		}
-		plan := env.Install(ctx, current.Revision, r.PlanID, r.Source)
+		if !r.UserspaceOnly || r.Source != "" {
+			return current, errors.New("only explicitly confirmed installations without server reboot are allowed")
+		}
+		plan := env.Install(ctx, current.Revision, r.PlanID)
 		current.IsolationEnvironment = &plan
 		return current, nil
 	}

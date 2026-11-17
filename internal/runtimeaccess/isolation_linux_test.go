@@ -33,6 +33,9 @@ func environmentFixture(t *testing.T) (EnvironmentInstaller, *[]string) {
 			}
 			return "Installed: (none)\nCandidate: 0.11.0-1\n", nil
 		case "apt-get":
+			if strings.Contains(strings.Join(args, " "), "--simulate") {
+				return "Inst bubblewrap (0.11.0-1 Debian:13/stable [amd64])\nConf bubblewrap (0.11.0-1 Debian:13/stable [amd64])\n", nil
+			}
 			return "", nil
 		case "dpkg-query":
 			if args[len(args)-1] != "bubblewrap" {
@@ -56,7 +59,7 @@ func TestIsolationPlanDoesNotInstallAndPinsConfirmation(t *testing.T) {
 		t.Fatalf("plan %+v", p)
 	}
 	for _, call := range *calls {
-		if strings.HasPrefix(call, "apt-get") {
+		if strings.HasPrefix(call, "apt-get") && !strings.Contains(call, "--simulate") {
 			t.Fatal("inspection changed package state")
 		}
 	}
@@ -67,7 +70,7 @@ func TestIsolationPlanDoesNotInstallAndPinsConfirmation(t *testing.T) {
 		}
 	}
 	for _, call := range *calls {
-		if strings.HasPrefix(call, "apt-get") {
+		if strings.HasPrefix(call, "apt-get") && !strings.Contains(call, "--simulate") {
 			t.Fatal("unconfirmed plan performed installation")
 		}
 	}
@@ -115,7 +118,7 @@ func TestIsolationInstallReportsRealFailureWithoutMirrorCredentials(t *testing.T
 	e, _ := environmentFixture(t)
 	original := e.Run
 	e.Run = func(ctx context.Context, name string, args ...string) (string, error) {
-		if name == "apt-get" {
+		if name == "apt-get" && !strings.Contains(strings.Join(args, " "), "--simulate") {
 			return "https://synthetic-user:synthetic-secret@example.invalid: package lock unavailable", errors.New("failed")
 		}
 		return original(ctx, name, args...)
@@ -128,20 +131,20 @@ func TestIsolationInstallReportsRealFailureWithoutMirrorCredentials(t *testing.T
 	}
 }
 
-func TestKernelInstallNeverClaimsIsolationReadyOrReboots(t *testing.T) {
+func TestUnsupportedKernelNeverOffersKernelOrBackportsInstallation(t *testing.T) {
 	e, calls := environmentFixture(t)
-	e.ABI = func() (int, error) { return 6, errors.New("ABI too old") }
+	e.ABI = func() (int, error) { return 7, errors.New("ABI too old") }
 	p := e.Plan(context.Background(), "revision")
-	if !p.CanInstall || !p.RequiresReboot || len(p.Packages) != 2 {
-		t.Fatalf("kernel not planned: %+v", p)
+	if p.CanInstall || p.RequiresReboot || p.Source != "" || len(p.Packages) != 0 || p.State != "blocked" {
+		t.Fatalf("reboot plan offered: %+v", p)
 	}
 	r := e.Install(context.Background(), "revision", p.PlanID)
-	if r.State != "reboot_required" || !r.RequiresReboot {
-		t.Fatalf("kernel installation mislabeled: %+v", r)
+	if r.State != "failed" {
+		t.Fatal("unsupported kernel install accepted")
 	}
 	for _, call := range *calls {
-		if strings.Contains(call, "reboot") || strings.Contains(call, "systemctl") {
-			t.Fatalf("unconfirmed restart: %s", call)
+		if strings.HasPrefix(call, "apt-") {
+			t.Fatalf("kernel repair touched APT: %s", call)
 		}
 	}
 }
@@ -161,7 +164,7 @@ func TestContainerKernelCannotBeFixedByInstallingContainerPackages(t *testing.T)
 		t.Fatalf("container installation accepted: %+v", r)
 	}
 	for _, call := range *calls {
-		if strings.HasPrefix(call, "apt-get") {
+		if strings.HasPrefix(call, "apt-get") && !strings.Contains(call, "--simulate") {
 			t.Fatal("container kernel installation attempted")
 		}
 	}
@@ -176,10 +179,10 @@ func TestEnvironmentInstallPreservesRuntimeConfigurationAndRejectsWrongServer(t 
 	if err != nil || p.IsolationEnvironment == nil {
 		t.Fatal(err)
 	}
-	if _, err := h.Handle(ctx, Request{Action: "isolation-install", ServerID: "another-node", PlanID: p.IsolationEnvironment.PlanID}); err == nil {
+	if _, err := h.Handle(ctx, Request{Action: "isolation-install", ServerID: "another-node", PlanID: p.IsolationEnvironment.PlanID, UserspaceOnly: true}); err == nil {
 		t.Fatal("different server accepted")
 	}
-	r, err := h.Handle(ctx, Request{Action: "isolation-install", ServerID: "node", PlanID: p.IsolationEnvironment.PlanID})
+	r, err := h.Handle(ctx, Request{Action: "isolation-install", ServerID: "node", PlanID: p.IsolationEnvironment.PlanID, UserspaceOnly: true})
 	if err != nil || r.IsolationEnvironment.State != "verify" {
 		t.Fatalf("install: %+v %v", r, err)
 	}
@@ -192,161 +195,64 @@ func TestEnvironmentInstallPreservesRuntimeConfigurationAndRejectsWrongServer(t 
 	}
 }
 
-func backportsFixture(t *testing.T) (EnvironmentInstaller, *[]string, *[]string) {
-	t.Helper()
+func TestUserspaceInstallRejectsSystemDependenciesAndRebootMarkers(t *testing.T) {
+	for _, tc := range []struct {
+		name, output string
+		marker       bool
+	}{
+		{"kernel", "Inst bubblewrap (0.11.0-1 Debian [amd64])\nInst linux-image-amd64 (7.2 Debian [amd64])", false},
+		{"libc upgrade", "Inst libc6 (2.42 Debian [amd64])\nInst bubblewrap (0.11.0-1 Debian [amd64])", false},
+		{"pending kernel configuration", "Inst bubblewrap (0.11.0-1 Debian [amd64])\nConf linux-image-amd64 (7.2 Debian [amd64])", false},
+		{"removal", "Remv systemd [257]\nInst bubblewrap (0.11.0-1 Debian [amd64])", false},
+		{"truncated", strings.Repeat("x", 4096), false},
+		{"reboot marker", "Inst bubblewrap (0.11.0-1 Debian [amd64])", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, calls := environmentFixture(t)
+			original := e.Run
+			e.Run = func(ctx context.Context, name string, args ...string) (string, error) {
+				if name == "apt-get" && strings.Contains(strings.Join(args, " "), "--simulate") {
+					return tc.output, nil
+				}
+				return original(ctx, name, args...)
+			}
+			if tc.marker {
+				if err := os.MkdirAll(filepath.Join(e.Root, "run"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(e.Root, "run/reboot-required"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p := e.Plan(context.Background(), "revision")
+			if p.CanInstall || p.RequiresReboot || p.Error == "" {
+				t.Fatalf("unsafe plan offered: %+v", p)
+			}
+			if e.Install(context.Background(), "revision", p.PlanID).State != "failed" {
+				t.Fatal("unsafe install accepted")
+			}
+			for _, call := range *calls {
+				if strings.Contains(call, "--assume-yes") {
+					t.Fatal("unsafe package installation")
+				}
+			}
+		})
+	}
+}
+
+func TestHelperRejectsLegacyInstallWithoutUserspaceApproval(t *testing.T) {
+	h, _ := installed(t)
 	e, calls := environmentFixture(t)
-	for name, body := range map[string]string{"usr/share/keyrings/debian-archive-keyring.gpg": "fixture keyring", "etc/apt/sources.list": "deb https://fixture.invalid/debian trixie main\n", "etc/apt/sources.list.d/vendor.sources": "fixture source"} {
-		path := filepath.Join(e.Root, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	e.ABI = func() (int, error) { return 7, errors.New("ABI too old") }
-	original := e.Run
-	catalogs := []string{}
-	e.Run = func(ctx context.Context, name string, args ...string) (string, error) {
-		temporary := false
-		for _, arg := range args {
-			if strings.HasPrefix(arg, "Dir::Etc::sourcelist=") {
-				temporary = true
-				path := strings.TrimPrefix(arg, "Dir::Etc::sourcelist=")
-				catalogs = append(catalogs, filepath.Dir(path))
-				body, err := os.ReadFile(path)
-				if err != nil || !strings.Contains(string(body), "https://deb.debian.org/debian trixie-backports main") || !strings.Contains(string(body), "signed-by=") || !strings.Contains(string(body), "fixture.invalid") {
-					t.Fatalf("unsafe catalog %q %v", body, err)
-				}
-			}
-		}
-		if name == "apt-cache" && args[len(args)-1] != "bubblewrap" {
-			*calls = append(*calls, name+" "+strings.Join(args, " "))
-			if temporary {
-				if !strings.Contains(strings.Join(args, " "), "APT::Default-Release=trixie-backports") {
-					t.Fatal("backports candidate lost its explicit priority")
-				}
-				return "Installed: 6.12.0-1\nCandidate: 7.2.12-1~bpo13+1\n", nil
-			}
-			return "Installed: 6.12.0-1\nCandidate: 6.12.99-1\n", nil
-		}
-		if name == "dpkg-query" && args[len(args)-1] != "bubblewrap" {
-			return "install ok installed\t7.2.12-1~bpo13+1", nil
-		}
-		return original(ctx, name, args...)
-	}
-	return e, calls, &catalogs
-}
-
-func TestBackportsPlanPreservesSourcesAndRequiresExplicitSourceConfirmation(t *testing.T) {
-	e, calls, catalogs := backportsFixture(t)
-	before := map[string][]byte{}
-	for _, name := range []string{"etc/apt/sources.list", "etc/apt/sources.list.d/vendor.sources"} {
-		before[name], _ = os.ReadFile(filepath.Join(e.Root, name))
-	}
+	h.Environment = &e
 	p := e.Plan(context.Background(), "revision")
-	if !p.CanInstall || !p.RequiresReboot || p.Source != debianBackports || p.Packages[1].Version != "7.2.12-1~bpo13+1" {
-		t.Fatalf("no executable kernel plan: %+v", p)
-	}
-	for _, source := range []string{"", "https://untrusted.invalid", "configured"} {
-		r := e.Install(context.Background(), "revision", p.PlanID, source)
-		if r.State != "failed" || !strings.Contains(r.Error, "explicitly confirmed") {
-			t.Fatalf("source approval bypassed: %+v", r)
+	for _, request := range []Request{{Action: "isolation-install", ServerID: "node", PlanID: p.PlanID}, {Action: "isolation-install", ServerID: "node", PlanID: p.PlanID, UserspaceOnly: true, Source: "debian-backports"}} {
+		if _, err := h.Handle(context.Background(), request); err == nil {
+			t.Fatal("legacy reboot-capable installation accepted")
 		}
 	}
 	for _, call := range *calls {
-		if strings.Contains(call, " install ") && !strings.Contains(call, "--simulate") {
-			t.Fatal("unapproved source installed")
-		}
-	}
-	stale := p.PlanID
-	p.PlanID = ""
-	p.Source = ""
-	if fingerprint(p, "revision").PlanID == stale {
-		t.Fatal("source excluded from fingerprint")
-	}
-	r := e.Install(context.Background(), "revision", stale, debianBackports)
-	if r.State != "reboot_required" || r.CanInstall || r.Source != debianBackports {
-		t.Fatalf("kernel outcome: %+v", r)
-	}
-	found := false
-	for _, call := range *calls {
-		if strings.Contains(call, " install ") && !strings.Contains(call, "--simulate") {
-			found = true
-			if !strings.Contains(call, "Dir::Etc::sourcelist=") || !strings.Contains(call, "-t trixie-backports") || !strings.Contains(call, "linux-image-") || !strings.Contains(call, "=7.2.12-1~bpo13+1") {
-				t.Fatalf("unpinned installation: %s", call)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no actual package install")
-	}
-	for name, want := range before {
-		after, _ := os.ReadFile(filepath.Join(e.Root, name))
-		if !reflect.DeepEqual(after, want) {
-			t.Fatal("persistent sources changed")
-		}
-	}
-	for _, path := range *catalogs {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatal("temporary catalog leaked")
-		}
-	}
-}
-
-func TestBackportsSignatureFailureCannotInstallOrExposeMirrorCredentials(t *testing.T) {
-	e, calls, _ := backportsFixture(t)
-	original := e.Run
-	e.Run = func(ctx context.Context, name string, args ...string) (string, error) {
-		if name == "apt-get" && args[len(args)-1] == "update" {
-			return "https://synthetic:secret@example.invalid is not signed", errors.New("bad signature")
-		}
-		return original(ctx, name, args...)
-	}
-	p := e.Plan(context.Background(), "revision")
-	if p.CanInstall || !strings.Contains(p.Error, "signature") || strings.Contains(p.Error, "secret") {
-		t.Fatalf("unsafe plan: %+v", p)
-	}
-	r := e.Install(context.Background(), "revision", p.PlanID, debianBackports)
-	if r.State != "failed" {
-		t.Fatal("signature failure accepted")
-	}
-	for _, call := range *calls {
-		if strings.Contains(call, " install ") && !strings.Contains(call, "--simulate") {
-			t.Fatal("unsigned repository installed")
-		}
-	}
-}
-
-func TestKnownInsufficientKernelDoesNotOfferFalseUpgrade(t *testing.T) {
-	for _, version := range []string{"6.12.99-1", "6.18.12-1", "7.0.12-1"} {
-		if kernelHasRequiredFeatures(version) {
-			t.Fatalf("insufficient candidate %s", version)
-		}
-	}
-	for _, version := range []string{"7.1.0", "7.1.0-1", "7.2.12-1~bpo13+1", "8.0.1-1"} {
-		if !kernelHasRequiredFeatures(version) {
-			t.Fatalf("valid upgrade candidate %s", version)
-		}
-	}
-}
-
-func TestBackportsDependencyFailureIsReturnedBeforeOfferingInstallation(t *testing.T) {
-	e, calls, _ := backportsFixture(t)
-	original := e.Run
-	e.Run = func(ctx context.Context, name string, args ...string) (string, error) {
-		if name == "apt-get" && strings.Contains(strings.Join(args, " "), "--simulate") {
-			return "unmet dependencies: held broken packages", errors.New("unresolvable")
-		}
-		return original(ctx, name, args...)
-	}
-	p := e.Plan(context.Background(), "revision")
-	if p.CanInstall || !strings.Contains(p.Error, "dependency check failed") || strings.Contains(p.Error, "hostname") {
-		t.Fatalf("false executable plan: %+v", p)
-	}
-	for _, call := range *calls {
-		if strings.Contains(call, " install ") && !strings.Contains(call, "--simulate") {
-			t.Fatal("dependency check installed packages")
+		if strings.Contains(call, "--assume-yes") {
+			t.Fatal("legacy request installed packages")
 		}
 	}
 }

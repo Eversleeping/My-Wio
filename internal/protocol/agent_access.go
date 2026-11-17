@@ -16,11 +16,12 @@ type AgentIsolationSupport struct {
 	Reason    string `json:"reason,omitempty"`
 }
 type AgentAccessCommand struct {
-	ServerID  string               `json:"server_id"`
-	Settings  *AgentAccessSettings `json:"settings,omitempty"`
-	PlanID    string               `json:"plan_id,omitempty"`
-	Source    string               `json:"source,omitempty"`
-	RequestID string               `json:"request_id,omitempty"`
+	ServerID      string               `json:"server_id"`
+	Settings      *AgentAccessSettings `json:"settings,omitempty"`
+	PlanID        string               `json:"plan_id,omitempty"`
+	UserspaceOnly bool                 `json:"userspace_only,omitempty"`
+	Source        string               `json:"source,omitempty"`
+	RequestID     string               `json:"request_id,omitempty"`
 }
 
 // IsolationEnvironment is an installation plan or its actual outcome. Package

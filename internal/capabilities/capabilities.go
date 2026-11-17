@@ -55,6 +55,7 @@ var gates = []gate{
 	{protocol.CapabilityAgentAccess, nil},
 	{protocol.CapabilityAgentRestart, nil},
 	{protocol.CapabilityAgentIsolationSetup, nil},
+	{protocol.CapabilityAgentIsolationUserspace, nil},
 	{protocol.CapabilityAgentSelfUpdate, nil},
 	{protocol.CapabilityCodexCLIUpdate, nil},
 	{protocol.CapabilityDeployRollbackExact, nil},

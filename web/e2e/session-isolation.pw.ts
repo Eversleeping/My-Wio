@@ -100,12 +100,12 @@ test("configures server runtime access and global collaboration from Settings", 
  await page.getByRole("button",{name:"Confirm installation",exact:true}).click();
  await expect(page.getByText(/The full isolation check passed/)).toBeVisible();
  await expect(isolation).toBeEnabled();
- expect(writes.at(-1)).toEqual(expect.objectContaining({action:"install",plan_id:"b".repeat(64),request_id:expect.any(String)}));
+ expect(writes.at(-1)).toEqual(expect.objectContaining({action:"install",plan_id:"b".repeat(64),request_id:expect.any(String),userspace_only:true}));
  await expect(isolation).not.toBeChecked();
 });
 
 
-test("confirms the official backports kernel source and reports the server reboot requirement",async({page},testInfo)=>{
+test("rejects legacy kernel and server reboot plans",async({page},testInfo)=>{
  const writes:Record<string,unknown>[]=[];
  const env={plan_id:"c".repeat(64),source:"debian-backports",state:"install_required",can_install:true,requires_reboot:true,packages:[{name:"linux-image-amd64",version:"7.2.12-1~bpo13+1"}],checks:[{id:"landlock",ok:false,detail:"Landlock ABI 7; required: 9+"}]};
  let result=env;
@@ -123,16 +123,13 @@ test("confirms the official backports kernel source and reports the server reboo
  await page.goto("/?view=settings");
  await page.getByRole("combobox",{name:"Select server",exact:true}).selectOption("kernel-node");
  await page.getByRole("button",{name:"Check and install isolation environment",exact:true}).click();
- await expect(page.getByText(/Source: official Debian trixie-backports/)).toBeVisible();
- await expect(page.getByText("linux-image-amd64 7.2.12-1~bpo13+1",{exact:true})).toBeVisible();
- await page.getByRole("button",{name:"Install missing components…",exact:true}).click();
- await expect(page.getByText(/The server will not restart automatically/)).toBeVisible();
+ await expect(page.getByText(/This plan involves kernel or system changes/)).toBeVisible();
+ await expect(page.getByText("linux-image-amd64 7.2.12-1~bpo13+1",{exact:true})).toHaveCount(0);
+ await expect(page.getByRole("button",{name:"Install missing components…",exact:true})).toHaveCount(0);
+ await expect(page.getByRole("button",{name:"Confirm installation",exact:true})).toHaveCount(0);
  expect(writes).toEqual([]);
- await page.getByRole("button",{name:"Confirm installation",exact:true}).scrollIntoViewIfNeeded();
- await page.screenshot({path:testInfo.outputPath("official-kernel-confirm.png")});
- await page.getByRole("button",{name:"Confirm installation",exact:true}).click();
- await expect(page.getByText(/Restarting the Agent does not load a new kernel/)).toBeVisible();
- expect(writes).toEqual([{plan_id:env.plan_id,source:"debian-backports",request_id:expect.any(String)}]);
+ await page.getByText(/This plan involves kernel or system changes/).scrollIntoViewIfNeeded();
+ await page.screenshot({path:testInfo.outputPath("no-server-reboot.png")});
  await expect(page.getByRole("checkbox",{name:/Enable session isolation/})).not.toBeChecked();
  await expect(page.getByRole("checkbox",{name:/Enable session isolation/})).toBeDisabled();
 });

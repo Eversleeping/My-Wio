@@ -41,7 +41,7 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 		capability = protocol.CapabilityAgentRestart
 	}
 	if planning || installing {
-		capability = protocol.CapabilityAgentIsolationSetup
+		capability = protocol.CapabilityAgentIsolationUserspace
 	}
 	if !server.Supports(capability) {
 		writeError(w, 409, "upgrade this server's Agent to configure runtime settings")
@@ -52,19 +52,20 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	var operation string
 	if installing {
 		var input struct {
-			PlanID    string `json:"plan_id"`
-			Source    string `json:"source"`
-			RequestID string `json:"request_id"`
+			PlanID        string `json:"plan_id"`
+			UserspaceOnly bool   `json:"userspace_only"`
+			Source        string `json:"source"`
+			RequestID     string `json:"request_id"`
 		}
 		if !decodeJSON(w, r, &input) {
 			return
 		}
 		digest, e := hex.DecodeString(input.PlanID)
-		if input.Source != "" && input.Source != "debian-backports" || e != nil || len(digest) != 32 || !regexp.MustCompile(`^[A-Za-z0-9-]{16,80}$`).MatchString(input.RequestID) {
+		if !input.UserspaceOnly || input.Source != "" || e != nil || len(digest) != 32 || !regexp.MustCompile(`^[A-Za-z0-9-]{16,80}$`).MatchString(input.RequestID) {
 			writeError(w, 400, "invalid installation plan or request identity")
 			return
 		}
-		command.PlanID, command.RequestID, command.Source = input.PlanID, input.RequestID, input.Source
+		command.PlanID, command.RequestID, command.UserspaceOnly = input.PlanID, input.RequestID, true
 		kind = protocol.OpAgentIsolationInstall
 		operation, err = a.store.QueueAgentIsolationInstall(r.Context(), id, command)
 	} else if planning {

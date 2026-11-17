@@ -45,7 +45,7 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	heartbeat.Capabilities = capabilities.AgentDeclaration(heartbeat.GeminiVersion, heartbeat.ClaudeVersion)
 	if runtime.GOOS != "linux" || c.config.configPath != "/etc/wio-agent/config.json" {
 		heartbeat.Capabilities = slices.DeleteFunc(heartbeat.Capabilities, func(name string) bool {
-			return name == protocol.CapabilityAgentAccess || name == protocol.CapabilityAgentRestart || name == protocol.CapabilityAgentIsolationSetup
+			return name == protocol.CapabilityAgentAccess || name == protocol.CapabilityAgentRestart || name == protocol.CapabilityAgentIsolationSetup || name == protocol.CapabilityAgentIsolationUserspace
 		})
 	}
 	status := c.isolation.Status(ctx)

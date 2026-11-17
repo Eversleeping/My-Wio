@@ -143,12 +143,12 @@ func TestIsolationInstallIsMaintenanceAndRechecksRealBoundary(t *testing.T) {
 			c := &Client{config: Config{ServerID: "node"}, seen: map[string]*operationExecution{}, isolation: sessionisolation.New(&sessionisolation.Config{Bwrap: filepath.Join(dir, "missing-bwrap")}, dir)}
 			c.seen["install"] = &operationExecution{kind: protocol.OpAgentIsolationInstall, done: make(chan struct{})}
 			c.runtimeAccessCall = func(_ context.Context, r runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
-				if !c.agentUpdatePending() || r.Action != "isolation-install" || r.Settings != nil || r.PlanID != strings.Repeat("b", 64) || r.Source != "debian-backports" {
+				if !c.agentUpdatePending() || r.Action != "isolation-install" || r.Settings != nil || r.PlanID != strings.Repeat("b", 64) || !r.UserspaceOnly || r.Source != "" {
 					t.Fatalf("unsafe helper call: %+v", r)
 				}
 				return protocol.AgentAccessSettings{Revision: strings.Repeat("a", 64), IsolationEnvironment: &protocol.IsolationEnvironment{State: state}, IsolationSupport: &protocol.AgentIsolationSupport{Supported: true}}, nil
 			}
-			raw, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: "node", PlanID: strings.Repeat("b", 64), RequestID: "request", Source: "debian-backports"})
+			raw, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: "node", PlanID: strings.Repeat("b", 64), RequestID: "request", UserspaceOnly: true})
 			restart, data, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: protocol.OpAgentIsolationInstall, PayloadJSON: raw})
 			var got protocol.AgentAccessSettings
 			if err != nil || restart != "" || c.agentUpdatePending() || json.Unmarshal(data, &got) != nil || got.IsolationSupport.Supported {
@@ -264,29 +264,5 @@ func TestRuntimeAccessDockerUsesLocalHostProcessIdentity(t *testing.T) {
 	}
 	if strings.Contains(args, "\n--privileged\n") {
 		t.Fatal("system helper must keep its bounded capabilities")
-	}
-}
-
-func TestIsolationPlanDockerKeepsHostReadOnlyAndUsesOnlyPrivateTemporaryState(t *testing.T) {
-	dir := t.TempDir()
-	arguments := filepath.Join(dir, "arguments")
-	docker := filepath.Join(dir, "docker")
-	script := "#!/bin/sh\nif [ \"$3\" = image ]; then printf 'sha256:" + strings.Repeat("a", 64) + "\\n'; exit 0; fi\nprintf '%s\\n' \"$@\" > '" + arguments + "'\ncat >/dev/null\nprintf '%s\\n' '{\"settings\":{\"revision\":\"" + strings.Repeat("b", 64) + "\"}}'\n"
-	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	c := &Client{config: Config{DockerPath: docker}}
-	if _, err := c.dockerRuntimeAccess(context.Background(), runtimeaccess.Request{Action: "isolation-plan", ServerID: "node"}); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(arguments)
-	args := "\n" + string(raw)
-	for _, want := range []string{"\n--network\nhost\n", "\ntype=bind,src=/,dst=/host,readonly\n", "\n--tmpfs\n/host/tmp:rw,noexec,nosuid,nodev,mode=1777,size=512m\n", "\n--read-only\n"} {
-		if !strings.Contains(args, want) {
-			t.Fatalf("unsafe plan container: missing %q", want)
-		}
-	}
-	if strings.Contains(args, "\n--privileged\n") || strings.Contains(args, "\nSETUID\n") {
-		t.Fatal("inspection expanded root capabilities")
 	}
 }

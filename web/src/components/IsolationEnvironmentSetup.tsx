@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { servers, type AgentAccessSettings, type IsolationEnvironment } from "../data/servers";
 import { useI18n } from "../i18n";
 
-type Pending = {plan_id:string;request_id:string;source?:"debian-backports";operation_id?:string};
+type Pending = {plan_id:string;request_id:string;source?:"debian-backports";userspace_only?:boolean;operation_id?:string};
 
 export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:string;disabled:boolean;onChecked:(settings:AgentAccessSettings)=>void;onBusy?:(busy:boolean)=>void}) {
  const {language}=useI18n();
@@ -19,7 +19,7 @@ export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:str
    const result=await servers.runtimeResult(id,operation);
    if(generation.current!==run)return;
    if(result.status==="succeeded"&&result.settings?.isolation_environment) {
-    setPlan(result.settings.isolation_environment);checked.current(result.settings);setConfirming(false);
+    setPlan(safePlan(result.settings.isolation_environment));checked.current(result.settings);setConfirming(false);
     localStorage.removeItem(key);setPending(null);return;
    }
    if(["failed","cancelled","canceled","interrupted"].includes(result.status)) {
@@ -33,7 +33,8 @@ export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:str
   setBusy(true);setError("");
   try {
    if(!saved.operation_id) {
-    const response=await servers.isolationInstall(id,saved.plan_id,saved.request_id,saved.source);
+    if(!saved.userspace_only||saved.source){localStorage.removeItem(key);setPending(null);throw Error(text("旧安装方案已停止恢复，请重新检查并确认无需重启服务器的方案。","The previous installation plan will not be resumed. Check again and confirm a plan that needs no server reboot."));}
+    const response=await servers.isolationInstall(id,saved.plan_id,saved.request_id);
     saved={...saved,operation_id:response.operation_id};
     localStorage.setItem(key,JSON.stringify(saved));
     if(generation.current!==run)return;
@@ -60,18 +61,21 @@ export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:str
   finally { if(generation.current===run)setBusy(false); }
  }
  function install() {
-  if(!plan?.can_install||!confirming)return;
-  const saved={plan_id:plan.plan_id,request_id:crypto.randomUUID(),...(plan.source?{source:plan.source}: {})};
+  if(!plan?.can_install||plan.requires_reboot||plan.source||plan.packages.some(pkg=>pkg.name!=="bubblewrap")||!confirming)return;
+  const saved={plan_id:plan.plan_id,request_id:crypto.randomUUID(),userspace_only:true};
   // Save before sending: a lost response or navigation must query/retry the
   // same confirmed request rather than queue a second package installation.
   try { localStorage.setItem(key,JSON.stringify(saved)); }
   catch {setError(text("无法保存安装记录，未开始安装。","Could not save the installation record; installation has not started."));return;}
   setPending(saved);setConfirming(false);void resume(saved,generation.current);
  }
+ function safePlan(value:IsolationEnvironment):IsolationEnvironment {
+  if(value.requires_reboot||value.source||value.state==="reboot_required"||value.packages.some(pkg=>pkg.name!=="bubblewrap"))return {...value,state:"blocked",can_install:false,requires_reboot:false,source:undefined,packages:[],logs:[],error:text("该方案涉及内核、系统升级或服务器重启，已禁止安装。仅支持无需重启服务器的隔离工具安装。","This plan involves kernel or system changes or a server reboot and cannot be installed. Only isolation tools that need no server reboot are supported.")};
+  return value;
+ }
  const stateText:Record<string,string>={
   install_required:text("缺少隔离环境，可确认安装。","Required isolation components can be installed."),
   ready:text("隔离环境已通过完整检查，可以开启会话隔离。","The full isolation check passed. You can enable session isolation."),
-  reboot_required:text("内核已安装，需重启服务器后重新检测。尚未确认隔离可用；重启 Agent 无法加载新内核。","Kernel installed. Restart the server and check again; isolation has not yet passed verification. Restarting the Agent does not load a new kernel."),
   blocked:text("环境检查未通过，以下问题仍需处理。","The environment check found requirements that still need attention."),
   failed:text("安装未完成，请查看结果后重新检测。","Installation did not complete. Review the result and check again."),
  };
@@ -83,11 +87,10 @@ export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:str
    <p role="status">{stateText[plan.state]||plan.state}</p>
    <ul>{plan.checks.map(check=><li key={check.id}>{check.ok?"✓ ":"✗ "}{check.id==="agent_boundary"?text("Agent 完整隔离检查","Full Agent isolation check"):check.id==="landlock"?text("内核隔离能力","Kernel isolation support"):text("隔离工具","Isolation tools")}{check.detail&&`: ${check.detail}`}</li>)}</ul>
    {plan.error&&<p role="alert">{plan.error}</p>}
-   {plan.packages.length>0&&<><p>{plan.source==="debian-backports"?text("安装来源：Debian 官方 trixie-backports（https://deb.debian.org/debian）。使用系统 Debian 签名密钥校验，内核及必要依赖可来自该源；临时读取软件源，永久软件源配置不变。","Source: official Debian trixie-backports (https://deb.debian.org/debian). Verified with the system Debian archive keyring using a temporary catalog. The kernel and required dependencies may come from this source; permanent repositories remain unchanged."):text("安装方案使用服务器现有软件源：","Installation uses the server's configured repositories:")}</p><ul>{plan.packages.map(pkg=><li key={pkg.name}>{pkg.name} {pkg.version}</li>)}</ul></>}
-   {plan.requires_reboot&&plan.can_install&&<p>{text("包含内核安装或更新，完成后需要重启整台服务器并重新验证，不能保证当前软件源的内核具备所需能力。不会自动重启。","Includes a kernel install or update. A server reboot and recheck are required; the repository's kernel may still lack the required features. The server will not restart automatically.")}</p>}
+   {plan.packages.length>0&&<><p>{text("以下工具可从服务器现有软件源安装，无需重启服务器：","These tools can be installed from the server's configured repositories without a server reboot:")}</p><ul>{plan.packages.map(pkg=><li key={pkg.name}>{pkg.name} {pkg.version}</li>)}</ul></>}
    {plan.can_install&&!pending&&!confirming&&<button className="primary-button" disabled={disabled||busy} onClick={()=>setConfirming(true)}>{text("安装缺失环境…","Install missing components…")}</button>}
    {confirming&&<div role="group" aria-label={text("确认安装隔离环境","Confirm isolation installation")}>
-    <p>{text("是否通过此服务器的 Agent 安装以上软件包？安装会修改系统软件；sudo 和隔离开关保持原值。","Install these packages through this server's Agent? This changes system software. Sudo and isolation settings remain unchanged.")}</p>
+    <p>{text("是否通过此服务器的 Agent 安装以上软件包？仅安装以上工具，无需重启服务器；sudo 和隔离开关保持原值。","Install these packages through this server's Agent? Only the listed tools will be installed; no server reboot is needed. Sudo and isolation settings remain unchanged.")}</p>
     <button className="primary-button" disabled={disabled||busy} onClick={install}>{text("确认安装","Confirm installation")}</button>
     <button className="secondary-button" disabled={busy} onClick={()=>setConfirming(false)}>{text("取消","Cancel")}</button>
    </div>}
