@@ -228,8 +228,15 @@ func TestReviewStopRevokesAlreadyStreamingResponse(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("streaming upstream request survived stop")
 	}
-	if _, err := io.ReadAll(response.Body); err == nil {
-		t.Fatal("revoked stream remained normally readable")
+	// Cancellation can let the handler return before Server.Close closes the
+	// downstream connection. Both EOF and a transport error are valid; neither
+	// may leave the stream open or deliver additional data.
+	remaining, _ := io.ReadAll(response.Body)
+	if ctx.Err() != nil {
+		t.Fatal("revoked stream did not close before the client deadline")
+	}
+	if len(remaining) != 0 {
+		t.Fatal("revoked stream delivered additional data")
 	}
 	conn, err := net.DialTimeout("tcp4", b.address, 300*time.Millisecond)
 	if err == nil {
