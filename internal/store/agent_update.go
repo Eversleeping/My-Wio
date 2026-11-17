@@ -59,6 +59,9 @@ func (s *Store) QueueAgentUpdate(ctx context.Context, serverID string, command p
 func (s *Store) QueueAgentAccessUpdate(ctx context.Context, serverID string, command protocol.AgentAccessCommand) (string, error) {
 	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentAccessUpdate, command, "agent-access-update:")
 }
+func (s *Store) QueueAgentRestart(ctx context.Context, serverID string, command protocol.AgentAccessCommand) (string, error) {
+	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentRestart, command, "agent-restart:")
+}
 func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, command any, keyPrefix string) (string, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {

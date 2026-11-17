@@ -13,7 +13,7 @@ test("configures through the enrolled Agent with no SSH credentials and confirms
  const writes:unknown[]=[];const paths:string[]=[];
  vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
   const path=String(input);paths.push(path);
-  if(path.endsWith("/servers"))return new Response(JSON.stringify([node,{id:"control",name:"Control",is_control_plane:true,status:"online"}]));
+  if(path.endsWith("/servers"))return new Response(JSON.stringify([{...node,agent_update_available:true,agent_update_supported:true},{id:"control",name:"Control",is_control_plane:true,status:"online"}]));
   if(path.endsWith("/access-settings/read"))return new Response(JSON.stringify({operation_id:"read"}));
   if(path.endsWith("/access-settings")&&options.method==="PUT"){settings=JSON.parse(String(options.body));writes.push(settings);return new Response(JSON.stringify({operation_id:"apply"}));}
   return new Response(JSON.stringify({status:"succeeded",settings}));
@@ -25,6 +25,7 @@ test("configures through the enrolled Agent with no SSH credentials and confirms
  expect(screen.queryByRole("button",{name:"Check fingerprint"})).not.toBeInTheDocument();
  const sudo=screen.getByRole("checkbox",{name:/Allow passwordless sudo/});
  await waitFor(()=>expect(sudo).toBeEnabled());expect(sudo).toBeChecked();
+ expect(screen.getByRole("button",{name:"Upgrade Agent"})).toBeEnabled();
  expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).toBeDisabled();
  await user.click(sudo);await user.click(screen.getByRole("checkbox",{name:/Enable session isolation/}));
  await user.click(screen.getByRole("button",{name:"Apply server settings"}));
@@ -62,4 +63,53 @@ test("ignores a response for a previously selected server",async()=>{
  await waitFor(()=>expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).toBeChecked());
  resolveRead(new Response(JSON.stringify({operation_id:"late"})));
  await waitFor(()=>expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).not.toBeChecked());
+});
+
+test("resumes a pending restart and confirms success only after its recovery record is cleared",async()=>{
+ localStorage.setItem("wio_language","en");
+ let pending=true,reads=0;
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
+  const path=String(input);
+  if(path.endsWith("/servers"))return new Response(JSON.stringify([node]));
+  if(path.endsWith("/access-settings/read"))return new Response(JSON.stringify({operation_id:"read"}));
+  if(path.endsWith("/access-settings")&&options.method==="PUT")return new Response(JSON.stringify({operation_id:"apply"}));
+  if(path.endsWith("/operations/read"))reads++;
+  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision,applied:true,restart_required:pending}}));
+ }));
+ render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
+ await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
+ expect(await screen.findByText(/The previous change still needs a restart/)).toBeInTheDocument();
+ expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).toBeDisabled();
+ expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).toBeDisabled();
+ await user.click(screen.getByRole("button",{name:"Apply server settings"}));
+ await waitFor(()=>expect(reads).toBeGreaterThanOrEqual(2));
+ expect(screen.queryByText("Settings applied and confirmed by the Agent")).not.toBeInTheDocument();
+ pending=false;
+ expect(await screen.findByText("Settings applied and confirmed by the Agent")).toBeInTheDocument();
+ expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).toBeEnabled();
+});
+
+test("restarts the Agent without applying drafts and waits for a different process instance",async()=>{
+ localStorage.setItem("wio_language","en");
+ let instance="before",reads=0;
+ const writes:string[]=[];
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
+  const path=String(input);
+  if(path.endsWith("/servers"))return new Response(JSON.stringify([{...node,agent_restart_supported:true}]));
+  if(path.endsWith("/access-settings/read"))return new Response(JSON.stringify({operation_id:"read"}));
+  if(options.method==="POST"&&path.endsWith("/agent-restart")){writes.push(path);return new Response(JSON.stringify({operation_id:"restart"}));}
+  if(path.endsWith("/operations/read"))reads++;
+  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision,applied:true,restart_required:false,instance_id:path.endsWith("/operations/restart")?"before":instance}}));
+ }));
+ render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
+ await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
+ await waitFor(()=>expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).toBeEnabled());
+ await user.click(screen.getByRole("checkbox",{name:/Enable session isolation/}));
+ await user.click(screen.getByRole("button",{name:"Restart Agent"}));
+ await waitFor(()=>expect(reads).toBeGreaterThanOrEqual(2));
+ expect(screen.queryByText("Agent restarted and reconnected")).not.toBeInTheDocument();
+ instance="after";
+ expect(await screen.findByText("Agent restarted and reconnected")).toBeInTheDocument();
+ expect(writes).toEqual(["/api/servers/node/agent-restart"]);
+ expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).not.toBeChecked();
 });

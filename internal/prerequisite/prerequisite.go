@@ -203,7 +203,7 @@ func (c *coordinator) handle(ctx context.Context, connection net.Conn) {
 	if err := json.NewDecoder(connection).Decode(&input); err != nil {
 		return
 	}
-	if input.Action == "runtime-access" && input.Access != nil {
+	if (input.Action == runtimeaccess.HelperAction || input.Action == "runtime-access") && input.Access != nil {
 		settings, err := (runtimeaccess.Helper{Root: "/"}).Handle(ctx, *input.Access)
 		reply := runtimeaccess.Reply{Settings: settings}
 		if err != nil {

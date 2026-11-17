@@ -1,0 +1,11 @@
+{
+  "baseline": "0.3.34",
+  "direction": "operation",
+  "kind": "agent.restart",
+  "source": [
+    "internal/protocol/agent_access.go"
+  ],
+  "payload": {
+    "server_id": "node"
+  }
+}

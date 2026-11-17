@@ -7,6 +7,7 @@ type AgentAccessSettings struct {
 	Revision         string `json:"revision"`
 	Applied          bool   `json:"applied"`
 	RestartRequired  bool   `json:"restart_required"`
+	InstanceID       string `json:"instance_id,omitempty"`
 }
 type AgentAccessCommand struct {
 	ServerID string               `json:"server_id"`

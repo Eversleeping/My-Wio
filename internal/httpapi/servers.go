@@ -44,6 +44,7 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 		servers[index].ClaudeEffortSupported = servers[index].Supports(protocol.CapabilityClaudeEffort)
 		servers[index].ClaudeCredentialsSupported = servers[index].Supports(protocol.CapabilityClaudeManage)
 		servers[index].AgentAccessSupported = !servers[index].IsControlPlane && servers[index].Supports(protocol.CapabilityAgentAccess)
+		servers[index].AgentRestartSupported = !servers[index].IsControlPlane && servers[index].Supports(protocol.CapabilityAgentRestart)
 		servers[index].CLIManagementSupported = servers[index].Supports(protocol.CapabilityCLIManage)
 		servers[index].CodexUpdateAvailable = servers[index].CodexUpdateSupported && (servers[index].CodexVersion == "" || codexcli.UpdateAvailable(servers[index].CodexVersion, codexTarget))
 		servers[index].ExactRollbackSupported = servers[index].Supports(protocol.CapabilityDeployRollbackExact)

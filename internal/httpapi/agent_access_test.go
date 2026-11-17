@@ -103,3 +103,37 @@ func TestAgentAccessResultScopesAndFiltersAgentData(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentRestartRequiresCapabilityAndQueuesOnlyServerIdentity(t *testing.T) {
+	db := openBootstrapTestStore(t)
+	server, _ := enrollBootstrapTestServer(t, db, "agent-restart")
+	ctx := context.Background()
+	api := resourceTestAPI(db)
+	user := &store.Session{UserID: "test-user"}
+	request := func() int {
+		return directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/agent-restart", server.ID, map[string]any{"allow_sudo": true}, user, api.agentAccess).Code
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.Version, Capabilities: []string{protocol.CapabilityAgentAccess}}); err != nil {
+		t.Fatal(err)
+	}
+	if status := request(); status != 409 {
+		t.Fatalf("restart without capability: %d", status)
+	}
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: buildinfo.Version, Capabilities: []string{protocol.CapabilityAgentRestart}}); err != nil {
+		t.Fatal(err)
+	}
+	if status := request(); status != 202 {
+		t.Fatalf("restart: %d", status)
+	}
+	ops, err := db.PendingOperations(ctx, server.ID)
+	if err != nil || len(ops) != 1 || ops[0].Kind != protocol.OpAgentRestart {
+		t.Fatalf("missing restart operation: %+v %v", ops, err)
+	}
+	var command protocol.AgentAccessCommand
+	if json.Unmarshal([]byte(ops[0].Payload), &command) != nil || command.ServerID != server.ID || command.Settings != nil {
+		t.Fatalf("restart must not change settings: %s", ops[0].Payload)
+	}
+	if status := request(); status != 409 {
+		t.Fatalf("duplicate restart must be blocked: %d", status)
+	}
+}

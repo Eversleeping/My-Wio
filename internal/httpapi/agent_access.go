@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wio-platform/wio/internal/protocol"
@@ -31,14 +32,22 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "server is offline")
 		return
 	}
-	if !server.Supports(protocol.CapabilityAgentAccess) {
+	restarting := strings.HasSuffix(r.URL.Path, "/agent-restart")
+	capability := protocol.CapabilityAgentAccess
+	if restarting {
+		capability = protocol.CapabilityAgentRestart
+	}
+	if !server.Supports(capability) {
 		writeError(w, 409, "upgrade this server's Agent to configure runtime settings")
 		return
 	}
 	command := protocol.AgentAccessCommand{ServerID: id}
 	kind := protocol.OpAgentAccessRead
 	var operation string
-	if r.Method == http.MethodPut {
+	if restarting {
+		kind = protocol.OpAgentRestart
+		operation, err = a.store.QueueAgentRestart(r.Context(), id, command)
+	} else if r.Method == http.MethodPut {
 		var settings protocol.AgentAccessSettings
 		if !decodeJSON(w, r, &settings) {
 			return
@@ -66,11 +75,14 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	if kind == protocol.OpAgentAccessUpdate {
 		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.access.update", "server", id, map[string]any{"operation_id": operation, "allow_sudo": command.Settings.AllowSudo, "session_isolation": command.Settings.SessionIsolation}, clientIP(r))
 	}
+	if kind == protocol.OpAgentRestart {
+		_ = a.store.Audit(r.Context(), currentSession(r).UserID, "agent.restart", "server", id, map[string]string{"operation_id": operation}, clientIP(r))
+	}
 	writeJSON(w, 202, map[string]string{"operation_id": operation})
 }
 func (a *API) agentAccessResult(w http.ResponseWriter, r *http.Request) {
 	op, err := a.store.Operation(r.Context(), chi.URLParam(r, "operationID"))
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.ServerID != chi.URLParam(r, "serverID") || (op.Kind != protocol.OpAgentAccessRead && op.Kind != protocol.OpAgentAccessUpdate)) {
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (op.ServerID != chi.URLParam(r, "serverID") || (op.Kind != protocol.OpAgentAccessRead && op.Kind != protocol.OpAgentAccessUpdate && op.Kind != protocol.OpAgentRestart)) {
 		writeError(w, 404, "runtime settings operation not found")
 		return
 	}

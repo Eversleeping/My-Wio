@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -34,6 +35,8 @@ import (
 const initialReconnectBackoff = time.Second
 
 type Client struct {
+	instanceOnce       sync.Once
+	instanceID         string
 	runtimeAccessCall  func(context.Context, runtimeaccess.Request) (protocol.AgentAccessSettings, error)
 	toolMu             sync.Mutex
 	toolReplies        map[string]chan sessiontools.Reply
@@ -68,6 +71,11 @@ type Client struct {
 	retry       *protocol.AgentEnvelope
 	sentWaiters map[string]chan struct{}
 	workers     sync.WaitGroup
+}
+
+func (c *Client) runtimeInstanceID() string {
+	c.instanceOnce.Do(func() { c.instanceID = uuid.NewString() })
+	return c.instanceID
 }
 
 func NewClient(config Config, log *slog.Logger) *Client {

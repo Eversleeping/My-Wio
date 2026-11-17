@@ -47,7 +47,7 @@ func (s *Store) cliInstallBlockers(ctx context.Context, query sqlx.QueryerContex
 	} else if kind != "codex" {
 		return out, errors.New("unsupported AI CLI")
 	}
-	if err := sqlx.SelectContext(ctx, query, &out.BlockingOperations, s.Q("SELECT id,kind,status FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','agent.access.update','gemini.credentials.configure','gemini.skills.manage','claude.credentials.configure') AND status IN ('queued','delivered','running') ORDER BY created_at,id"), serverID); err != nil {
+	if err := sqlx.SelectContext(ctx, query, &out.BlockingOperations, s.Q("SELECT id,kind,status FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','agent.access.update','agent.restart','gemini.credentials.configure','gemini.skills.manage','claude.credentials.configure') AND status IN ('queued','delivered','running') ORDER BY created_at,id"), serverID); err != nil {
 		return out, err
 	}
 	active := "t.status IN ('queued','running','interrupting')"

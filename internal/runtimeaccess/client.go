@@ -11,11 +11,16 @@ import (
 	"time"
 )
 
+// HelperAction makes Agents require the recovery-capable helper. An older
+// installed helper rejects it, so the Agent uses its current local helper.
+const HelperAction = "runtime-access-v2"
+
 type Request struct {
 	Action   string                        `json:"action"`
 	ServerID string                        `json:"server_id"`
 	Settings *protocol.AgentAccessSettings `json:"settings,omitempty"`
 	Revision string                        `json:"revision,omitempty"`
+	Force    bool                          `json:"force,omitempty"`
 }
 type Reply struct {
 	Settings protocol.AgentAccessSettings `json:"settings"`
@@ -34,7 +39,7 @@ func Call(ctx context.Context, socket string, request Request) (protocol.AgentAc
 	if err = json.NewEncoder(c).Encode(struct {
 		Action string  `json:"action"`
 		Access Request `json:"access"`
-	}{"runtime-access", request}); err != nil {
+	}{HelperAction, request}); err != nil {
 		return protocol.AgentAccessSettings{}, err
 	}
 	var reply Reply

@@ -21,6 +21,7 @@ import (
 )
 
 const runtimeAccessRestart = "runtime-access-restart"
+const runtimeServiceRestart = "runtime-service-restart"
 
 func (c *Client) callRuntimeAccess(ctx context.Context, r runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
 	if c.runtimeAccessCall != nil {
@@ -110,7 +111,10 @@ func (c *Client) dockerRuntimeAccess(ctx context.Context, r runtimeaccess.Reques
 	if r.Action == "read" {
 		mount += ",readonly"
 	}
-	command := invoke("run", "--pull", "never", "--rm", "--sig-proxy=false", "--read-only", "--network", "none", "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "SYS_CHROOT", "--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--security-opt", "no-new-privileges=true", "--pids-limit", "32", "--mount", mount, "-i", imageID, "runtime-access-helper", "--host-root")
+	// systemd authenticates the caller using its process identity. Share the
+	// host PID namespace to match the host /proc mounted by the chroot; a
+	// container PID namespace makes sd-bus authentication fail with ENODATA.
+	command := invoke("run", "--pull", "never", "--rm", "--sig-proxy=false", "--read-only", "--network", "none", "--pid", "host", "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "SYS_CHROOT", "--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--security-opt", "no-new-privileges=true", "--pids-limit", "32", "--mount", mount, "-i", imageID, "runtime-access-helper", "--host-root")
 	input, _ := json.Marshal(r)
 	command.Stdin = bytes.NewReader(input)
 	output, err := command.Output()
@@ -136,8 +140,8 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 		return
 	}
 	request := runtimeaccess.Request{Action: "read", ServerID: command.ServerID}
-	if envelope.Kind == protocol.OpAgentAccessUpdate {
-		if command.Settings == nil || command.Settings.AllowSudo && command.Settings.SessionIsolation {
+	if envelope.Kind == protocol.OpAgentAccessUpdate || envelope.Kind == protocol.OpAgentRestart {
+		if envelope.Kind == protocol.OpAgentAccessUpdate && (command.Settings == nil || command.Settings.AllowSudo && command.Settings.SessionIsolation) || envelope.Kind == protocol.OpAgentRestart && command.Settings != nil {
 			err = errors.New("invalid runtime settings")
 			return
 		}
@@ -161,7 +165,9 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 				c.releaseAgentUpdate()
 			}
 		}()
-		request.Action, request.Settings = "apply", command.Settings
+		if envelope.Kind == protocol.OpAgentAccessUpdate {
+			request.Action, request.Settings = "apply", command.Settings
+		}
 	} else if command.Settings != nil {
 		err = errors.New("read operation cannot change runtime settings")
 		return
@@ -173,15 +179,22 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 	}
 	isolation := c.config.SessionIsolation != nil && c.config.SessionIsolation.Enabled
 	settings.Applied = settings.AllowSudo == c.config.AllowSudo && settings.SessionIsolation == isolation
+	settings.InstanceID = c.runtimeInstanceID()
 	data, err = json.Marshal(settings)
-	if settings.RestartRequired {
+	if envelope.Kind == protocol.OpAgentRestart {
+		restart = runtimeServiceRestart + ":" + settings.Revision
+	} else if settings.RestartRequired && envelope.Kind == protocol.OpAgentAccessUpdate {
 		restart = runtimeAccessRestart + ":" + settings.Revision
 	}
 	return
 }
 func (c *Client) restartRuntimeAccess(ctx context.Context, path string) error {
 	revision := strings.TrimPrefix(path, runtimeAccessRestart+":")
-	_, err := c.callRuntimeAccess(ctx, runtimeaccess.Request{Action: "restart", ServerID: c.config.ServerID, Revision: revision})
+	force := strings.HasPrefix(path, runtimeServiceRestart+":")
+	if force {
+		revision = strings.TrimPrefix(path, runtimeServiceRestart+":")
+	}
+	_, err := c.callRuntimeAccess(ctx, runtimeaccess.Request{Action: "restart", ServerID: c.config.ServerID, Revision: revision, Force: force})
 	if err != nil {
 		return fmt.Errorf("could not restart Agent after changing runtime settings: %w", err)
 	}

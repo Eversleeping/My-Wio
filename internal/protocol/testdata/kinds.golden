@@ -8,6 +8,7 @@
 .turn.start
 agent.access.read
 agent.access.update
+agent.restart
 agent.update
 agent.updated
 agent_update_status

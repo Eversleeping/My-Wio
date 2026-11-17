@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -50,7 +51,22 @@ func run(ctx context.Context, name string, args ...string) error {
 	}
 	command := childprocess.CommandContext(ctx, program, args...)
 	command.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
-	return command.Run()
+	var diagnostic boundedDiagnostic
+	command.Stderr = &diagnostic
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(diagnostic.String()))
+	}
+	return nil
+}
+
+type boundedDiagnostic struct{ bytes.Buffer }
+
+func (b *boundedDiagnostic) Write(p []byte) (int, error) {
+	n := len(p)
+	if remaining := 4096 - b.Len(); remaining > 0 {
+		_, _ = b.Buffer.Write(p[:min(n, remaining)])
+	}
+	return n, nil
 }
 func readSnapshot(name string) (snapshot, error) {
 	s, err := os.Lstat(name)
@@ -142,6 +158,37 @@ func (h Helper) restore(ctx context.Context, b backup) error {
 	}
 	return errors.Join(errs...)
 }
+
+func (h Helper) pending(id string) (backup, error) {
+	var b backup
+	raw, err := os.ReadFile(h.path(backupFile))
+	if err != nil {
+		return b, err
+	}
+	if json.Unmarshal(raw, &b) != nil || !validRevision(b.NextRevision) || len(b.Files) != 3 {
+		return b, errors.New("invalid pending runtime settings backup")
+	}
+	for _, name := range []string{configFile, sudoFile, overrideFile} {
+		if _, ok := b.Files[name]; !ok {
+			return b, errors.New("invalid pending runtime settings backup")
+		}
+	}
+	if _, _, err := decode(b.Files[configFile].Data, id); err != nil {
+		return b, errors.New("pending runtime settings server identity differs")
+	}
+	return b, nil
+}
+
+func (h Helper) restored(b backup) bool {
+	for name, before := range b.Files {
+		now, err := readSnapshot(h.path(name))
+		if err != nil || now.Exists != before.Exists || now.Mode != before.Mode || now.UID != before.UID || now.GID != before.GID || !bytes.Equal(now.Data, before.Data) {
+			return false
+		}
+	}
+	return true
+}
+
 func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSettings, error) {
 	if h.Run == nil {
 		h.Run = run
@@ -150,7 +197,15 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	if err != nil {
 		return current, err
 	}
+	if r.Force && r.Action != "restart" {
+		return current, errors.New("only an explicit Agent restart may be forced")
+	}
 	if r.Action == "read" && r.Settings == nil && r.Revision == "" {
+		pending, err := h.pending(r.ServerID)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return current, err
+		}
+		current.RestartRequired = err == nil && pending.NextRevision == current.Revision
 		return current, nil
 	}
 	if r.Action != "apply" && r.Action != "restart" {
@@ -169,35 +224,46 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	if err != nil {
 		return current, err
 	}
-	var previous backup
-	raw, backupErr := os.ReadFile(h.path(backupFile))
-	if backupErr == nil {
-		if json.Unmarshal(raw, &previous) != nil {
-			return current, errors.New("invalid pending runtime settings backup")
-		}
-	} else if !errors.Is(backupErr, os.ErrNotExist) {
+	previous, backupErr := h.pending(r.ServerID)
+	if backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
 		return current, backupErr
 	}
 	if r.Action == "restart" {
 		if !validRevision(r.Revision) || r.Revision != current.Revision || r.Settings != nil {
 			return current, errors.New("runtime settings changed before restart")
 		}
-		if backupErr != nil {
+		hasBackup := backupErr == nil
+		if hasBackup && previous.NextRevision != current.Revision && r.Force && h.restored(previous) {
+			if err := h.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+				return current, fmt.Errorf("could not finish restoring Agent service settings: %w", err)
+			}
+			if err := os.Remove(h.path(backupFile)); err != nil {
+				return current, err
+			}
+			hasBackup = false
+		}
+		if !hasBackup && !r.Force {
 			return current, nil
 		}
-		if previous.NextRevision != current.Revision {
+		if hasBackup && previous.NextRevision != current.Revision {
 			return current, errors.New("pending runtime settings revision differs")
 		}
 		// A service restart disconnects its client; it must not cancel rollback.
 		restartCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		if err = h.Run(restartCtx, "systemctl", "restart", "wio-agent.service"); err != nil {
+			if !hasBackup {
+				return current, fmt.Errorf("Agent restart failed: %w", err)
+			}
 			rollbackErr := h.restore(restartCtx, previous)
 			oldRestartErr := h.Run(restartCtx, "systemctl", "restart", "wio-agent.service")
 			if rollbackErr == nil && oldRestartErr == nil {
 				_ = os.Remove(h.path(backupFile))
 			}
 			return current, errors.Join(errors.New("Agent restart failed; previous settings were restored when possible"), rollbackErr, oldRestartErr)
+		}
+		if !hasBackup {
+			return current, nil
 		}
 		return current, os.Remove(h.path(backupFile))
 	}
@@ -209,11 +275,22 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 		return current, errors.New("session isolation and passwordless sudo are mutually exclusive")
 	}
 	if backupErr == nil {
-		if previous.NextRevision == current.Revision && next.AllowSudo == current.AllowSudo && next.SessionIsolation == current.SessionIsolation {
+		if h.restored(previous) {
+			// A failed apply can restore every file while daemon-reload still
+			// fails. Retry that reload before clearing its recovery record;
+			// otherwise its staged revision permanently blocks later changes.
+			if err := h.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+				return current, fmt.Errorf("could not finish restoring Agent service settings: %w", err)
+			}
+			if err := os.Remove(h.path(backupFile)); err != nil {
+				return current, err
+			}
+		} else if previous.NextRevision == current.Revision && next.AllowSudo == current.AllowSudo && next.SessionIsolation == current.SessionIsolation {
 			current.RestartRequired = true
 			return current, nil
+		} else {
+			return current, errors.New("finish the pending Agent restart before changing settings")
 		}
-		return current, errors.New("finish the pending Agent restart before changing settings")
 	}
 	if next.AllowSudo == current.AllowSudo && next.SessionIsolation == current.SessionIsolation {
 		return current, nil

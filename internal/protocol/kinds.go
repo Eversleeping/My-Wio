@@ -33,6 +33,7 @@ const (
 const (
 	OpAgentAccessRead            = "agent.access.read"
 	OpAgentAccessUpdate          = "agent.access.update"
+	OpAgentRestart               = "agent.restart"
 	OpAgentUpdate                = "agent.update"
 	OpClaudeCredentialsConfigure = "claude.credentials.configure"
 	OpClaudeQuestionAnswer       = "claude.question.answer"

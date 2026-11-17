@@ -49,9 +49,9 @@ export function ServerAccessSettings() {
  useEffect(() => {
   if(!upgrading)return;
   const timer=setInterval(servers.reload,3000);
-  if(server?.agent_access_supported)setUpgrading(false);
+  if(server&&!server.agent_update_available){setUpgrading(false);setReload(value=>value+1);}
   return () => clearInterval(timer);
- },[upgrading,server?.agent_access_supported,servers.reload]);
+ },[upgrading,server?.agent_update_available,servers.reload]);
  async function apply() {
   if(!access)return;
   const target=id,expected={...access},run=generation.current;
@@ -65,7 +65,7 @@ export function ServerAccessSettings() {
     try {
      const actual=await read(target,run);
      if(!actual)return;
-     if(actual.applied && actual.allow_sudo===expected.allow_sudo && actual.session_isolation===expected.session_isolation) {
+     if(actual.applied && !actual.restart_required && actual.allow_sudo===expected.allow_sudo && actual.session_isolation===expected.session_isolation) {
       setAccess(actual);setNotice(text("设置已由 Agent 应用并确认生效", "Settings applied and confirmed by the Agent"));return;
      }
     } catch { /* A restart briefly disconnects the Agent; retry confirmation. */ }
@@ -80,19 +80,46 @@ export function ServerAccessSettings() {
   try {await endpoints.updateAgent(target);if(generation.current===run){setUpgrading(true);setNotice(text("Agent 升级已排队，升级后会自动读取设置", "Agent upgrade queued; settings will load after it reconnects"));}}
   catch(err){if(generation.current===run)setError(String(err));}
  }
+ async function restartAgent() {
+  const target=id,run=generation.current;
+  setBusy(true);setError("");setNotice(text("正在重启 Agent，等待重新连接…", "Restarting the Agent; waiting for it to reconnect…"));
+  try {
+   const queued=await endpoints.restartAgent(target);
+   const before=await operation(target,queued.operation_id,run);
+   if(!before)return;
+   if(!before.instance_id)throw new Error(text("请先升级 Agent 后重试重启", "Upgrade the Agent before retrying the restart"));
+   const deadline=Date.now()+90000;
+   while(generation.current===run&&Date.now()<deadline) {
+    try {
+     const actual=await read(target,run);
+     if(!actual)return;
+     if(actual.instance_id&&actual.instance_id!==before.instance_id&&actual.applied&&!actual.restart_required) {
+      setAccess(actual);setNotice(text("Agent 已重启并重新连接", "Agent restarted and reconnected"));servers.reload();return;
+     }
+    } catch { /* The service disconnects while restarting; retry confirmation. */ }
+    await pause();
+   }
+   if(generation.current===run)throw new Error(text("尚未确认 Agent 重启完成，请重新读取设置", "Agent restart has not been confirmed; read the settings again"));
+  }catch(err){if(generation.current===run){setError(String(err));setNotice("");}}
+  finally{if(generation.current===run)setBusy(false);}
+ }
  return <Section title={text("服务器运行设置","Server runtime settings")} icon={<ShieldCheck size={18}/>}><div className="settings-content">
   <p>{text("选择已注册服务器，直接通过 Agent 配置 sudo 权限和会话隔离。应用设置会重启 Agent，请先结束运行中的会话。", "Select a registered server to configure sudo access and session isolation through its Agent. Applying settings restarts the Agent; finish active sessions first.")}</p>
   {servers.error && <p role="alert">{servers.error}<button onClick={servers.reload}>{t("common.retry")}</button></p>}
   <label className="field"><span>{text("选择服务器","Select server")}</span><select value={id} onChange={event=>{setID(event.target.value);setUpgrading(false);}}><option value="">{text("请选择服务器","Choose a server")}</option>{(servers.data??[]).map(item=><option key={item.id} value={item.id}>{item.is_control_plane?t("server.controlPlane"):item.name}</option>)}</select></label>
   {server?.is_control_plane ? <p>{text("内置 Agent 由控制面部署管理。会话隔离通过部署变量 WIO_CONTROL_AGENT_SESSION_ISOLATION 配置并重启生效；sudo 权限由部署环境的运行账户管理。", "The built-in Agent is managed by the control-plane deployment. Configure isolation with WIO_CONTROL_AGENT_SESSION_ISOLATION and restart the deployment. Its runtime account controls sudo access.")}</p> : server && <>
    {server.status!=="online" && <p role="status">{text("服务器离线，等待 Agent 连接后可配置", "Server offline; settings are available when the Agent connects")}</p>}
-   {!server.agent_access_supported && <p>{text("请先升级此服务器的 Agent，以支持直接配置运行设置。", "Upgrade this server's Agent to configure runtime settings directly.")}{server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):text("升级 Agent","Upgrade Agent")}</button>}</p>}
+   {!server.agent_access_supported && <p>{text("请先升级此服务器的 Agent，以支持直接配置运行设置。", "Upgrade this server's Agent to configure runtime settings directly.")}</p>}
+   {server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):text("升级 Agent","Upgrade Agent")}</button>}
    <fieldset className="settings-fields" disabled={busy||!access||server.status!=="online"||!server.agent_access_supported}>
-    <label className={`agent-access-option ${access?.allow_sudo?"enabled":""}`}><input type="checkbox" checked={access?.allow_sudo??false} disabled={access?.session_isolation} onChange={event=>{if(access)setAccess({...access,allow_sudo:event.target.checked});}}/><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
-    <label className={`agent-access-option ${access?.session_isolation?"enabled":""}`}><input type="checkbox" checked={access?.session_isolation??false} disabled={access?.allow_sudo} onChange={event=>{if(access)setAccess({...access,session_isolation:event.target.checked});}}/><span><strong>{t("server.sessionIsolation")}</strong><small>{t("server.sessionIsolationHelp")}</small></span></label>
+    <label className={`agent-access-option ${access?.allow_sudo?"enabled":""}`}><input type="checkbox" checked={access?.allow_sudo??false} disabled={access?.session_isolation||access?.restart_required} onChange={event=>{if(access)setAccess({...access,allow_sudo:event.target.checked});}}/><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
+    <label className={`agent-access-option ${access?.session_isolation?"enabled":""}`}><input type="checkbox" checked={access?.session_isolation??false} disabled={access?.allow_sudo||access?.restart_required} onChange={event=>{if(access)setAccess({...access,session_isolation:event.target.checked});}}/><span><strong>{t("server.sessionIsolation")}</strong><small>{t("server.sessionIsolationHelp")}</small></span></label>
     <button className="primary-button" onClick={()=>void apply()}>{text("应用服务器设置","Apply server settings")}</button>
    </fieldset>
-   {access&&!access.applied&&!busy&&<p role="status">{text("已保存的设置尚未由当前 Agent 确认生效，可重新应用。", "The running Agent has not confirmed the saved settings; apply them again to finish.")}</p>}
+   {access?.restart_required&&!busy&&<p role="status">{text("上次设置仍待完成重启，请点击“应用服务器设置”完成后再调整开关。", "The previous change still needs a restart. Apply the server settings to finish before changing the switches.")}</p>}
+   {access&&!access.applied&&!access.restart_required&&!busy&&<p role="status">{text("已保存的设置尚未由当前 Agent 确认生效，可重新应用。", "The running Agent has not confirmed the saved settings; apply them again to finish.")}</p>}
+   <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{text("重启 Agent","Restart Agent")}</button>
+   {!server.agent_restart_supported&&server.agent_access_supported&&<p>{text("请升级此服务器的 Agent，以使用独立重启按钮。", "Upgrade this server's Agent to use the restart button.")}</p>}
    <button className="secondary-button" disabled={busy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{text("重新读取设置","Read settings again")}</button>
   </>}
   {busy&&<p role="status">{t("common.loading")}</p>}

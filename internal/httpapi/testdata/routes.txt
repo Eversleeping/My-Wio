@@ -102,6 +102,7 @@ POST /api/servers/ssh/bootstrap middleware=5
 POST /api/servers/ssh/bootstrap-stream middleware=5
 POST /api/servers/ssh/probe middleware=5
 POST /api/servers/{serverID}/access-settings/read middleware=5
+POST /api/servers/{serverID}/agent-restart middleware=5
 POST /api/servers/{serverID}/agent-update middleware=5
 POST /api/servers/{serverID}/ai-clis/{kind}/install middleware=5
 POST /api/servers/{serverID}/claude-credential-profile middleware=5

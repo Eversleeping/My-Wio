@@ -36,7 +36,7 @@ func TestGateRegistryCoversProtocolNames(t *testing.T) {
 		}
 		return false
 	})
-	if len(names) != 33 || len(gates) != 33 {
+	if len(names) != 34 || len(gates) != 34 {
 		t.Fatalf("protocol=%d gates=%d", len(names), len(gates))
 	}
 	for _, gate := range gates {
@@ -54,7 +54,7 @@ func TestAgentDeclarationCLIRequirements(t *testing.T) {
 	for _, gemini := range []string{"", "invalid", "0.65.99", "0.66.0", "v0.66.1+build"} {
 		for _, claude := range []string{"", "invalid", "2.1.285", "2.1.286", "2.1.286 (Claude Code)", "v2.1.287+build", " 2.1.286"} {
 			declared := AgentDeclaration(gemini, claude)
-			expected := 25
+			expected := 26
 			goodGemini := gemini == "0.66.0" || gemini == "v0.66.1+build"
 			goodClaude := claude == "2.1.286" || claude == "2.1.286 (Claude Code)" || claude == "v2.1.287+build"
 			if goodGemini {

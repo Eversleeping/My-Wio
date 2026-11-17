@@ -75,6 +75,7 @@ func (api *API) registerServerRoutes(private chi.Router) {
 	private.Patch("/servers/{serverID}", api.updateServer)
 	private.Post("/servers/{serverID}/credential-profiles", api.updateServerCredentialProfiles)
 	private.Post("/servers/{serverID}/agent-update", api.updateAgent)
+	private.Post("/servers/{serverID}/agent-restart", api.agentAccess)
 	private.Post("/servers/{serverID}/codex-update", api.updateCodexCLI)
 	private.Get("/servers/{serverID}/ai-clis", api.serverCLIs)
 	private.Get("/ai-clis/{kind}/versions", api.cliVersions)

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var Version = "0.3.33"
+var Version = "0.3.34"
 
 // MinimumAgentVersion is the published capability baseline for this control plane.
 // Older Agents may connect for recovery, but only agent.update is dispatched.

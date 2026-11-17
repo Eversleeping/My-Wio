@@ -144,7 +144,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			c.log.Warn("Agent update result was not sent before restart; it will be replayed after reconnect", "operation_id", envelope.OperationID)
 		}
 		restartErr := error(nil)
-		if strings.HasPrefix(restartPath, runtimeAccessRestart+":") {
+		if strings.HasPrefix(restartPath, runtimeAccessRestart+":") || strings.HasPrefix(restartPath, runtimeServiceRestart+":") {
 			if !resultSaved {
 				restartErr = errors.New("runtime settings receipt was not persisted; refusing to restart")
 			} else {
