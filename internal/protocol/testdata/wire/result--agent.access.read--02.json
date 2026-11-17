@@ -1,0 +1,19 @@
+{
+  "baseline": "0.3.35",
+  "direction": "result",
+  "kind": "agent.access.read",
+  "source": [
+    "internal/protocol/agent_access.go"
+  ],
+  "payload": {
+    "allow_sudo": false,
+    "session_isolation": false,
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "applied": true,
+    "restart_required": false,
+    "isolation_support": {
+      "supported": false,
+      "reason": "Landlock ABI 9 or later is required"
+    }
+  }
+}

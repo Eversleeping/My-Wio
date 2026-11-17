@@ -4,9 +4,9 @@ import { assertMockApplication, installMockApplication } from "./support/mock-ap
 test.afterEach(({ page }) => assertMockApplication(page));
 
 test("configures server runtime access and global collaboration from Settings", async ({ page }, testInfo) => {
- const server = { id: "isolated-node", name: "Isolated node", hostname: "node.example.test", status: "online", agent_access_supported:true,agent_restart_supported:true,agent_version: "0.3.34", agent_target_version: "0.3.34", codex_ready: 1, codex_version: "1.0.0", codex_target_version: "1.0.0", address: "node.example.test", configuration: "", notes: "", session_isolation: { mode: "unsupported", reason: "Required namespaces are unavailable" } };
+ const server = { id: "isolated-node", name: "Isolated node", hostname: "node.example.test", status: "online", agent_access_supported:true,agent_restart_supported:true,agent_version: "0.3.35", agent_target_version: "0.3.35", codex_ready: 1, codex_version: "1.0.0", codex_target_version: "1.0.0", address: "node.example.test", configuration: "", notes: "", session_isolation: { mode: "unsupported", reason: "Required namespaces are unavailable" } };
  let collaboration = {enabled:false,target_modes:{}};
- let access = {allow_sudo:false,session_isolation:false,revision:"a".repeat(64),applied:true,restart_required:false,instance_id:"before"};
+ let access = {allow_sudo:false,session_isolation:false,revision:"a".repeat(64),applied:true,restart_required:false,instance_id:"before",isolation_support:{supported:true,reason:""}};
  let restartReceipt=access;
  const writes: unknown[] = [];
  await installMockApplication(page, {configured:true,onAPIRequest:request => {
@@ -72,4 +72,12 @@ test("configures server runtime access and global collaboration from Settings", 
  await page.getByRole("button",{name:"Restart Agent",exact:true}).click();
  await expect(page.getByText("Agent restarted and reconnected",{exact:true})).toBeVisible();
  expect(writes).toContainEqual({action:"restart"});
+ access={...access,isolation_support:{supported:false,reason:"Landlock ABI 9 is required"}};
+ await page.getByRole("button",{name:"Read settings again",exact:true}).click();
+ await expect(page.getByText(/Turn isolation off and apply settings to restore sessions/)).toBeVisible();
+ await isolation.uncheck();
+ await page.getByRole("button",{name:"Apply server settings",exact:true}).click();
+ await expect(page.getByText(/Settings applied and confirmed by the Agent/)).toBeVisible();
+ await expect(isolation).toBeDisabled();
+ expect(writes.at(-1)).toEqual(expect.objectContaining({session_isolation:false}));
 });

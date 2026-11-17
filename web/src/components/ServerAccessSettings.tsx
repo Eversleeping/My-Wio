@@ -54,6 +54,7 @@ export function ServerAccessSettings() {
  },[upgrading,server?.agent_update_available,servers.reload]);
  async function apply() {
   if(!access)return;
+  if(access.session_isolation&&!access.isolation_support?.supported){setError(text("此服务器尚未通过隔离支持检查，请关闭隔离后应用。", "This server has not passed the isolation support check. Turn isolation off before applying."));return;}
   const target=id,expected={...access},run=generation.current;
   setBusy(true);setError("");setNotice(text("正在应用设置，等待 Agent 重连确认…", "Applying settings; waiting for the Agent to reconnect…"));
   try {
@@ -113,9 +114,11 @@ export function ServerAccessSettings() {
    {server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):text("升级 Agent","Upgrade Agent")}</button>}
    <fieldset className="settings-fields" disabled={busy||!access||server.status!=="online"||!server.agent_access_supported}>
     <label className={`agent-access-option ${access?.allow_sudo?"enabled":""}`}><input type="checkbox" checked={access?.allow_sudo??false} disabled={access?.session_isolation||access?.restart_required} onChange={event=>{if(access)setAccess({...access,allow_sudo:event.target.checked});}}/><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
-    <label className={`agent-access-option ${access?.session_isolation?"enabled":""}`}><input type="checkbox" checked={access?.session_isolation??false} disabled={access?.allow_sudo||access?.restart_required} onChange={event=>{if(access)setAccess({...access,session_isolation:event.target.checked});}}/><span><strong>{t("server.sessionIsolation")}</strong><small>{t("server.sessionIsolationHelp")}</small></span></label>
+    <label className={`agent-access-option ${access?.session_isolation?"enabled":""}`}><input type="checkbox" checked={access?.session_isolation??false} disabled={access?.allow_sudo||access?.restart_required||(!access?.session_isolation&&!access?.isolation_support?.supported)} onChange={event=>{if(access)setAccess({...access,session_isolation:event.target.checked});}}/><span><strong>{t("server.sessionIsolation")}</strong><small>{t("server.sessionIsolationHelp")}</small></span></label>
     <button className="primary-button" onClick={()=>void apply()}>{text("应用服务器设置","Apply server settings")}</button>
    </fieldset>
+   {access&&!access.isolation_support&&<p role="status">{text("请升级此服务器的 Agent，以检查环境是否支持隔离。", "Upgrade this server's Agent to check isolation support.")}</p>}
+   {access?.isolation_support&&!access.isolation_support.supported&&<p role="status">{text("此服务器不支持会话隔离：", "Session isolation is unavailable on this server: ")}{access.isolation_support.reason}{access.session_isolation&&text("。请关闭隔离并应用设置，恢复会话使用。", ". Turn isolation off and apply settings to restore sessions.")}</p>}
    {access?.restart_required&&!busy&&<p role="status">{text("上次设置仍待完成重启，请点击“应用服务器设置”完成后再调整开关。", "The previous change still needs a restart. Apply the server settings to finish before changing the switches.")}</p>}
    {access&&!access.applied&&!access.restart_required&&!busy&&<p role="status">{text("已保存的设置尚未由当前 Agent 确认生效，可重新应用。", "The running Agent has not confirmed the saved settings; apply them again to finish.")}</p>}
    <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{text("重启 Agent","Restart Agent")}</button>

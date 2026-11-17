@@ -166,6 +166,12 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 			}
 		}()
 		if envelope.Kind == protocol.OpAgentAccessUpdate {
+			if command.Settings.SessionIsolation {
+				if err = c.isolation.CheckSupport(ctx); err != nil {
+					err = fmt.Errorf("cannot enable session isolation: %w", err)
+					return
+				}
+			}
 			request.Action, request.Settings = "apply", command.Settings
 		}
 	} else if command.Settings != nil {
@@ -180,6 +186,11 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 	isolation := c.config.SessionIsolation != nil && c.config.SessionIsolation.Enabled
 	settings.Applied = settings.AllowSudo == c.config.AllowSudo && settings.SessionIsolation == isolation
 	settings.InstanceID = c.runtimeInstanceID()
+	settings.IsolationSupport = &protocol.AgentIsolationSupport{Supported: true}
+	if supportErr := c.isolation.CheckSupport(ctx); supportErr != nil {
+		settings.IsolationSupport.Supported = false
+		settings.IsolationSupport.Reason = supportErr.Error()
+	}
 	data, err = json.Marshal(settings)
 	if envelope.Kind == protocol.OpAgentRestart {
 		restart = runtimeServiceRestart + ":" + settings.Revision

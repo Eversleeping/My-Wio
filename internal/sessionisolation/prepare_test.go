@@ -51,6 +51,19 @@ func TestMissingBoundaryDoesNotLaunchCLIOrBlockAgentHelpers(t *testing.T) {
 	}
 }
 
+func TestSupportCheckProbesDisabledConfigurationAndDoesNotTrustCachedSuccess(t *testing.T) {
+	dir := t.TempDir()
+	m := New(&Config{Bwrap: filepath.Join(dir, "missing-bwrap")}, dir)
+	// A previous read must not authorize a later change without another probe.
+	m.status, m.checked = Status{Mode: "enabled"}, time.Now()
+	if err := m.CheckSupport(context.Background()); err == nil {
+		t.Fatal("cached support authorized an unavailable boundary")
+	}
+	if m.config.Enabled || m.Status(context.Background()).Mode != "disabled" {
+		t.Fatal("checking support changed the configured isolation mode")
+	}
+}
+
 func TestOnlyReviewedClaudeDescriptorsReachTheCLI(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "descriptor")
 	if err != nil {

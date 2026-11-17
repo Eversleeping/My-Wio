@@ -356,3 +356,13 @@ test("shows the minimum Agent requirement in the list and details while keeping 
   const dialog = screen.getByRole("dialog", { name: "Edit server information" });
   expect(within(dialog).getByText(text)).toBeInTheDocument();
 });
+
+test("keeps installed engines distinct from failed version checks under unavailable isolation",async()=>{
+ localStorage.setItem("wio_language","en");
+ const unavailable={...server,codex_version:"",gemini_version:"",gemini_ready:1,claude_version:"",claude_ready:1,cli_management_supported:true,claude_credentials_supported:true,session_isolation:{mode:"unsupported",reason:"Landlock ABI 9 is required"}};
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>new Response(JSON.stringify(String(input)==="/api/servers"?[unavailable]:[]))));
+ render(<I18nProvider><DataProvider revisions={{servers:0}}><ServersPage notify={vi.fn()}/></DataProvider></I18nProvider>);
+ await waitFor(()=>expect(screen.getAllByText("Installed; version check unavailable")).toHaveLength(3));
+ expect(screen.queryByText("Not installed")).not.toBeInTheDocument();
+ expect(screen.getByText("Isolation unavailable")).toBeInTheDocument();
+});

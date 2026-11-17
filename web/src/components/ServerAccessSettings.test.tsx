@@ -6,10 +6,11 @@ import { ServerAccessSettings } from "./ServerAccessSettings";
 
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
 const revision="a".repeat(64);
+const support={isolation_support:{supported:true}};
 const node={id:"node",name:"Node",status:"online",agent_access_supported:true};
 test("configures through the enrolled Agent with no SSH credentials and confirms the applied state",async()=>{
  localStorage.setItem("wio_language","en");
- let settings={allow_sudo:true,session_isolation:false,revision,applied:true,restart_required:false};
+ let settings={allow_sudo:true,session_isolation:false,revision,applied:true,restart_required:false,...support};
  const writes:unknown[]=[];const paths:string[]=[];
  vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
   const path=String(input);paths.push(path);
@@ -55,7 +56,7 @@ test("ignores a response for a previously selected server",async()=>{
   if(path.endsWith("/servers"))return new Response(JSON.stringify([node,{...node,id:"other",name:"Other"}]));
   if(path.includes("/node/"))return new Promise<Response>(resolve=>{resolveRead=resolve;});
   if(path.endsWith("/read"))return new Response(JSON.stringify({operation_id:"other-read"}));
-  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:true,revision,applied:true,restart_required:false}}));
+  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:true,revision,applied:true,restart_required:false,...support}}));
  }));
  render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
  await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
@@ -74,7 +75,7 @@ test("resumes a pending restart and confirms success only after its recovery rec
   if(path.endsWith("/access-settings/read"))return new Response(JSON.stringify({operation_id:"read"}));
   if(path.endsWith("/access-settings")&&options.method==="PUT")return new Response(JSON.stringify({operation_id:"apply"}));
   if(path.endsWith("/operations/read"))reads++;
-  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision,applied:true,restart_required:pending}}));
+  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision,applied:true,restart_required:pending,...support}}));
  }));
  render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
  await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
@@ -99,7 +100,7 @@ test("restarts the Agent without applying drafts and waits for a different proce
   if(path.endsWith("/access-settings/read"))return new Response(JSON.stringify({operation_id:"read"}));
   if(options.method==="POST"&&path.endsWith("/agent-restart")){writes.push(path);return new Response(JSON.stringify({operation_id:"restart"}));}
   if(path.endsWith("/operations/read"))reads++;
-  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision,applied:true,restart_required:false,instance_id:path.endsWith("/operations/restart")?"before":instance}}));
+  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision,applied:true,restart_required:false,...support,instance_id:path.endsWith("/operations/restart")?"before":instance}}));
  }));
  render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
  await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
@@ -112,4 +113,44 @@ test("restarts the Agent without applying drafts and waits for a different proce
  expect(await screen.findByText("Agent restarted and reconnected")).toBeInTheDocument();
  expect(writes).toEqual(["/api/servers/node/agent-restart"]);
  expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).not.toBeChecked();
+});
+
+test.each([false,true])("blocks unsupported enabling but allows an existing isolation setting to be turned off (enabled=%s)",async(enabled)=>{
+ localStorage.setItem("wio_language","en");
+ let settings={allow_sudo:false,session_isolation:enabled,revision,applied:true,restart_required:false,isolation_support:{supported:false,reason:"Landlock ABI 9 is required"}};
+ const changes:unknown[]=[];
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
+  const path=String(input);
+  if(path.endsWith("/servers"))return new Response(JSON.stringify([node]));
+  if(path.endsWith("/access-settings/read"))return new Response(JSON.stringify({operation_id:"read"}));
+  if(path.endsWith("/access-settings")&&options.method==="PUT"){settings=JSON.parse(String(options.body));changes.push(settings);return new Response(JSON.stringify({operation_id:"apply"}));}
+  return new Response(JSON.stringify({status:"succeeded",settings}));
+ }));
+ render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
+ await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
+ expect(await screen.findByText(/Landlock ABI 9 is required/)).toBeInTheDocument();
+ const isolation=screen.getByRole("checkbox",{name:/Enable session isolation/});
+ if(enabled){
+  expect(isolation).toBeChecked();expect(isolation).toBeEnabled();
+  await user.click(isolation);
+  await user.click(screen.getByRole("button",{name:"Apply server settings"}));
+  expect(await screen.findByText("Settings applied and confirmed by the Agent")).toBeInTheDocument();
+  expect(changes).toEqual([expect.objectContaining({session_isolation:false,allow_sudo:false,revision})]);
+ }else expect(changes).toEqual([]);
+ expect(isolation).toBeDisabled();
+});
+
+test("requires a support-capable Agent before enabling isolation",async()=>{
+ localStorage.setItem("wio_language","en");
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+  const path=String(input);
+  if(path.endsWith("/servers"))return new Response(JSON.stringify([node]));
+  if(path.endsWith("/access-settings/read"))return new Response(JSON.stringify({operation_id:"read"}));
+  return new Response(JSON.stringify({status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision,applied:true,restart_required:false}}));
+ }));
+ render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
+ await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
+ expect(await screen.findByText(/Upgrade this server's Agent to check isolation support/)).toBeInTheDocument();
+ expect(screen.getByRole("checkbox",{name:/Enable session isolation/})).toBeDisabled();
+ expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).toBeEnabled();
 });

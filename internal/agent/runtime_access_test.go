@@ -14,7 +14,52 @@ import (
 
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/runtimeaccess"
+	"github.com/wio-platform/wio/internal/sessionisolation"
 )
+
+func TestRuntimeAccessRejectsUnsupportedIsolationBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	c := &Client{config: Config{ServerID: "node"}, seen: map[string]*operationExecution{}, isolation: sessionisolation.New(&sessionisolation.Config{Bwrap: filepath.Join(dir, "missing-bwrap")}, dir)}
+	c.runtimeAccessCall = func(context.Context, runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
+		t.Fatal("unsupported isolation reached the system settings helper")
+		return protocol.AgentAccessSettings{}, nil
+	}
+	command := protocol.AgentAccessCommand{ServerID: "node", Settings: &protocol.AgentAccessSettings{SessionIsolation: true, Revision: strings.Repeat("a", 64), IsolationSupport: &protocol.AgentIsolationSupport{Supported: true}}}
+	raw, _ := json.Marshal(command)
+	restart, _, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: protocol.OpAgentAccessUpdate, PayloadJSON: raw})
+	if err == nil || !strings.Contains(err.Error(), "cannot enable session isolation") || restart != "" || c.agentUpdatePending() {
+		t.Fatalf("unsupported isolation was not safely rejected: restart=%q error=%v", restart, err)
+	}
+}
+
+func TestRuntimeAccessReportsUnsupportedWhileDisabledAndAllowsRecovery(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		dir := t.TempDir()
+		config := &sessionisolation.Config{Enabled: enabled, Bwrap: filepath.Join(dir, "missing-bwrap")}
+		c := &Client{config: Config{ServerID: "node", SessionIsolation: config}, seen: map[string]*operationExecution{}, isolation: sessionisolation.New(config, dir)}
+		c.runtimeAccessCall = func(_ context.Context, request runtimeaccess.Request) (protocol.AgentAccessSettings, error) {
+			if enabled && (request.Action != "apply" || request.Settings.SessionIsolation) || !enabled && request.Action != "read" {
+				t.Fatal("unexpected configuration mutation")
+			}
+			return protocol.AgentAccessSettings{Revision: strings.Repeat("a", 64), RestartRequired: enabled}, nil
+		}
+		kind := protocol.OpAgentAccessRead
+		command := protocol.AgentAccessCommand{ServerID: "node"}
+		if enabled {
+			kind = protocol.OpAgentAccessUpdate
+			command.Settings = &protocol.AgentAccessSettings{Revision: strings.Repeat("a", 64)}
+		}
+		raw, _ := json.Marshal(command)
+		restart, data, _, err := c.runRuntimeAccess(context.Background(), &protocol.ControlEnvelope{Kind: kind, PayloadJSON: raw})
+		var result protocol.AgentAccessSettings
+		if err != nil || json.Unmarshal(data, &result) != nil || result.IsolationSupport == nil || result.IsolationSupport.Supported || result.IsolationSupport.Reason == "" || result.SessionIsolation {
+			t.Fatalf("missing support check or blocked recovery: data=%s error=%v", data, err)
+		}
+		if (restart != "") != enabled {
+			t.Fatalf("unexpected recovery restart: %q", restart)
+		}
+	}
+}
 
 func TestRuntimeAccessSavesReceiptBeforeRestartAndReplays(t *testing.T) {
 	c := &Client{config: Config{ServerID: "node", StateDir: t.TempDir()}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), seen: map[string]*operationExecution{}, outbound: make(chan *protocol.AgentEnvelope, 8)}

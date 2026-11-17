@@ -3,6 +3,8 @@ package sessionservice
 import (
 	"context"
 
+	"github.com/wio-platform/wio/internal/protocol"
+
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/store"
 )
@@ -43,6 +45,8 @@ func ResolveEngineAvailability(workspace store.Workspace, server store.Server) [
 			item.Reason = "workspace_not_ready"
 		case server.Status != "online":
 			item.Reason = "server_offline"
+		case server.SessionIsolation != nil && server.SessionIsolation.Mode == protocol.IsolationUnsupported:
+			item.Reason = "isolation_unavailable"
 		case !item.Capabilities.Turns:
 			item.Reason = "agent_update"
 		case spec.ready != 1:

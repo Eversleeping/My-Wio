@@ -149,17 +149,35 @@ func (m *Manager) Status(ctx context.Context) Status {
 	if m == nil || !m.config.Enabled {
 		return Status{Mode: "disabled"}
 	}
+	if err := m.checkSupport(ctx, false); err != nil {
+		return Status{Mode: "unsupported", Reason: err.Error()}
+	}
+	return Status{Mode: "enabled"}
+}
+
+// CheckSupport tests the complete boundary even while isolation is disabled.
+// It does not change configuration or launch an official CLI.
+func (m *Manager) CheckSupport(ctx context.Context) error {
+	return m.checkSupport(ctx, true)
+}
+
+func (m *Manager) checkSupport(ctx context.Context, refresh bool) error {
+	if m == nil {
+		return errors.New("session isolation support is unavailable")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.checked.IsZero() && time.Since(m.checked) < time.Minute {
-		return m.status
+	if refresh || m.checked.IsZero() || time.Since(m.checked) >= time.Minute {
+		probe, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		m.status = Status{Mode: "enabled"}
+		if err := sandbox.Probe(probe, m.options); err != nil {
+			m.status = Status{Mode: "unsupported", Reason: err.Error()}
+		}
+		m.checked = time.Now()
 	}
-	probe, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	m.status = Status{Mode: "enabled"}
-	if err := sandbox.Probe(probe, m.options); err != nil {
-		m.status = Status{Mode: "unsupported", Reason: err.Error()}
+	if m.status.Mode != "enabled" {
+		return errors.New(m.status.Reason)
 	}
-	m.checked = time.Now()
-	return m.status
+	return nil
 }
