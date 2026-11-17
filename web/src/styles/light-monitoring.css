@@ -1,0 +1,75 @@
+
+
+/* -------------------------------------------------------------------------- */
+/* Light Theme: Monitoring & Analytics (监控与指标图表)                        */
+/* -------------------------------------------------------------------------- */
+[data-theme="light"] .monitor-header {
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+[data-theme="light"] .monitor-header strong {
+  color: #0f172a;
+}
+[data-theme="light"] .range-control {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+}
+[data-theme="light"] .range-control button {
+  color: #64748b;
+  border-right: 1px solid #cbd5e1;
+}
+[data-theme="light"] .range-control button:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+[data-theme="light"] .range-control button.active {
+  color: #ffffff;
+  background: #0284c7;
+  box-shadow: 0 1px 4px rgba(2, 132, 199, 0.35);
+}
+[data-theme="light"] .metric-summary-grid {
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+[data-theme="light"] .metric-stat {
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+}
+[data-theme="light"] .metric-stat strong {
+  color: #0f172a;
+}
+[data-theme="light"] .metric-stat-icon {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+}
+[data-theme="light"] .timeseries-chart {
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+[data-theme="light"] .timeseries-heading > strong {
+  color: #0f172a;
+}
+[data-theme="light"] .chart-gridline {
+  stroke: #f1f5f9;
+}
+[data-theme="light"] .chart-axis-label {
+  fill: #94a3b8;
+}
+[data-theme="light"] .chart-cursor {
+  stroke: #0284c7;
+}
+[data-theme="light"] .chart-tooltip {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #0f172a;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.15);
+}
+[data-theme="light"] .chart-tooltip > strong {
+  color: #0284c7;
+  border-bottom: 1px solid #e2e8f0;
+}
+[data-theme="light"] .chart-empty {
+  color: #94a3b8;
+}

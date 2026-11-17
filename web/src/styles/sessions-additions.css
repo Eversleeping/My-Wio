@@ -1,0 +1,37 @@
+
+@media (max-width: 400px) { .claude-composer .composer-action { padding: 5px 8px; } .claude-composer .composer-action span { display: none; } .claude-composer .composer-action > svg { display: block; } }
+
+.slash-command-status { margin: 0; padding: 10px 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
+.claude-steer-instruction { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.claude-steer-instruction p { margin: 6px 0 0; white-space: pre-wrap; }
+/* Session collaboration uses the existing theme and dialog primitives. */
+.session-collaboration { border-bottom: 1px solid var(--line); flex: 0 0 auto; font-size: .85rem; }
+.collaboration-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: .35rem .8rem; gap: .5rem; }
+.collaboration-toggle { display: flex; align-items: center; gap: .45rem; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.collaboration-content { padding: .2rem .8rem .6rem; max-height: 15rem; overflow: auto; }
+.collaboration-card { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .7rem; padding: .45rem 0; }
+.collaboration-card a { color: var(--cyan); display: inline-flex; gap: .3rem; align-items: center; overflow-wrap: anywhere; }
+.collaboration-card small { opacity: .7; overflow-wrap: anywhere; }
+.collaboration-settings { display: grid; gap: .8rem; }
+.collaboration-settings fieldset { display: grid; gap: .65rem; border: 1px solid var(--line); border-radius: .5rem; padding: .8rem; min-width: 0; }
+.collaboration-settings label { display: flex; align-items: center; gap: .6rem; overflow-wrap: anywhere; }
+.collaboration-settings input[type=checkbox] { width: 1rem; height: 1rem; flex: 0 0 auto; }
+.collaboration-settings select { flex: 1; min-width: 0; }
+.collaboration-task > p:first-child { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+.collaboration-task .field small { font-size: 12px; }
+
+.collaboration-read { font-size: inherit; text-align: left; max-width: 100%; white-space: normal; }
+.status-tag.waiting-user, .status-tag.accepted { color: var(--amber); border-color: var(--amber-border); background: var(--amber-soft); }
+
+.session-filters { padding: 0 12px 8px; display: grid; gap: 8px; }
+.session-filters .field { margin: 0; }
+.session-filters > label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.session-filters input[type="checkbox"] { width: auto; }
+.session-engine { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 3px; margin-right: 5px; }
+.session-engine-choices { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.thread-project-toggle.workspace-focused { box-shadow: inset 3px 0 var(--cyan, #22d3ee); }
+.session-isolation { width: fit-content; max-width: 280px; flex-wrap: wrap; }
+.session-isolation small { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+.session-isolation-indicator { padding: 8px 14px 0; }

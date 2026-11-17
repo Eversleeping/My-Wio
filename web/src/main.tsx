@@ -4,7 +4,7 @@ import { registerSW } from "virtual:pwa-register";
 import App from "./App";
 import { I18nProvider } from "./i18n";
 import { ThemeProvider } from "./theme";
-import "./styles.css";
+import "./styles/index.css";
 
 const frontendVersionValue = document.querySelector<HTMLMetaElement>('meta[name="wio-frontend-version"]')?.content ?? "";
 const frontendVersion = frontendVersionValue && !frontendVersionValue.startsWith("__") ? frontendVersionValue : "";
