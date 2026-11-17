@@ -19,6 +19,7 @@ type AgentAccessCommand struct {
 	ServerID  string               `json:"server_id"`
 	Settings  *AgentAccessSettings `json:"settings,omitempty"`
 	PlanID    string               `json:"plan_id,omitempty"`
+	Source    string               `json:"source,omitempty"`
 	RequestID string               `json:"request_id,omitempty"`
 }
 
@@ -26,6 +27,7 @@ type AgentAccessCommand struct {
 // names originate in the system helper, never in a browser request.
 type IsolationEnvironment struct {
 	PlanID         string             `json:"plan_id,omitempty"`
+	Source         string             `json:"source,omitempty"`
 	State          string             `json:"state"`
 	CanInstall     bool               `json:"can_install"`
 	RequiresReboot bool               `json:"requires_reboot"`

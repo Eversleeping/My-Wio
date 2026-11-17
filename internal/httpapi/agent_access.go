@@ -53,17 +53,18 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	if installing {
 		var input struct {
 			PlanID    string `json:"plan_id"`
+			Source    string `json:"source"`
 			RequestID string `json:"request_id"`
 		}
 		if !decodeJSON(w, r, &input) {
 			return
 		}
 		digest, e := hex.DecodeString(input.PlanID)
-		if e != nil || len(digest) != 32 || !regexp.MustCompile(`^[A-Za-z0-9-]{16,80}$`).MatchString(input.RequestID) {
+		if input.Source != "" && input.Source != "debian-backports" || e != nil || len(digest) != 32 || !regexp.MustCompile(`^[A-Za-z0-9-]{16,80}$`).MatchString(input.RequestID) {
 			writeError(w, 400, "invalid installation plan or request identity")
 			return
 		}
-		command.PlanID, command.RequestID = input.PlanID, input.RequestID
+		command.PlanID, command.RequestID, command.Source = input.PlanID, input.RequestID, input.Source
 		kind = protocol.OpAgentIsolationInstall
 		operation, err = a.store.QueueAgentIsolationInstall(r.Context(), id, command)
 	} else if planning {

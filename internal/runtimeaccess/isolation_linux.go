@@ -22,12 +22,13 @@ import (
 
 type PackageRunner func(context.Context, string, ...string) (string, error)
 
-// EnvironmentInstaller accepts only a plan fingerprint. The package allowlist
+// EnvironmentInstaller accepts a plan fingerprint and an explicit source approval. The package allowlist
 // and exact candidate versions are derived again on the target host.
 type EnvironmentInstaller struct {
-	Root string
-	Run  PackageRunner
-	ABI  func() (int, error)
+	Root       string
+	Run        PackageRunner
+	ABI        func() (int, error)
+	aptOptions []string
 }
 
 func packageRun(ctx context.Context, name string, args ...string) (string, error) {
@@ -70,7 +71,13 @@ func (e EnvironmentInstaller) defaults() EnvironmentInstaller {
 }
 
 func (e EnvironmentInstaller) candidate(ctx context.Context, name string) (protocol.IsolationPackage, bool) {
-	output, err := e.Run(ctx, "apt-cache", "policy", name)
+	args := []string{"policy", name}
+	if len(e.aptOptions) > 0 {
+		// Backports intentionally has a lower default priority than stable.
+		// Select its candidate explicitly, without changing system-wide pins.
+		args = append([]string{"-o", "APT::Default-Release=trixie-backports"}, args...)
+	}
+	output, err := e.apt(ctx, "apt-cache", args...)
 	if err != nil {
 		return protocol.IsolationPackage{}, false
 	}
@@ -92,7 +99,7 @@ func (e EnvironmentInstaller) candidate(ctx context.Context, name string) (proto
 
 func (e EnvironmentInstaller) Plan(ctx context.Context, revision string) protocol.IsolationEnvironment {
 	e = e.defaults()
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 150*time.Second)
 	defer cancel()
 	p := protocol.IsolationEnvironment{State: "blocked", Packages: []protocol.IsolationPackage{}, Checks: []protocol.IsolationCheck{}}
 	abi, abiErr := e.ABI()
@@ -156,17 +163,37 @@ func (e EnvironmentInstaller) Plan(ctx context.Context, revision string) protoco
 			kernelAdded := false
 			running, runningErr := e.Run(ctx, "uname", "-r")
 			for _, name := range names {
-				if pkg, ok := e.candidate(ctx, name); ok && runningErr == nil && newerRelease(pkg.Version, strings.TrimSpace(running)) {
+				if pkg, ok := e.candidate(ctx, name); ok && runningErr == nil && kernelHasRequiredFeatures(pkg.Version) && newerRelease(pkg.Version, strings.TrimSpace(running)) {
 					p.Packages = append(p.Packages, pkg)
 					p.RequiresReboot = true
 					kernelAdded = true
 					break
 				}
 			}
+			if !kernelAdded && distro == "debian" && version == "13" && len(names) > 0 && runningErr == nil {
+				catalog, cleanup, err := e.backportsCatalog(ctx)
+				if err != nil {
+					p.Error = err.Error()
+				} else {
+					defer cleanup()
+					if pkg, ok := catalog.candidate(ctx, names[0]); ok && kernelHasRequiredFeatures(pkg.Version) && newerRelease(pkg.Version, strings.TrimSpace(running)) {
+						p.Source = debianBackports
+						p.Packages = append(p.Packages, pkg)
+						p.RequiresReboot, kernelAdded = true, true
+						args := []string{"--simulate", "--no-remove", "--no-install-recommends", "install"}
+						for _, item := range p.Packages {
+							args = append(args, item.Name+"="+item.Version)
+						}
+						if output, err := catalog.apt(ctx, "apt-get", args...); err != nil {
+							p.Error = "Installation dependency check failed: " + packageFailure(output)
+						}
+					}
+				}
+			}
 			if !kernelAdded {
 				if e.newerKernelInstalled(ctx) {
 					p.RequiresReboot = true
-				} else {
+				} else if p.Error == "" {
 					p.Error = "No newer distribution kernel is available in the configured repositories. A distribution/kernel upgrade is required for Landlock ABI 9; installing bubblewrap alone will not enable isolation."
 				}
 			}
@@ -200,11 +227,18 @@ func (e EnvironmentInstaller) newerKernelInstalled(ctx context.Context) bool {
 			continue
 		}
 		candidate := strings.TrimPrefix(entry.Name(), "vmlinuz-")
-		if newerRelease(candidate, current) {
+		if kernelHasRequiredFeatures(candidate) && newerRelease(candidate, current) {
 			return true
 		}
 	}
 	return false
+}
+
+// Upstream 7.1 introduced pathname socket resolution controls (ABI 9).
+// This filters known-insufficient upgrade candidates; only syscall probes can
+// establish actual support after a reboot (vendor configurations may differ).
+func kernelHasRequiredFeatures(version string) bool {
+	return version == "7.1" || version == "7.1.0" || newerRelease(version, "7.1.0")
 }
 
 func newerRelease(candidate, current string) bool {
@@ -250,7 +284,7 @@ func fingerprint(p protocol.IsolationEnvironment, revision string) protocol.Isol
 	return p
 }
 
-func (e EnvironmentInstaller) Install(ctx context.Context, revision, planID string) (result protocol.IsolationEnvironment) {
+func (e EnvironmentInstaller) Install(ctx context.Context, revision, planID string, approvedSource ...string) (result protocol.IsolationEnvironment) {
 	defer func() {
 		if result.State == "failed" {
 			result.CanInstall = false
@@ -265,16 +299,38 @@ func (e EnvironmentInstaller) Install(ctx context.Context, revision, planID stri
 		p.Error = "The installation plan changed or cannot be installed. Check the environment and confirm the new plan."
 		return p
 	}
+	source := ""
+	if len(approvedSource) == 1 {
+		source = approvedSource[0]
+	}
+	if len(approvedSource) > 1 || source != p.Source {
+		p.State, p.Error = "failed", "The repository source must be explicitly confirmed with the installation plan."
+		return p
+	}
+	if p.Source == debianBackports {
+		catalog, cleanup, err := e.backportsCatalog(ctx)
+		if err != nil {
+			p.State, p.Error = "failed", err.Error()
+			return p
+		}
+		defer cleanup()
+		e.aptOptions = catalog.aptOptions
+	}
 	logs := []string{"Installation confirmed; existing isolation and sudo settings are unchanged."}
-	// Update metadata only after confirmation. A changed candidate requires a
+	if p.Source == debianBackports {
+		logs = append(logs, "Using signed Debian trixie-backports in a temporary catalog; permanent repository configuration is unchanged.")
+	}
+	// Refresh the selected catalog after confirmation. A changed candidate requires a
 	// new confirmation, rather than silently installing a different kernel.
-	if output, err := e.Run(ctx, "apt-get", "-o", "DPkg::Lock::Timeout=60", "update"); err != nil {
+	if output, err := e.apt(ctx, "apt-get", "-o", "DPkg::Lock::Timeout=60", "update"); err != nil {
 		p.State = "failed"
 		p.Error = packageFailure(output)
 		p.Logs = append(logs, "Repository refresh failed.")
 		return p
 	}
-	fresh := e.Plan(ctx, revision)
+	planner := e
+	planner.aptOptions = nil
+	fresh := planner.Plan(ctx, revision)
 	if fresh.PlanID != planID {
 		fresh.State = "failed"
 		fresh.Error = "Repository candidates changed. Confirm the refreshed installation plan."
@@ -285,7 +341,7 @@ func (e EnvironmentInstaller) Install(ctx context.Context, revision, planID stri
 	for _, pkg := range p.Packages {
 		args = append(args, pkg.Name+"="+pkg.Version)
 	}
-	output, err := e.Run(ctx, "apt-get", args...)
+	output, err := e.apt(ctx, "apt-get", args...)
 	if err != nil {
 		p.State = "failed"
 		p.Error = packageFailure(output)
@@ -321,8 +377,15 @@ func packageFailure(output string) string {
 		{"lock", "The package manager is busy. Retry after other package operations finish."},
 		{"No space left", "Insufficient disk space for installation."},
 		{"not signed", "Repository signature verification failed."},
+		{"NO_PUBKEY", "Repository signature verification failed: the required archive key is unavailable."},
+		{"signature", "Repository signature verification failed."},
+		{"Certificate verification failed", "The repository HTTPS certificate could not be verified."},
+		{"timed out", "Repository access timed out. Check connectivity and retry the environment check."},
 		{"404", "The package candidate could not be downloaded. Refresh the installation plan."},
-		{"resolve", "The repository hostname could not be resolved."},
+		{"Could not resolve", "The repository hostname could not be resolved."},
+		{"Temporary failure resolving", "The repository hostname could not be resolved."},
+		{"unmet dependencies", "Package dependencies cannot be resolved with this installation source."},
+		{"held broken packages", "Package dependencies cannot be resolved with this installation source."},
 	} {
 		if strings.Contains(output, item.needle) {
 			return item.message

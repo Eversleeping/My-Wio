@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { servers, type AgentAccessSettings, type IsolationEnvironment } from "../data/servers";
 import { useI18n } from "../i18n";
 
-type Pending = {plan_id:string;request_id:string;operation_id?:string};
+type Pending = {plan_id:string;request_id:string;source?:"debian-backports";operation_id?:string};
 
 export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:string;disabled:boolean;onChecked:(settings:AgentAccessSettings)=>void;onBusy?:(busy:boolean)=>void}) {
  const {language}=useI18n();
@@ -33,7 +33,7 @@ export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:str
   setBusy(true);setError("");
   try {
    if(!saved.operation_id) {
-    const response=await servers.isolationInstall(id,saved.plan_id,saved.request_id);
+    const response=await servers.isolationInstall(id,saved.plan_id,saved.request_id,saved.source);
     saved={...saved,operation_id:response.operation_id};
     localStorage.setItem(key,JSON.stringify(saved));
     if(generation.current!==run)return;
@@ -61,7 +61,7 @@ export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:str
  }
  function install() {
   if(!plan?.can_install||!confirming)return;
-  const saved={plan_id:plan.plan_id,request_id:crypto.randomUUID()};
+  const saved={plan_id:plan.plan_id,request_id:crypto.randomUUID(),...(plan.source?{source:plan.source}: {})};
   // Save before sending: a lost response or navigation must query/retry the
   // same confirmed request rather than queue a second package installation.
   try { localStorage.setItem(key,JSON.stringify(saved)); }
@@ -83,7 +83,7 @@ export function IsolationEnvironmentSetup({id,disabled,onChecked,onBusy}:{id:str
    <p role="status">{stateText[plan.state]||plan.state}</p>
    <ul>{plan.checks.map(check=><li key={check.id}>{check.ok?"✓ ":"✗ "}{check.id==="agent_boundary"?text("Agent 完整隔离检查","Full Agent isolation check"):check.id==="landlock"?text("内核隔离能力","Kernel isolation support"):text("隔离工具","Isolation tools")}{check.detail&&`: ${check.detail}`}</li>)}</ul>
    {plan.error&&<p role="alert">{plan.error}</p>}
-   {plan.packages.length>0&&<><p>{text("安装方案使用服务器现有软件源：","Installation uses the server's configured repositories:")}</p><ul>{plan.packages.map(pkg=><li key={pkg.name}>{pkg.name} {pkg.version}</li>)}</ul></>}
+   {plan.packages.length>0&&<><p>{plan.source==="debian-backports"?text("安装来源：Debian 官方 trixie-backports（https://deb.debian.org/debian）。使用系统 Debian 签名密钥校验，内核及必要依赖可来自该源；临时读取软件源，永久软件源配置不变。","Source: official Debian trixie-backports (https://deb.debian.org/debian). Verified with the system Debian archive keyring using a temporary catalog. The kernel and required dependencies may come from this source; permanent repositories remain unchanged."):text("安装方案使用服务器现有软件源：","Installation uses the server's configured repositories:")}</p><ul>{plan.packages.map(pkg=><li key={pkg.name}>{pkg.name} {pkg.version}</li>)}</ul></>}
    {plan.requires_reboot&&plan.can_install&&<p>{text("包含内核安装或更新，完成后需要重启整台服务器并重新验证，不能保证当前软件源的内核具备所需能力。不会自动重启。","Includes a kernel install or update. A server reboot and recheck are required; the repository's kernel may still lack the required features. The server will not restart automatically.")}</p>}
    {plan.can_install&&!pending&&!confirming&&<button className="primary-button" disabled={disabled||busy} onClick={()=>setConfirming(true)}>{text("安装缺失环境…","Install missing components…")}</button>}
    {confirming&&<div role="group" aria-label={text("确认安装隔离环境","Confirm isolation installation")}>

@@ -201,7 +201,7 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 	if r.Force && r.Action != "restart" {
 		return current, errors.New("only an explicit Agent restart may be forced")
 	}
-	if r.PlanID != "" && r.Action != "isolation-install" {
+	if (r.PlanID != "" || r.Source != "") && r.Action != "isolation-install" {
 		return current, errors.New("unexpected isolation installation plan")
 	}
 	if (r.Action == "isolation-plan" || r.Action == "isolation-install") && (r.Settings != nil || r.Revision != "" || r.Force || r.Action == "isolation-plan" && r.PlanID != "") {
@@ -252,7 +252,7 @@ func (h Helper) Handle(ctx context.Context, r Request) (protocol.AgentAccessSett
 		if h.Environment != nil {
 			env = *h.Environment
 		}
-		plan := env.Install(ctx, current.Revision, r.PlanID)
+		plan := env.Install(ctx, current.Revision, r.PlanID, r.Source)
 		current.IsolationEnvironment = &plan
 		return current, nil
 	}

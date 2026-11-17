@@ -147,7 +147,7 @@ func TestIsolationInstallRequiresCapabilityPlanAndStableRequest(t *testing.T) {
 	request := func(input any) *httptest.ResponseRecorder {
 		return directServerJSONRequest(t, http.MethodPost, "/api/servers/"+server.ID+"/isolation/environment/install", server.ID, input, user, a.agentAccess)
 	}
-	input := map[string]any{"plan_id": strings.Repeat("b", 64), "request_id": "11111111-1111-4111-8111-111111111111"}
+	input := map[string]any{"plan_id": strings.Repeat("b", 64), "request_id": "11111111-1111-4111-8111-111111111111", "source": "debian-backports"}
 	if w := request(input); w.Code != 409 {
 		t.Fatalf("missing capability accepted: %d", w.Code)
 	}
@@ -157,6 +157,9 @@ func TestIsolationInstallRequiresCapabilityPlanAndStableRequest(t *testing.T) {
 	if w := request(map[string]string{"plan_id": "bad"}); w.Code != 400 {
 		t.Fatalf("unconfirmed plan accepted: %d", w.Code)
 	}
+	if w := request(map[string]string{"plan_id": strings.Repeat("b", 64), "request_id": "11111111-1111-4111-8111-111111111111", "source": "https://untrusted.invalid"}); w.Code != 400 {
+		t.Fatalf("arbitrary source accepted: %d", w.Code)
+	}
 	first := request(input)
 	second := request(input)
 	if first.Code != 202 || second.Code != 202 || first.Body.String() != second.Body.String() {
@@ -165,5 +168,9 @@ func TestIsolationInstallRequiresCapabilityPlanAndStableRequest(t *testing.T) {
 	ops, err := db.PendingOperations(ctx, server.ID)
 	if err != nil || len(ops) != 1 || ops[0].Kind != protocol.OpAgentIsolationInstall {
 		t.Fatalf("unexpected install operations: %+v %v", ops, err)
+	}
+	var command protocol.AgentAccessCommand
+	if json.Unmarshal([]byte(ops[0].Payload), &command) != nil || command.Source != "debian-backports" {
+		t.Fatalf("source confirmation lost: %+v", command)
 	}
 }

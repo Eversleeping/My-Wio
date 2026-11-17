@@ -116,6 +116,10 @@ func (c *Client) dockerRuntimeAccess(ctx context.Context, r runtimeaccess.Reques
 	// container PID namespace makes sd-bus authentication fail with ENODATA.
 	network, pids := "none", "32"
 	var extraCaps []string
+	if r.Action == "isolation-plan" {
+		network = "host"
+		extraCaps = []string{"--tmpfs", "/host/tmp:rw,noexec,nosuid,nodev,mode=1777,size=512m"}
+	}
 	if r.Action == "isolation-install" {
 		network, pids = "host", "256"
 		extraCaps = []string{"--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "FSETID"}
@@ -152,7 +156,7 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 	installing := envelope.Kind == protocol.OpAgentIsolationInstall
 	planning := envelope.Kind == protocol.OpAgentIsolationPlan
 	if installing || planning {
-		if command.Settings != nil || planning && (command.PlanID != "" || command.RequestID != "") || installing && (len(command.PlanID) != 64 || command.RequestID == "") {
+		if command.Settings != nil || planning && (command.PlanID != "" || command.RequestID != "" || command.Source != "") || installing && (len(command.PlanID) != 64 || command.RequestID == "") {
 			err = errors.New("invalid isolation environment command")
 			return
 		}
@@ -160,8 +164,9 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 		if installing {
 			request.Action = "isolation-install"
 			request.PlanID = command.PlanID
+			request.Source = command.Source
 		}
-	} else if command.PlanID != "" || command.RequestID != "" {
+	} else if command.PlanID != "" || command.RequestID != "" || command.Source != "" {
 		err = errors.New("unexpected isolation environment parameters")
 		return
 	}

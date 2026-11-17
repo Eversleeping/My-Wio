@@ -1,0 +1,14 @@
+{
+  "baseline": "0.3.37",
+  "direction": "operation",
+  "kind": "agent.isolation.install",
+  "source": [
+    "internal/protocol/agent_access.go"
+  ],
+  "payload": {
+    "server_id": "node",
+    "plan_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "source": "debian-backports"
+  }
+}

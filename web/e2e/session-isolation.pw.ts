@@ -103,3 +103,36 @@ test("configures server runtime access and global collaboration from Settings", 
  expect(writes.at(-1)).toEqual(expect.objectContaining({action:"install",plan_id:"b".repeat(64),request_id:expect.any(String)}));
  await expect(isolation).not.toBeChecked();
 });
+
+
+test("confirms the official backports kernel source and reports the server reboot requirement",async({page},testInfo)=>{
+ const writes:Record<string,unknown>[]=[];
+ const env={plan_id:"c".repeat(64),source:"debian-backports",state:"install_required",can_install:true,requires_reboot:true,packages:[{name:"linux-image-amd64",version:"7.2.12-1~bpo13+1"}],checks:[{id:"landlock",ok:false,detail:"Landlock ABI 7; required: 9+"}]};
+ let result=env;
+ await installMockApplication(page,{configured:true,onAPIRequest:request=>{
+  if(request.path==="/servers"&&request.method==="GET")return {body:[{id:"kernel-node",name:"Kernel node",hostname:"kernel.example.test",status:"online",agent_access_supported:true,agent_restart_supported:true,agent_isolation_setup_supported:true}]};
+  if(["/settings/gemini-cli","/settings/claude-cli"].includes(request.path))return {body:{target_version:"1.0.0",versions:["1.0.0"]}};
+  if(["/credential-profiles","/secret-sets","/scheduled-tasks"].includes(request.path)&&request.method==="GET")return {body:[]};
+  if(request.path==="/sessions"&&request.method==="GET")return {body:{items:[],has_more:false,next:null}};
+  if(request.path.endsWith("/access-settings/read"))return {status:202,body:{operation_id:"read"}};
+  if(request.path.endsWith("/isolation/environment/read"))return {status:202,body:{operation_id:"plan"}};
+  if(request.path.endsWith("/isolation/environment/install")){writes.push(JSON.parse(request.body||"{}"));result={...env,state:"reboot_required",can_install:false};return {status:202,body:{operation_id:"install"}};}
+  if(request.path.includes("/access-settings/operations/"))return {body:{status:"succeeded",settings:{allow_sudo:false,session_isolation:false,revision:"a".repeat(64),applied:true,restart_required:false,isolation_support:{supported:false,reason:"Landlock ABI 9 required"},...(request.path.endsWith("/read")?{}:{isolation_environment:result})}}};
+  return undefined;
+ }});
+ await page.goto("/?view=settings");
+ await page.getByRole("combobox",{name:"Select server",exact:true}).selectOption("kernel-node");
+ await page.getByRole("button",{name:"Check and install isolation environment",exact:true}).click();
+ await expect(page.getByText(/Source: official Debian trixie-backports/)).toBeVisible();
+ await expect(page.getByText("linux-image-amd64 7.2.12-1~bpo13+1",{exact:true})).toBeVisible();
+ await page.getByRole("button",{name:"Install missing components…",exact:true}).click();
+ await expect(page.getByText(/The server will not restart automatically/)).toBeVisible();
+ expect(writes).toEqual([]);
+ await page.getByRole("button",{name:"Confirm installation",exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:testInfo.outputPath("official-kernel-confirm.png")});
+ await page.getByRole("button",{name:"Confirm installation",exact:true}).click();
+ await expect(page.getByText(/Restarting the Agent does not load a new kernel/)).toBeVisible();
+ expect(writes).toEqual([{plan_id:env.plan_id,source:"debian-backports",request_id:expect.any(String)}]);
+ await expect(page.getByRole("checkbox",{name:/Enable session isolation/})).not.toBeChecked();
+ await expect(page.getByRole("checkbox",{name:/Enable session isolation/})).toBeDisabled();
+});

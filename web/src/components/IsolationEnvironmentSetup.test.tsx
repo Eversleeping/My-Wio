@@ -54,3 +54,28 @@ test("restores the saved operation result without queuing another installation",
  expect(String(fetch.mock.calls[0]?.[0])).toContain("saved-operation");
  expect(screen.queryByRole("button",{name:"Confirm installation"})).not.toBeInTheDocument();
 });
+
+test("shows the official kernel source and preserves its explicit approval across a lost response",async()=>{
+ const kernel: IsolationEnvironment={...plan,source:"debian-backports",requires_reboot:true,packages:[...plan.packages,{name:"linux-image-amd64",version:"7.2.12-1~bpo13+1"}]};
+ const writes:Record<string,unknown>[]=[];
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,options:RequestInit={})=>{
+  const path=String(input);
+  if(path.endsWith("/environment/read"))return new Response(JSON.stringify({operation_id:"plan"}));
+  if(path.endsWith("/environment/install")){writes.push(JSON.parse(String(options.body)));if(writes.length===1)throw Error("lost response");return new Response(JSON.stringify({operation_id:"kernel-install"}));}
+  return reply(path.endsWith("/kernel-install")?{...kernel,state:"reboot_required",can_install:false,logs:["Kernel package verified."]}:kernel);
+ }));
+ const view=mount();const user=userEvent.setup();
+ await user.click(screen.getByRole("button",{name:"Check and install isolation environment"}));
+ expect(await screen.findByText(/Source: official Debian trixie-backports/)).toBeInTheDocument();
+ expect(screen.getByText(/permanent repositories remain unchanged/)).toBeInTheDocument();
+ expect(screen.getByText("linux-image-amd64 7.2.12-1~bpo13+1")).toBeInTheDocument();
+ expect(screen.getByText(/The server will not restart automatically/)).toBeInTheDocument();
+ await user.click(screen.getByRole("button",{name:"Install missing components…"}));expect(writes).toEqual([]);
+ await user.click(screen.getByRole("button",{name:"Confirm installation"}));
+ await screen.findByText(/lost response/);
+ const saved=JSON.parse(localStorage.getItem("wio-isolation-install:node")||"{}");expect(saved.source).toBe("debian-backports");
+ view.unmount();mount();
+ expect(await screen.findByText(/Restarting the Agent does not load a new kernel/)).toBeInTheDocument();
+ expect(writes).toEqual([saved,saved]);
+ expect(screen.queryByText(/The full isolation check passed/)).not.toBeInTheDocument();
+});
