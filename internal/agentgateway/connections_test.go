@@ -145,6 +145,9 @@ func TestConnectNewestStreamSupersedesOldWithoutMarkingOffline(t *testing.T) {
 	defer newestCancel()
 	raw, _ := json.Marshal(protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")})
 	newest.incoming <- &protocol.AgentEnvelope{Kind: protocol.AgentKindHeartbeat, PayloadJSON: raw}
+	// A replacement is online only after its own heartbeat has been stored.
+	// Stream cleanup alone does not establish that precondition.
+	waitConnectionHeartbeat(t, g, server.ID)
 	// No cancellation from the client is needed: opening a replacement closes
 	// the superseded Connect even when its Recv is waiting forever.
 	select {
