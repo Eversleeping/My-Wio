@@ -143,7 +143,17 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 		if !waitForSent(resultSent, agentUpdateFlushTimeout) {
 			c.log.Warn("Agent update result was not sent before restart; it will be replayed after reconnect", "operation_id", envelope.OperationID)
 		}
-		if restartErr := activateStagedUpdate(c.config.StateDir, restartPath); restartErr != nil {
+		restartErr := error(nil)
+		if strings.HasPrefix(restartPath, runtimeAccessRestart+":") {
+			if !resultSaved {
+				restartErr = errors.New("runtime settings receipt was not persisted; refusing to restart")
+			} else {
+				restartErr = c.restartRuntimeAccess(parent, restartPath)
+			}
+		} else {
+			restartErr = activateStagedUpdate(c.config.StateDir, restartPath)
+		}
+		if restartErr != nil {
 			c.releaseAgentUpdate()
 			c.log.Error("could not restart into Agent update", "operation_id", envelope.OperationID, "error", restartErr)
 			failure := protocol.OperationResult{OperationID: envelope.OperationID, Status: "failed", Message: truncate(restartErr.Error(), 8192)}

@@ -39,6 +39,8 @@ func sessionInterruption(engine string, execute commandFunc) operationHandler {
 }
 
 var operationHandlers = map[string]operationHandler{
+	protocol.OpAgentAccessRead:            {run: (*Client).runRuntimeAccess},
+	protocol.OpAgentAccessUpdate:          {run: (*Client).runRuntimeAccess},
 	protocol.OpAgentUpdate:                {run: (*Client).runAgentUpdateOperation},
 	protocol.OpCLIInstall:                 commandOperation((*Client).executeCLIInstall),
 	protocol.OpClaudeCredentialsConfigure: commandOperation((*Client).executeClaudeCredentialsConfigure),

@@ -30,6 +30,7 @@ func SafeDuringAgentRestart(kind string) bool {
 // AgentRestartSafeKinds is shared by the Agent and the control plane so both
 // sides refuse an update for the same set of active operations.
 var AgentRestartSafeKinds = []string{
+	OpAgentAccessRead,
 	OpInventoryScan,
 	OpWorkspaceFiles,
 	OpWorkspaceFilePreview,

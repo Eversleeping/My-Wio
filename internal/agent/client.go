@@ -25,6 +25,7 @@ import (
 	"github.com/wio-platform/wio/internal/deployer"
 	"github.com/wio-platform/wio/internal/geminiadapter"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/runtimeaccess"
 	"github.com/wio-platform/wio/internal/session"
 	"github.com/wio-platform/wio/internal/sessionisolation"
 	"github.com/wio-platform/wio/internal/sessiontools"
@@ -33,6 +34,7 @@ import (
 const initialReconnectBackoff = time.Second
 
 type Client struct {
+	runtimeAccessCall  func(context.Context, runtimeaccess.Request) (protocol.AgentAccessSettings, error)
 	toolMu             sync.Mutex
 	toolReplies        map[string]chan sessiontools.Reply
 	config             Config

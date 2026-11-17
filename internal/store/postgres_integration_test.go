@@ -236,6 +236,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	t.Run("collaboration orphan cleanup", func(t *testing.T) { assertCollaborationOrphanCleanupOnPostgres(t, scans) })
 	t.Run("workspace session creation defaults", func(t *testing.T) { assertWorkspaceSessionDefaults(t, scans) })
 	t.Run("global collaboration settings", func(t *testing.T) { assertGlobalCollaborationCoversExistingAndNewSessions(t, scans) })
+	t.Run("runtime access restart locking", func(t *testing.T) { assertRuntimeAccessSerializesRestartAndBlocksMaintenance(t, scans) })
 	limited, err := OpenWithOptions(scanURL.String(), OpenOptions{PostgresMaxOpenConns: 2})
 	if err != nil {
 		t.Fatal(err)

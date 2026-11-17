@@ -6,6 +6,8 @@
 .question.cancelled
 .turn.rewrite
 .turn.start
+agent.access.read
+agent.access.update
 agent.update
 agent.updated
 agent_update_status

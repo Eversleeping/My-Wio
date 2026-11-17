@@ -1,0 +1,18 @@
+{
+  "baseline": "0.3.33",
+  "direction": "operation",
+  "kind": "agent.access.update",
+  "source": [
+    "internal/protocol/agent_access.go"
+  ],
+  "payload": {
+    "server_id": "node",
+    "settings": {
+      "allow_sudo": false,
+      "session_isolation": true,
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "applied": false,
+      "restart_required": true
+    }
+  }
+}

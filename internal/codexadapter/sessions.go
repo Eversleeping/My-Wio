@@ -378,3 +378,19 @@ func (p *Sessions) Close() error {
 	<-p.done
 	return nil
 }
+
+// HasActiveTurn is used before a system-service restart, including turns whose
+// initial dispatch receipt has already completed.
+func (p *Sessions) HasActiveTurn() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.shared.hasActiveTurn() {
+		return true
+	}
+	for _, s := range p.sessions {
+		if s.adapter.hasActiveTurn() {
+			return true
+		}
+	}
+	return false
+}

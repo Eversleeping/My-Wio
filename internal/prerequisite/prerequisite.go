@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/runtimeaccess"
 )
 
 const DefaultSocket = "/run/wio-prerequisites/helper.sock"
@@ -33,7 +34,8 @@ type Result struct {
 }
 
 type request struct {
-	Action string `json:"action"`
+	Action string                 `json:"action"`
+	Access *runtimeaccess.Request `json:"access,omitempty"`
 }
 
 type response struct {
@@ -199,6 +201,15 @@ func (c *coordinator) handle(ctx context.Context, connection net.Conn) {
 	_ = connection.SetDeadline(time.Now().Add(requestTimeout))
 	var input request
 	if err := json.NewDecoder(connection).Decode(&input); err != nil {
+		return
+	}
+	if input.Action == "runtime-access" && input.Access != nil {
+		settings, err := (runtimeaccess.Helper{Root: "/"}).Handle(ctx, *input.Access)
+		reply := runtimeaccess.Reply{Settings: settings}
+		if err != nil {
+			reply.Error = err.Error()
+		}
+		_ = json.NewEncoder(connection).Encode(reply)
 		return
 	}
 	reply := response{}

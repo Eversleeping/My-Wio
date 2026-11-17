@@ -3,6 +3,7 @@ package protocol
 // Capability names are wire contracts. Published names must never be renamed.
 // Unknown names are ignored by older control planes.
 const (
+	CapabilityAgentAccess          = "agent.access"
 	CapabilityAgentSelfUpdate      = "agent.self_update"
 	CapabilityCodexCLIUpdate       = "codex.cli_update"
 	CapabilityDeployRollbackExact  = "deploy.rollback_exact"

@@ -17,6 +17,7 @@ import (
 	"github.com/wio-platform/wio/internal/agent"
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/prerequisite"
+	"github.com/wio-platform/wio/internal/runtimeaccess"
 	"github.com/wio-platform/wio/internal/sandbox"
 	"github.com/wio-platform/wio/internal/sessionisolation"
 )
@@ -112,6 +113,13 @@ func run(log *slog.Logger, args []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 		return agent.NewClient(config, log).Run(ctx)
+	case "runtime-access-helper":
+		flags := flag.NewFlagSet("runtime-access-helper", flag.ContinueOnError)
+		hostRoot := flags.Bool("host-root", false, "use the fixed local host mount")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		return runtimeaccess.ServeOne(os.Stdin, os.Stdout, *hostRoot)
 	case "prerequisite-helper":
 		if runtime.GOOS != "linux" {
 			return errors.New("deployment prerequisite helper is supported only on Linux")

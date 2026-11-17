@@ -52,6 +52,7 @@ func claudeInteractive(_, claude string) bool {
 }
 
 var gates = []gate{
+	{protocol.CapabilityAgentAccess, nil},
 	{protocol.CapabilityAgentSelfUpdate, nil},
 	{protocol.CapabilityCodexCLIUpdate, nil},
 	{protocol.CapabilityDeployRollbackExact, nil},

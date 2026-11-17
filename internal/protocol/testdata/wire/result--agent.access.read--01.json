@@ -1,0 +1,15 @@
+{
+  "baseline": "0.3.33",
+  "direction": "result",
+  "kind": "agent.access.read",
+  "source": [
+    "internal/protocol/agent_access.go"
+  ],
+  "payload": {
+    "allow_sudo": false,
+    "session_isolation": true,
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "applied": false,
+    "restart_required": true
+  }
+}

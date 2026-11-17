@@ -57,6 +57,7 @@ type Server struct {
 	CodexTargetVersion         string              `db:"-" json:"codex_target_version"`
 	CodexUpdateAvailable       bool                `db:"-" json:"codex_update_available"`
 	CodexUpdateSupported       bool                `db:"-" json:"codex_update_supported"`
+	AgentAccessSupported       bool                `db:"-" json:"agent_access_supported"`
 	CLIManagementSupported     bool                `db:"-" json:"cli_management_supported"`
 	ExactRollbackSupported     bool                `db:"-" json:"exact_rollback_supported"`
 	ScopedCredentialsSupported bool                `db:"-" json:"scoped_credentials_supported"`

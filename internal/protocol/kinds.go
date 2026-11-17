@@ -31,6 +31,8 @@ const (
 
 // Operation kinds.
 const (
+	OpAgentAccessRead            = "agent.access.read"
+	OpAgentAccessUpdate          = "agent.access.update"
 	OpAgentUpdate                = "agent.update"
 	OpClaudeCredentialsConfigure = "claude.credentials.configure"
 	OpClaudeQuestionAnswer       = "claude.question.answer"

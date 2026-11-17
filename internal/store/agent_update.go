@@ -54,6 +54,12 @@ func (s *Store) agentUpdateBlockingOperations(ctx context.Context, query sqlx.Qu
 // Share the server lock with Gemini turns and CLI maintenance so checking for
 // active work and queuing a restart cannot race a newly queued Gemini task.
 func (s *Store) QueueAgentUpdate(ctx context.Context, serverID string, command protocol.AgentUpdateCommand) (string, error) {
+	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentUpdate, command, "agent-update:")
+}
+func (s *Store) QueueAgentAccessUpdate(ctx context.Context, serverID string, command protocol.AgentAccessCommand) (string, error) {
+	return s.queueAgentRestart(ctx, serverID, protocol.OpAgentAccessUpdate, command, "agent-access-update:")
+}
+func (s *Store) queueAgentRestart(ctx context.Context, serverID, kind string, command any, keyPrefix string) (string, error) {
 	tx, err := s.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -87,7 +93,7 @@ func (s *Store) QueueAgentUpdate(ctx context.Context, serverID string, command p
 		return "", err
 	}
 	id := NewID()
-	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,'agent.update',?,?,?)"), id, serverID, string(payload), "agent-update:"+serverID+":"+id, time.Now().UTC())
+	_, err = tx.ExecContext(ctx, s.Q("INSERT INTO agent_operations(id,server_id,kind,payload,idempotency_key,created_at) VALUES(?,?,?,?,?,?)"), id, serverID, kind, string(payload), keyPrefix+serverID+":"+id, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}
