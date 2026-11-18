@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { runTaskWorkflow } from "./task-workflow";
 
 // Every request reaches the compiled control plane; no route interception or
 // direct database setup is used. Only the external model CLIs are substitutes.
-test("setup, login, built-in Agent and three engine replies", async ({ page }) => {
+test("three engine sessions and task review through the real control plane", async ({ page }) => {
+  test.setTimeout(240_000);
   const baseURL = process.env.WIO_E2E_URL!;
   await page.addInitScript(() => localStorage.setItem("wio_language", "en"));
   await page.goto(baseURL);
@@ -58,4 +60,5 @@ test("setup, login, built-in Agent and three engine replies", async ({ page }) =
       await expect(page.locator("article.message.assistant").getByText(`P0-07 fake ${engine} reply`, { exact: true })).toBeVisible();
     });
   }
+  await runTaskWorkflow(page, baseURL, headers);
 });

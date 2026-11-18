@@ -21,6 +21,10 @@ stream cancellation issue.
 
 The browser creates an administrator, signs in, sees the built-in server online,
 then creates a session and checks a visible reply for Codex, Claude and Gemini.
+It also runs a three-engine task, captures an uncommitted artifact, reproduces it
+in an independent Git worktree, records a rejected review, and verifies the
+rework, second review and user acceptance. The final task graph, artifacts and
+session links are opened at desktop and mobile viewport sizes.
 All HTTP and WebSocket traffic reaches the real control plane. The engine
 executables are substitutes; this does not validate paid models or real CLI
 compatibility. Teardown sends SIGTERM, waits for a clean exit and removes the

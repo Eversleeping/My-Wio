@@ -17,6 +17,7 @@ Wio 是面向小规模 Linux 服务器集群的个人自托管控制平台。通
 | 文档 | 内容 |
 | --- | --- |
 | [用户手册](docs/USER_GUIDE.md) | 首次配置、日常操作、三种 AI 会话、协作、定时任务、部署和故障处理 |
+| [任务编排](docs/TASKS.md) | 计划、执行授权、成果交接、审查返工和故障恢复 |
 | [生产部署](docs/PRODUCTION_DEPLOYMENT.md) | PostgreSQL、TLS、独立 / 宿主机 Caddy、目录挂载、升级与验收 |
 | [运维参考](docs/OPERATIONS.md) | 操作中断、连接与扫描排查、数据保留策略 |
 | [Claude 接入](docs/CLAUDE.md) / [Gemini 接入](docs/GEMINI.md) | CLI 认证、兼容版本和运行限制 |
@@ -26,7 +27,7 @@ Wio 是面向小规模 Linux 服务器集群的个人自托管控制平台。通
 
 本文与用户手册按当前仓库实现维护；当前 Wio 版本见 [internal/buildinfo/version.go](internal/buildinfo/version.go)。功能是否开放还取决于目标 Agent 和实际 CLI 的版本，不能仅根据控制面版本判断。
 
-规划方向（2026-11-14 已确认）：以 Wio 为主，参考 OpenTeams 的设计，在现有 Go/React 技术栈中补齐任务、依赖调度、团队协作、版本化成果和审查返工。具体步骤见 [P7 任务编排与团队协作](docs/roadmap/P7-task-orchestration.md)。这是待实现计划，不代表当前版本已提供任务 DAG、动态改计划或自动验收；现有会话协作的能力与边界见下文及协作协议。
+任务编排复用现有会话和 Agent，支持依赖调度、成果交接、审查返工及用户验收。启用任务成员工具后，协调成员可提出计划草案，由用户确认新版计划。设计和验收进度见 [P7 任务编排与团队协作](docs/roadmap/P7-task-orchestration.md)。
 
 ## 主要能力
 

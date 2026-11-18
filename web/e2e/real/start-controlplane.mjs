@@ -80,6 +80,8 @@ export default async function startControlplane() {
     });
     execFileSync("git", ["init", "--initial-branch=main", workspace], { env, stdio: "pipe" });
     writeFileSync(join(workspace, "README.md"), "Browser smoke workspace\n");
+    execFileSync("git", ["-C", workspace, "add", "README.md"], { env, stdio: "pipe" });
+    execFileSync("git", ["-C", workspace, "-c", "user.name=Wio Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Fixture baseline"], { env, stdio: "pipe" });
     child = spawn(join(bin, "controlplane"), [], { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     exited = new Promise((resolve, reject) => {
       child.once("error", reject);
