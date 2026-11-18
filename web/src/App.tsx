@@ -1,5 +1,5 @@
 import { DataProvider, clearResourceMemory } from "./data/resources";
-import { lazy, useMemo, useState, useCallback, useEffect, Suspense } from "react";
+import { lazy, useMemo, useState, useCallback, useEffect, Suspense, type MouseEvent } from "react";
 import { useI18n } from "./i18n";
 import { readLocationState, isEngine, type View, navigateToLocation, navigation, tasksLocation, type TaskLocation } from "./navigation";
 import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
@@ -100,22 +100,37 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  useEffect(() => {
-    const onPopState = () => {
-      const location = readLocationState();
-      setView(location.view);
-      setSessionThreadID(location.threadID);
-      setSessionEngine(location.engine);
-      setSessionEntry(location.entry);
-      setTaskLocation(location.task ?? {});
-      setInitialFilter(location.initialFilter ? {engine:location.initialFilter} : undefined);
-      if (isEngine(new URLSearchParams(window.location.search).get("view"))) navigateToLocation(location.view, location.threadID, true, location.engine);
-      setMobileNav(false);
-    };
-    if (isEngine(new URLSearchParams(window.location.search).get("view"))) navigateToLocation(initialLocation.view, initialLocation.threadID, true, initialLocation.engine);
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+  const restoreLocation = useCallback(() => {
+    const location = readLocationState();
+    setView(location.view);
+    setSessionThreadID(location.threadID);
+    setSessionEngine(location.engine);
+    setSessionEntry(location.entry);
+    setTaskLocation(location.task ?? {});
+    setInitialFilter(location.initialFilter ? { engine: location.initialFilter } : undefined);
+    if (isEngine(new URLSearchParams(window.location.search).get("view"))) {
+      navigateToLocation(location.view, location.threadID, true, location.engine);
+    }
+    setMobileNav(false);
   }, []);
+  useEffect(() => {
+    if (isEngine(new URLSearchParams(window.location.search).get("view"))) restoreLocation();
+    window.addEventListener("popstate", restoreLocation);
+    return () => window.removeEventListener("popstate", restoreLocation);
+  }, [restoreLocation]);
+  const followConsoleLink = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || !(event.target instanceof Element)) return;
+    const link = event.target.closest<HTMLAnchorElement>("a[href]");
+    if (!link || (link.target && link.target !== "_self") || link.hasAttribute("download")) return;
+    const url = new URL(link.href);
+    if (url.origin !== window.location.origin || url.pathname !== window.location.pathname || !url.searchParams.has("view")) return;
+    const view = url.searchParams.get("view");
+    if (!isEngine(view) && !navigation.some(item => item.id === view)) return;
+    event.preventDefault();
+    if (url.href === window.location.href) return;
+    window.history.pushState(null, "", url);
+    restoreLocation();
+  };
 
   if (auth === "loading") return <LoadingScreen />;
   if (auth === "setup") return <SetupScreen onReady={mode => { setAuthMode(mode); setAuth("login"); }} />;
@@ -140,6 +155,7 @@ export default function App() {
     navigateToLocation(next, nextThreadID, replace);
   };
   const selectSession = (ref: import("./sessions/types").SessionRef | null, replace = false) => {
+    setSessionEntry(undefined);
     setView("sessions"); setSessionThreadID(ref?.id ?? ""); setSessionEngine(ref?.engine); setMobileNav(false);
     navigateToLocation("sessions", ref?.id ?? "", replace, ref?.engine);
   };
@@ -154,7 +170,7 @@ export default function App() {
     dashboard: <Suspense fallback={<PageLoading />}><DashboardPage onNavigate={selectView} /></Suspense>,
     servers: <ServersPage notify={setToast} />,
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute notify={setToast} /></Suspense>,
-    sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage entry={sessionEntry} onEntryConsumed={() => navigateToLocation("sessions", sessionThreadID, true, sessionEngine)} initialFilter={initialFilter} realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && sessionThreadID ? { engine: sessionEngine, id: sessionThreadID } : undefined} onSelect={selectSession} /></Suspense>,
+    sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage entry={sessionEntry} onEntryConsumed={() => { setSessionEntry(undefined); navigateToLocation("sessions", sessionThreadID, true, sessionEngine); }} initialFilter={initialFilter} realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && sessionThreadID ? { engine: sessionEngine, id: sessionThreadID } : undefined} onSelect={selectSession} /></Suspense>,
     tasks: <Suspense fallback={<PageLoading />}><TasksPage location={taskLocation} onNavigate={selectTask} connected={socketConnected} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><LogsPageRoute /></Suspense>,
@@ -163,7 +179,7 @@ export default function App() {
   }[view];
 
   return (
-    <div className={`app-shell ${view === "sessions" ? "agent-shell" : ""}`}>
+    <div className={`app-shell ${view === "sessions" ? "agent-shell" : ""}`} onClick={followConsoleLink}>
       <aside className={`sidebar ${mobileNav ? "open" : ""}`}>
         <div className="brand"><span className="brand-mark">W</span><span>{t("app.name")}</span></div>
         <nav aria-label={t("nav.primary")}>

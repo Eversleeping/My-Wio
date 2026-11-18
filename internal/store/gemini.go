@@ -57,7 +57,7 @@ type GeminiThread struct {
 	ServerStatus              string               `db:"server_status" json:"server_status"`
 }
 
-const geminiThreadSelect = `SELECT t.*,` + geminiCredentialRevision + ` AS credential_revision,CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending,s.agent_version,` + serverCapabilitySelect + `,` + geminiEngineVersion + ` AS gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
+const geminiThreadSelect = `SELECT t.*,` + geminiCredentialRevision + ` AS credential_revision,` + nativeSessionRecovery + ` AS recovery_pending,s.agent_version,` + serverCapabilitySelect + `,` + geminiEngineVersion + ` AS gemini_version,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,w.server_id,s.name AS server_name,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status
  FROM gemini_threads t JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN ` + geminiEngineBinding + ` gcp ON gcp.server_id=s.id` + projectServerJoin
 
 // Check running turns and deliveries whose start acknowledgement may have been
@@ -475,47 +475,20 @@ func (s *Store) DeleteGeminiThread(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	count, err := result.RowsAffected()
-	if err != nil {
+	if err := s.sessionMutationResult(ctx, tx, "gemini_threads", id, result); err != nil {
 		return err
-	}
-	if count != 1 {
-		return ErrThreadActive
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM scheduled_tasks WHERE engine='gemini' AND thread_id=?"), id); err != nil {
 		return err
 	}
-	key := "gemini:" + id
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_links WHERE target_key=?"), key); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=?"), id); err != nil {
+	if err := s.clearDeletedSessionRecords(ctx, tx, "gemini", id); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) UpdateGeminiThread(ctx context.Context, id, title string, archived bool) error {
-	var at *time.Time
-	if archived {
-		now := time.Now().UTC()
-		at = &now
-	}
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE gemini_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='gemini' AND b.session_id=gemini_threads.id AND b.released_at IS NULL) AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))"), title, at, time.Now().UTC(), id)
-	if err != nil {
-		return err
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if count != 1 {
-		return ErrThreadActive
-	}
-	return nil
+	return s.UpdateNativeSessionMetadata(ctx, session.Ref{Engine: session.Gemini, ID: id}, &title, &archived, nil)
 }
 
 // CompleteGeminiTurn only accepts the currently claimed operation. Late results

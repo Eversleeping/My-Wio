@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/taskartifact"
 )
+
+// ErrArtifactHandoffUnknown indicates that a failed apply could not be
+// verified as restored. The control plane must reserve the worktree.
+var ErrArtifactHandoffUnknown = errors.New("artifact handoff could not be safely restored")
 
 type artifactContent struct {
 	mode string
@@ -83,7 +87,7 @@ func CaptureTaskArtifact(ctx context.Context, root string, paths []string) (prot
 				return manifest, errors.New("artifact cannot capture an ignored file")
 			}
 		}
-		after, err := artifactWorkingFile(root, name)
+		after, err := artifactWorkingFile(root, name, false)
 		if err != nil {
 			return manifest, err
 		}
@@ -102,7 +106,7 @@ func CaptureTaskArtifact(ctx context.Context, root string, paths []string) (prot
 		return manifest, errors.New("Git baseline changed while capturing artifact")
 	}
 	for _, selected := range manifest.Files {
-		current, err := artifactWorkingFile(root, selected.Path)
+		current, err := artifactWorkingFile(root, selected.Path, false)
 		if err != nil || current.hash() != selected.AfterHash || current.mode != selected.AfterMode {
 			return manifest, errors.New("a selected file changed while capturing artifact")
 		}
@@ -136,6 +140,16 @@ func HandoffTaskArtifact(ctx context.Context, root string, command protocol.Task
 	if command.Action != "apply" && command.Action != "preflight" && command.Action != "verify" {
 		return errors.New("invalid artifact handoff action")
 	}
+	if command.MetadataOnly {
+		if command.Action != "verify" || command.Previous != nil {
+			return errors.New("metadata-only artifacts can only verify a prepared worktree")
+		}
+		manifest, err := readPreparedArtifact(root, command.Manifest)
+		if err != nil {
+			return err
+		}
+		command.Manifest = manifest
+	}
 	digest, err := taskartifact.Validate(command.Manifest)
 	if err != nil || digest != command.Digest {
 		return errors.New("artifact digest does not match")
@@ -147,6 +161,11 @@ func HandoffTaskArtifact(ctx context.Context, root string, command protocol.Task
 	dirty, err := taskArtifactStatus(ctx, root)
 	if err != nil {
 		return err
+	}
+	// A clean target is at its Git baseline, even if the control plane has
+	// evidence of an older handoff which was subsequently cleaned.
+	if len(dirty) == 0 {
+		command.Previous = nil
 	}
 	files, old, err := artifactTransition(ctx, root, command)
 	if err != nil {
@@ -167,11 +186,11 @@ func HandoffTaskArtifact(ctx context.Context, root string, command protocol.Task
 		replay = replay && allowedAfter[name]
 	}
 	for i, file := range files {
-		current, err := artifactWorkingFile(root, file.Path)
+		current, err := artifactWorkingFile(root, file.Path, artifactPathOverlap(files, file.Path))
 		if err != nil {
 			return err
 		}
-		before = before && current.mode == old[i].mode && current.hash() == old[i].hash()
+		before = before && sameArtifactContent(current, old[i])
 		replay = replay && current.mode == file.AfterMode && current.hash() == file.AfterHash
 	}
 	if replay && command.Action != "preflight" {
@@ -208,16 +227,105 @@ func HandoffTaskArtifact(ctx context.Context, root string, command protocol.Task
 	if err != nil || head != base {
 		return errors.New("target Git baseline changed before applying")
 	}
-	if _, err := RunInspect(ctx, root, "apply", "--whitespace=nowarn", "--", patch); err != nil {
-		return errors.New("Git could not apply the artifact")
+	_, applyErr := RunInspect(ctx, root, "apply", "--whitespace=nowarn", "--", patch)
+	if applyErr == nil {
+		applyErr = verifyArtifactTransition(root, files)
+		if applyErr == nil {
+			return nil
+		}
 	}
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := restoreArtifactTransition(restoreCtx, root, base, files, old); err != nil {
+		return ErrArtifactHandoffUnknown
+	}
+	return errors.New("Git could not apply and verify the artifact; the prior contents were restored")
+}
+
+// Reconstruct the original manifest from the worktree. The digest
+// still covers the contents, and paths are checked before opening any file.
+func readPreparedArtifact(root string, manifest protocol.ArtifactManifest) (protocol.ArtifactManifest, error) {
+	paths := make([]string, 0, len(manifest.Files))
+	for _, file := range manifest.Files {
+		paths = append(paths, file.Path)
+	}
+	if err := taskartifact.Paths(paths); err != nil {
+		return manifest, err
+	}
+	manifest.Files = append([]protocol.ArtifactFile(nil), manifest.Files...)
+	size := 0
+	for i, file := range manifest.Files {
+		current, err := artifactWorkingFile(root, file.Path, false)
+		if err != nil || current.mode != file.AfterMode || current.hash() != file.AfterHash {
+			return manifest, errors.New("target workspace no longer matches the prepared artifact")
+		}
+		size += len(current.data)
+		if size > protocol.MaxArtifactBytes {
+			return manifest, errors.New("prepared artifact exceeds the size limit")
+		}
+		manifest.Files[i].Content = current.data
+	}
+	return manifest, nil
+}
+
+func sameArtifactContent(left, right artifactContent) bool {
+	return left.mode == right.mode && left.hash() == right.hash()
+}
+
+func artifactPathOverlap(files []protocol.ArtifactFile, path string) bool {
 	for _, file := range files {
-		actual, err := artifactWorkingFile(root, file.Path)
+		if strings.HasPrefix(file.Path, path+"/") || strings.HasPrefix(path, file.Path+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyArtifactTransition(root string, files []protocol.ArtifactFile) error {
+	for _, file := range files {
+		actual, err := artifactWorkingFile(root, file.Path, artifactPathOverlap(files, file.Path))
 		if err != nil || actual.mode != file.AfterMode || actual.hash() != file.AfterHash {
-			return fmt.Errorf("applied artifact does not match its manifest")
+			return errors.New("applied artifact does not match its manifest")
 		}
 	}
 	return nil
+}
+
+func restoreArtifactTransition(ctx context.Context, root, base string, files []protocol.ArtifactFile, old []artifactContent) error {
+	head, err := artifactBaseline(ctx, root)
+	if err != nil || head != base {
+		return ErrArtifactHandoffUnknown
+	}
+	var changed []protocol.ArtifactFile
+	var current []artifactContent
+	restore := make([]protocol.ArtifactFile, 0, len(files))
+	for i, file := range files {
+		prior := protocol.ArtifactFile{Path: file.Path, AfterMode: old[i].mode, AfterHash: old[i].hash(), Content: old[i].data}
+		restore = append(restore, prior)
+		actual, err := artifactWorkingFile(root, file.Path, artifactPathOverlap(files, file.Path))
+		if err != nil {
+			return err
+		}
+		if sameArtifactContent(actual, old[i]) {
+			continue
+		}
+		if actual.mode != file.AfterMode || actual.hash() != file.AfterHash {
+			return ErrArtifactHandoffUnknown
+		}
+		changed = append(changed, prior)
+		current = append(current, actual)
+	}
+	if len(changed) > 0 {
+		patch, cleanup, err := taskArtifactPatch(ctx, current, changed, len(base))
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		if _, err := RunInspect(ctx, root, "apply", "--whitespace=nowarn", "--", patch); err != nil {
+			return err
+		}
+	}
+	return verifyArtifactTransition(root, restore)
 }
 
 // artifactTransition builds one patch from the previously prepared snapshot
@@ -241,23 +349,17 @@ func artifactTransition(ctx context.Context, root string, command protocol.TaskA
 			}
 		}
 	}
-	if err := taskartifact.Paths(paths); err != nil {
-		return nil, nil, err
-	}
 	var files []protocol.ArtifactFile
 	var old []artifactContent
-	size := 0
+	previousSize, size := 0, 0
 	for _, name := range paths {
 		base, err := artifactBaseFile(ctx, root, command.Manifest.BaseSHA, name)
 		if err != nil {
 			return nil, nil, err
 		}
-		size += len(base.data)
-		if size > protocol.MaxArtifactBytes {
-			return nil, nil, errors.New("artifact baseline exceeds the size limit")
-		}
 		current := base
 		if file, ok := previous[name]; ok {
+			previousSize += len(base.data)
 			if file.BeforeHash != base.hash() || file.BeforeMode != base.mode {
 				return nil, nil, errors.New("previous artifact baseline does not match the target")
 			}
@@ -266,8 +368,14 @@ func artifactTransition(ctx context.Context, root string, command protocol.TaskA
 		file, ok := byPath[name]
 		if !ok {
 			file = protocol.ArtifactFile{Path: name, AfterMode: base.mode, AfterHash: base.hash(), Content: base.data}
-		} else if file.BeforeHash != base.hash() || file.BeforeMode != base.mode {
-			return nil, nil, errors.New("target Git file baseline differs from the artifact")
+		} else {
+			size += len(base.data)
+			if file.BeforeHash != base.hash() || file.BeforeMode != base.mode {
+				return nil, nil, errors.New("target Git file baseline differs from the artifact")
+			}
+		}
+		if size > protocol.MaxArtifactBytes || previousSize > protocol.MaxArtifactBytes {
+			return nil, nil, errors.New("artifact baseline exceeds the size limit")
 		}
 		old = append(old, current)
 		files = append(files, file)

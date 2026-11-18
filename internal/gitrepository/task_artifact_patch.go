@@ -43,6 +43,9 @@ func taskArtifactPatch(ctx context.Context, old []artifactContent, files []proto
 		return "", nil, errors.New("could not prepare scratch Git index")
 	}
 	writeIndex := func(before bool) error {
+		if _, err := run(nil, "read-tree", "--empty"); err != nil {
+			return err
+		}
 		var input bytes.Buffer
 		for i, file := range files {
 			content := artifactContent{file.AfterMode, file.Content}
@@ -50,7 +53,6 @@ func taskArtifactPatch(ctx context.Context, old []artifactContent, files []proto
 				content = old[i]
 			}
 			if content.mode == "" {
-				fmt.Fprintf(&input, "0 %s\t%s%c", strings.Repeat("0", shaLength), file.Path, 0)
 				continue
 			}
 			object, err := run(content.data, "hash-object", "-w", "--stdin")

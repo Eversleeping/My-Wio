@@ -873,8 +873,8 @@ func TestRepairEnrollmentPreservesServerAndWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	current, err := database.Server(ctx, server.ID)
-	if err != nil || current.CodexVersion != "" || current.CodexReady != 0 || current.GeminiVersion != "" || current.GeminiReady != 0 || current.ClaudeVersion != "claude-before" || current.ClaudeReady != 1 {
-		t.Fatalf("repair changed CLI reset semantics: %+v %v", current, err)
+	if err != nil || current.CodexVersion != "" || current.CodexReady != 0 || current.GeminiVersion != "" || current.GeminiReady != 0 || current.ClaudeVersion != "" || current.ClaudeReady != 0 {
+		t.Fatalf("repaired registration retained previous CLI readiness: %+v %v", current, err)
 	}
 	if repaired.ID != server.ID {
 		t.Fatalf("repair changed server ID: %s != %s", repaired.ID, server.ID)

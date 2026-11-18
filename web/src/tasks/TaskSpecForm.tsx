@@ -17,9 +17,11 @@ export function TaskSpecForm({ projectID, task, onSaved, onClose }: {
     onSuccess={() => { if (saved.current) onSaved(saved.current); }}
     prepare={() => {
       const spec = { title: title.trim(), requirement: requirement.trim(), criteria: criteria.map(item => ({ ...item, text: item.text.trim() })) };
+      if (base && (!task || base.spec_version !== task.spec_version ||
+          (spec.title !== base.title && base.title !== task.title))) throw new Error(t("tasks.draftOutdated"));
       const run = base
         ? taskCommand(tasks.update(base.id, projectID), projectID, {
-          expected_version: base.version,
+          expected_version: task!.version,
           ...(base.title !== spec.title ? { title: spec.title } : {}),
           ...(base.requirement !== spec.requirement ? { requirement: spec.requirement } : {}),
           ...(JSON.stringify(base.criteria) !== JSON.stringify(spec.criteria) ? { criteria: spec.criteria } : {})

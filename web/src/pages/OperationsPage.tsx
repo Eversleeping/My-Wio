@@ -24,7 +24,8 @@ function resourceHref(operation: OperationSummary) {
   if (operation.kind.startsWith("deploy.")) {
     params.set("view", "deployments");
   } else if (operation.resource_type === "thread" && operation.resource_id) {
-    params.set("view", "codex");
+    params.set("view", "sessions");
+    params.set("engine", "codex");
     params.set("thread", operation.resource_id);
   } else if (operation.resource_type === "workspace") {
     params.set("view", "projects");

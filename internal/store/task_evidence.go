@@ -264,6 +264,23 @@ func (s *Store) ReconcileTaskAttempt(ctx context.Context, f task.Fence) error {
 		if err != nil {
 			return err
 		}
+		expired := a.DeadlineAt != nil && !a.DeadlineAt.After(now)
+		if a.State == "queued" && state == "queued" && a.OperationID != nil && (r.State == "cancelling" || expired) {
+			result, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',completed_at=?,result='Task stopped before dispatch' WHERE id=? AND status='queued' AND delivered_at IS NULL"), now, *a.OperationID)
+			if err != nil {
+				return err
+			}
+			count, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if count == 1 {
+				state, summary = "cancelled", "Task stopped before dispatch"
+				if err := s.markTaskSessionInterruptedTx(ctx, tx, a); err != nil {
+					return err
+				}
+			}
+		}
 		terminal := state == "succeeded" || state == "failed" || state == "cancelled"
 		if terminal && state == "succeeded" {
 			summary, err = s.taskResultSummaryTx(ctx, tx, a, summary)
@@ -276,11 +293,11 @@ func (s *Store) ReconcileTaskAttempt(ctx context.Context, f task.Fence) error {
 				return err
 			}
 		}
-		if !terminal && a.DeadlineAt != nil && !a.DeadlineAt.After(now) {
+		if !terminal && expired {
 			state = "unknown"
 			summary = "step deadline reached; awaiting confirmed termination"
 		}
-		if !terminal && (r.State == "cancelling" || state == "unknown" && a.DeadlineAt != nil && !a.DeadlineAt.After(now)) {
+		if !terminal && (r.State == "cancelling" || state == "unknown" && expired) {
 			if err := s.taskInterruptTx(ctx, tx, a); err != nil {
 				return err
 			}
@@ -319,7 +336,7 @@ func (s *Store) ReconcileTaskAttempt(ctx context.Context, f task.Fence) error {
 			stepState = "blocked"
 			code = "execution_unknown"
 		}
-		if _, err := tx.ExecContext(ctx, s.Q("UPDATE task_step_runs SET state=?,block_code=?,version=version+1 WHERE run_id=? AND step_id=? AND current_attempt_id=?"), stepState, code, a.RunID, a.StepID, a.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE task_step_runs SET state=?,block_code=?,version=version+1 WHERE run_id=? AND step_id=? AND current_attempt_id=? AND (state<>? OR COALESCE(block_code,'')<>COALESCE(?,''))"), stepState, code, a.RunID, a.StepID, a.ID, stepState, code); err != nil {
 			return err
 		}
 		if state != a.State {
@@ -361,8 +378,30 @@ func (s *Store) taskResultSummaryTx(ctx context.Context, tx *sqlx.Tx, a task.Att
 }
 
 func (s *Store) taskInterruptTx(ctx context.Context, tx *sqlx.Tx, a task.Attempt) error {
-	if a.InterruptOperationID != nil || a.OperationID == nil {
+	if a.OperationID == nil {
 		return nil
+	}
+	key := "task-interrupt:" + a.ID
+	if a.InterruptOperationID != nil {
+		var previous struct {
+			Status    string     `db:"status"`
+			Completed *time.Time `db:"completed_at"`
+		}
+		if err := tx.GetContext(ctx, &previous, s.Q("SELECT status,completed_at FROM agent_operations WHERE id=?"), *a.InterruptOperationID); err != nil {
+			return err
+		}
+		if previous.Status != "failed" && previous.Status != "cancelled" ||
+			previous.Completed == nil || time.Since(*previous.Completed) < 5*time.Second {
+			return nil
+		}
+		var count int
+		if err := tx.GetContext(ctx, &count, s.Q("SELECT COUNT(*) FROM agent_operations WHERE idempotency_key=? OR idempotency_key LIKE ?"), key, key+":%"); err != nil {
+			return err
+		}
+		if count >= 3 {
+			return nil
+		}
+		key += ":" + *a.InterruptOperationID
 	}
 	var payload any
 	kind := ""
@@ -406,7 +445,6 @@ func (s *Store) taskInterruptTx(ctx context.Context, tx *sqlx.Tx, a task.Attempt
 		kind = protocol.OpCodexTurnInterrupt
 		payload = protocol.InterruptTurnCommand{ThreadID: a.SessionID, CodexThread: native, TurnID: turn}
 	}
-	key := "task-interrupt:" + a.ID
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err

@@ -104,7 +104,10 @@ export function taskCommand<T>(endpoint: Mutation<T>, projectID: string, body: o
     try {
       return await writeResource(endpoint, input, { signal: AbortSignal.timeout(15000) });
     } catch (error) {
-      if (error instanceof APIError && error.status < 500 && error.status !== 408) throw error;
+      if (error instanceof APIError && error.status < 500 && error.status !== 408) {
+        if (error.status === 409) invalidateResources(scope);
+        throw error;
+      }
       try {
         const found = await readResource(query<{ response: T }>(scoped(`/task-requests/${requestID}`, projectID), []), { signal: AbortSignal.timeout(5000) });
         invalidateResources(scope);

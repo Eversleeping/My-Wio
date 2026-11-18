@@ -37,5 +37,6 @@ const (
 	CapabilityCredentialsScoped    = "credentials.scoped"
 	CapabilitySessionCollaboration = "session.collaboration"
 	CapabilityTaskArtifacts        = "task.artifacts.v1"
+	CapabilityTaskArtifactVerify   = "task.artifact_verify.v1"
 	CapabilityTaskCollaboration    = "task.collaboration.v1"
 )

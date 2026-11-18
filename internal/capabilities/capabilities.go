@@ -60,6 +60,7 @@ var gates = []gate{
 	{protocol.CapabilityCodexSteer, nil},
 	{protocol.CapabilityWorkspaceFileWrite, nil},
 	{protocol.CapabilityTaskArtifacts, nil},
+	{protocol.CapabilityTaskArtifactVerify, nil},
 	{protocol.CapabilityTaskCollaboration, nil},
 	{protocol.CapabilityCodexForkAtMessage, nil},
 	{protocol.CapabilityGeminiSessions, nil},

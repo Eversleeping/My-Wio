@@ -106,7 +106,7 @@ func (s *Store) QueueCodexTurnRequest(ctx context.Context, thread Thread, comman
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		operationID, event, err = s.queueCodexTurnTx(ctx, tx, thread, command)
+		operationID, event, err = s.queueCodexTurnTx(ctx, tx, thread, command, nil)
 		if err != nil {
 			return err
 		}

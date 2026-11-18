@@ -39,28 +39,27 @@ func (r taskRow) decode() (task.Task, error) {
 	}
 	return t, nil
 }
+
+const taskStateSQL = "CASE WHEN r.id IS NULL THEN 'draft' WHEN r.state IN ('running','paused','blocked','cancelling') THEN 'active' ELSE r.state END"
+const taskCurrentRunJoin = " LEFT JOIN task_runs r ON r.id=t.current_run_id AND r.task_id=t.id"
+
+type taskStateRow struct {
+	taskRow
+	State string `db:"task_state"`
+}
+
+func (r taskStateRow) decode() (task.Task, error) {
+	t, err := r.taskRow.decode()
+	t.State = r.State
+	return t, err
+}
+
 func (s *Store) taskTx(ctx context.Context, tx *sqlx.Tx, project, id string) (task.Task, error) {
-	var row taskRow
-	if err := tx.GetContext(ctx, &row, s.Q("SELECT * FROM tasks WHERE id=? AND project_id=?"), id, project); err != nil {
+	var row taskStateRow
+	if err := tx.GetContext(ctx, &row, s.Q("SELECT t.*,"+taskStateSQL+" AS task_state FROM tasks t"+taskCurrentRunJoin+" WHERE t.id=? AND t.project_id=?"), id, project); err != nil {
 		return task.Task{}, err
 	}
-	t, err := row.decode()
-	if err != nil {
-		return t, err
-	}
-	if t.CurrentRunID != nil {
-		var state string
-		if err := tx.GetContext(ctx, &state, s.Q("SELECT state FROM task_runs WHERE id=? AND task_id=?"), *t.CurrentRunID, t.ID); err != nil {
-			return t, err
-		}
-		switch state {
-		case "running", "paused", "blocked", "cancelling":
-			t.State = "active"
-		default:
-			t.State = state
-		}
-	}
-	return t, nil
+	return row.decode()
 }
 
 // User commands lock the project before checking the request ledger. That makes
@@ -238,6 +237,9 @@ func (s *Store) UpdateTask(ctx context.Context, project, id string, in task.Upda
 		if in.Requirement != nil || in.Criteria != nil {
 			t.SpecVersion++
 			t.CurrentRunID = nil
+			if _, err := tx.ExecContext(ctx, s.Q("UPDATE task_team_requests SET state='superseded' WHERE task_id=? AND state='pending'"), id); err != nil {
+				return err
+			}
 		}
 		criteria, err := json.Marshal(t.Criteria)
 		if err != nil {

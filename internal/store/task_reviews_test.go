@@ -90,6 +90,11 @@ func assertTaskReviewScenario(t *testing.T, db *Store, restart func() *Store, re
 	}
 	coordinator := dispatch("a")
 	revision := task.TeamPlan{Members: plan.Members, Steps: plan.Steps}
+	invalidPlan := task.TeamPlan{Members: append([]task.Member(nil), plan.Members...), Steps: plan.Steps}
+	invalidPlan.Members[0].Mode = "nonexistent"
+	if invalid := call(coordinator, sessiontools.TaskPlanProposal, task.TeamToolInput{RequestID: "invalid-plan", Reason: "Invalid mode", Plan: &invalidPlan}); invalid.Error == nil || invalid.Error.Code != "INVALID_ARGUMENT" {
+		t.Fatal("invalid proposal was accepted", invalid)
+	}
 	proposal := call(coordinator, sessiontools.TaskPlanProposal, task.TeamToolInput{RequestID: "propose-plan", Reason: "Use an explicit new run", Plan: &revision})
 	if proposal.Error != nil {
 		t.Fatal(proposal)
@@ -102,6 +107,19 @@ func assertTaskReviewScenario(t *testing.T, db *Store, restart func() *Store, re
 	var firstArtifact task.Artifact
 	for round := 1; round <= 2; round++ {
 		developer := dispatch("c")
+		if round == 2 {
+			op, err := db.Operation(ctx, *developer.OperationID)
+			if err != nil || !strings.Contains(op.Payload, "Checked native evidence") || !strings.Contains(op.Payload, "Read the recorded reviewer session evidence") {
+				t.Fatal("rework lost the review feedback", err)
+			}
+			if restart == nil && !strings.Contains(op.Payload, "explicit user action") {
+				t.Fatal("rework lost the user reason")
+			}
+			reply := call(developer, sessiontools.TaskContext, task.TeamToolInput{})
+			if reply.Error != nil || reply.Data.(map[string]any)["review_recovery"] == nil {
+				t.Fatal("rework feedback is missing from the task context", reply)
+			}
+		}
 		input := task.TeamToolInput{RequestID: "review-once", TargetStepID: "d", Reason: "Confirm the developed version"}
 		bad := input
 		bad.TargetStepID = "b"
@@ -141,6 +159,17 @@ func assertTaskReviewScenario(t *testing.T, db *Store, restart func() *Store, re
 			}
 		}
 		complete(artifact.OperationID, manifest)
+		if round == 1 {
+			newer, err := db.CaptureTaskArtifact(ctx, f.project, created.ID, task.CaptureArtifact{
+				Meta:      task.Meta{Actor: "task-user", RequestID: NewID(), ExpectedVersion: snapshot().Task.Version},
+				AttemptID: developer.ID, Paths: []string{"change.txt"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(newer.OperationID, manifest)
+			artifact = newer
+		}
 		h, err := db.HandoffTaskArtifact(ctx, f.project, created.ID, artifact.ID, task.HandoffArtifact{Meta: task.Meta{Actor: "task-user", RequestID: NewID(), ExpectedVersion: snapshot().Task.Version},
 			WorkspaceID: f.workspace, Digest: digest, Action: "apply"})
 		if err != nil {
@@ -188,6 +217,10 @@ func assertTaskReviewScenario(t *testing.T, db *Store, restart func() *Store, re
 		if round == 1 {
 			taskRunAction(t, db, f, created.ID, run.ID, task.Action{Action: "rework", AttemptID: reviewer.ID})
 			if restart != nil {
+				// Emulate an in-flight recovery queued before recovery_json existed.
+				if _, err := db.DB.Exec(db.Q("UPDATE task_step_runs SET recovery_json=NULL WHERE run_id=? AND step_id='c'"), run.ID); err != nil {
+					t.Fatal(err)
+				}
 				db = restart()
 			}
 		} else if rejectTwice {
@@ -197,6 +230,14 @@ func assertTaskReviewScenario(t *testing.T, db *Store, restart func() *Store, re
 			if !strings.Contains(err.Error(), "budget") {
 				t.Fatal("recovery was rejected for the wrong reason", err)
 			}
+			if err := db.AdvanceTasks(ctx, "worker"); err != nil {
+				t.Fatal(err)
+			}
+			detail, err := db.TaskDetail(ctx, f.project, created.ID)
+			if err != nil || detail.Run.State != "failed" {
+				t.Fatalf("spent rework budget left the run active: %+v %v", detail.Run, err)
+			}
+
 			return
 		}
 	}

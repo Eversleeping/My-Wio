@@ -319,7 +319,14 @@ func TestOperationStartedRecordsRunningLifecycle(t *testing.T) {
 	}
 }
 
-func TestFlushRetainsPostDeliveryCancellationProtectionForCodexTurns(t *testing.T) {
+func TestFlushRetainsPostDeliveryCancellationProtection(t *testing.T) {
+	for _, engine := range []string{"codex", "claude", "gemini"} {
+		t.Run(engine, func(t *testing.T) { assertPostDeliveryCancellation(t, engine) })
+	}
+}
+
+func assertPostDeliveryCancellation(t *testing.T, engine string) {
+	t.Helper()
 	database, server := gatewayTestServer(t, "flush-cancel-agent-token")
 	ctx := context.Background()
 	if err := database.UpsertInventory(ctx, server.ID, protocol.Inventory{Repositories: []protocol.Repository{{Path: "/srv/flush-cancel", Name: "flush-cancel"}}}); err != nil {
@@ -329,12 +336,34 @@ func TestFlushRetainsPostDeliveryCancellationProtectionForCodexTurns(t *testing.
 	if err != nil || len(workspaces) != 1 {
 		t.Fatalf("unexpected workspaces: %#v %v", workspaces, err)
 	}
-	thread, err := database.CreateThread(ctx, workspaces[0].ID, "flush cancellation")
-	if err != nil {
-		t.Fatal(err)
+	var threadID string
+	var command any
+	workspace := workspaces[0]
+	switch engine {
+	case "codex":
+		thread, err := database.CreateThread(ctx, workspace.ID, "flush cancellation")
+		if err != nil {
+			t.Fatal(err)
+		}
+		threadID = thread.ID
+		command = protocol.StartTurnCommand{ThreadID: threadID, WorkspaceID: workspace.ID, Workspace: workspace.Path, Prompt: "cancel after delivery"}
+	case "claude":
+		thread, err := database.CreateClaudeThread(ctx, workspace.ID, "sonnet", "default", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		threadID = thread.ID
+		command = protocol.ClaudeTurnCommand{ThreadID: threadID, Workspace: workspace.Path, Prompt: "cancel after delivery"}
+	case "gemini":
+		thread, err := database.CreateGeminiThread(ctx, workspace.ID, "flash", "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		threadID = thread.ID
+		command = protocol.GeminiTurnCommand{ThreadID: threadID, Workspace: workspace.Path, Prompt: "cancel after delivery"}
 	}
-	command := protocol.StartTurnCommand{ThreadID: thread.ID, WorkspaceID: thread.WorkspaceID, Workspace: thread.Path, Prompt: "cancel after delivery"}
-	operationID, err := database.QueueOperation(ctx, server.ID, "codex.turn.start", command, "flush-cancel-turn")
+	turnKind := engine + ".turn.start"
+	operationID, err := database.QueueResourceOperation(ctx, server.ID, turnKind, command, "flush-cancel-turn", store.OperationResource{WorkspaceID: workspace.ID}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,25 +390,29 @@ func TestFlushRetainsPostDeliveryCancellationProtectionForCodexTurns(t *testing.
 	}
 	select {
 	case delivered := <-stream.sent:
-		if delivered.OperationID != operationID || delivered.Kind != "codex.turn.start" {
+		if delivered.OperationID != operationID || delivered.Kind != turnKind {
 			t.Fatalf("unexpected delivered operation: %#v", delivered)
 		}
 	default:
-		t.Fatal("Codex turn was not delivered")
+		t.Fatal("turn was not delivered")
 	}
 	operation, err := database.Operation(ctx, operationID)
 	if err != nil || operation.Status != "cancelled" {
 		t.Fatalf("cancelled operation was overwritten: %#v %v", operation, err)
 	}
 	pending, err := database.PendingOperations(ctx, server.ID)
-	if err != nil || len(pending) != 1 || pending[0].Kind != "codex.turn.interrupt" {
+	if err != nil || len(pending) != 1 || pending[0].Kind != engine+".turn.interrupt" {
 		t.Fatalf("best-effort interrupt was not queued: %#v %v", pending, err)
 	}
-	var interrupt protocol.InterruptTurnCommand
+	var interrupt struct {
+		ThreadID    string `json:"thread_id"`
+		OperationID string `json:"operation_id"`
+		BestEffort  bool   `json:"best_effort"`
+	}
 	if err := json.Unmarshal([]byte(pending[0].Payload), &interrupt); err != nil {
 		t.Fatal(err)
 	}
-	if interrupt.ThreadID != thread.ID || !interrupt.BestEffort {
+	if interrupt.ThreadID != threadID || (engine == "codex" && !interrupt.BestEffort) || (engine != "codex" && interrupt.OperationID != operationID) {
 		t.Fatalf("unexpected best-effort interrupt: %#v", interrupt)
 	}
 }

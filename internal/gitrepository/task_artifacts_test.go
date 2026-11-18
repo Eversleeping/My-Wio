@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,5 +91,76 @@ func TestTaskImmutableHandoff(t *testing.T) {
 	}
 	if head, err := artifactBaseline(ctx, target); err != nil || head != manifest.BaseSHA {
 		t.Fatal("handoff changed HEAD", err)
+	}
+}
+
+func TestTaskHandoffTransitionsBetweenLegalSnapshots(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	runChangesGit(t, root, "init", "-b", "main")
+	runChangesGit(t, root, "-c", "user.name=Artifact Test", "-c", "user.email=artifact@example.test", "commit", "--allow-empty", "-m", "base")
+	base, err := artifactBaseline(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := func(path string) protocol.ArtifactFile {
+		data := []byte(path + "\n")
+		return protocol.ArtifactFile{Path: path, AfterMode: "100644", AfterHash: taskartifact.Hash(data), Content: data}
+	}
+	first := protocol.ArtifactManifest{BaseSHA: base}
+	for i := 0; i < protocol.MaxArtifactFiles-1; i++ {
+		first.Files = append(first.Files, file(fmt.Sprintf("old-%03d", i)))
+	}
+	first.Files = append(first.Files, file("item/old.txt"))
+	second := protocol.ArtifactManifest{BaseSHA: base, Files: []protocol.ArtifactFile{file("item"), file("next.txt")}}
+	var previous *protocol.ArtifactManifest
+	for _, manifest := range []protocol.ArtifactManifest{first, second, first} {
+		digest, err := taskartifact.Validate(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command := protocol.TaskArtifactHandoff{Action: "apply", Manifest: manifest, Digest: digest, Previous: previous}
+		if err := HandoffTaskArtifact(ctx, root, command); err != nil {
+			t.Fatal(err)
+		}
+		command.Action, command.Previous, command.MetadataOnly = "verify", nil, true
+		command.Manifest.Files = append([]protocol.ArtifactFile(nil), manifest.Files...)
+		for i := range command.Manifest.Files {
+			command.Manifest.Files[i].Content = nil
+		}
+		if err := HandoffTaskArtifact(ctx, root, command); err != nil {
+			t.Fatal(err)
+		}
+		previous = &manifest
+	}
+}
+
+func TestTaskHandoffRestoresOnlyRecognizedContents(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	runChangesGit(t, root, "init", "-b", "main")
+	runChangesGit(t, root, "-c", "user.name=Artifact Test", "-c", "user.email=artifact@example.test", "commit", "--allow-empty", "-m", "base")
+	base, err := artifactBaseline(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := artifactContent{mode: "100644", data: []byte("before\n")}
+	after := []byte("after\n")
+	files := []protocol.ArtifactFile{{Path: "edited.txt", AfterMode: "100644", AfterHash: taskartifact.Hash(after), Content: after}}
+	writeChangesFile(t, root, "edited.txt", string(after))
+	if err := restoreArtifactTransition(ctx, root, base, files, []artifactContent{before}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "edited.txt"))
+	if err != nil || !bytes.Equal(got, before.data) {
+		t.Fatalf("restore did not recover the prior contents: %q %v", got, err)
+	}
+	writeChangesFile(t, root, "edited.txt", "other change\n")
+	if err := restoreArtifactTransition(ctx, root, base, files, []artifactContent{before}); !errors.Is(err, ErrArtifactHandoffUnknown) {
+		t.Fatalf("modified worktree was reported as restored: %v", err)
+	}
+	got, err = os.ReadFile(filepath.Join(root, "edited.txt"))
+	if err != nil || string(got) != "other change\n" {
+		t.Fatalf("restore overwrote an unrelated change: %q %v", got, err)
 	}
 }

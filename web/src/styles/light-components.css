@@ -190,3 +190,11 @@
 [data-theme="light"] .deployment-review-row code { color: #1e293b; }
 [data-theme="light"] .deployment-review-row code:last-child { color: #065f46; }
 [data-theme="light"] .deployment-public-link { color: #047857; }
+
+[data-theme="light"] .deployment-event-list { background: #f8fafc; }
+[data-theme="light"] .deployment-event { border-color: var(--line); }
+[data-theme="light"] .deployment-event-marker { background: #ffffff; }
+[data-theme="light"] .deployment-event header strong,
+[data-theme="light"] .deployment-event pre { color: var(--ink); }
+[data-theme="light"] .deployment-event pre { background: #ffffff; border-color: var(--line); }
+[data-theme="light"] .deployment-event.failed pre { color: #991b1b; border-color: #fecaca; }

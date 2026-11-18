@@ -21,6 +21,7 @@ func (s *Store) WorkspaceSessionDefaults(ctx context.Context, workspaceID string
 		if err != nil {
 			return nil, err
 		}
+		decorateAISession(&row)
 		result[engine] = row
 	}
 	return result, nil

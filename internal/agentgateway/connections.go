@@ -41,22 +41,44 @@ type gatewayConnection struct {
 	gateway  *Gateway
 	serverID string
 	token    string
+	sends    chan gatewaySend
 	// Protected by slot.mu; a reconnect must establish its own heartbeat.
 	heartbeatProcessed bool
 }
 
 func (c *gatewayConnection) Context() context.Context { return c.ctx }
 
-// Allow cancellation to release a blocked Send before taking the slot mutex
-// during replacement. Returning Connect also cancels the underlying gRPC RPC.
-func (c *gatewayConnection) Send(message *protocol.ControlEnvelope) error {
-	if err := c.ctx.Err(); err != nil {
-		return err
+type gatewaySend struct {
+	message *protocol.ControlEnvelope
+	result  chan error
+}
+
+// A single sender owns the gRPC stream. The Connect handler may return on
+// replacement, which cancels the transport and releases a blocked Send.
+func (c *gatewayConnection) sendLoop() {
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case request := <-c.sends:
+			if err := c.ctx.Err(); err != nil {
+				request.result <- err
+				return
+			}
+			request.result <- c.AgentServiceConnectServer.Send(request.message)
+		}
 	}
-	done := make(chan error, 1)
-	go func() { done <- c.AgentServiceConnectServer.Send(message) }()
+}
+
+func (c *gatewayConnection) Send(message *protocol.ControlEnvelope) error {
+	request := gatewaySend{message: message, result: make(chan error, 1)}
 	select {
-	case err := <-done:
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	case c.sends <- request:
+	}
+	select {
+	case err := <-request.result:
 		return err
 	case <-c.ctx.Done():
 		return c.ctx.Err()
@@ -110,7 +132,7 @@ func (g *Gateway) registerConnection(stream protocol.AgentServiceConnectServer, 
 	}
 	g.mu.Unlock()
 	ctx, cancel := context.WithCancel(stream.Context())
-	c := &gatewayConnection{AgentServiceConnectServer: stream, ctx: ctx, cancel: cancel, slot: slot, gateway: g, serverID: serverID, token: token}
+	c := &gatewayConnection{AgentServiceConnectServer: stream, ctx: ctx, cancel: cancel, slot: slot, gateway: g, serverID: serverID, token: token, sends: make(chan gatewaySend)}
 	if old := slot.current.Load(); old != nil {
 		old.cancel()
 	}
@@ -122,6 +144,7 @@ func (g *Gateway) registerConnection(stream protocol.AgentServiceConnectServer, 
 	g.wakes[serverID] = wake
 	g.mu.Unlock()
 	slot.mu.Unlock()
+	g.runHandler(c.sendLoop)
 	return c
 }
 
@@ -136,5 +159,8 @@ func (g *Gateway) removeConnection(serverID string, c *gatewayConnection) {
 	g.mu.Lock()
 	delete(g.wakes, serverID)
 	g.mu.Unlock()
+	g.metricMu.Lock()
+	delete(g.metricBreaches, serverID)
+	g.metricMu.Unlock()
 	_, _ = g.store.DB.ExecContext(context.Background(), g.store.Q("UPDATE servers SET status='offline' WHERE id=?"), serverID)
 }

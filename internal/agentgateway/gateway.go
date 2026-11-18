@@ -315,7 +315,7 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 			}
 			continue
 		}
-		geminiTurn := op.Kind == protocol.OpGeminiTurnStart || op.Kind == protocol.OpGeminiTurnRewrite || op.Kind == protocol.OpClaudeTurnStart
+		nonReplayableTurn := op.Kind == protocol.OpGeminiTurnStart || op.Kind == protocol.OpGeminiTurnRewrite || op.Kind == protocol.OpClaudeTurnStart
 		payload := json.RawMessage(op.Payload)
 		if strings.HasPrefix(op.Payload, "v1:") {
 			if err := g.vault.Decrypt(op.Payload, &payload); err != nil {
@@ -354,7 +354,8 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				continue
 			}
 		}
-		if geminiTurn {
+		codexClaim := isCodexTurnOperation(op.Kind) && op.Status == "queued"
+		if nonReplayableTurn {
 			// Claim before sending so cancellation or a lost acknowledgement cannot
 			// lead to a duplicate CLI execution on reconnect.
 			claimed, err := g.store.ClaimGeminiDelivery(stream.Context(), op.ID)
@@ -365,10 +366,19 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				continue
 			}
 		}
+		if codexClaim {
+			claimed, err := g.store.ClaimCodexTurnDelivery(stream.Context(), op.ID)
+			if err != nil {
+				return err
+			}
+			if !claimed {
+				continue
+			}
+		}
 		if err := stream.Send(&protocol.ControlEnvelope{OperationID: op.ID, Kind: op.Kind, CreatedAtUnixMS: op.CreatedAt.UnixMilli(), PayloadJSON: payload}); err != nil {
 			return err
 		}
-		if !geminiTurn {
+		if !nonReplayableTurn && !codexClaim {
 			if err := g.store.MarkDelivered(stream.Context(), op.ID); err != nil {
 				g.log.Warn("could not mark Agent operation delivered", "operation_id", op.ID, "error", err)
 				continue
@@ -381,31 +391,34 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 			"kind", op.Kind,
 			"queue_wait_ms", time.Since(op.CreatedAt).Milliseconds(),
 		)
-		// Only Codex turns need a post-delivery state lookup: a cancellation can
-		// win the race between Send and MarkDelivered, and then needs a best-effort
-		// interrupt. Other operation types do not consume this status, so skipping
-		// their lookup removes one database round trip per delivered operation.
-		if isCodexTurnOperation(op.Kind) {
-			updated, statusErr := g.store.Operation(stream.Context(), op.ID)
-			if statusErr == nil && updated.Status == "cancelled" {
+		// A cancellation can win after the operation is claimed for sending.
+		if isCodexTurnOperation(op.Kind) || nonReplayableTurn {
+			updated, err := g.store.Operation(stream.Context(), op.ID)
+			if err != nil || updated.Status != "cancelled" {
+				continue
+			}
+			if isCodexTurnOperation(op.Kind) {
 				if err := g.queueBestEffortInterrupt(stream.Context(), serverID, op); err != nil {
 					g.log.Warn("could not queue best-effort Codex interrupt", "operation_id", op.ID, "error", err)
 				}
+				continue
 			}
-		}
-		if op.Kind == protocol.OpGeminiTurnStart || op.Kind == protocol.OpGeminiTurnRewrite {
-			updated, statusErr := g.store.Operation(stream.Context(), op.ID)
-			if statusErr == nil && updated.Status == "cancelled" {
-				var command protocol.GeminiTurnCommand
-				if err := json.Unmarshal([]byte(op.Payload), &command); err != nil {
-					return err
-				}
-				_, err := g.store.QueueResourceOperation(stream.Context(), serverID, protocol.OpGeminiTurnInterrupt, protocol.GeminiInterruptCommand{ThreadID: command.ThreadID, OperationID: op.ID}, "gemini-cancel:"+op.ID, store.OperationResource{ProjectID: op.ProjectID, WorkspaceID: op.WorkspaceID}, false)
-				if err != nil {
-					return err
-				}
-				g.Wake(serverID)
+			var command struct {
+				ThreadID string `json:"thread_id"`
 			}
+			if err := json.Unmarshal(payload, &command); err != nil {
+				return err
+			}
+			kind, key := protocol.OpGeminiTurnInterrupt, "gemini-cancel:"+op.ID
+			var interrupt any = protocol.GeminiInterruptCommand{ThreadID: command.ThreadID, OperationID: op.ID}
+			if op.Kind == protocol.OpClaudeTurnStart {
+				kind, key = protocol.OpClaudeTurnInterrupt, "claude-cancel:"+op.ID
+				interrupt = protocol.ClaudeInterruptCommand{ThreadID: command.ThreadID, OperationID: op.ID}
+			}
+			if _, err := g.store.QueueResourceOperation(stream.Context(), serverID, kind, interrupt, key, store.OperationResource{ProjectID: op.ProjectID, WorkspaceID: op.WorkspaceID}, false); err != nil {
+				return err
+			}
+			g.Wake(serverID)
 		}
 	}
 	return nil

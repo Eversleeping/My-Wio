@@ -16,8 +16,10 @@ interface I18nValue {
 const I18nContext = createContext<I18nValue | null>(null);
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const stored = window.localStorage.getItem("wio_language");
-  const [language, updateLanguage] = useState<Language>(stored === "en" ? "en" : "zh-CN");
+  const [language, updateLanguage] = useState<Language>(() => {
+    try { return window.localStorage.getItem("wio_language") === "en" ? "en" : "zh-CN"; }
+    catch { return "zh-CN"; }
+  });
   activeLanguage = language;
   useEffect(() => {
     document.documentElement.lang = language;
@@ -25,7 +27,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute("content", dictionaries[language]["app.description"]);
   }, [language]);
   const setLanguage = useCallback((next: Language) => {
-    window.localStorage.setItem("wio_language", next);
+    try { window.localStorage.setItem("wio_language", next); } catch { /* Preference storage is optional. */ }
     activeLanguage = next;
     updateLanguage(next);
     document.documentElement.lang = next;

@@ -61,6 +61,7 @@ export function useData<T>(path: string | null, dependency: unknown, cache = fal
       if (running) { pending = { dependency }; return; }
       const cached = cache ? dataCache.get(path) : undefined;
       if (!force && cached && Object.is(cached.dependency, dependency)) {
+        setResult({ path, data: cached.data as T });
         setFailure({ path, text: "" });
         setSettledPath(path);
         return;

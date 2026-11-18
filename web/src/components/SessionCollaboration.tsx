@@ -3,6 +3,7 @@ import { Network, ExternalLink, Trash2 } from "lucide-react";
 import { post, remove } from "../api";
 import { useData } from "../useData";
 import { useI18n } from "../i18n";
+import { locationFor } from "../navigation";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Status } from "./PageUI";
 
@@ -21,8 +22,7 @@ const activeStatuses = new Set(["queued", "running", "interrupting"]);
 const pendingRequestStatuses = new Set(["accepted", "preparing", "queued", "running", "waiting_user"]);
 
 export function SessionCollaboration({ engine, id, workspaceID, revision }: { engine: Engine; id: string; workspaceID: string; projectID: string; revision: unknown }) {
-  const { language, t } = useI18n();
-  const text = (zh: string, en: string) => language === "zh-CN" ? zh : en;
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -46,26 +46,26 @@ export function SessionCollaboration({ engine, id, workspaceID, revision }: { en
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); setDeleting(null); }
     finally { setBusy(false); }
   };
-  const toolLabel: Record<string, string> = { wio_create_session: text("创建会话", "Create session"), wio_fork_session: text("继续会话", "Continue session"), wio_send_message: text("发送任务", "Send task"), wio_steer_session: text("补充指令", "Add instruction"), wio_interrupt_session: text("中断任务", "Interrupt task"), wio_archive_session: text("归档会话", "Archive session"), wio_restore_session: text("恢复会话", "Restore session"), wio_update_session: text("更新会话", "Update session") };
-  return <section className="session-collaboration" aria-label={text("会话协作", "Session collaboration")}>
+  const toolLabel: Record<string, string> = { wio_create_session: t("collaboration.createSession"), wio_fork_session: t("collaboration.continueSession"), wio_send_message: t("collaboration.sendTask"), wio_steer_session: t("collaboration.addInstruction"), wio_interrupt_session: t("collaboration.interruptTask"), wio_archive_session: t("collaboration.archiveSession"), wio_restore_session: t("collaboration.restoreSession"), wio_update_session: t("collaboration.updateSession") };
+  return <section className="session-collaboration" aria-label={t("collaboration.title")}>
     <div className="collaboration-heading">
-      <button type="button" className="collaboration-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Network size={15} />{text("会话协作", "Session collaboration")}{links.length > 0 && <span>{links.length}</span>}</button>
-      {notifications.length > 0 && <span role="status">{notifications.length} {text("条未读结果", "unread results")}</span>}
+      <button type="button" className="collaboration-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Network size={15} />{t("collaboration.title")}{links.length > 0 && <span>{links.length}</span>}</button>
+      {notifications.length > 0 && <span role="status">{notifications.length} {t("collaboration.unreadResults")}</span>}
 
     </div>
     {expanded && <div className="collaboration-content">
-      {notifications.map(notification => <button type="button" className="secondary-button collaboration-read" key={notification.target_key} onClick={() => { void post(path + "/read", notification).then(() => state.reload()).catch(failure => setError(String(failure))); }}>{text("标为已读", "Mark as read")} · {state.data?.links?.find(link => link.target_key === notification.target_key)?.session?.title ?? notification.target_key}</button>)}
+      {notifications.map(notification => <button type="button" className="secondary-button collaboration-read" key={notification.target_key} onClick={() => { void post(path + "/read", notification).then(() => state.reload()).catch(failure => setError(String(failure))); }}>{t("collaboration.markRead")} · {state.data?.links?.find(link => link.target_key === notification.target_key)?.session?.title ?? notification.target_key}</button>)}
       {error && <p role="alert">{error}</p>}
       {state.error && <p role="alert">{state.error}<button type="button" onClick={state.reload}>{t("common.retry")}</button></p>}
-      {state.data && !state.data.supported && <p>{text("请升级此服务器的 Agent 后使用协作工具。", "Update this server's Agent to use collaboration tools.")}</p>}
-      {!state.data?.grant?.enabled && <p>{text("在全局设置页开启会话协作，对所有会话生效。", "Enable collaboration for all sessions on the global Settings page.")}</p>}
+      {state.data && !state.data.supported && <p>{t("collaboration.updateAgent")}</p>}
+      {!state.data?.grant?.enabled && <p>{t("collaboration.enableAll")}</p>}
       {links.map(link => { const child = link.target_key !== `${engine}:${id}`; const running = activeStatuses.has(link.session.status); return <div className="collaboration-card" key={`${link.source_key}:${link.target_key}`}>
-        {child && <button type="button" className="icon-button danger" aria-label={`${text("删除子会话", "Delete child session")} ${link.session.title}`} title={running ? text("运行中的会话需先停止才能删除", "Stop the running session before deleting it") : text("删除子会话", "Delete child session")} disabled={busy || running} onClick={() => setDeleting(link.session)}><Trash2 size={14} /></button>}
-        <span>{child ? text("子会话", "Child session") : text("来源会话", "Source session")}</span>
-        <><a href={link.session.url}>{link.session.title} · {link.session.engine}<ExternalLink size={12} /></a><Status value={link.session.recovery_pending ? "unknown" : link.session.waiting_user ? "waiting_user" : link.session.status} /><small>{link.session.workspace_id === workspaceID ? text("共享工作目录", "Shared working directory") : text("独立工作区", "Separate workspace")}</small></>
+        {child && <button type="button" className="icon-button danger" aria-label={`${t("collaboration.deleteChild")} ${link.session.title}`} title={running ? t("collaboration.stopBeforeDelete") : t("collaboration.deleteChild")} disabled={busy || running} onClick={() => setDeleting(link.session)}><Trash2 size={14} /></button>}
+        <span>{child ? t("collaboration.child") : t("collaboration.source")}</span>
+        <><a href={link.session.url}>{link.session.title} · {link.session.engine}<ExternalLink size={12} /></a><Status value={link.session.recovery_pending ? "unknown" : link.session.waiting_user ? "waiting_user" : link.session.status} /><small>{link.session.workspace_id === workspaceID ? t("collaboration.sharedDirectory") : t("collaboration.separateWorkspace")}</small></>
       </div>; })}
-      {requests.map(request => <div className="collaboration-card" key={request.id}><span>{toolLabel[request.tool] ?? request.tool}</span><Status value={request.status} />{request.error && <small role="alert">{request.error.code} · {request.error.message}</small>}{request.phase === "await_source" && <small>{text("等待来源会话本轮结束", "Waiting for the source turn to end")}</small>}{request.target_id && <a href={`/?view=${request.target_engine}&thread=${encodeURIComponent(request.target_id)}`}>{text("打开会话", "Open session")}</a>}<small title={request.operation_id}>{request.request_id}</small></div>)}
+      {requests.map(request => <div className="collaboration-card" key={request.id}><span>{toolLabel[request.tool] ?? request.tool}</span><Status value={request.status} />{request.error && <small role="alert">{request.error.code} · {request.error.message}</small>}{request.phase === "await_source" && <small>{t("collaboration.waitingForSource")}</small>}{request.target_id && <a href={locationFor("sessions", request.target_id, request.target_engine)}>{t("collaboration.openSession")}</a>}<small title={request.operation_id}>{request.request_id}</small></div>)}
     </div>}
-    <ConfirmDialog open={Boolean(deleting)} danger title={text("删除子会话", "Delete child session")} description={deleting ? `${deleting.title} · ${deleting.engine}` : undefined} impact={text("将永久删除该会话及其消息记录，无法恢复。来源记录会保留。", "This permanently deletes the session and its messages. Provenance is retained.")} confirmLabel={t("common.delete")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setDeleting(null)} onConfirm={deleteSession} />
+    <ConfirmDialog open={Boolean(deleting)} danger title={t("collaboration.deleteChild")} description={deleting ? `${deleting.title} · ${deleting.engine}` : undefined} impact={t("collaboration.deleteImpact")} confirmLabel={t("common.delete")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={busy} onClose={() => setDeleting(null)} onConfirm={deleteSession} />
   </section>;
 }

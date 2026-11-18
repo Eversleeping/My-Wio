@@ -1,6 +1,10 @@
 package task
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"time"
+)
 
 type Budgets struct {
 	Concurrency   int `json:"concurrency"`
@@ -12,6 +16,54 @@ type Budgets struct {
 	Reworks       int `json:"reworks,omitempty"`
 	StepSeconds   int `json:"step_seconds"`
 	RunSeconds    int `json:"run_seconds"`
+
+	messagesSpecified bool
+	reworksSpecified  bool
+}
+
+// Preserve default values for older requests and grants that omitted these
+// budgets. An explicit zero disables the corresponding behavior.
+func (b *Budgets) UnmarshalJSON(raw []byte) error {
+	type fields Budgets
+	var decoded struct {
+		fields
+		Messages *int `json:"messages"`
+		Reworks  *int `json:"reworks"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*b = Budgets(decoded.fields)
+	if decoded.Messages != nil {
+		b.Messages, b.messagesSpecified = *decoded.Messages, true
+	}
+	if decoded.Reworks != nil {
+		b.Reworks, b.reworksSpecified = *decoded.Reworks, true
+	}
+	return nil
+}
+
+func (b Budgets) MarshalJSON() ([]byte, error) {
+	var messages, reworks *int
+	if b.Messages != 0 || b.messagesSpecified {
+		messages = &b.Messages
+	}
+	if b.Reworks != 0 || b.reworksSpecified {
+		reworks = &b.Reworks
+	}
+	return json.Marshal(struct {
+		Concurrency   int  `json:"concurrency"`
+		Messages      *int `json:"messages,omitempty"`
+		Attempts      int  `json:"attempts"`
+		StepAttempts  int  `json:"step_attempts"`
+		Runs          int  `json:"runs"`
+		PlanRevisions int  `json:"plan_revisions"`
+		Reworks       *int `json:"reworks,omitempty"`
+		StepSeconds   int  `json:"step_seconds"`
+		RunSeconds    int  `json:"run_seconds"`
+	}{b.Concurrency, messages, b.Attempts, b.StepAttempts, b.Runs, b.PlanRevisions, reworks, b.StepSeconds, b.RunSeconds})
 }
 
 func DefaultBudgets() Budgets {
@@ -25,14 +77,14 @@ func ValidateBudgets(b Budgets) error {
 }
 
 func (b Budgets) MessageLimit() int {
-	if b.Messages == 0 {
+	if b.Messages == 0 && !b.messagesSpecified {
 		return 100
 	}
 	return b.Messages
 }
 
 func (b Budgets) ReworkLimit() int {
-	if b.Reworks == 0 {
+	if b.Reworks == 0 && !b.reworksSpecified {
 		return 2
 	}
 	return b.Reworks

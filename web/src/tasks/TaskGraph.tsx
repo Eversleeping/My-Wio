@@ -50,7 +50,7 @@ export function TaskGraph({ steps, members, projection = [], onSelect }: {
       ctx.lineWidth = 1;
       for (const step of steps) {
         const target = nodes.current.get(step.id)?.getBoundingClientRect();
-        if (!target || invalid.has(step.id)) continue;
+        if (!target) continue;
         for (const id of step.depends_on ?? []) {
           const source = nodes.current.get(id)?.getBoundingClientRect();
           if (!source) continue;
@@ -59,6 +59,7 @@ export function TaskGraph({ steps, members, projection = [], onSelect }: {
           const startY = source.top + source.height / 2 - bounds.top;
           const endY = target.top + target.height / 2 - bounds.top;
           const mid = (startX + endX) / 2;
+          ctx.setLineDash(invalid.has(step.id) && invalid.has(id) ? [4, 3] : []);
           ctx.beginPath();
           ctx.moveTo(startX, startY);
           ctx.bezierCurveTo(mid, startY, mid, endY, endX, endY);
@@ -72,8 +73,10 @@ export function TaskGraph({ steps, members, projection = [], onSelect }: {
     const observer = new ResizeObserver(draw);
     observer.observe(element);
     for (const node of nodes.current.values()) observer.observe(node);
+    const theme = new MutationObserver(draw);
+    theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     draw();
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); theme.disconnect(); };
   }, [steps, invalid]);
   return <div className="task-graph-scroll" role="group" aria-label={t("tasks.graph")}>
     <div className="task-graph" ref={container}>

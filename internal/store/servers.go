@@ -225,8 +225,16 @@ func (s *Store) deleteServerRecords(ctx context.Context, tx *sqlx.Tx, serverID s
 		UNION SELECT project_id FROM agent_operations WHERE server_id=? AND project_id IS NOT NULL`), serverID, serverID, serverID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM events WHERE stream_id IN (
-		SELECT t.id FROM codex_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE w.server_id=?)`), serverID); err != nil {
+	var workspaces []string
+	if err := tx.SelectContext(ctx, &workspaces, s.Q("SELECT id FROM workspaces WHERE server_id=?"), serverID); err != nil {
+		return err
+	}
+	for _, workspace := range workspaces {
+		if err := s.clearWorkspaceSessionRecords(ctx, tx, workspace); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=?"), serverID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, s.Q(`DELETE FROM codex_snapshots WHERE
@@ -381,7 +389,7 @@ func (s *Store) repairServerEnrollment(ctx context.Context, e Enrollment, hostna
 		}
 		return server, err
 	}
-	if _, err = tx.ExecContext(ctx, s.Q("UPDATE server_engines SET cli_version='',ready=0 WHERE server_id=? AND engine IN ('codex','gemini')"), e.ServerID); err != nil {
+	if _, err = tx.ExecContext(ctx, s.Q("UPDATE server_engines SET cli_version='',ready=0 WHERE server_id=?"), e.ServerID); err != nil {
 		return server, err
 	}
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE agent_credentials SET token_hash=?,created_at=?,revoked_at=NULL WHERE server_id=?"), HashToken(agentToken), time.Now().UTC(), e.ServerID); err != nil {

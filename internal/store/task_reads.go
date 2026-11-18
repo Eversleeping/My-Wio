@@ -107,10 +107,10 @@ func (s *Store) TaskPage(ctx context.Context, f task.Filter) (task.Page, error) 
 	default:
 		return result, task.Fail(task.Invalid, "invalid task state")
 	}
-	query := "SELECT t.* FROM tasks t LEFT JOIN task_runs r ON r.id=t.current_run_id AND r.task_id=t.id WHERE t.project_id=?"
+	query := "SELECT t.*," + taskStateSQL + " AS task_state FROM tasks t" + taskCurrentRunJoin + " WHERE t.project_id=?"
 	args := []any{f.ProjectID}
 	if f.State != "" {
-		query += " AND CASE WHEN r.id IS NULL THEN 'draft' WHEN r.state IN ('running','paused','blocked','cancelling') THEN 'active' ELSE r.state END=?"
+		query += " AND " + taskStateSQL + "=?"
 		args = append(args, f.State)
 	}
 	if f.Cursor != "" {
@@ -130,7 +130,7 @@ func (s *Store) TaskPage(ctx context.Context, f task.Filter) (task.Page, error) 
 		if err := tx.GetContext(ctx, &exists, s.Q("SELECT id FROM projects WHERE id=?"), f.ProjectID); err != nil {
 			return err
 		}
-		rows := []taskRow{}
+		rows := []taskStateRow{}
 		if err := tx.SelectContext(ctx, &rows, s.Q(query), args...); err != nil {
 			return err
 		}
@@ -140,7 +140,7 @@ func (s *Store) TaskPage(ctx context.Context, f task.Filter) (task.Page, error) 
 		}
 		result.Items = []task.Task{}
 		for _, row := range rows {
-			t, err := s.taskTx(ctx, tx, f.ProjectID, row.ID)
+			t, err := row.decode()
 			if err != nil {
 				return err
 			}
@@ -211,8 +211,8 @@ func (s *Store) TaskProject(ctx context.Context, id string) (string, error) {
 
 func (s *Store) RecentTasks(ctx context.Context) ([]task.Recent, error) {
 	rows := []task.Recent{}
-	err := s.DB.SelectContext(ctx, &rows, `SELECT t.id,t.project_id,p.name AS project_name,t.title,COALESCE(r.state,'draft') AS state
- FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_runs r ON r.id=t.current_run_id AND r.task_id=t.id
+	err := s.DB.SelectContext(ctx, &rows, `SELECT t.id,t.project_id,p.name AS project_name,t.title,`+taskStateSQL+` AS state
+ FROM tasks t JOIN projects p ON p.id=t.project_id`+taskCurrentRunJoin+`
  WHERE t.archived_at IS NULL ORDER BY t.updated_at DESC,t.id DESC LIMIT 5`)
 	return rows, err
 }

@@ -7,7 +7,6 @@ import { Section } from "./PageUI";
 
 export function ServerAccessSettings() {
  const { t, language } = useI18n();
- const text = (zh:string,en:string) => language === "zh-CN" ? zh : en;
  const servers = useResource(endpoints.list());
  const [id,setID] = useState("");
  const server = servers.data?.find(item => item.id === id);
@@ -25,11 +24,11 @@ export function ServerAccessSettings() {
    const reply=await endpoints.runtimeResult(target,operationID);
    if(generation.current!==run)return null;
    if(reply.status==="succeeded" && reply.settings)return reply.settings;
-   if(["failed","cancelled","canceled","interrupted"].includes(reply.status))throw new Error(reply.error||text("Agent 未能应用设置，请重试", "Agent could not apply settings; retry"));
+   if(["failed","cancelled","canceled","interrupted"].includes(reply.status))throw new Error(reply.error||t("server.runtime.applyFailed"));
    await pause();
   }
   if(generation.current!==run)return null;
-  throw new Error(text("等待 Agent 响应超时，请重新读取当前设置", "Timed out waiting for the Agent; read the current settings again"));
+  throw new Error(t("server.runtime.responseTimeout"));
  }
  async function read(target:string,run:number) {
   const queued=await endpoints.runtimeRead(target);
@@ -55,7 +54,7 @@ export function ServerAccessSettings() {
  async function apply() {
   if(!access)return;
   const target=id,expected={...access},run=generation.current;
-  setBusy(true);setError("");setNotice(text("正在应用设置，等待 Agent 重连确认…", "Applying settings; waiting for the Agent to reconnect…"));
+  setBusy(true);setError("");setNotice(t("server.runtime.applying"));
   try {
    const queued=await endpoints.runtimeApply(target,expected);
    const saved=await operation(target,queued.operation_id,run);
@@ -66,60 +65,60 @@ export function ServerAccessSettings() {
      const actual=await read(target,run);
      if(!actual)return;
      if(actual.applied && !actual.restart_required && actual.allow_sudo===expected.allow_sudo) {
-      setAccess(actual);setNotice(text("设置已由 Agent 应用并确认生效", "Settings applied and confirmed by the Agent"));return;
+      setAccess(actual);setNotice(t("server.runtime.applied"));return;
      }
     } catch { /* A restart briefly disconnects the Agent; retry confirmation. */ }
     await pause();
    }
-   if(generation.current===run)throw new Error(text("尚未确认 Agent 应用设置，请重新读取当前状态", "Agent settings have not been confirmed; read the current state again"));
+   if(generation.current===run)throw new Error(t("server.runtime.applyUnconfirmed"));
   }catch(err){if(generation.current===run){setError(String(err));setNotice("");}}
   finally{if(generation.current===run)setBusy(false);}
  }
  async function upgrade() {
   const target=id,run=generation.current;setError("");
-  try {await endpoints.updateAgent(target);if(generation.current===run){setUpgrading(true);setNotice(text("Agent 升级已排队，升级后会自动读取设置", "Agent upgrade queued; settings will load after it reconnects"));}}
+  try {await endpoints.updateAgent(target);if(generation.current===run){setUpgrading(true);setNotice(t("server.runtime.upgradeQueued"));}}
   catch(err){if(generation.current===run)setError(String(err));}
  }
  async function restartAgent() {
   const target=id,run=generation.current;
-  setBusy(true);setError("");setNotice(text("正在重启 Agent，等待重新连接…", "Restarting the Agent; waiting for it to reconnect…"));
+  setBusy(true);setError("");setNotice(t("server.runtime.restarting"));
   try {
    const queued=await endpoints.restartAgent(target);
    const before=await operation(target,queued.operation_id,run);
    if(!before)return;
-   if(!before.instance_id)throw new Error(text("请先升级 Agent 后重试重启", "Upgrade the Agent before retrying the restart"));
+   if(!before.instance_id)throw new Error(t("server.runtime.restartRequiresUpgrade"));
    const deadline=Date.now()+90000;
    while(generation.current===run&&Date.now()<deadline) {
     try {
      const actual=await read(target,run);
      if(!actual)return;
      if(actual.instance_id&&actual.instance_id!==before.instance_id&&actual.applied&&!actual.restart_required) {
-      setAccess(actual);setNotice(text("Agent 已重启并重新连接", "Agent restarted and reconnected"));servers.reload();return;
+      setAccess(actual);setNotice(t("server.runtime.restarted"));servers.reload();return;
      }
     } catch { /* The service disconnects while restarting; retry confirmation. */ }
     await pause();
    }
-   if(generation.current===run)throw new Error(text("尚未确认 Agent 重启完成，请重新读取设置", "Agent restart has not been confirmed; read the settings again"));
+   if(generation.current===run)throw new Error(t("server.runtime.restartUnconfirmed"));
   }catch(err){if(generation.current===run){setError(String(err));setNotice("");}}
   finally{if(generation.current===run)setBusy(false);}
  }
- return <Section title={text("服务器运行设置","Server runtime settings")} icon={<ShieldCheck size={18}/>}><div className="settings-content">
-  <p>{text("选择已注册服务器，直接通过 Agent 配置 sudo 权限。应用设置会重启 Agent，请先结束运行中的会话。", "Select a registered server to configure sudo access through its Agent. Applying settings restarts the Agent; finish active sessions first.")}</p>
+ return <Section title={t("server.runtime.title")} icon={<ShieldCheck size={18}/>}><div className="settings-content">
+  <p>{t("server.runtime.instructions")}</p>
   {servers.error && <p role="alert">{servers.error}<button onClick={servers.reload}>{t("common.retry")}</button></p>}
-  <label className="field"><span>{text("选择服务器","Select server")}</span><select value={id} onChange={event=>{setID(event.target.value);setUpgrading(false);}}><option value="">{text("请选择服务器","Choose a server")}</option>{(servers.data??[]).map(item=><option key={item.id} value={item.id}>{item.is_control_plane?t("server.controlPlane"):item.name}</option>)}</select></label>
-  {server?.is_control_plane ? <p>{text("内置 Agent 由控制面部署管理。sudo 权限由部署环境的运行账户管理。", "The built-in Agent is managed by the control-plane deployment. Its runtime account controls sudo access.")}</p> : server && <>
-   {server.status!=="online" && <p role="status">{text("服务器离线，等待 Agent 连接后可配置", "Server offline; settings are available when the Agent connects")}</p>}
-   {!server.agent_access_supported && <p>{text("请先升级此服务器的 Agent，以支持直接配置运行设置。", "Upgrade this server's Agent to configure runtime settings directly.")}</p>}
-   {server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):text("升级 Agent","Upgrade Agent")}</button>}
+  <label className="field"><span>{t("server.runtime.server")}</span><select value={id} onChange={event=>{setID(event.target.value);setUpgrading(false);}}><option value="">{t("server.runtime.chooseServer")}</option>{(servers.data??[]).map(item=><option key={item.id} value={item.id}>{item.is_control_plane?t("server.controlPlane"):item.name}</option>)}</select></label>
+  {server?.is_control_plane ? <p>{t("server.runtime.builtIn")}</p> : server && <>
+   {server.status!=="online" && <p role="status">{t("server.runtime.offline")}</p>}
+   {!server.agent_access_supported && <p>{t("server.runtime.upgradeRequired")}</p>}
+   {server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):t("server.runtime.upgrade")}</button>}
    <fieldset className="settings-fields" disabled={busy||upgrading||!access||server.status!=="online"||!server.agent_access_supported}>
     <label className={`agent-access-option ${access?.allow_sudo?"enabled":""}`}><input type="checkbox" checked={access?.allow_sudo??false} disabled={access?.restart_required} onChange={event=>{if(access)setAccess({...access,allow_sudo:event.target.checked});}}/><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
-    <button className="primary-button" onClick={()=>void apply()}>{text("应用服务器设置","Apply server settings")}</button>
+    <button className="primary-button" onClick={()=>void apply()}>{t("server.runtime.apply")}</button>
    </fieldset>
-   {access?.restart_required&&!busy&&<p role="status">{text("上次设置仍待完成重启，请点击“应用服务器设置”完成后再调整开关。", "The previous change still needs a restart. Apply the server settings to finish before changing the switches.")}</p>}
-   {access&&!access.applied&&!access.restart_required&&!busy&&<p role="status">{text("已保存的设置尚未由当前 Agent 确认生效，可重新应用。", "The running Agent has not confirmed the saved settings; apply them again to finish.")}</p>}
-   <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{text("重启 Agent","Restart Agent")}</button>
-   {!server.agent_restart_supported&&server.agent_access_supported&&<p>{text("请升级此服务器的 Agent，以使用独立重启按钮。", "Upgrade this server's Agent to use the restart button.")}</p>}
-   <button className="secondary-button" disabled={busy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{text("重新读取设置","Read settings again")}</button>
+   {access?.restart_required&&!busy&&<p role="status">{t("server.runtime.restartPending")}</p>}
+   {access&&!access.applied&&!access.restart_required&&!busy&&<p role="status">{t("server.runtime.savedUnconfirmed")}</p>}
+   <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{t("server.runtime.restart")}</button>
+   {!server.agent_restart_supported&&server.agent_access_supported&&<p>{t("server.runtime.upgradeForRestart")}</p>}
+   <button className="secondary-button" disabled={busy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{t("server.runtime.readAgain")}</button>
   </>}
   {busy&&<p role="status">{t("common.loading")}</p>}
   {error&&<p role="alert">{error}</p>}

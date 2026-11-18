@@ -44,7 +44,6 @@ export default function UnifiedSessionsPage({ selected, initialFilter, entry, on
   const [scheduling, setScheduling] = useState<{workspaceID:string; thread?:AISession} | null>(null);
   const [creation, setCreation] = useState<{ workspaceID: string } | null>(null);
   const appliedEntry = useRef<SessionEntry>();
-  const focusedEntry = useRef<SessionEntry>();
   const [focusWorkspaceID, setFocusWorkspaceID] = useState("");
   useEffect(() => {
     if (!entry || !workspaces.data || appliedEntry.current === entry) return;
@@ -52,7 +51,7 @@ export default function UnifiedSessionsPage({ selected, initialFilter, entry, on
     const workspace = workspaces.data.find(item => item.id === entry.workspaceID);
     if (!workspace) props.notify(t("sessions.workspaceMissing"));
     else {
-      setFilter(""); setArchived(false); setShowAll(true); setSearch(workspace.path); setFocusWorkspaceID(workspace.id);
+      setFilter(""); setArchived(false); setShowAll(true); setSearch(workspace.path); setFocusWorkspaceID(entry.create ? "" : workspace.id);
       if (workspace.project_hidden_at) props.notify(t("sessions.workspaceHidden"));
       if (entry.create && workspace.status === "ready") setCreation({workspaceID:workspace.id});
     }
@@ -65,11 +64,11 @@ export default function UnifiedSessionsPage({ selected, initialFilter, entry, on
   const items = includeSelection(source.data ?? [], active, archived, filter, search, workspaces.data ?? []);
   const groups = unifiedGroups(items, workspaces.data ?? [], source.groups, showAll, search);
   useEffect(() => {
-    if (!entry || focusedEntry.current === entry || !focusWorkspaceID || entry.create) return;
+    if (!focusWorkspaceID) return;
     const group = document.getElementById(`session-workspace-${focusWorkspaceID}`);
-    if (group) { group.focus(); group.scrollIntoView?.({block:"nearest"}); focusedEntry.current = entry; }
-  }, [entry, focusWorkspaceID, groups]);
-  const management = useUnifiedManagement({ workspaces: workspaces.data ?? [], online: new Set((servers.data ?? []).filter(server => server.status === "online").map(server => server.id)), refresh, select: ref => { if (ref) setArchived(false); onSelect(ref); }, notify: props.notify, onNew: openNew, onSchedule: thread => setScheduling({workspaceID:thread.workspace_id,thread}), onWorkspaceSchedule: workspaceID => setScheduling({workspaceID}) });
+    if (group) { group.focus(); group.scrollIntoView?.({block:"nearest"}); setFocusWorkspaceID(""); }
+  }, [focusWorkspaceID, groups]);
+  const management = useUnifiedManagement({ selected, workspaces: workspaces.data ?? [], online: new Set((servers.data ?? []).filter(server => server.status === "online").map(server => server.id)), refresh, select: ref => { if (ref) setArchived(false); onSelect(ref); }, notify: props.notify, onNew: openNew, onSchedule: thread => setScheduling({workspaceID:thread.workspace_id,thread}), onWorkspaceSchedule: workspaceID => setScheduling({workspaceID}) });
   const engine = selected?.engine ?? "codex";
   const Conversation = engineModule(engine).Conversation;
   const selectKey = (key: string) => { const item = items.find(item => sessionKey(item) === key); if (item) onSelect({ engine: item.engine, id: item.id }); };

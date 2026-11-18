@@ -35,7 +35,7 @@ func (s codexCollaborationDriver) Create(ctx context.Context, tx *sqlx.Tx, ref s
 }
 
 func (s codexCollaborationDriver) Send(ctx context.Context, tx *sqlx.Tx, t CollaborationSession, prompt string) (string, error) {
-	op, _, err := s.queueCodexTurnTx(ctx, tx, Thread{ID: t.ID, ServerID: t.ServerID, ProjectID: t.ProjectID, WorkspaceID: t.WorkspaceID}, protocol.StartTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID, WorkspaceID: t.WorkspaceID, Workspace: t.Path, Prompt: prompt, Model: t.Model, ReasoningEffort: t.Effort, ApprovalMode: t.Mode})
+	op, _, err := s.queueCodexTurnTx(ctx, tx, Thread{ID: t.ID, ServerID: t.ServerID, ProjectID: t.ProjectID, WorkspaceID: t.WorkspaceID}, protocol.StartTurnCommand{ThreadID: t.ID, CodexThread: t.NativeID, WorkspaceID: t.WorkspaceID, Workspace: t.Path, Prompt: prompt, Model: t.Model, ReasoningEffort: t.Effort, ApprovalMode: t.Mode}, nil)
 	return op, err
 }
 

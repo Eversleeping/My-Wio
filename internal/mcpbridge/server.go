@@ -26,7 +26,7 @@ func Start(ctx context.Context, call sessiontools.Caller) (map[string]any, func(
 	token := uuid.NewString() + uuid.NewString()
 	name := "wio_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 	limit := make(chan struct{}, 8)
-	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/mcp" {
 			http.NotFound(w, r)

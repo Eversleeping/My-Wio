@@ -20,7 +20,8 @@ export function TaskGrantForm({ detail, workspaces, onClose }: {
   const members = base.plan?.members ?? [];
   return <TaskForm title={t("tasks.authorization")} submitLabel={enabled ? "tasks.authorize" : "tasks.revoke"}
     onClose={onClose} prepare={() => {
-      const { id, project_id, version } = base.task;
+      if (base.plan?.id !== detail.plan?.id || base.grant?.revision !== detail.grant?.revision) throw new Error(t("tasks.draftOutdated"));
+      const { id, project_id, version } = detail.task;
       const run = taskCommand(tasks.grant(id, project_id), project_id, {
         expected_version: version, enabled, task_tools: taskTools, budgets: values,
         allowed_members: members.map(member => member.id),
@@ -43,7 +44,7 @@ export function TaskGrantForm({ detail, workspaces, onClose }: {
     {!enabled && <p>{t("tasks.revokeNotice")}</p>}
     <div className="task-form-grid">{(Object.keys(defaultBudgets) as (keyof Budgets)[]).map(key =>
       <Field key={key} label={t(`tasks.budget.${key}`)}>
-        <input required type="number" min={1} max={maxBudgets[key]} value={values[key] || ""}
+        <input required type="number" min={key === "messages" || key === "reworks" ? 0 : 1} max={maxBudgets[key]} value={values[key]}
           onChange={e => setValues({ ...values, [key]: Number(e.target.value) })} />
       </Field>
     )}</div>
@@ -62,15 +63,18 @@ export function TaskRunForm({ detail, dialog, onClose }: {
   const { task, run, plan, grant } = base;
   const action = typeof dialog === "object" ? dialog.action : dialog === "archive" && task.archived_at ? "restore" : dialog;
   const prepare = () => {
-    const { id, project_id: project, version } = task;
+    const { id, project_id: project, version } = detail.task;
     if (dialog === "start" && plan && grant) {
+      if (plan.id !== detail.plan?.id || grant.revision !== detail.grant?.revision) throw new Error(t("tasks.draftOutdated"));
       return taskCommand(tasks.start(id, project), project, { expected_version: version, plan_id: plan.id, grant_revision: grant.revision });
     }
     if (dialog === "archive") {
+      if (task.archived_at !== detail.task.archived_at) throw new Error(t("tasks.draftOutdated"));
       return taskCommand(tasks.archive(id, project), project, { expected_version: version, archived: !task.archived_at });
     }
     if (!run || typeof dialog !== "object") throw new Error(t("tasks.runUnavailable"));
-    const meta = { expected_version: run.version, reason: reason.trim() };
+    if (run.id !== detail.run?.id) throw new Error(t("tasks.draftOutdated"));
+    const meta = { expected_version: detail.run.version, reason: reason.trim() };
     if (dialog.action === "accepted" || dialog.action === "rejected") {
       return taskCommand(tasks.accept(id, project, run.id), project, { ...meta, decision: dialog.action, evidence_hash: base.acceptance_evidence_hash });
     }

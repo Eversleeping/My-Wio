@@ -37,6 +37,8 @@ type Client struct {
 	instanceOnce       sync.Once
 	instanceID         string
 	runtimeAccessCall  func(context.Context, runtimeaccess.Request) (protocol.AgentAccessSettings, error)
+	runtimeHelperMu    sync.Mutex
+	runtimeHelperTag   string
 	toolMu             sync.Mutex
 	toolReplies        map[string]chan sessiontools.Reply
 	config             Config

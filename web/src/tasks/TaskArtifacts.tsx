@@ -55,7 +55,7 @@ function ArtifactForm({ detail, artifact, workspaces, candidateIDs, onClose }: {
   const targets = workspaces.filter(w => w.status === "ready" && (action === "preflight" || w.id !== artifact?.workspace_id && w.kind === "worktree" && w.management_mode === "managed"));
   const label = artifact ? "tasks.artifact.prepare" : "tasks.artifact.capture";
   return <TaskForm title={t(label)} submitLabel={label} onClose={onClose} prepare={() => {
-    const { id, project_id, version } = base.task;
+    const { id, project_id, version } = detail.task;
     const run = artifact
       ? taskCommand(artifacts.handoff(id, project_id, artifact.id), project_id, { expected_version: version, digest: artifact.digest, workspace_id: workspace, action })
       : taskCommand(artifacts.capture(id, project_id), project_id, { expected_version: version, attempt_id: attempt, paths: paths.split("\n").map(p => p.trim()).filter(Boolean) });

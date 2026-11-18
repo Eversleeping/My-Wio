@@ -200,7 +200,8 @@ docker compose -p "$WIO_COMPOSE_PROJECT" \
 - 库结构比程序更新时，启动报错形如 `database schema version 2 is newer than supported schema version 1 (control plane <版本>); use a control plane supporting schema version 2 or later`。按升级说明选择支持该结构的控制面，不要删除或修改版本记录绕过检查。此保护仅存在于包含 P1-03 的新制品，早期旧制品无法识别新库；破坏性迁移必须在升级说明标出最低可回滚版本，并与扩展迁移至少间隔一个发布版本。编写与验证规则见[数据库迁移](OPERATIONS.md#数据库迁移)。
 - 包含 P2-07 的 M4 制品会将结构从 1 升到 3，迁移定时任务与服务器引擎配置。旧表保留但不再承接对应的新写入；原 M3 制品只支持结构 1，不能直接连接升级库。发布时记录支持结构 3 的实际制品作为最低可用版本。若退回 M3，必须同时恢复升级前数据库备份；恢复会丢失升级后的变更，除非先完成增量协调。上线前用最新备份在隔离实例中确认任务数量、下次运行时间、启用状态和引擎凭据绑定一致。
 - **P2-10 / schema 5 是破坏性迁移**：启动支持此迁移的制品后，将删除 `codex_scheduled_tasks`、`gemini_scheduled_tasks`、`claude_scheduled_tasks`、`server_gemini_credential_profiles`、`server_claude_credential_profiles`、`server_claude_cli` 六张停用表，以及 `servers` 的 `codex_version` / `codex_ready` / `gemini_version` / `gemini_ready` 和 `server_credential_profiles.codex_profile_id` 五列。当前任务和引擎配置从统一表读取；原生线程表、Git 绑定和凭据更新追溯保留。schema 5 的首个已验收发布制品为 `e3d9d78`（Agent 0.3.26）；具体环境状态以部署记录及实际迁移版本为准。
-- 当前数据库最高迁移版本为 schema 11。P7 / 0.3.43 依次应用 schema 7 至 11，新增任务、执行、成果、审查与团队协作存储。原生会话与既有迁移保留。
+- 当前数据库最高迁移版本为 schema 12。P7 / 0.3.43 依次应用 schema 7 至 11，新增任务、执行、成果、审查与团队协作存储。0.3.44 在任务步骤记录中增加返工反馈字段，并为中断操作关联增加索引。
+- **0.3.44 回滚边界**：0.3.43 控制面最多支持 schema 11。发布前用生产备份演练 11 → 12 与重复启动。回退到 0.3.43 时恢复匹配的 schema 11 备份和旧制品，并先保留切换后的数据库以便协调新增写入。
 - **P7 回滚边界**：只支持 schema 6 的 0.3.39 控制面会拒绝启动已升级的数据库。升级前用生产备份在隔离实例中验证 6 → 11、重复启动、旧制品拒绝新库，以及恢复 schema 6 备份后使用匹配旧制品启动。退回 0.3.39 时同时恢复升级前数据库，并先保留当前库以便协调切换后的写入。
 - **schema 5 的最低可回滚制品必须支持 schema 5**。M3（schema 1）、M5（schema 3）和只支持 schema 4 的制品均不能直接连接升级库；同一个 Agent 版本号也不能证明控制面 schema 兼容。发布前记录实际 Git 提交和镜像摘要，并用升级前备份在隔离实例演练升级、重复启动、任务与凭据绑定核对及旧制品拒绝启动。需要退回旧制品时，须同步恢复升级前备份，并明确升级后增量的丢失或协调方式；禁止补造已删除的表或修改迁移记录绕过保护。
 - 丢失 `WIO_MASTER_KEY` 将使 Vault 中加密的 TOTP 密钥、凭据预设和部分 Agent 状态无法恢复，不能用新的随机值无损替换。

@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/task"
 	"github.com/wio-platform/wio/internal/taskartifact"
 )
+
+const taskReviewRecoveryQueued = "task.review.recovery.queued"
 
 func findTaskStep(plan task.Plan, id string) task.Step {
 	for _, step := range plan.Steps {
@@ -52,10 +55,14 @@ func (s *Store) taskReviewInputTx(ctx context.Context, tx *sqlx.Tx, run, workspa
 		return "", nil, err
 	}
 	var prepared struct {
-		ArtifactID string `db:"artifact_id"`
-		State      string `db:"state"`
+		ArtifactID   string                   `db:"artifact_id"`
+		State        string                   `db:"state"`
+		AgentVersion string                   `db:"agent_version"`
+		Declared     capabilities.Declaration `db:"declared_capabilities"`
 	}
-	err = tx.GetContext(ctx, &prepared, s.Q("SELECT artifact_id,state FROM task_artifact_handoffs WHERE workspace_id=? AND action='apply' ORDER BY created_at DESC,id DESC LIMIT 1"), workspace)
+	err = tx.GetContext(ctx, &prepared, s.Q(`SELECT h.artifact_id,h.state,s.agent_version,`+serverCapabilitySelect+`
+		FROM task_artifact_handoffs h JOIN workspaces w ON w.id=h.workspace_id JOIN servers s ON s.id=w.server_id
+		WHERE h.workspace_id=? AND h.action='apply' AND h.state<>'failed' ORDER BY h.created_at DESC,h.id DESC LIMIT 1`), workspace)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, nil
 	}
@@ -72,6 +79,12 @@ func (s *Store) taskReviewInputTx(ctx context.Context, tx *sqlx.Tx, run, workspa
 	digest, err := taskartifact.Validate(out.Manifest)
 	if err != nil || digest != out.Digest {
 		return "", nil, task.Fail(task.Conflict, "review artifact evidence is invalid")
+	}
+	if capabilities.Supports(protocol.CapabilityTaskArtifactVerify, prepared.AgentVersion, prepared.Declared) {
+		out.MetadataOnly = true
+		for i := range out.Manifest.Files {
+			out.Manifest.Files[i].Content = nil
+		}
 	}
 	return selected.ID, out, nil
 }
@@ -335,6 +348,15 @@ func (s *Store) taskReworkTx(ctx context.Context, tx *sqlx.Tx, t task.Task, r ta
 		Artifact *string `json:"artifact_id" db:"artifact_id"`
 	}
 	var history []invalidated
+	review, err := row.review()
+	if err != nil {
+		return err
+	}
+	feedback := taskFeedbackFromReview(review, in.Reason)
+	rawFeedback, err := json.Marshal(feedback)
+	if err != nil {
+		return err
+	}
 	for _, step := range affected {
 		var active, attempts int
 		if err := tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM task_attempts WHERE run_id=? AND step_id=? AND state IN ('queued','running','unknown')"), r.ID, step); err != nil {
@@ -355,14 +377,17 @@ func (s *Store) taskReworkTx(ctx context.Context, tx *sqlx.Tx, t task.Task, r ta
 		}
 		history = append(history, prior)
 		state, charge := "pending", 0
+		var recovery *string
 		if step == root {
 			state, charge = "ready", 1
+			value := string(rawFeedback)
+			recovery = &value
 		}
-		if _, err := tx.ExecContext(ctx, s.Q("UPDATE task_step_runs SET state=?,current_attempt_id=NULL,artifact_id=NULL,block_code=NULL,reworks=reworks+?,version=version+1 WHERE run_id=? AND step_id=?"), state, charge, r.ID, step); err != nil {
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE task_step_runs SET state=?,current_attempt_id=NULL,artifact_id=NULL,block_code=NULL,reworks=reworks+?,recovery_json=?,version=version+1 WHERE run_id=? AND step_id=?"), state, charge, recovery, r.ID, step); err != nil {
 			return err
 		}
 	}
-	return s.taskEventTx(ctx, tx, t.ID, "task.review.recovery.queued", in.Meta, map[string]any{"run_id": r.ID, "root_step_id": root, "review_attempt_id": row.AttemptID, "invalidated": history})
+	return s.taskEventTx(ctx, tx, t.ID, taskReviewRecoveryQueued, in.Meta, map[string]any{"run_id": r.ID, "root_step_id": root, "review_attempt_id": row.AttemptID, "invalidated": history})
 }
 
 func taskDescendants(plan task.Plan, root string) []string {
@@ -377,4 +402,90 @@ func taskDescendants(plan task.Plan, root string) []string {
 		}
 	}
 	return ids
+}
+
+type taskRecoveryFeedback struct {
+	ReviewAttempt string             `json:"review_attempt_id"`
+	Verdict       string             `json:"verdict"`
+	ReviewReason  *string            `json:"review_reason,omitempty"`
+	Reason        string             `json:"recovery_reason,omitempty"`
+	Checks        []task.ReviewCheck `json:"checks,omitempty"`
+}
+
+func taskFeedbackFromReview(review task.Review, reason string) taskRecoveryFeedback {
+	feedback := taskRecoveryFeedback{ReviewAttempt: review.AttemptID, Verdict: *review.Verdict, ReviewReason: review.Reason, Reason: reason}
+	for _, check := range review.Checks {
+		if check.State != "passed" {
+			feedback.Checks = append(feedback.Checks, check)
+		}
+	}
+	return feedback
+}
+
+func (s *Store) taskRecoveryFeedbackTx(ctx context.Context, tx *sqlx.Tx, run, step string) (*taskRecoveryFeedback, error) {
+	var row struct {
+		Task     string  `db:"task_id"`
+		Reworks  int     `db:"reworks"`
+		Recovery *string `db:"recovery_json"`
+	}
+	if err := tx.GetContext(ctx, &row, s.Q("SELECT task_id,reworks,recovery_json FROM task_step_runs WHERE run_id=? AND step_id=?"), run, step); err != nil {
+		return nil, err
+	}
+	if row.Recovery == nil {
+		if row.Reworks == 0 {
+			return nil, nil
+		}
+		return s.legacyTaskRecoveryFeedbackTx(ctx, tx, row.Task, run, step)
+	}
+	var feedback taskRecoveryFeedback
+	if err := json.Unmarshal([]byte(*row.Recovery), &feedback); err != nil {
+		return nil, err
+	}
+	return &feedback, nil
+}
+
+// Older recovery events retained the review and the invalidation set.
+func (s *Store) legacyTaskRecoveryFeedbackTx(ctx context.Context, tx *sqlx.Tx, id, run, step string) (*taskRecoveryFeedback, error) {
+	var events []string
+	if err := tx.SelectContext(ctx, &events, s.Q("SELECT payload FROM events WHERE stream_id=? AND kind=? ORDER BY sequence DESC"), "task:"+id, taskReviewRecoveryQueued); err != nil {
+		return nil, err
+	}
+	for _, raw := range events {
+		var event task.Event
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, err
+		}
+		var recovery struct {
+			Run         string `json:"run_id"`
+			Root        string `json:"root_step_id"`
+			Review      string `json:"review_attempt_id"`
+			Invalidated []struct {
+				Step string `json:"step_id"`
+			} `json:"invalidated"`
+		}
+		if err := json.Unmarshal(event.Payload, &recovery); err != nil {
+			return nil, err
+		}
+		if recovery.Run != run {
+			continue
+		}
+		if recovery.Root == step {
+			var row taskReviewRow
+			if err := tx.GetContext(ctx, &row, s.Q(taskReviewSelect+" WHERE r.task_id=? AND r.run_id=? AND r.attempt_id=?"), id, run, recovery.Review); err != nil {
+				return nil, err
+			}
+			review, err := row.review()
+			if err != nil || review.Verdict == nil {
+				return nil, err
+			}
+			feedback := taskFeedbackFromReview(review, "")
+			return &feedback, nil
+		}
+		for _, invalidated := range recovery.Invalidated {
+			if invalidated.Step == step {
+				return nil, nil
+			}
+		}
+	}
+	return nil, nil
 }

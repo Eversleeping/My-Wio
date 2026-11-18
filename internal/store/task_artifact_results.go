@@ -47,7 +47,15 @@ func (s *Store) CompleteTaskArtifact(ctx context.Context, op Operation, receipt 
 		var manifest protocol.ArtifactManifest
 		var digest string
 		var raw *string
-		if !unknown && receipt.Status == "succeeded" {
+		var handoffReceipt protocol.TaskArtifactReceipt
+		var handoffCommand struct{ Action string }
+		matchingHandoff := !capture && json.Unmarshal(receipt.Data, &handoffReceipt) == nil &&
+			json.Unmarshal([]byte(op.Payload), &handoffCommand) == nil &&
+			handoffReceipt.Digest == row.Payload && handoffReceipt.Action == handoffCommand.Action
+		if matchingHandoff && handoffCommand.Action == "apply" && handoffReceipt.Unknown {
+			state = "unknown"
+		}
+		if state != "unknown" && receipt.Status == "succeeded" {
 			valid := false
 			if capture {
 				var expected []string
@@ -65,10 +73,7 @@ func (s *Store) CompleteTaskArtifact(ctx context.Context, op Operation, receipt 
 					}
 				}
 			} else {
-				var r protocol.TaskArtifactReceipt
-				var command struct{ Action string }
-				valid = json.Unmarshal(receipt.Data, &r) == nil && json.Unmarshal([]byte(op.Payload), &command) == nil &&
-					r.Digest == row.Payload && r.Action == command.Action
+				valid = matchingHandoff && !handoffReceipt.Unknown
 			}
 			if valid {
 				state, message = "ready", ""
@@ -99,7 +104,10 @@ func (s *Store) CompleteTaskArtifact(ctx context.Context, op Operation, receipt 
 		}
 		if capture && state == "ready" {
 			if _, err := tx.ExecContext(ctx, s.Q(`UPDATE task_step_runs SET artifact_id=?,state='succeeded',block_code=NULL,version=version+1
-                WHERE task_id=? AND block_code='artifact_required' AND current_attempt_id=(SELECT attempt_id FROM task_artifacts WHERE id=?)`), row.ID, row.Task, row.ID); err != nil {
+                WHERE task_id=? AND current_attempt_id=(SELECT attempt_id FROM task_artifacts WHERE id=?)
+                AND (block_code='artifact_required' OR (state='succeeded' AND artifact_id IS NOT NULL
+                    AND NOT EXISTS (SELECT 1 FROM task_reviews r WHERE r.artifact_id=task_step_runs.artifact_id)
+                    AND EXISTS (SELECT 1 FROM task_runs r WHERE r.id=task_step_runs.run_id AND r.state IN ('running','blocked','paused'))))`), row.ID, row.Task, row.ID); err != nil {
 				return err
 			}
 		}

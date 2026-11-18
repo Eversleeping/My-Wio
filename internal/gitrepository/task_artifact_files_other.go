@@ -12,7 +12,7 @@ import (
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
-func artifactWorkingFile(root, name string) (artifactContent, error) {
+func artifactWorkingFile(root, name string, allowPathOverlap bool) (artifactContent, error) {
 	parts := strings.Split(name, "/")
 	for i, part := range parts {
 		root = filepath.Join(root, part)
@@ -24,10 +24,16 @@ func artifactWorkingFile(root, name string) (artifactContent, error) {
 			return artifactContent{}, err
 		}
 		if i < len(parts)-1 {
+			if allowPathOverlap && info.Mode().IsRegular() {
+				return artifactContent{}, nil
+			}
 			if !info.IsDir() {
 				return artifactContent{}, errors.New("artifact parent must be a regular directory")
 			}
 			continue
+		}
+		if allowPathOverlap && info.IsDir() {
+			return artifactContent{}, nil
 		}
 		if !info.Mode().IsRegular() || info.Size() > protocol.MaxArtifactBytes {
 			return artifactContent{}, errors.New("artifact path must be a bounded regular file")

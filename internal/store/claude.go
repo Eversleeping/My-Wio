@@ -56,8 +56,8 @@ type ClaudeThread struct {
 
 const claudeThreadSelect = `SELECT t.*,cm.pinned_at,COALESCE(cm.fork_snapshot_id,'') AS fork_snapshot_id,COALESCE(cm.fork_session_id,'') AS fork_session_id,COALESCE(cto.effort,'') AS effort,w.path,w.project_id,` + projectServerName + ` AS project_name,` + projectServerPin + ` AS project_pinned_at,` + projectServerHidden + ` AS project_hidden_at,
  w.server_id,s.name AS server_name,s.agent_version,` + serverCapabilitySelect + `,COALESCE(ccli.version,'') AS claude_version,
- COALESCE((SELECT payload FROM events WHERE stream_id=t.id AND kind IN ('claude.steer.ready','claude.steer.closed') ORDER BY sequence DESC LIMIT 1),'') AS steer_state,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status,
- CASE WHEN t.status='interrupted' AND EXISTS (SELECT 1 FROM agent_operations o WHERE o.id=t.operation_id AND o.status IN ('queued','delivered','running')) THEN 1 ELSE 0 END AS recovery_pending
+ ` + claudeSessionSteerState + ` AS steer_state,CASE WHEN s.last_seen_at>? THEN 'online' ELSE 'offline' END AS server_status,
+ ` + nativeSessionRecovery + ` AS recovery_pending
  FROM claude_threads t LEFT JOIN claude_thread_management cm ON cm.thread_id=t.id LEFT JOIN claude_thread_options cto ON cto.thread_id=t.id JOIN workspaces w ON w.id=t.workspace_id JOIN projects p ON p.id=w.project_id JOIN servers s ON s.id=w.server_id LEFT JOIN ` + claudeEngineCLI + ` ccli ON ccli.server_id=s.id` + projectServerJoin
 
 func (s *Store) ClaudeThreads(ctx context.Context, archived bool) ([]ClaudeThread, error) {
@@ -329,19 +329,7 @@ func (s *Store) ConfirmClaudeStopped(ctx context.Context, threadID, operationID 
 }
 
 func (s *Store) UpdateClaudeThread(ctx context.Context, id, title string, archived bool) error {
-	var at *time.Time
-	if archived {
-		now := time.Now().UTC()
-		at = &now
-	}
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE claude_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='claude' AND b.session_id=claude_threads.id AND b.released_at IS NULL) AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running')))"), title, at, time.Now().UTC(), id)
-	if err != nil {
-		return err
-	}
-	if n, err := result.RowsAffected(); err != nil || n != 1 {
-		return ErrThreadActive
-	}
-	return nil
+	return s.UpdateNativeSessionMetadata(ctx, session.Ref{Engine: session.Claude, ID: id}, &title, &archived, nil)
 }
 
 func (s *Store) DeleteClaudeThread(ctx context.Context, id string) error {
@@ -357,20 +345,13 @@ func (s *Store) DeleteClaudeThread(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if n, err := result.RowsAffected(); err != nil || n != 1 {
-		return ErrThreadActive
+	if err := s.sessionMutationResult(ctx, tx, "claude_threads", id, result); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM scheduled_tasks WHERE engine='claude' AND thread_id=?"), id); err != nil {
 		return err
 	}
-	key := "claude:" + id
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_links WHERE target_key=?"), key); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=?"), id); err != nil {
+	if err := s.clearDeletedSessionRecords(ctx, tx, "claude", id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -385,11 +366,15 @@ func (s *Store) UnfinishedClaudeOperations(ctx context.Context, serverID string)
 func (thread *ClaudeThread) setSteerCapability() {
 	thread.setCapabilities()
 	thread.SteerSupported = thread.Capabilities.Steer
+	thread.SteerReady = thread.SteerSupported && thread.Status == "running" && claudeSteerReady(thread.SteerState, thread.OperationID)
+}
+
+func claudeSteerReady(raw, operation string) bool {
 	var state struct {
 		OperationID string `json:"operation_id"`
 		Ready       bool   `json:"ready"`
 	}
-	thread.SteerReady = thread.SteerSupported && thread.Status == "running" && json.Unmarshal([]byte(thread.SteerState), &state) == nil && state.OperationID == thread.OperationID && state.Ready
+	return json.Unmarshal([]byte(raw), &state) == nil && state.OperationID == operation && state.Ready
 }
 
 func (thread *ClaudeThread) setCapabilities() {

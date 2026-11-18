@@ -318,6 +318,11 @@ func assertTaskPauseCancel(t *testing.T, db *Store) {
 	if _, err := db.CancelOperation(ctx, *b.OperationID, "manual cancel"); !errors.Is(err, ErrStateConflict) {
 		t.Fatal("native cancellation bypassed run ownership", err)
 	}
+	for _, attempt := range []task.Attempt{b, c} {
+		if err := db.MarkDelivered(ctx, *attempt.OperationID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	taskRunAction(t, db, f, created.ID, run.ID, task.Action{Action: "cancel"})
 	if err := db.AdvanceTasks(ctx, "worker"); err != nil {
 		t.Fatal(err)
@@ -328,8 +333,8 @@ func assertTaskPauseCancel(t *testing.T, db *Store) {
 			t.Fatal("missing durable interrupt", attempt.Engine)
 		}
 		op, err := db.Operation(ctx, *attempt.OperationID)
-		if err != nil || op.Status != "queued" {
-			t.Fatal("queued was mistaken for unsent", op.Status, err)
+		if err != nil || op.Status != "delivered" {
+			t.Fatal("delivered work was mistaken for unsent", op.Status, err)
 		}
 	}
 	taskFinish(t, db, b, "cancelled")
@@ -452,6 +457,10 @@ func assertTaskUnknownCancel(t *testing.T, db *Store) {
 	}
 	stopped := time.Now().UTC().Add(-time.Second)
 	taskRunAction(t, db, f, created.ID, run.ID, task.Action{Action: "resolve_unknown", AttemptID: a.ID, Resolution: "cancelled", StoppedAt: &stopped, Evidence: "Verified remote process stopped through independent inspection"})
+	thread, err := db.Thread(ctx, a.SessionID)
+	if err != nil || thread.Status != "interrupted" {
+		t.Fatalf("confirmed stop left the native session busy: %+v %v", thread, err)
+	}
 	if err := db.ReconcileTaskAttempt(ctx, fence); err == nil {
 		t.Fatal("resolved unknown accepted old lease")
 	}
@@ -750,6 +759,9 @@ func assertTaskDeadlineInterrupt(t *testing.T, db *Store) {
 		t.Fatal(err)
 	}
 	a := taskAttemptFor(t, db, run.ID, "a")
+	if err := db.MarkDelivered(ctx, *a.OperationID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.DB.Exec(db.Q("UPDATE task_attempts SET deadline_at=? WHERE id=?"), time.Now().UTC().Add(-time.Minute), a.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -848,5 +860,39 @@ func assertTaskAcceptance(t *testing.T, db *Store, f taskFixture, created task.T
 	last, err := db.TaskDetail(ctx, f.project, created.ID)
 	if err != nil || last.Plan.ID == after.Plan.ID || last.RunPlan == nil || last.RunPlan.ID != after.Plan.ID || last.Run.State != "accepted" {
 		t.Fatal("previous run lost its original plan", err)
+	}
+}
+
+func TestTaskRetriesUncapturedArtifactAndCancelsBeforeDispatch(t *testing.T) {
+	ctx := context.Background()
+	db := testStore(t)
+	f, created, _, run := newTaskExecutionPlan(t, db, func(plan *task.AppendPlan) {
+		plan.Steps[0].Kind = "develop"
+		plan.Steps[0].CompletionPolicy = "artifact"
+	})
+	if _, err := db.DispatchTaskStep(ctx, created.ID, run.ID, "a", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	first := taskAttemptFor(t, db, run.ID, "a")
+	taskFinish(t, db, first, "succeeded")
+	taskRunAction(t, db, f, created.ID, run.ID, task.Action{Action: "retry_step", StepID: "a"})
+	if _, err := db.DispatchTaskStep(ctx, created.ID, run.ID, "a", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	second := taskAttemptFor(t, db, run.ID, "a")
+	if second.Number != 2 || second.ID == first.ID {
+		t.Fatalf("retry did not allocate a new attempt: %+v", second)
+	}
+	taskRunAction(t, db, f, created.ID, run.ID, task.Action{Action: "cancel"})
+	if err := db.AdvanceTasks(ctx, "worker"); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := db.ClaimCodexTurnDelivery(ctx, *second.OperationID)
+	if err != nil || claimed {
+		t.Fatalf("cancelled operation was still dispatchable: %v %v", claimed, err)
+	}
+	detail, err := db.TaskDetail(ctx, f.project, created.ID)
+	if err != nil || detail.Run.State != "cancelled" {
+		t.Fatalf("undelivered run did not reach cancelled: %+v %v", detail.Run, err)
 	}
 }

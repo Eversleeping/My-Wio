@@ -46,7 +46,7 @@ test("links operations to their actual resource type", async () => {
   expect(await screen.findByRole("link", { name: /server-1/ })).toHaveAttribute("href", "?view=servers");
   expect(screen.getByRole("link", { name: /project-management/ })).toHaveAttribute("href", "?view=projects&project_name=project-management&project_server_id=server-1");
   expect(screen.getByRole("link", { name: /project-workspace/ })).toHaveAttribute("href", "?view=projects&workspace_path=%2Fsrv%2Fproject&workspace_server_id=server-1");
-  expect(screen.getByRole("link", { name: /Investigate deployment/ })).toHaveAttribute("href", "?view=codex&thread=thread-1");
+  expect(screen.getByRole("link", { name: /Investigate deployment/ })).toHaveAttribute("href", "?view=sessions&engine=codex&thread=thread-1");
 });
 
 test("interrupts active scans, waits for confirmation, and permits retry after failure", async () => {

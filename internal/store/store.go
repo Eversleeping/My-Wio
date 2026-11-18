@@ -42,9 +42,8 @@ func OpenWithOptions(databaseURL string, options OpenOptions) (*Store, error) {
 	if options.PostgresMaxOpenConns == 0 {
 		options.PostgresMaxOpenConns = 20
 	}
-	driver, dsn := "sqlite", databaseURL
+	driver := "sqlite"
 	var db *sqlx.DB
-	var err error
 	if strings.HasPrefix(databaseURL, "postgres://") || strings.HasPrefix(databaseURL, "postgresql://") {
 		driver = "pgx"
 		config, parseErr := pgx.ParseConfig(databaseURL)
@@ -56,14 +55,17 @@ func OpenWithOptions(databaseURL string, options OpenOptions) (*Store, error) {
 		// JIT. Apply this to every pooled connection, including replacements.
 		config.RuntimeParams["jit"] = "off"
 		db = sqlx.NewDb(stdlib.OpenDB(*config), driver)
-	} else if dsn == "" {
-		dsn = "wio.db?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
-	}
-	if db == nil {
-		db, err = sqlx.Open(driver, dsn)
-	}
-	if err != nil {
-		return nil, err
+	} else {
+		dsn, err := sqliteDSN(databaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SQLite database options: %w", err)
+		}
+		handle, err := sql.Open(driver, dsn)
+		if err != nil {
+			return nil, err
+		}
+		db = sqlx.NewDb(sql.OpenDB(sqliteConnector{dsn: dsn, driver: handle.Driver()}), driver)
+		_ = handle.Close()
 	}
 	if driver == "sqlite" {
 		db.SetMaxOpenConns(1)
@@ -75,6 +77,7 @@ func OpenWithOptions(databaseURL string, options OpenOptions) (*Store, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	baselineApplied, err := runMigrations(ctx, db, driver, schemaMigrations)

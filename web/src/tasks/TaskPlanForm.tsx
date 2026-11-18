@@ -47,13 +47,20 @@ function predecessors(step: Step, steps: Step[]) {
   return steps.filter(candidate => found.has(candidate.id));
 }
 
+function removeUnreachableInputs(steps: Step[]) {
+  return steps.map(step => {
+    const ancestors = new Set(predecessors(step, steps).map(parent => parent.id));
+    return { ...step, input_refs: step.input_refs?.filter(input => input.kind === "text" || ancestors.has(input.step_id)) ?? [] };
+  });
+}
+
 export function TaskPlanForm({ detail, workspaces, onClose }: {
   detail: TaskDetail; workspaces: Workspace[]; onClose: () => void;
 }) {
   const { t } = useI18n();
   const [base] = useState(detail);
-  const [members, setMembers] = useState(() => detail.plan?.members ?? [newMember(workspaces)]);
-  const [steps, setSteps] = useState(() => detail.plan?.steps ?? [newStep(members[0].id)]);
+  const [members, setMembers] = useState(() => detail.plan?.members?.length ? detail.plan.members : [newMember(workspaces)]);
+  const [steps, setSteps] = useState(() => detail.plan?.members?.length && detail.plan.steps?.length ? detail.plan.steps : [newStep(members[0].id)]);
   const [reason, setReason] = useState("");
   const updateMember = (id: string, change: Partial<Member>) => setMembers(items => items.map(item => item.id === id ? { ...item, ...change } : item));
   const updateStep = (id: string, change: Partial<Step>) => setSteps(items => items.map(item => item.id === id ? { ...item, ...change } : item));
@@ -64,8 +71,9 @@ export function TaskPlanForm({ detail, workspaces, onClose }: {
 
   return <TaskForm title={t("tasks.editPlan")} submitLabel="tasks.savePlan" onClose={onClose} disabled={!ready.length || invalid.size > 0}
     prepare={() => {
+      if (base.plan?.id !== detail.plan?.id || base.task.spec_version !== detail.task.spec_version) throw new Error(t("tasks.draftOutdated"));
       const run = taskCommand(tasks.plan(base.task.id, base.task.project_id), base.task.project_id, {
-        expected_version: base.task.version, parent_id: base.plan?.id, reason: reason.trim(), members,
+        expected_version: detail.task.version, parent_id: base.plan?.id, reason: reason.trim(), members,
         steps: steps.map(step => ({
           ...step,
           criterion_ids: (step.criterion_ids ?? []).filter(id => base.task.criteria.some(criterion => criterion.id === id))
@@ -148,7 +156,10 @@ export function TaskPlanForm({ detail, workspaces, onClose }: {
       {steps.length > 1 && <fieldset className="task-checks"><legend>{t("tasks.dependencies")}</legend>
         {steps.filter(other => other.id !== step.id).map(other => <label className="toggle-row" key={other.id}>
           <input type="checkbox" checked={step.depends_on?.includes(other.id) ?? false}
-            onChange={() => updateStep(step.id, { depends_on: toggle(step.depends_on, other.id) })} />{stepLabel(other)}
+            onChange={() => setSteps(items => {
+              const next = items.map(item => item.id === step.id ? { ...item, depends_on: toggle(item.depends_on, other.id) } : item);
+              return step.depends_on?.includes(other.id) ? removeUnreachableInputs(next) : next;
+            })} />{stepLabel(other)}
         </label>)}
       </fieldset>}
       <fieldset className="task-checks"><legend>{t("tasks.criteria")}</legend>
@@ -159,10 +170,9 @@ export function TaskPlanForm({ detail, workspaces, onClose }: {
       </fieldset>
       <StepInputs step={step} ancestors={predecessors(step, steps)} stepLabel={stepLabel} onChange={inputs => updateStep(step.id, { input_refs: inputs })} />
       <button type="button" className="secondary-button small" disabled={steps.length === 1}
-        onClick={() => setSteps(items => items.filter(item => item.id !== step.id).map(item => ({ ...item,
-          depends_on: item.depends_on?.filter(id => id !== step.id) ?? [],
-          input_refs: item.input_refs?.filter(input => input.kind === "text" || input.step_id !== step.id) ?? []
-        })))}>{t("tasks.removeStep")}</button>
+        onClick={() => setSteps(items => removeUnreachableInputs(items.filter(item => item.id !== step.id).map(item => ({ ...item,
+          depends_on: item.depends_on?.filter(id => id !== step.id) ?? []
+        }))))}>{t("tasks.removeStep")}</button>
     </fieldset>)}
     <button type="button" className="secondary-button small" disabled={steps.length >= 50}
       onClick={() => setSteps(items => [...items, newStep(members[0].id)])}>{t("tasks.addStep")}</button>

@@ -281,11 +281,11 @@ func (s *Store) ListThreads(ctx context.Context, archivedOption ...string) ([]Th
 	if len(archivedOption) > 0 {
 		archived = archivedOption[0]
 	}
-	filter := " WHERE t.archived_at IS NULL"
+	filter := " WHERE s.revoked_at IS NULL AND t.archived_at IS NULL"
 	if archived == "true" {
-		filter = " WHERE t.archived_at IS NOT NULL"
+		filter = " WHERE s.revoked_at IS NULL AND t.archived_at IS NOT NULL"
 	} else if archived == "all" {
-		filter = ""
+		filter = " WHERE s.revoked_at IS NULL"
 	}
 	err := s.DB.SelectContext(ctx, &out, codexThreadSelect+filter+` ORDER BY CASE WHEN (`+projectServerPin+`) IS NULL THEN 1 ELSE 0 END,project_pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC`)
 	for i := range out {
@@ -304,11 +304,11 @@ func (s *Store) ListThreadsPage(ctx context.Context, archived string, limit, off
 	if offset < 0 {
 		return ThreadPage{}, errors.New("thread page offset must not be negative")
 	}
-	filter := " WHERE t.archived_at IS NULL"
+	filter := " WHERE s.revoked_at IS NULL AND t.archived_at IS NULL"
 	if archived == "true" {
-		filter = " WHERE t.archived_at IS NOT NULL"
+		filter = " WHERE s.revoked_at IS NULL AND t.archived_at IS NOT NULL"
 	} else if archived == "all" {
-		filter = ""
+		filter = " WHERE s.revoked_at IS NULL"
 	}
 	items := make([]Thread, 0, limit+1)
 	err := s.DB.SelectContext(ctx, &items, s.Q(codexThreadSelect+filter+` ORDER BY CASE WHEN (`+projectServerPin+`) IS NULL THEN 1 ELSE 0 END,project_pinned_at DESC,CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,t.pinned_at DESC,t.updated_at DESC,t.id DESC LIMIT ? OFFSET ?`), limit+1, offset)
@@ -328,7 +328,7 @@ func (s *Store) ListThreadsPage(ctx context.Context, archived string, limit, off
 
 func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
 	var out Thread
-	err := s.DB.GetContext(ctx, &out, s.Q(codexThreadSelect+` WHERE t.id=?`), id)
+	err := s.DB.GetContext(ctx, &out, s.Q(codexThreadSelect+` WHERE t.id=? AND s.revoked_at IS NULL`), id)
 	out.setCapabilities()
 	return out, err
 }
@@ -382,14 +382,7 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM scheduled_tasks WHERE engine='codex' AND thread_id=?"), id); err != nil {
 		return err
 	}
-	key := "codex:" + id
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_subscriptions WHERE target_key=? OR source_key=?"), key, key); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM session_links WHERE target_key=?"), key); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, s.Q("DELETE FROM events WHERE stream_id=?"), id); err != nil {
+	if err := s.clearDeletedSessionRecords(ctx, tx, "codex", id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -421,6 +414,17 @@ func (s *Store) SetThreadTitle(ctx context.Context, id, title string) error {
 }
 
 func (s *Store) UpdateThread(ctx context.Context, id string, title *string, pinned *bool, archivedOption ...*bool) (Thread, error) {
+	var archived *bool
+	if len(archivedOption) > 0 {
+		archived = archivedOption[0]
+	}
+	if err := s.UpdateCodexSessionMetadata(ctx, id, title, pinned, archived); err != nil {
+		return Thread{}, err
+	}
+	return s.Thread(ctx, id)
+}
+
+func (s *Store) UpdateCodexSessionMetadata(ctx context.Context, id string, title *string, pinned, archived *bool) error {
 	sets := make([]string, 0, 3)
 	args := make([]any, 0, 4)
 	if title != nil {
@@ -436,10 +440,6 @@ func (s *Store) UpdateThread(ctx context.Context, id string, title *string, pinn
 			args = append(args, nil)
 		}
 	}
-	var archived *bool
-	if len(archivedOption) > 0 {
-		archived = archivedOption[0]
-	}
 	if archived != nil {
 		sets = append(sets, "archived_at=?")
 		if *archived {
@@ -449,22 +449,35 @@ func (s *Store) UpdateThread(ctx context.Context, id string, title *string, pinn
 		}
 	}
 	if len(sets) == 0 {
-		return s.Thread(ctx, id)
+		return nil
 	}
 	sets = append(sets, "updated_at=?")
 	args = append(args, now, id)
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET "+strings.Join(sets, ",")+" WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='codex' AND b.session_id=codex_threads.id AND b.released_at IS NULL)"), args...)
+	guard := ""
+	if archived != nil && *archived {
+		guard = " AND status NOT IN ('queued','running')"
+	}
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET "+strings.Join(sets, ",")+" WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='codex' AND b.session_id=codex_threads.id AND b.released_at IS NULL)"+guard), args...)
 	if err != nil {
-		return Thread{}, err
+		return err
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return Thread{}, err
+		return err
 	}
 	if rows == 0 {
-		return Thread{}, sql.ErrNoRows
+		if guard != "" {
+			var active int
+			if err := s.DB.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM codex_threads WHERE id=? AND status IN ('queued','running')"), id); err != nil {
+				return err
+			}
+			if active > 0 {
+				return ErrThreadActive
+			}
+		}
+		return sql.ErrNoRows
 	}
-	return s.Thread(ctx, id)
+	return nil
 }
 
 func (s *Store) ArchiveProjectThreads(ctx context.Context, projectID string, serverOption ...string) (int64, error) {

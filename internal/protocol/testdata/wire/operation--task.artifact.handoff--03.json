@@ -1,0 +1,22 @@
+{
+  "baseline": "0.3.44",
+  "direction": "operation",
+  "kind": "task.artifact.handoff",
+  "source": ["review handoff verification"],
+  "payload": {
+    "workspace": "/srv/review",
+    "action": "verify",
+    "digest": "72b0912d03327565b6471974b12a4be49209fa8e5e8895d622386c1e25cc31a5",
+    "manifest": {
+      "base_sha": "1111111111111111111111111111111111111111",
+      "files": [
+        {
+          "path": "notes.txt",
+          "after_hash": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "after_mode": "100644"
+        }
+      ]
+    },
+    "metadata_only": true
+  }
+}

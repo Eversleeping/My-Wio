@@ -219,45 +219,20 @@ func (s *Store) recordScheduledRun(ctx context.Context, tx *sqlx.Tx, run *schedu
 	return nil
 }
 
-// MarkScheduledCodexRunQueued records a scheduled Codex run whose turn was
-// queued in an earlier transaction. The Agent may already have reported the
-// result, which MarkScheduledTaskByOperation could not attribute to this task
-// yet. Locking the operation row makes a concurrent completion wait for this
-// write; a result that already arrived is carried over instead of being
-// overwritten with "queued".
-func (s *Store) MarkScheduledCodexRunQueued(ctx context.Context, id, operationID string, at time.Time) error {
-	return s.inTx(ctx, nil, func(tx *sqlx.Tx) error {
-		if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=?"), operationID); err != nil {
-			return err
-		}
-		var operation struct {
-			Status string `db:"status"`
-			Result string `db:"result"`
-		}
-		if err := tx.GetContext(ctx, &operation, s.Q("SELECT status,COALESCE(result,'') result FROM agent_operations WHERE id=?"), operationID); err != nil {
-			return err
-		}
-		status, message := "queued", ""
-		switch operation.Status {
-		case "failed", "cancelled":
-			status, message = operation.Status, operation.Result
-		case "succeeded":
-			// Codex reports success once the turn has started.
-			status = "running"
-		}
-		result, err := tx.ExecContext(ctx, s.Q("UPDATE scheduled_tasks SET last_run_at=?,last_run_status=?,last_run_message=?,last_operation_id=?,updated_at=? WHERE id=? AND engine='codex'"), at.UTC(), status, message, operationID, time.Now().UTC(), id)
+// QueueScheduledCodexTurn commits the session claim, operation, user event
+// and scheduled run together, just as the Claude and Gemini queues do.
+func (s *Store) QueueScheduledCodexTurn(ctx context.Context, taskID string, thread Thread, command protocol.StartTurnCommand, at time.Time) (string, error) {
+	var op string
+	err := s.inTx(ctx, nil, func(tx *sqlx.Tx) error {
+		run := &scheduledRun{engine: "codex", taskID: taskID, at: at}
+		id, _, err := s.queueCodexTurnTx(ctx, tx, thread, command, run)
 		if err != nil {
 			return err
 		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if count != 1 {
-			return sql.ErrNoRows
-		}
+		op = id
 		return nil
 	})
+	return op, err
 }
 
 func (s *Store) MarkScheduledTaskByOperation(ctx context.Context, operationID, status, message string) error {

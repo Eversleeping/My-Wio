@@ -265,11 +265,8 @@ func (g *Gateway) updateGeminiOwnership(ctx context.Context, serverID, operation
 		}
 	}
 	raw, _ := json.Marshal(map[string]any{"operation_id": operationID, "status": status, "recovery_pending": !active})
-	event := protocol.StreamEvent{EventID: store.NewID(), StreamID: command.ThreadID, Kind: kind, OccurredAt: time.Now().UTC(), Payload: raw}
-	if err := tx.GetContext(ctx, &event.Sequence, g.store.Q("SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE stream_id=?"), event.StreamID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, g.store.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), event.EventID, event.StreamID, event.Sequence, event.Kind, event.OccurredAt, string(raw)); err != nil {
+	event, err := g.store.AppendEventTx(ctx, tx, protocol.StreamEvent{StreamID: command.ThreadID, Kind: kind, Payload: raw})
+	if err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

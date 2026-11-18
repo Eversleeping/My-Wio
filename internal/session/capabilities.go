@@ -31,9 +31,9 @@ type Capabilities struct {
 	Collaboration  bool `json:"collaboration"`
 }
 
-// ResolveCapabilities maps declarations to session features. Agents below the
-// protocol baseline have no session features.
-func ResolveCapabilities(engine Engine, agentVersion, cliVersion string, declarations ...capabilities.Declaration) Capabilities {
+// ResolveCapabilities maps the protocol baseline and Agent-declared features.
+// The Agent applies CLI version gates when constructing its declaration.
+func ResolveCapabilities(engine Engine, agentVersion, _ string, declarations ...capabilities.Declaration) Capabilities {
 	if !buildinfo.MeetsAgentMinimum(agentVersion) {
 		return Capabilities{}
 	}

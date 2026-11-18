@@ -336,6 +336,17 @@ func (s *Store) HasActiveOperation(ctx context.Context, serverID, kind string) (
 	return count > 0, err
 }
 
+// ClaimCodexTurnDelivery closes the queued-cancellation race without changing
+// how a previously delivered Codex operation can be replayed.
+func (s *Store) ClaimCodexTurnDelivery(ctx context.Context, id string) (bool, error) {
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='delivered',delivered_at=? WHERE id=? AND status='queued'"), time.Now().UTC(), id)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
+
 // MarkDelivered also stamps re-sends. PendingOperations re-sends a delivered
 // operation (or a running interruption) once its timestamp is 30s old; without
 // refreshing it every flush (~2s) would send the same operation again forever.

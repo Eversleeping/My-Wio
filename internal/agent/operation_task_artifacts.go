@@ -44,6 +44,10 @@ func (c *Client) runTaskArtifactHandoff(ctx context.Context, op *protocol.Contro
 		}
 	}
 	if err = gitrepository.HandoffTaskArtifact(ctx, root, input); err != nil {
+		if errors.Is(err, gitrepository.ErrArtifactHandoffUnknown) {
+			raw, _ := json.Marshal(protocol.TaskArtifactReceipt{Digest: input.Digest, Action: input.Action, Unknown: true})
+			return "", raw, true, err
+		}
 		return "", nil, false, err
 	}
 	raw, err := json.Marshal(protocol.TaskArtifactReceipt{Digest: input.Digest, Action: input.Action})

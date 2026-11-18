@@ -105,7 +105,7 @@ func (s *Store) collaborationGemini(ctx context.Context, tx *sqlx.Tx, id string)
 	return t, err
 }
 
-func (s *Store) queueCodexTurnTx(ctx context.Context, tx *sqlx.Tx, t Thread, command protocol.StartTurnCommand) (string, protocol.StreamEvent, error) {
+func (s *Store) queueCodexTurnTx(ctx context.Context, tx *sqlx.Tx, t Thread, command protocol.StartTurnCommand, scheduled *scheduledRun) (string, protocol.StreamEvent, error) {
 	if err := s.taskMutationGuard(ctx, tx, "codex", t.ID); err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
@@ -125,7 +125,18 @@ func (s *Store) queueCodexTurnTx(ctx context.Context, tx *sqlx.Tx, t Thread, com
 	if err != nil {
 		return "", protocol.StreamEvent{}, err
 	}
-	raw, _ := json.Marshal(map[string]any{"text": command.Prompt, "image_count": len(command.Images), "operation_id": op})
+	data := map[string]any{"text": command.Prompt, "image_count": len(command.Images), "operation_id": op}
+	if scheduled != nil {
+		data["scheduled_task_id"] = scheduled.taskID
+		delete(data, "image_count")
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET idempotency_key=? WHERE id=?"), "codex-scheduled:"+scheduled.taskID+":"+scheduled.at.Format(time.RFC3339Nano), op); err != nil {
+			return "", protocol.StreamEvent{}, err
+		}
+		if err := s.recordScheduledRun(ctx, tx, scheduled, op); err != nil {
+			return "", protocol.StreamEvent{}, err
+		}
+	}
+	raw, _ := json.Marshal(data)
 	event := protocol.StreamEvent{EventID: NewID(), StreamID: t.ID, Kind: protocol.EventUserMessage, Payload: raw, OccurredAt: time.Now().UTC()}
 	if s.isPostgres() {
 		if err = lockEventStream(ctx, tx, t.ID); err != nil {

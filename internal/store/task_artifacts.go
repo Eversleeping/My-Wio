@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 
@@ -190,8 +190,10 @@ func (s *Store) HandoffTaskArtifact(ctx context.Context, project, id, artifact s
 		if in.Action == "apply" {
 			var old string
 			err := tx.GetContext(ctx, &old, s.Q(`SELECT a.manifest_json FROM task_artifact_handoffs h
-   JOIN task_artifacts a ON a.task_id=h.task_id AND a.id=h.artifact_id WHERE h.task_id=? AND h.workspace_id=?
-   AND h.action='apply' AND h.state='ready' ORDER BY h.created_at DESC,h.id DESC LIMIT 1`), id, w.ID)
+   JOIN task_artifacts a ON a.task_id=h.task_id AND a.id=h.artifact_id
+   JOIN tasks previous_task ON previous_task.id=h.task_id
+   WHERE h.workspace_id=? AND previous_task.project_id=?
+   AND h.action='apply' AND h.state='ready' ORDER BY h.created_at DESC,h.id DESC LIMIT 1`), w.ID, project)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
@@ -219,8 +221,13 @@ func (s *Store) HandoffTaskArtifact(ctx context.Context, project, id, artifact s
 }
 
 func containsArtifactPath(root, other string) bool {
-	relative, err := filepath.Rel(root, other)
-	return err != nil || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+	// Artifacts execute on Linux Agents. Interpret their workspace names as
+	// POSIX paths even when the control plane was built on Windows.
+	if !path.IsAbs(root) || !path.IsAbs(other) {
+		return true
+	}
+	root, other = path.Clean(root), path.Clean(other)
+	return root == other || strings.HasPrefix(other, strings.TrimSuffix(root, "/")+"/")
 }
 
 func (s *Store) taskArtifactEventTx(ctx context.Context, tx *sqlx.Tx, id string, meta task.Meta, kind string, payload any) error {
@@ -236,27 +243,40 @@ func (s *Store) TaskArtifacts(ctx context.Context, project, id string) (task.Art
 		if _, err := s.taskTx(ctx, tx, project, id); err != nil {
 			return err
 		}
-		type loaded struct {
-			task.Artifact
-			Manifest *string `db:"manifest_json"`
-		}
-		var rows []loaded
-		selection := strings.Replace(artifactSelect, " FROM ", ",manifest_json FROM ", 1)
-		if err := tx.SelectContext(ctx, &rows, s.Q(selection+" WHERE task_id=? ORDER BY revision DESC"), id); err != nil {
+		out.Items = []task.Artifact{}
+		if err := tx.SelectContext(ctx, &out.Items, s.Q(artifactSelect+" WHERE task_id=? ORDER BY revision DESC"), id); err != nil {
 			return err
 		}
-		out.Items = out.Items[:0]
-		for _, item := range rows {
-			if item.Manifest != nil {
-				var manifest struct {
-					Files []task.ArtifactFileEvidence `json:"files"`
-				}
-				if err := json.Unmarshal([]byte(*item.Manifest), &manifest); err != nil {
-					return err
-				}
-				item.Files = manifest.Files
-			}
-			out.Items = append(out.Items, item.Artifact)
+		query := `SELECT a.id,json_extract(f.value,'$.path') AS path,
+			COALESCE(json_extract(f.value,'$.before_hash'),'') AS before_hash,
+			COALESCE(json_extract(f.value,'$.before_mode'),'') AS before_mode,
+			COALESCE(json_extract(f.value,'$.after_hash'),'') AS after_hash,
+			COALESCE(json_extract(f.value,'$.after_mode'),'') AS after_mode
+			FROM task_artifacts a JOIN json_each(a.manifest_json,'$.files') f
+			WHERE a.task_id=? ORDER BY a.revision,f.key`
+		if s.isPostgres() {
+			query = `SELECT a.id,f.value->>'path' AS path,
+				COALESCE(f.value->>'before_hash','') AS before_hash,
+				COALESCE(f.value->>'before_mode','') AS before_mode,
+				COALESCE(f.value->>'after_hash','') AS after_hash,
+				COALESCE(f.value->>'after_mode','') AS after_mode
+				FROM task_artifacts a CROSS JOIN LATERAL jsonb_array_elements(CAST(a.manifest_json AS jsonb)->'files') WITH ORDINALITY AS f(value,position)
+				WHERE a.task_id=? ORDER BY a.revision,f.position`
+		}
+		var files []struct {
+			ID string `db:"id"`
+			task.ArtifactFileEvidence
+		}
+		if err := tx.SelectContext(ctx, &files, s.Q(query), id); err != nil {
+			return err
+		}
+		positions := make(map[string]int, len(out.Items))
+		for i, artifact := range out.Items {
+			positions[artifact.ID] = i
+		}
+		for _, file := range files {
+			artifact := &out.Items[positions[file.ID]]
+			artifact.Files = append(artifact.Files, file.ArtifactFileEvidence)
 		}
 		return tx.SelectContext(ctx, &out.Handoffs, s.Q("SELECT * FROM task_artifact_handoffs WHERE task_id=? ORDER BY created_at DESC,id"), id)
 	})

@@ -46,7 +46,6 @@ export function TaskReviews({ detail }: { detail: TaskDetail }) {
 
 function ReviewForm({ detail, review, onClose }: { detail: TaskDetail; review: TaskReview; onClose: () => void }) {
   const { t } = useI18n();
-  const [version] = useState(detail.task.version);
   const [verdict, setVerdict] = useState("inconclusive");
   const [reason, setReason] = useState("");
   const [checks, setChecks] = useState<ReviewCheck[]>(() => review.criteria.map(c => ({ criterion_id: c.id, state: "not_run", evidence: "" })));
@@ -55,7 +54,7 @@ function ReviewForm({ detail, review, onClose }: { detail: TaskDetail; review: T
     disabled={verdict === "approved" && checks.some(check => check.state !== "passed")}
     prepare={() => {
       const run = taskCommand(reviews.decide(detail.task.id, detail.task.project_id), detail.task.project_id, {
-        expected_version: version, attempt_id: review.attempt_id, artifact_id: review.artifact_id,
+        expected_version: detail.task.version, attempt_id: review.attempt_id, artifact_id: review.artifact_id,
         evidence_hash: review.evidence_hash, verdict, reason, checks
       });
       return async () => { await run(); };

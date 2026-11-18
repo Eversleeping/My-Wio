@@ -174,8 +174,16 @@ func (s *Store) ExecuteTaskTool(ctx context.Context, server string, call session
 			if err != nil {
 				return err
 			}
-			reply.Data = map[string]any{"task_id": t.ID, "run_id": run.ID, "plan_id": plan.ID, "member_id": source.MemberID,
+			feedback, err := s.taskRecoveryFeedbackTx(ctx, tx, run.ID, source.StepID)
+			if err != nil {
+				return err
+			}
+			data := map[string]any{"task_id": t.ID, "run_id": run.ID, "plan_id": plan.ID, "member_id": source.MemberID,
 				"step_id": source.StepID, "members": plan.Members, "steps": plan.Steps, "requests": requests, "remaining_messages": max(grant.Budgets.MessageLimit()-t.Counters.Messages, 0)}
+			if feedback != nil {
+				data["review_recovery"] = feedback
+			}
+			reply.Data = data
 			return nil
 		}
 		if run.State == "paused" {
@@ -275,14 +283,15 @@ func (s *Store) scopeTaskRequestTx(ctx context.Context, tx *sqlx.Tx, req *teamRo
 		if err := task.ValidatePlan(candidate, plan.Criteria); err != nil {
 			return sessiontools.Fail("INVALID_ARGUMENT", err.Error())
 		}
-		for _, member := range candidate.Members {
-			var available int
-			if err := tx.GetContext(ctx, &available, s.Q("SELECT COUNT(*) FROM workspaces WHERE id=? AND project_id=? AND status='ready'"), member.WorkspaceID, project); err != nil {
-				return err
+		if err := s.validatePlanMembersTx(ctx, tx, project, candidate.Members); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return sessiontools.Fail("OUT_OF_SCOPE", "workspaces must be ready and belong to the task project and an active server")
 			}
-			if available != 1 {
-				return sessiontools.Fail("OUT_OF_SCOPE", "workspaces must be ready and belong to the task project")
+			var invalid *task.Error
+			if errors.As(err, &invalid) && invalid.Code == task.Invalid {
+				return sessiontools.Fail("INVALID_ARGUMENT", invalid.Error())
 			}
+			return err
 		}
 		req.NeedsGrant = validateTaskGrant(grant, task.Plan{Members: candidate.Members}) != nil
 		req.State = "pending"

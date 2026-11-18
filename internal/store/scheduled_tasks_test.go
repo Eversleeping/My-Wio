@@ -215,51 +215,42 @@ func TestQueueScheduledTurnsRecordTheRunInTheQueueTransaction(t *testing.T) {
 	}
 }
 
-func TestMarkScheduledCodexRunQueuedKeepsResultsThatArrivedFirst(t *testing.T) {
+func TestQueueScheduledCodexTurnRollsBackAndRecordsRun(t *testing.T) {
 	ctx := context.Background()
-	database := testStore(t)
-	server, workspace := scheduledTaskFixture(t, database, "codex-run")
-	thread, err := database.CreateThread(ctx, workspace.ID, "scheduled")
+	db := testStore(t)
+	_, workspace := scheduledTaskFixture(t, db, "codex-run")
+	thread, err := db.CreateThread(ctx, workspace.ID, "scheduled")
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := createTestScheduledTask(t, database, "codex", thread.ID, time.Now().UTC())
-	for _, test := range []struct {
-		result      *protocol.OperationResult
-		wantStatus  string
-		wantMessage string
-	}{
-		{nil, "queued", ""},
-		{&protocol.OperationResult{Status: "failed", Message: "Agent is updating"}, "failed", "Agent is updating"},
-		{&protocol.OperationResult{Status: "succeeded"}, "running", ""},
-	} {
-		operationID, err := database.QueueResourceOperation(ctx, server.ID, "codex.turn.start", map[string]string{"thread_id": thread.ID}, NewID(), OperationResource{ThreadID: thread.ID}, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if test.result != nil {
-			// The result arrives before the run is recorded, so the gateway
-			// cannot attribute it to the task yet.
-			test.result.OperationID = operationID
-			if err := database.CompleteOperation(ctx, *test.result); err != nil {
-				t.Fatal(err)
-			}
-			if err := database.MarkScheduledTaskByOperation(ctx, operationID, test.result.Status, test.result.Message); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := database.MarkScheduledCodexRunQueued(ctx, task.ID, operationID, time.Now().UTC()); err != nil {
-			t.Fatal(err)
-		}
-		current, err := database.ScheduledTask(ctx, task.ID)
-		if err != nil || current.LastOperationID != operationID || current.LastRunStatus != test.wantStatus || current.LastRunMessage != test.wantMessage {
-			t.Fatalf("run = %q %q (%q), want %q %q: %v", current.LastRunStatus, current.LastRunMessage, current.LastOperationID, test.wantStatus, test.wantMessage, err)
-		}
-		if test.result == nil {
-			if err := database.CompleteOperation(ctx, protocol.OperationResult{OperationID: operationID, Status: "cancelled"}); err != nil {
-				t.Fatal(err)
-			}
-		}
+	now := time.Now().UTC()
+	command := protocol.StartTurnCommand{ThreadID: thread.ID, WorkspaceID: workspace.ID, Workspace: workspace.Path, Prompt: "review"}
+	if _, err := db.QueueScheduledCodexTurn(ctx, "deleted-task", thread, command, now); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("queue with a deleted schedule: %v", err)
+	}
+	current, err := db.Thread(ctx, thread.ID)
+	if err != nil || current.Status != "idle" {
+		t.Fatalf("deleted schedule left a claimed thread: %+v %v", current, err)
+	}
+	events, err := db.Events(ctx, thread.ID, 0, 20)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("deleted schedule left events: %+v %v", events, err)
+	}
+	task := createTestScheduledTask(t, db, "codex", thread.ID, now)
+	op, err := db.QueueScheduledCodexTurn(ctx, task.ID, thread, command, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := db.ScheduledTask(ctx, task.ID)
+	if err != nil || run.LastOperationID != op || run.LastRunStatus != "queued" {
+		t.Fatalf("queue did not commit the run: %+v %v", run, err)
+	}
+	if err := db.MarkScheduledTaskByOperation(ctx, op, "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	run, err = db.ScheduledTask(ctx, task.ID)
+	if err != nil || run.LastRunStatus != "running" {
+		t.Fatalf("fast result did not reach the run: %+v %v", run, err)
 	}
 }
 

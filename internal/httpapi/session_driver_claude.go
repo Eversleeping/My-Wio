@@ -81,8 +81,11 @@ func (a *claudeHTTPDriver) createClaudeThread(w http.ResponseWriter, r *http.Req
 }
 
 func (a *claudeHTTPDriver) updateClaudeThread(w http.ResponseWriter, r *http.Request) {
-	thread, ok := a.loadClaudeThread(w, r)
-	if !ok {
+	id := chi.URLParam(r, "threadID")
+	item, projected := r.Context().Value(sessionRecordContextKey{}).(session.Record)
+	if projected {
+		id = item.ID
+	} else if _, ok := a.loadClaudeThread(w, r); !ok {
 		return
 	}
 	var input struct {
@@ -93,31 +96,20 @@ func (a *claudeHTTPDriver) updateClaudeThread(w http.ResponseWriter, r *http.Req
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	title, archived := thread.Title, thread.ArchivedAt != nil
 	if input.Title != nil {
-		title = strings.TrimSpace(*input.Title)
+		title := strings.TrimSpace(*input.Title)
+		if title == "" || utf8.RuneCountInString(title) > 180 {
+			writeError(w, 400, "invalid session title")
+			return
+		}
+		input.Title = &title
 	}
-	if input.Archived != nil {
-		archived = *input.Archived
-	}
-	if title == "" || utf8.RuneCountInString(title) > 180 {
-		writeError(w, 400, "invalid session title")
+	if err := a.store.UpdateNativeSessionMetadata(r.Context(), session.Ref{Engine: session.Claude, ID: id}, input.Title, input.Archived, input.Pinned); err != nil {
+		writeStoreError(w, err, "could not update Claude session")
 		return
 	}
-	if input.Title != nil || input.Archived != nil {
-		if err := a.store.UpdateClaudeThread(r.Context(), thread.ID, title, archived); err != nil {
-			writeStoreError(w, err, "finish or interrupt the Claude turn first")
-			return
-		}
-	}
-	if input.Pinned != nil {
-		if err := a.store.PinClaudeThread(r.Context(), thread.ID, *input.Pinned); err != nil {
-			writeError(w, 500, "could not pin Claude session")
-			return
-		}
-	}
-	a.auditClaude(r, "claude.thread.update", thread.ID)
-	a.publishClaudeChange(r, thread.ID, protocol.EventClaudeThreadUpdated)
+	a.auditClaude(r, "claude.thread.update", id)
+	a.publishClaudeChange(r, id, protocol.EventClaudeThreadUpdated)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

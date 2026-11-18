@@ -2,7 +2,7 @@ import { useComposerDraft } from "../composerDrafts";
 import { Archive, ArrowUp, Bot, CalendarClock, Copy, Gauge, GitFork, ListChecks, LoaderCircle, MessageSquare, MoreHorizontal, Pencil, Plus, Settings2, Square, UserRound, Workflow, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ContextMenu } from "../../ContextMenu";
-import MarkdownContent from "../../MarkdownContent";
+import { MarkdownContent } from "../../components/LazyMarkdown";
 import { SlashCommandMenu, type SlashCommandItem } from "../../SlashCommandMenu";
 import { api, post } from "../../api";
 import { claudeDisplayEvents } from "../../claudeContent";

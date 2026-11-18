@@ -16,11 +16,11 @@ type HandoffArtifact struct {
 }
 
 type ArtifactFileEvidence struct {
-	Path       string `json:"path"`
-	BeforeHash string `json:"before_hash,omitempty"`
-	BeforeMode string `json:"before_mode,omitempty"`
-	AfterHash  string `json:"after_hash,omitempty"`
-	AfterMode  string `json:"after_mode,omitempty"`
+	Path       string `json:"path" db:"path"`
+	BeforeHash string `json:"before_hash,omitempty" db:"before_hash"`
+	BeforeMode string `json:"before_mode,omitempty" db:"before_mode"`
+	AfterHash  string `json:"after_hash,omitempty" db:"after_hash"`
+	AfterMode  string `json:"after_mode,omitempty" db:"after_mode"`
 }
 
 type Artifact struct {

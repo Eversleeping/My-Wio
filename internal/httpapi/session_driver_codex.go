@@ -90,27 +90,15 @@ func (a *codexHTTPDriver) updateThread(w http.ResponseWriter, r *http.Request) {
 		input.Title = &title
 	}
 	threadID := chi.URLParam(r, "threadID")
-	if input.Archived != nil && *input.Archived {
-		current, err := a.store.Thread(r.Context(), threadID)
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "Codex session not found")
-			return
-		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not load Codex session")
-			return
-		}
-		if current.Status == "queued" || current.Status == "running" {
-			writeError(w, http.StatusConflict, "active Codex session cannot be archived")
-			return
-		}
-	}
-	thread, err := a.store.UpdateThread(r.Context(), threadID, input.Title, input.Pinned, input.Archived)
-	if errors.Is(err, sql.ErrNoRows) {
+	err := a.store.UpdateCodexSessionMetadata(r.Context(), threadID, input.Title, input.Pinned, input.Archived)
+	switch {
+	case errors.Is(err, store.ErrThreadActive):
+		writeError(w, http.StatusConflict, "active Codex session cannot be archived")
+		return
+	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, http.StatusNotFound, "Codex session not found")
 		return
-	}
-	if err != nil {
+	case err != nil:
 		writeError(w, http.StatusInternalServerError, "could not update Codex session")
 		return
 	}
@@ -124,9 +112,18 @@ func (a *codexHTTPDriver) updateThread(w http.ResponseWriter, r *http.Request) {
 	if input.Archived != nil {
 		detail["archived"] = *input.Archived
 	}
-	session := currentSession(r)
-	_ = a.store.Audit(r.Context(), session.UserID, "codex.thread.update", "thread", thread.ID, detail, clientIP(r))
-	writeJSON(w, http.StatusOK, thread)
+	user := currentSession(r)
+	_ = a.store.Audit(r.Context(), user.UserID, "codex.thread.update", "thread", threadID, detail, clientIP(r))
+	if _, unified := r.Context().Value(sessionRecordContextKey{}).(session.Record); !unified {
+		thread, err := a.store.Thread(r.Context(), threadID)
+		if err != nil {
+			writeStoreError(w, err, "could not load updated Codex session")
+			return
+		}
+		writeJSON(w, http.StatusOK, thread)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *codexHTTPDriver) deleteThread(w http.ResponseWriter, r *http.Request) {

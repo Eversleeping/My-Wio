@@ -32,6 +32,13 @@ var schemaMigrations = []migration{
 	{version: 9, name: "task_artifacts", up: migrateTaskArtifacts},
 	{version: 10, name: "task_reviews", up: migrateTaskReviews},
 	{version: 11, name: "task_team", up: migrateTaskTeam},
+	{version: 12, name: "task_recovery", up: func(ctx context.Context, tx *sqlx.Tx, _ string) error {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE task_step_runs ADD COLUMN recovery_json TEXT"); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "CREATE INDEX task_attempts_interrupt_idx ON task_attempts(interrupt_operation_id)")
+		return err
+	}},
 }
 
 // PostgreSQL advisory locks are scoped to a database. All Wio schemas in one

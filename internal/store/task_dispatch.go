@@ -87,7 +87,7 @@ func (s *Store) taskResourceBlockTx(ctx context.Context, tx *sqlx.Tx, project st
 		return "artifact_handoff_unknown", w, nil
 	}
 	var n int
-	if err := tx.GetContext(ctx, &n, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','agent.update','agent.isolation.install','codex.credentials.configure','claude.credentials.configure','gemini.credentials.configure') AND status IN ('queued','delivered','running')"), w.ServerID); err != nil {
+	if err := tx.GetContext(ctx, &n, s.Q("SELECT COUNT(*) FROM agent_operations WHERE server_id=? AND (kind IN ('cli.install','agent.update','codex.credentials.configure','claude.credentials.configure','gemini.credentials.configure') OR (?='gemini' AND kind='gemini.skills.manage')) AND status IN ('queued','delivered','running')"), w.ServerID, m.Engine); err != nil {
 		return "", w, err
 	}
 	if n > 0 {
@@ -359,6 +359,19 @@ func (s *Store) taskPromptTx(ctx context.Context, tx *sqlx.Tx, p task.Plan, step
 			}
 			b.WriteString("\nRecorded predecessor result (task material):\n" + summary)
 		}
+	}
+	feedback, err := s.taskRecoveryFeedbackTx(ctx, tx, run, step.ID)
+	if err != nil {
+		return "", err
+	}
+	if feedback != nil {
+		raw, err := json.Marshal(feedback)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\nReview recovery feedback and user instructions:\n")
+		b.Write(raw)
+		b.WriteByte('\n')
 	}
 	if b.Len() > 256<<10 {
 		return "", task.Fail(task.Invalid, "compiled task input exceeds 256 KiB")

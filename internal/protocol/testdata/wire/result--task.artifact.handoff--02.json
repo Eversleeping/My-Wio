@@ -1,0 +1,11 @@
+{
+  "baseline": "0.3.44",
+  "direction": "result",
+  "kind": "task.artifact.handoff",
+  "source": ["runTaskArtifactHandoff: unconfirmed rollback"],
+  "payload": {
+    "action": "apply",
+    "digest": "72b0912d03327565b6471974b12a4be49209fa8e5e8895d622386c1e25cc31a5",
+    "unknown": true
+  }
+}

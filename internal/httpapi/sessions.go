@@ -64,54 +64,49 @@ func (a *API) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not list sessions")
 		return
 	}
-	items := make([]map[string]any, 0, len(page.Items))
+	items := make([]any, 0, len(page.Items))
 	for _, item := range page.Items {
-		driver, e := a.sessionDriver(item.Engine)
-		if e != nil {
-			writeError(w, 500, "could not resolve session driver")
-			return
-		}
-		response, e := sessionResponse(r.Context(), driver, item)
-		if e != nil {
-			writeStoreError(w, e, "could not load session")
-			return
-		}
-		items = append(items, response)
+		items = append(items, sessionListItem(item))
 	}
 	writeJSON(w, 200, struct {
-		Items      []map[string]any `json:"items"`
-		NextCursor *string          `json:"next_cursor"`
-		Groups     []session.Group  `json:"groups"`
+		Items      []any           `json:"items"`
+		NextCursor *string         `json:"next_cursor"`
+		Groups     []session.Group `json:"groups"`
 	}{items, page.NextCursor, page.Groups})
 }
 
-func sessionResponse(ctx context.Context, driver session.Driver, item session.Record) (map[string]any, error) {
-	native, err := driver.Native(ctx, item.ID)
-	if err != nil {
-		return nil, err
+type sessionListNativeFields struct {
+	SessionID               string `json:"session_id"`
+	ModelCredentialRevision string `json:"model_credential_revision"`
+	SteerReady              bool   `json:"steer_ready"`
+	RecoveryPending         bool   `json:"recovery_pending"`
+}
+
+func sessionListItem(item session.Record) any {
+	native := sessionListNativeFields{item.NativeID, item.ModelCredentialRevision, item.SteerReady, item.RecoveryPending}
+	switch item.Engine {
+	case session.Codex:
+		return struct {
+			session.Record
+			CodexThreadID string `json:"codex_thread_id"`
+		}{item, item.NativeID}
+	case session.Claude:
+		return struct {
+			session.Record
+			sessionListNativeFields
+			PermissionMode string `json:"permission_mode"`
+		}{item, native, item.Mode}
+	case session.Gemini:
+		return struct {
+			session.Record
+			sessionListNativeFields
+			ApprovalMode       string `json:"approval_mode"`
+			ThinkingLevel      string `json:"thinking_level"`
+			CredentialRevision string `json:"credential_revision"`
+		}{item, native, item.Mode, item.Effort, item.CredentialRevision}
+	default:
+		return item
 	}
-	raw, err := json.Marshal(native)
-	if err != nil {
-		return nil, err
-	}
-	result := map[string]any{}
-	if err = json.Unmarshal(raw, &result); err != nil {
-		return nil, err
-	}
-	raw, err = json.Marshal(item)
-	if err != nil {
-		return nil, err
-	}
-	// Unified clients use the capability object. Native fields remain internal
-	// to the drivers while their historical HTTP aliases are retired.
-	for key := range result {
-		if strings.HasSuffix(key, "_supported") {
-			delete(result, key)
-		}
-	}
-	// Merge the common fields last so grouping and ordering use one definition.
-	err = json.Unmarshal(raw, &result)
-	return result, err
 }
 
 func sessionActionSupported(c session.Capabilities, action string) bool {
@@ -119,6 +114,8 @@ func sessionActionSupported(c session.Capabilities, action string) bool {
 	value, present := checks[action]
 	return !present || value
 }
+
+type sessionRecordContextKey struct{}
 
 func (a *API) unifiedSessionAction(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -149,12 +146,7 @@ func (a *API) unifiedSessionAction(action string) http.HandlerFunc {
 			}
 		}
 		if action == "detail" {
-			result, e := sessionResponse(r.Context(), driver, item)
-			if e != nil {
-				writeStoreError(w, e, "could not load session")
-				return
-			}
-			writeJSON(w, 200, result)
+			writeJSON(w, 200, sessionListItem(item))
 			return
 		}
 		if action == "events" {
@@ -166,6 +158,9 @@ func (a *API) unifiedSessionAction(action string) http.HandlerFunc {
 			return
 		}
 		response := &sessionActionResponse{header: make(http.Header)}
+		if action == "update" {
+			r = r.WithContext(context.WithValue(r.Context(), sessionRecordContextKey{}, item))
+		}
 		handler(response, r)
 		if response.status >= 200 && response.status < 300 {
 			id := item.ID
@@ -184,12 +179,7 @@ func (a *API) unifiedSessionAction(action string) http.HandlerFunc {
 				writeStoreError(w, err, "could not load session")
 				return
 			}
-			result, e := sessionResponse(r.Context(), driver, item)
-			if e != nil {
-				writeStoreError(w, e, "could not load session")
-				return
-			}
-			writeJSON(w, response.status, result)
+			writeJSON(w, response.status, sessionListItem(item))
 			return
 		}
 		for name, values := range response.header {

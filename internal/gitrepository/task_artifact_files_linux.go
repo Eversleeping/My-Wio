@@ -14,7 +14,7 @@ import (
 
 // Open each path component relative to its pinned parent. A concurrent
 // symlink or special-file replacement cannot redirect or block the read.
-func artifactWorkingFile(root, name string) (artifactContent, error) {
+func artifactWorkingFile(root, name string, allowPathOverlap bool) (artifactContent, error) {
 	dir, err := unix.Open(root, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return artifactContent{}, errors.New("could not open artifact workspace")
@@ -27,6 +27,11 @@ func artifactWorkingFile(root, name string) (artifactContent, error) {
 			return artifactContent{}, nil
 		}
 		if err != nil {
+			var info unix.Stat_t
+			if allowPathOverlap && errors.Is(err, unix.ENOTDIR) &&
+				unix.Fstatat(dir, part, &info, unix.AT_SYMLINK_NOFOLLOW) == nil && info.Mode&unix.S_IFMT == unix.S_IFREG {
+				return artifactContent{}, nil
+			}
 			return artifactContent{}, errors.New("artifact parent must be a regular directory")
 		}
 		_ = unix.Close(dir)
@@ -42,6 +47,9 @@ func artifactWorkingFile(root, name string) (artifactContent, error) {
 	file := os.NewFile(uintptr(fd), name)
 	defer file.Close()
 	info, err := file.Stat()
+	if err == nil && allowPathOverlap && info.IsDir() {
+		return artifactContent{}, nil
+	}
 	if err != nil || !info.Mode().IsRegular() || info.Size() > protocol.MaxArtifactBytes {
 		return artifactContent{}, errors.New("artifact path must be a bounded regular file")
 	}

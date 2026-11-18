@@ -31,9 +31,7 @@ func (s *Store) AppendTaskPlan(ctx context.Context, project, id string, in task.
 			if err != nil {
 				return err
 			}
-			if g.Budgets.PlanRevisions > planLimit {
-				planLimit = g.Budgets.PlanRevisions
-			}
+			planLimit = g.Budgets.PlanRevisions
 		}
 		if t.Counters.Plans >= planLimit {
 			return task.Fail(task.StateConflict, "task plan revision budget is exhausted")
@@ -51,20 +49,8 @@ func (s *Store) AppendTaskPlan(ctx context.Context, project, id string, in task.
 				return err
 			}
 		}
-		for _, m := range in.Members {
-			var w Workspace
-			if err := tx.GetContext(ctx, &w, s.Q("SELECT w.* FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.project_id=? AND w.status='ready' AND s.revoked_at IS NULL"), m.WorkspaceID, project); err != nil {
-				return err
-			}
-			if m.DirectoryMode == "existing_worktree" && w.Kind != "worktree" {
-				return task.Fail(task.Invalid, "member workspace is not a worktree")
-			}
-			if !validCollaborationMode(m.Engine, m.Mode) {
-				return task.Fail(task.Invalid, "invalid member execution mode")
-			}
-			if _, _, err := collaborationModelOverride(m.Engine, m.Model, m.Effort, sessiontools.Params{Model: m.Model, Effort: m.Effort}); err != nil {
-				return task.Fail(task.Invalid, err.Error())
-			}
+		if err := s.validatePlanMembersTx(ctx, tx, project, in.Members); err != nil {
+			return err
 		}
 		p := task.Plan{ID: NewID(), TaskID: id, Revision: int64(t.Counters.Plans + 1), ParentID: in.ParentID, SpecVersion: t.SpecVersion, Requirement: t.Requirement, Criteria: t.Criteria, Members: in.Members, Steps: in.Steps, GrantRevision: t.CurrentGrantRevision, Reason: in.Reason, Author: in.Actor, CreatedAt: time.Now().UTC()}
 		// Only semantic content enters the digest; generated identity and time do not.
@@ -180,4 +166,23 @@ func (s *Store) taskWorkspaceReferences(ctx context.Context, q deletionQueryer, 
      (SELECT COUNT(*) FROM task_artifacts WHERE workspace_id=?) +
      (SELECT COUNT(*) FROM task_artifact_handoffs WHERE workspace_id=?)`), id, id, id, id)
 	return count, err
+}
+
+func (s *Store) validatePlanMembersTx(ctx context.Context, tx *sqlx.Tx, project string, members []task.Member) error {
+	for _, m := range members {
+		var w Workspace
+		if err := tx.GetContext(ctx, &w, s.Q("SELECT w.* FROM workspaces w JOIN servers s ON s.id=w.server_id WHERE w.id=? AND w.project_id=? AND w.status='ready' AND s.revoked_at IS NULL"), m.WorkspaceID, project); err != nil {
+			return err
+		}
+		if m.DirectoryMode == "existing_worktree" && w.Kind != "worktree" {
+			return task.Fail(task.Invalid, "member workspace is not a worktree")
+		}
+		if !validCollaborationMode(m.Engine, m.Mode) {
+			return task.Fail(task.Invalid, "invalid member execution mode")
+		}
+		if _, _, err := collaborationModelOverride(m.Engine, m.Model, m.Effort, sessiontools.Params{Model: m.Model, Effort: m.Effort}); err != nil {
+			return task.Fail(task.Invalid, err.Error())
+		}
+	}
+	return nil
 }

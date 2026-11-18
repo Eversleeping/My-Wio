@@ -3,7 +3,6 @@ package sessionservice
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -41,14 +40,6 @@ func (r *codexDriver) EnqueueScheduled(ctx context.Context, task store.Scheduled
 		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Codex session is archived", "", now)
 		return
 	}
-	if err := r.store.ClaimThreadForTurn(ctx, thread.ID); err != nil {
-		if errors.Is(err, store.ErrThreadActive) {
-			_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Codex session is already active", "", now)
-		} else {
-			_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", err.Error(), "", now)
-		}
-		return
-	}
 	command := protocol.StartTurnCommand{
 		ThreadID:        thread.ID,
 		CodexThread:     thread.CodexThreadID,
@@ -59,22 +50,13 @@ func (r *codexDriver) EnqueueScheduled(ctx context.Context, task store.Scheduled
 		ReasoningEffort: task.ReasoningEffort,
 		ApprovalMode:    normalizedApprovalMode(task.ApprovalMode),
 	}
-	operationID, err := r.store.QueueResourceOperation(ctx, thread.ServerID, protocol.OpCodexTurnStart, command, "codex-scheduled:"+task.ID+":"+now.Format(time.RFC3339Nano), store.OperationResource{ThreadID: thread.ID}, false)
-	if err != nil {
-		_ = r.store.SetThreadStatus(ctx, thread.ID, "idle")
-		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", err.Error(), "", now)
+	if _, err := r.store.QueueScheduledCodexTurn(ctx, task.ID, thread, command, now); err != nil {
+		if errors.Is(err, store.ErrThreadActive) {
+			_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "skipped", "Codex session is already active", "", now)
+		} else {
+			_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", err.Error(), "", now)
+		}
 		return
-	}
-	payload, _ := json.Marshal(map[string]any{"text": task.Prompt, "scheduled_task_id": task.ID, "operation_id": operationID})
-	if _, eventErr := r.store.AddEvent(ctx, protocol.StreamEvent{StreamID: thread.ID, Kind: protocol.EventUserMessage, Payload: payload}); eventErr != nil {
-		r.log.Warn("could not record scheduled Codex prompt", "task_id", task.ID, "error", eventErr)
-		_, _ = r.store.CancelOperation(ctx, operationID, "could not record scheduled Codex prompt")
-		_ = r.store.SetThreadStatus(ctx, thread.ID, "idle")
-		_ = r.store.MarkScheduledTaskRun(ctx, task.ID, "failed", eventErr.Error(), operationID, now)
-		return
-	}
-	if err := r.store.MarkScheduledCodexRunQueued(ctx, task.ID, operationID, now); err != nil {
-		r.log.Warn("could not record scheduled Codex task run", "task_id", task.ID, "error", err)
 	}
 	r.wake(thread.ServerID)
 }

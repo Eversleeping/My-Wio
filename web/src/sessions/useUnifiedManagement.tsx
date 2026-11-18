@@ -1,5 +1,5 @@
 import { clearComposerDrafts } from "./composerDrafts";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Archive, ArchiveRestore, CalendarClock, Copy, ExternalLink, EyeOff, FolderOpen, GitBranch, GitFork, Link, Pencil, Pin, PinOff, Plus } from "lucide-react";
 import type { ContextMenuAction } from "../ContextMenu";
 import { api, patch, post, remove } from "../api";
@@ -19,11 +19,17 @@ import { sessionKey, type AISession, type SessionRef } from "./types";
 export function sessionBusy(thread: AISession) { return ["queued", "running", "interrupting"].includes(thread.status) || Boolean("recovery_pending" in thread && thread.recovery_pending); }
 
 type ProjectContext = Pick<Workspace, "project_id" | "server_id" | "project_name" | "id"> & { pinned_at?: string | null };
-export function useUnifiedManagement({ workspaces, online, refresh, select, notify, onNew, onSchedule, onWorkspaceSchedule }: {
+export function useUnifiedManagement({ selected, workspaces, online, refresh, select, notify, onNew, onSchedule, onWorkspaceSchedule }: {
+  selected?: SessionRef;
   workspaces: Workspace[]; online: Set<string>; refresh: () => void; select: (ref: SessionRef | null) => void;
   notify: (text: string) => void; onSchedule: (thread: AISession) => void; onWorkspaceSchedule: (workspaceID: string) => void; onNew: (workspaceID?: string) => void;
 }) {
   const { t } = useI18n();
+  const selection = useRef(selected);
+  selection.current = selected;
+  const clearSelection = (thread: SessionRef) => {
+    if (selection.current && sessionKey(selection.current) === sessionKey(thread)) select(null);
+  };
   const [busy, setBusy] = useState(false);
   const [rename, setRename] = useState<{ thread?: AISession; project?: ProjectContext; name: string } | null>(null);
   const [confirmation, setConfirmation] = useState<{ kind: "hide" | "archive"; project: ProjectContext } | { kind: "delete"; thread: AISession } | null>(null);
@@ -47,7 +53,7 @@ export function useUnifiedManagement({ workspaces, online, refresh, select, noti
     const result = await sessionAPI.action<{ operation_id: string; target_thread_id: string }>(thread.engine, thread.id, "fork", eventID ? { event_id: eventID } : {});
     await wait(result.operation_id); await selectFork(thread, result.target_thread_id);
   });
-  const archive = (thread: AISession) => action(async () => { await sessionAPI.update(thread.engine, thread.id, { archived: !thread.archived_at }); select(null); });
+  const archive = (thread: AISession) => action(async () => { await sessionAPI.update(thread.engine, thread.id, { archived: !thread.archived_at }); clearSelection(thread); });
   const openWorktree = (workspaceID: string, thread?: AISession) => { setError(""); setForm({ branch: "", path: "", base_ref: "HEAD" }); setWorktree({ workspaceID, thread }); };
   const copy = (value: string, label: string) => { void copyText(value).then(() => notify(t(label))).catch(error => notify(message(error))); };
   const link = (thread: AISession) => `${window.location.origin}${locationFor("sessions", thread.id, thread.engine)}`;
@@ -92,7 +98,9 @@ export function useUnifiedManagement({ workspaces, online, refresh, select, noti
       if (confirmation.kind === "delete") { const thread = confirmation.thread; await remove(sessionPath(thread.engine, thread.id)); clearComposerDrafts(thread); (await engineModule(thread.engine).load()).afterDelete?.(thread.id); }
       else if (confirmation.kind === "hide") await patch(`/projects/${confirmation.project.project_id}`, { hidden: true, server_id: confirmation.project.server_id });
       else for (const module of engines) await post(`${module.archiveProjectPath(confirmation.project.project_id)}?server_id=${encodeURIComponent(confirmation.project.server_id)}`, {});
-      setConfirmation(null); select(null);
+      setConfirmation(null);
+      if (confirmation.kind === "delete") clearSelection(confirmation.thread);
+      else select(null);
     })} />
     <Dialog open={Boolean(worktree)} title={t(worktree?.thread ? "codex.continueInNewWorktree" : "codex.createPermanentWorktree")} onClose={() => { if (!busy) setWorktree(null); }}><form onSubmit={event => { event.preventDefault(); if (!worktree || busy) return; setBusy(true); setError(""); void (async () => {
       try { const result = await post<{ operation_id: string; target_thread_id?: string }>(worktree.thread ? sessionPath(worktree.thread.engine, worktree.thread.id, "fork-worktree") : `/workspaces/${worktree.workspaceID}/worktrees`, form); await wait(result.operation_id); if (worktree.thread && result.target_thread_id) await selectFork(worktree.thread, result.target_thread_id); setWorktree(null); refresh(); }

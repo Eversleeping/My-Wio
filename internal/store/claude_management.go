@@ -126,19 +126,8 @@ func (s *Store) commitClaudeFork(ctx context.Context, tx *sqlx.Tx, c protocol.Cl
 	if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO claude_thread_management(thread_id,fork_snapshot_id,fork_session_id) VALUES(?,?,?)"), c.TargetThreadID, snapshot, c.SessionID); err != nil {
 		return err
 	}
-	var events []struct {
-		Sequence   int64     `db:"sequence"`
-		Kind       string    `db:"kind"`
-		OccurredAt time.Time `db:"occurred_at"`
-		Payload    string    `db:"payload"`
-	}
-	if err = tx.SelectContext(ctx, &events, s.Q("SELECT sequence,kind,occurred_at,payload FROM events WHERE stream_id=? AND sequence<=? ORDER BY sequence"), c.SourceThreadID, c.CutoffSequence); err != nil {
+	if err := s.copyForkEventsTx(ctx, tx, c.SourceThreadID, c.TargetThreadID, c.CutoffSequence); err != nil {
 		return err
-	}
-	for _, e := range events {
-		if _, err = tx.ExecContext(ctx, s.Q("INSERT INTO events(event_id,stream_id,sequence,kind,occurred_at,payload) VALUES(?,?,?,?,?,?)"), NewID(), c.TargetThreadID, e.Sequence, e.Kind, e.OccurredAt, e.Payload); err != nil {
-			return err
-		}
 	}
 	return s.showProjectForNewThread(ctx, tx, c.WorkspaceID)
 }

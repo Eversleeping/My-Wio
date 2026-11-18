@@ -53,25 +53,17 @@ func (c *Client) dockerRuntimeAccess(ctx context.Context, r runtimeaccess.Reques
 		command.Env = childprocess.Environment(childprocess.WithExtraEnvironment(ctx, nil), "DOCKER_CONTEXT=", "DOCKER_HOST=unix:///var/run/docker.sock")
 		return command
 	}
-	executable, err := os.Executable()
+	tag, err := c.localRuntimeHelperTag()
 	if err != nil {
 		return protocol.AgentAccessSettings{}, err
 	}
-	f, err := os.Open(executable)
-	if err != nil {
-		return protocol.AgentAccessSettings{}, err
-	}
-	defer f.Close()
-	hash := sha256.New()
-	if _, err = io.Copy(hash, f); err != nil {
-		return protocol.AgentAccessSettings{}, err
-	}
-	tag := "wio-runtime-helper:" + hex.EncodeToString(hash.Sum(nil))
 	image, err := invoke("image", "inspect", tag, "--format", "{{.Id}}").Output()
 	if err != nil {
-		if _, err = f.Seek(0, 0); err != nil {
+		f, err := os.Open("/proc/self/exe")
+		if err != nil {
 			return protocol.AgentAccessSettings{}, err
 		}
+		defer f.Close()
 		archive, err := os.CreateTemp(c.config.StateDir, ".runtime-helper-*.tar")
 		if err != nil {
 			return protocol.AgentAccessSettings{}, err
@@ -99,7 +91,7 @@ func (c *Client) dockerRuntimeAccess(ctx context.Context, r runtimeaccess.Reques
 		command.Stdin = archive
 		image, err = command.Output()
 		if err != nil {
-			return protocol.AgentAccessSettings{}, errors.New("system settings helper is unavailable; this Agent needs a local system helper or Docker management access")
+			return protocol.AgentAccessSettings{}, fmt.Errorf("system settings helper is unavailable; this Agent needs a local system helper or Docker management access: %w", err)
 		}
 	}
 	imageID := strings.TrimSpace(string(image))
@@ -122,7 +114,7 @@ func (c *Client) dockerRuntimeAccess(ctx context.Context, r runtimeaccess.Reques
 	command.Stdin = bytes.NewReader(input)
 	output, err := command.Output()
 	if err != nil {
-		return protocol.AgentAccessSettings{}, errors.New("could not run the local system settings helper")
+		return protocol.AgentAccessSettings{}, fmt.Errorf("could not run the local system settings helper: %w", err)
 	}
 	var reply runtimeaccess.Reply
 	if json.Unmarshal(output, &reply) != nil {
@@ -133,6 +125,28 @@ func (c *Client) dockerRuntimeAccess(ctx context.Context, r runtimeaccess.Reques
 	}
 	return reply.Settings, nil
 }
+
+func (c *Client) localRuntimeHelperTag() (string, error) {
+	c.runtimeHelperMu.Lock()
+	defer c.runtimeHelperMu.Unlock()
+	if c.runtimeHelperTag != "" {
+		return c.runtimeHelperTag, nil
+	}
+	// The running executable remains stable across Agent updates that
+	// replace the file at its original path.
+	file, err := os.Open("/proc/self/exe")
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	c.runtimeHelperTag = "wio-runtime-helper:" + hex.EncodeToString(hash.Sum(nil))
+	return c.runtimeHelperTag, nil
+}
+
 func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.ControlEnvelope) (restart string, data json.RawMessage, refresh bool, err error) {
 	var command protocol.AgentAccessCommand
 	if err = json.Unmarshal(envelope.PayloadJSON, &command); err != nil {

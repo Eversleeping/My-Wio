@@ -80,6 +80,19 @@ test("keeps the latest cache revision and allows a forced reload", async () => {
   expect(cached.result.current.data).toEqual(["manual"]);
 });
 
+test("applies another reader's cached revision to existing subscribers", async () => {
+  const pending = requests();
+  const read = ({ revision }: { revision: number }) => useData<string[]>("/cache", revision, true);
+  const first = renderHook(read, { initialProps: { revision: 0 } });
+  await act(async () => pending[0].resolve(["original"]));
+  const second = renderHook(read, { initialProps: { revision: 1 } });
+  await act(async () => pending[1].resolve(["new"]));
+  expect(second.result.current.data).toEqual(["new"]);
+  first.rerender({ revision: 1 });
+  expect(first.result.current.data).toEqual(["new"]);
+  expect(pending).toHaveLength(2);
+});
+
 test("deduplicates simultaneous readers and keeps the remaining reader alive after navigation", async () => {
   const pending = requests();
   const first = renderHook(() => useData<string[]>("/shared", 0));

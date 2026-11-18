@@ -50,3 +50,31 @@ func TestPlanGraphAndInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestOptionalBudgetsDistinguishOmissionFromZero(t *testing.T) {
+	for _, tc := range []struct {
+		raw      string
+		messages int
+		reworks  int
+	}{
+		{`{"attempts":100}`, 100, 2},
+		{`{"attempts":100,"messages":0,"reworks":0}`, 0, 0},
+		{`{"attempts":100,"messages":4,"reworks":1}`, 4, 1},
+	} {
+		var budget Budgets
+		if err := json.Unmarshal([]byte(tc.raw), &budget); err != nil {
+			t.Fatal(err)
+		}
+		wire, err := json.Marshal(budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reopened Budgets
+		if err := json.Unmarshal(wire, &reopened); err != nil {
+			t.Fatal(err)
+		}
+		if reopened.Attempts != 100 || reopened.MessageLimit() != tc.messages || reopened.ReworkLimit() != tc.reworks {
+			t.Fatalf("budget changed across persistence: %s -> %s", tc.raw, wire)
+		}
+	}
+}

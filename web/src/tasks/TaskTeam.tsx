@@ -32,14 +32,13 @@ export function TaskTeam({ detail }: { detail: TaskDetail }) {
 
 function ProposalForm({ detail, item, onClose }: { detail: TaskDetail; item: TaskTeamRequest; onClose: () => void }) {
   const { t } = useI18n();
-  const [base] = useState(detail);
   const [reason, setReason] = useState("");
   const plan = item.proposal!;
   const canAdopt = detail.capabilities.edit_plan && item.state === "pending" && detail.plan?.id === item.plan_id;
   return <TaskForm title={t("tasks.team.inspect")} submitLabel="tasks.team.adopt" onClose={onClose} disabled={!canAdopt}
     prepare={() => {
-      const run = taskCommand(tasks.plan(base.task.id, base.task.project_id), base.task.project_id, {
-        expected_version: base.task.version, parent_id: base.plan?.id, proposal_id: item.id, reason, ...plan
+      const run = taskCommand(tasks.plan(detail.task.id, detail.task.project_id), detail.task.project_id, {
+        expected_version: detail.task.version, parent_id: item.plan_id, proposal_id: item.id, reason, ...plan
       });
       return async () => { await run(); };
     }}>

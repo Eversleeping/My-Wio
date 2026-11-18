@@ -3,7 +3,7 @@ import { useVisibleClock } from "../../hooks/useVisibleInterval";
 import { ArrowUp, Bot, Boxes, CalendarClock, Copy, Download, GitFork, Globe, Lightbulb, ListChecks, LoaderCircle, MessageSquare, MoreHorizontal, Pause, Pencil, Play, Plus, RefreshCw, Sparkles, Square, Target, UserRound, Users, Workflow, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ContextMenu } from "../../ContextMenu";
-import MarkdownContent from "../../MarkdownContent";
+import { MarkdownContent } from "../../components/LazyMarkdown";
 import { SlashCommandMenu, type SlashCommandItem } from "../../SlashCommandMenu";
 import { api, post, remove } from "../../api";
 import { type FilePreviewSelection } from "../../codexContent";
@@ -182,7 +182,7 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
   useEffect(() => {
     const controller = new AbortController();
     (async () => {
-      let initial = cursor.current === 0;
+      const initial = cursor.current === 0;
       while (!controller.signal.aborted) {
         const next = await api<StreamEvent[]>(`/sessions/gemini/${thread.id}/events${initial ? "" : `?after=${cursor.current}`}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
@@ -197,10 +197,11 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
         }
         merge(next);
         if (initial) setHasEarlier(next.length === 500);
-        cursor.current = Math.max(cursor.current, next.at(-1)?.sequence ?? 0);
+        const latest = next.at(-1)?.sequence ?? 0;
+        const advanced = latest > cursor.current;
+        if (advanced) cursor.current = latest;
         setError("");
-        if (initial || next.length < 500) break;
-        initial = false;
+        if (initial || next.length < 500 || !advanced) break;
       }
     })().catch(error => { if (!controller.signal.aborted) setError(message(error)); });
     return () => controller.abort();

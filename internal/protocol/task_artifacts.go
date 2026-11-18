@@ -25,14 +25,16 @@ type ArtifactManifest struct {
 }
 
 type TaskArtifactHandoff struct {
-	Workspace string            `json:"workspace"`
-	Action    string            `json:"action"`
-	Digest    string            `json:"digest"`
-	Manifest  ArtifactManifest  `json:"manifest"`
-	Previous  *ArtifactManifest `json:"previous,omitempty"`
+	Workspace    string            `json:"workspace"`
+	Action       string            `json:"action"`
+	Digest       string            `json:"digest"`
+	Manifest     ArtifactManifest  `json:"manifest"`
+	Previous     *ArtifactManifest `json:"previous,omitempty"`
+	MetadataOnly bool              `json:"metadata_only,omitempty"`
 }
 
 type TaskArtifactReceipt struct {
-	Action string `json:"action"`
-	Digest string `json:"digest"`
+	Unknown bool   `json:"unknown,omitempty"`
+	Action  string `json:"action"`
+	Digest  string `json:"digest"`
 }
