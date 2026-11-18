@@ -6,6 +6,8 @@
 
 本阶段补充盘点基线为 Wio 提交 `65b5753`，版本 0.3.12；P0 至 P6 的历史基线仍以总览为准。下面的类型、模块和接口均为待实现设计，最终契约由 P7-01 固化，不能作为当前功能说明。
 
+P7-01 的当前实现盘点更新到 `2260a01`（0.3.39 / schema 6，2026-11-18）。P2、P4、P6 已完成，已移除的会话隔离功能不作为任务依赖；下文“P7-01 冻结契约”取代旧基线中的接口草图。冻结表示后续实现遵循该设计，不表示产品能力已开放。
+
 ## 目标与交付顺序
 
 目标流程：用户创建需求；协调成员拆解计划；开发和研究成员并行执行；开发完成后请求审查；审查不通过则有限返工；协调成员汇总，用户最终验收。Claude、Codex、Gemini 均可承担任一角色，角色不与引擎绑定。
@@ -127,6 +129,215 @@ flowchart TD
 
 新任务接口和事件单独定义命名空间，既有会话、操作和事件的持久化取值保持不变。新增表走 P1 迁移；新增 Agent 工具或操作走 P4 能力协商和载荷夹具，并按仓库规则升级 Agent 版本。旧 Agent 上无法保证的成果捕获/工具能力明确禁用，不静默跳过。
 
+## P7-01 冻结契约
+
+本节是后续实现的验收依据。新增包、方法、表、HTTP 路由和能力名均是设计；“现有”表格中的符号才是 `2260a01` 已有实现。若实现中发现无法满足契约，先修订本节和相关验收项，再写代码。
+
+### 1. 当前代码、复用点与必须补齐的入口
+
+下列路径均相对仓库根目录，可通过符号名定位，不依赖历史行号。
+
+| 现有文件与符号 | 可以复用 | 任务层必须补齐 |
+| --- | --- | --- |
+| `internal/session/session.go`：`Ref`；`record.go`：`Record`；`driver.go`：`Driver` | 引擎与 Wio 会话 ID、统一读模型、事件读取、定时任务驱动 | `Driver` 没有通用 Create/Send 事务接口；不能拿 `EnqueueScheduled` 表达任务尝试 |
+| `internal/sessionservice/service.go`：`Service.Execute`、`List`；`availability.go`：`WorkspaceEngines`、`ResolveEngineAvailability` | 正式协作工具入口、列表、工作区引擎可用性及原因 | `Execute` 要求实际模型来源，不能伪造 source 调用它完成用户授权的任务派单 |
+| `internal/store/session_driver_collaboration.go`：`collaborationEngineDriver`、`createCollaborationSessionTx`、`collaborationSend`；三个 `session_driver_<engine>.go` | 已有事务内 Create/Send/Interrupt、权限设置及引擎差异 | 新增用户/任务身份的窄入口，在同一 `sqlx.Tx` 使用这些原生适配；不复制三套轮次实现 |
+| `internal/store/session_collaboration_port.go`：`transactionPort`；`internal/sessionservice/core/mutate.go`：`Port`、`Mutate` | 调用者持有事务、端口不提交的约定 | 协作端口绑定来源、委派和子会话授权，不能直接当任务权限入口 |
+| `internal/store/codex_requests.go`：`QueueCodexTurnRequest`；`session_collaboration_actions.go`：`queueCollaborationOperation` | 原子轮次/消息及既有请求去重模式 | 后者的 `session-tool:` 随机操作键不是稳定任务键；任务尝试关联和稳定键须在同一事务落库 |
+| `internal/store/operations.go`：`PendingOperations`、`MarkDelivered`、`CompleteOperationIfActive`；`operation_completion.go`：`completeActiveOperation` | 持久化操作、原 ID 重送、终态条件更新 | 任务结果投影和原生轮次终态关联；操作终态本身不足以证明任务成功 |
+| `internal/store/session_collaboration_result.go`：`collaborationTurnState`、`session_collaboration.go`：`collaborationTurnBounds`；`internal/agentgateway/operation_results.go`：`reconcileCompletedTurn`、`reconcileOperation` | 指定操作的结果边界、Codex 接受与结束分离、丢失结果对账 | 任务读取必须要求绑定操作的终止证据；保留未知来源，不能把合成的 failed 当成可安全重试的失败 |
+| `internal/store/session_collaboration.go`：`ExecuteCollaboration`、`collaborationGrant`；`session_collaboration_actions.go`：`collaborationLimits`；`session_collaboration_worker.go`：`continueCollaboration` | 稳定 request_id、授权版本复核、深度/子会话限制、自动续聊 | 全局设置现在可以覆盖逐会话 grant；任务专属会话必须先执行编排所有权限制，不能靠写一个空 grant 防止重复调度 |
+| `internal/store/session_collaboration_actions.go`：`workspaceWriteBusy`；三个原生入队器 | server → workspace 的锁顺序、既有工作区写入规则 | 同一任务成员/会话互斥；现有规则允许 Claude/Gemini 轮次共享目录，不能宣称已互斥全部模型写入 |
+| `internal/store/tx_retry.go`：`inTx`、`inSerializableTx`、`nextEventSequence`；`events.go`：`AddEvent` | 有界事务重试、事件流序号分配 | 状态与任务事件同事务；重试回调内不得 Wake、发布 WebSocket 或访问 Agent |
+| `internal/store/workspace_lifecycle.go`：`WorkspaceDeletionPlan`、`clearWorkspaceSessionRecords`；`project_deletion.go`：`ProjectDeletionPlan`；`retention.go`：`PruneRetainedData` | 删除预检和保留策略的接入位置 | 当前删除会清会话事件，保留查询不认识任务成果；必须加入任务证据保护再开放关联 |
+| `internal/gitworktree/worktree.go`：`Create`；`internal/store/workspace_lifecycle.go`：`QueueCrossServerWorkspaceClone` | 原有 worktree 创建和跨机仓库克隆通道 | 仓库克隆不含未提交修改；不可变成果捕获、传输和审查工作区仍是 P7-05 新能力 |
+| `internal/agentgateway/session_collaboration.go`：`receiveSessionTool`、`RunSessionCollaboration`；`internal/sessiontools/tools.go`：`Call`、`Grant`、`Definitions` | 实际 server/session/operation 身份、MCP 返回通道与工具定义 | P7-07 添加独立任务工具及鉴权；不以工具参数中的角色或 task_id 确立身份 |
+| `web/src/navigation.ts`：`readLocationState`、`locationFor`；`web/src/data/requests.ts`；`web/src/realtime/scopes.ts` | 统一会话地址、公共取数层和范围失效 | 增加 tasks 路由、取数和 scope；不在新页面增加独立 WebSocket/轮询体系 |
+
+### 2. 模块及事务端口
+
+`internal/task` 保存领域 DTO、状态常量、规范化和纯校验，允许依赖 `session.Ref`，不依赖 Store、HTTP、网关或 CLI。`internal/taskservice` 保存命令处理、就绪计算与后台对账，定义它消费的 Repository 接口；Store 实现该接口。`cmd/controlplane` 装配任务服务、Store 和提交后的 `gateway.Wake`/实时通知。HTTP 只负责已认证用户身份、CSRF、输入限额和结果映射。
+
+Repository 的最小方法为 `CreateTask`、`UpdateTask`、`AppendPlan`、`SetGrant`、`CreateRun`、`TransitionRun`、`DispatchAttempt`、`RecordAttemptEvidence`、`ResolveAttempt`、`RecordAcceptance`、`ArchiveTask`、`GetTask`、`ListTasks`、`ReadEvents`、`GetRequest`。每个修改方法接收 `CommandMeta{actor, request_id, expected_version}`，执行领域决定后以条件更新和事件原子提交。后台写入另带 `AttemptFence{attempt_id, lease_generation}`；领域决定在事务内依据重新读取的事实校验，不能只依赖事务外快照。
+
+新增 `Store.DispatchTaskAttempt` 作为 `DispatchAttempt` 的实现：在自己的事务里校验任务授权、run/step 版本、预算和资源，预留尝试、创建/读取任务会话、调用原生驱动 Send、关联真实操作并写入事件。任务服务不拿到裸 `*sqlx.Tx`，也不调用自开事务的 HTTP/公开入队方法。新增 Store 内部 `taskSessionPort` 仅提供事务内 Create/Send/Interrupt/Observe，适配现有原生方法。取消使用同样的事务端口，为各活动尝试持久化中断意图和中断操作关联。
+
+任务事件与会话事件都使用现有序号规则，锁顺序固定为 server（按 ID 排序）→ task/run → workspace（按 ID 排序）→ 会话/attempt → event stream（按 stream ID 排序）。跨层入口都按该顺序锁定并重读条件；纯任务编辑从 task 开始，不在持有 task 后补取 server。多服务器派单每事务只处理一个目标，避免锁住整张 DAG。P7-03 必须以 PostgreSQL 竞争用例验证与浏览器、协作、定时任务入口无锁顺序倒置。
+
+### 3. 对象与字段
+
+公共约定：ID 为服务生成的不透明字符串，时间为 UTC RFC3339；`version` 是从 1 开始的乐观并发号。模型不能指定数据库主键、actor、租约代次或实际操作 ID。输入字符串不作 shell 拼接；执行设置只接受引擎已有合法值。
+
+| 对象 | 必需字段与约束 |
+| --- | --- |
+| Task | `id, project_id, title, requirement, criteria[], spec_version, current_plan_id?, current_run_id?, current_grant_revision?, counters, version, created_by, created_at, updated_at, archived_at?`；每条 criterion 有稳定 ID 和文本；需求/条件只能在无活动运行时修改，旧版本保存在 plan 快照中 |
+| PlanRevision | `id, task_id, revision, parent_id?, spec_version, requirement_snapshot, criteria_snapshot, members[], steps[], grant_revision?, reason, author, content_hash, created_at`；不可变，引用同任务父版本；保存规范化 JSON 及 SHA256，revision 按任务递增；grant_revision 只记录设计依据，可为空，实际执行授权由 run 固化 |
+| TaskMember（计划快照） | `id, role, engine, workspace_id, model, mode, effort, directory_mode`；role 为 `coordinator/developer/researcher/reviewer`，任何角色可选三种引擎；一个成员绑定一个工作区，换引擎/工作区必须新计划；M8 的 directory_mode 仅为 `shared/existing_worktree`，后者也必须已就绪 |
+| Step（计划定义） | `id, member_id, kind, title, instructions, input_refs[], depends_on[], criterion_ids[], required, completion_policy`；kind 为 `plan/develop/research/review/summarize`；M8 所有步骤 required=true、策略为 `execution`，M9 增加 `artifact/review`；不得把未交付策略静默降级 |
+| TaskRun | `id, task_id, plan_id, grant_revision, state, version, counters, started_at?, deadline_at?, ended_at?, accepted_by?, acceptance_reason?, accepted_at?`；每任务最多一个非终态 run，始终绑定不可变计划和需求/条件版本 |
+| StepRun | `run_id, step_id, state, current_attempt_id?, block_code?, version`；每次 run 独立投影，不修改计划中的 Step；依赖只读取本 run、本 plan 的有效结果 |
+| Attempt | `id, run_id, step_id, number, dispatch_key, input_hash, state, session_ref, server_id, workspace_id, operation_id?, interrupt_operation_id?, lease_owner?, lease_generation, lease_expires_at?, evidence_cursor, outcome_certainty, result_summary?, created_at, ended_at?`；保留实际执行设置和输入快照，不跟随成员后续设置变化 |
+| TaskGrantRevision | `task_id, revision, actor, allowed_members, workspace_ids, execution_modes, budgets, enabled, created_at`；用户授权的不可变快照，任务保存当前 revision；收窄或撤销立即阻止新派单，历史授权仍可审计 |
+| TaskEvent | `event_id, task_id, sequence, kind, schema_version, run_id?, step_id?, attempt_id?, actor, request_id?, payload, occurred_at`；与状态同事务，sequence 按任务单调递增 |
+| TaskRequest | `actor_key, project_id, request_id, action, input_hash, task_id, response_json, created_at`；请求与状态同事务，成功后永久可对账；同键异参冲突，不重复执行 |
+
+P7-05/06/07 逐批新增：`ArtifactRevision{id, task_id, run_id, attempt_id, revision, manifest_hash, repository_identity, base_sha?, result_sha?, patch_hash?, files[], evidence[], created_at}`；`Review{id, task_id, attempt_id, artifact_ids[], criteria_hash, verdict, evidence[], reason, created_at}`，verdict 为 `approved/rejected/inconclusive`；`CollaborationRequest{id, task_id, source_attempt_id, request_id, kind, target_member_id?, payload_hash, state, resolution, created_at}`。首批不创建空实现或可调用的占位工具。
+
+计划校验执行 Kahn 拓扑排序：ID 不重复、依赖存在且无自依赖/环、成员和 criterion 均属于快照、工作区属于任务项目、输入引用必须来自依赖祖先或明确外部材料。保存计划不授予执行权限，P7-02 无 grant 时只校验项目与结构；启动和派单还要求全部引用在当前授权内。首批依赖只有 AND 汇合；不支持任意脚本条件、可选步骤、自动跳过必需步骤或回边。跨工作区的隐含文件交接在 M8 被拒绝；显式文本输入可跨服务器，代码交接到 P7-05 才可选择。
+
+### 4. 状态迁移与证据
+
+Task 的显示状态由当前 run 投影：无 run 为 `draft`；run 的 running/paused/blocked/cancelling 为 `active`；其他直接显示 run 状态。`archived_at` 独立于执行状态，归档不代表通过。创建计划不触发执行；用户确认计划、授权和预算后 `CreateRun` 原子创建 run 和全部 StepRun 并进入 running。P7-02 只开放草稿/计划 API，直到 P7-03 验收通过才注册启动动作。
+
+下表未列出的迁移一律拒绝。所有迁移都要求正确的 expected_version、任务/项目范围；状态、计数和 TaskEvent 同事务。运行中的结果归并还校验 attempt、operation 和 fence。证据原始落库不因 fence 失效而丢弃，旧调度者不得写当前投影。
+
+| TaskRun 迁移 | 允许条件、证据与动作 | 拒绝条件 |
+| --- | --- | --- |
+| 无 → running | 用户选择 plan_id、当前授权；计划校验通过，无其他活动 run，预算足够；固化 plan/grant 和期限 | 空条件、环、越权、过期版本或未交付策略 |
+| running/blocked → paused | 用户暂停；提交后所有 DispatchAttempt 检查失败；在途尝试继续归并 | 已终态或 cancelling |
+| paused → running/blocked | 用户恢复，重新校验授权；有可推进步骤为 running，否则 blocked | 授权已撤销，或所有必需步骤已满足时应进入 awaiting_acceptance |
+| running → blocked；blocked → running | 无活动尝试且剩余步骤全部等待资源/用户/失败处理时 blocked；阻塞解除且未暂停后自动恢复 | 不允许用 blocked 释放未知尝试占用；其他独立步骤可执行时保持 running 并列出局部阻塞 |
+| running/paused/blocked → cancelling | 用户取消、撤销授权或运行期限到达；先关闭派单门，再逐尝试请求停止；保留取消原因 | 不能先显示 cancelled 再异步猜测停止 |
+| cancelling → cancelled | 全部尝试未派出或有可信停止/终止证据；未启动步骤记 cancelled | 任一 running、unknown 或停止请求未确认 |
+| awaiting_acceptance → cancelled | 用户取消并保存理由；此时已无活动尝试 | 不能覆盖已经 accepted/rejected 的决定 |
+| running/paused/blocked → awaiting_acceptance | 全部必需 StepRun succeeded、无活动/未知尝试；M9 还要求成果和绑定版本审查通过 | 仅会话 idle、启动操作成功、模型声明完成或旧成果审查 |
+| running/paused/blocked → failed | 必需步骤确定失败且无法在预算内继续，全部在途已终止；保存失败原因 | 无法确认远端结束；此时保留 blocked/paused，显示 unknown |
+| awaiting_acceptance → accepted/rejected | 已认证用户提交决定、理由、当前 run/plan 和证据摘要；事务内复核版本和无未决必要证据 | 模型、调度器或 CLI 审批不能代替用户；拒绝不隐式执行返工 |
+| accepted/rejected/failed/cancelled → 新 run | 用户重新打开；旧 run 不变，新 run ID、重新校验计划与授权，任务累计预算不清零 | 仍有活动/未知尝试；M8 不复用旧步骤成功结果 |
+
+非终态 run 包括 running、paused、blocked、cancelling 和 awaiting_acceptance；accepted、rejected、failed、cancelled 才是终态。暂停与最后一个结果到达并发时，完整达成条件优先投影到 awaiting_acceptance，仍不派新步骤；否则保留 paused。取消提交后即使迟到成功也只保存该尝试的真实结果，run 最终仍为 cancelled，不转 awaiting_acceptance。取消与验收竞争由版本条件更新保证只有一个命令生效。
+
+| StepRun / Attempt 迁移 | 条件与证据 |
+| --- | --- |
+| step pending → ready | 所有依赖 succeeded 且结果版本有效；无依赖可直接 ready。ready 是可重建投影，不能凭它跳过事务复核 |
+| ready → blocked → ready | 会话忙、Agent 离线、工作区冲突、缺能力/凭据、预算或授权问题；保存具体 block_code；等待不分配新尝试号 |
+| ready → active；attempt 无 → queued | 单事务领取、消耗一次尝试额度、保存输入、会话/操作关联与事件；没有已提交的“预留成功、操作缺失”中间状态 |
+| queued → running | 已绑定操作的启动/原生接受证据；delivered 只说明派送，不能证明完成 |
+| queued/running → succeeded | 平台取得该轮次的可信正常结束证据；M8 仅表明执行结束，StepRun 按 completion_policy 决定是否 succeeded，不表示验收条件已验证 |
+| queued/running → failed/cancelled | 确认未执行就拒绝，或绑定轮次的失败/停止证据；已取消的未送操作必须以条件更新获胜，不能与派送竞争后声称未执行 |
+| queued/running → unknown | Agent 丢失操作、原生所有权丢失、证据不足或超时且无法证实终止；step blocked，保留会话占用与业务阻塞，不自动重试 |
+| unknown → running/succeeded/failed/cancelled | 当前对账者读取原 operation/原生轮次的可信证据，或用户提交可审计的停止核实记录；模型文本或 lease 过期不构成证据 |
+| failed/cancelled → 新 attempt | 用户明确重试，或已启用的自动重试规则匹配安全失败，且旧尝试确认终止、授权和预算仍有效；旧 attempt 不变 |
+| succeeded → 等待成果/审查或 step succeeded | `execution` 直接记录执行成功；`artifact` 要求不可变清单；`review` 要求指定成果/criteria_hash 的合格审查；缺失保持 step blocked |
+| step succeeded → ready/pending（M9） | 指定成果的真实 rejected 审查触发一次授权内返工：生产步骤 ready，受影响的下游 pending；只允许相关尝试全部可信终止且预算足够时原子失效，保存旧结果来源和失效事件 |
+
+Codex 必须按 `operation_id` 对应的 turn 接受事件、turn ID/消息区间与终止事件关联；不能复用 `collaborationTurnState` 中“当前会话 idle 且 start succeeded”的兼容回退作为任务成功证据。Claude/Gemini 以绑定操作的真实终态及所有权恢复事实归并。`OperationLostMessage` 等网关合成失败明确映射到任务 unknown；P7-03 新增持久化的证据来源分类，不能仅匹配错误文案。历史证据按 `(attempt_id, source_event_id)` 去重，游标推进与投影原子提交。
+
+StepRun 状态固定为 pending、ready、active、blocked、succeeded、failed、cancelled。attempt 失败/取消且可重试时 step 为 blocked，明确重试动作使其 ready；预算耗尽且旧尝试均已结束才置 failed。run 取消时未执行步骤置 cancelled，已成功步骤保持历史 succeeded。queued 在网关取出后、MarkDelivered 前仍可能已经发送，单凭操作行 queued/cancelled 不能证明未执行；P7-03 必须对这个窗口注入竞争，若没有可靠的未发送证明，继续中断/所有权对账并保留 cancelling/unknown。
+
+重试、返工、动态改计划、重新打开都不清除旧记录。M9 在同 run 内通过新 Attempt 返工，不给 DAG 加回边：review 的 rejected/inconclusive 先使审查步骤 blocked，不满足依赖；rejected 可在已有授权/预算内把指定生产步骤重新置 ready、审查及其受影响后继置 pending，inconclusive 等用户补证据或明确重审。失效范围、旧 attempt/artifact/review ID、返工计数和事件同事务落库；有在途/未知后继时先暂停并确认停止，再失效，不能边执行边换输入。新尝试的 input_hash 绑定新的成果及依赖结果，旧审查不能再次归并为新步骤成功。M10 计划替换先暂停派单并处理在途尝试，形成新 plan/run；只能显式继承输入摘要、成果/条件版本均未变化的结果并记录来源，旧操作不满足新步骤。
+
+### 5. 派单幂等、租约和恢复窗口
+
+外部修改请求必须有 1–128 字符的 `request_id`，范围为 `(actor_key, project_id, request_id)`；输入摘要包含动作、目标、expected_version 和规范化业务输入，排除传输元数据。成功去重记录先于当前状态/版本错误返回检查，因此响应丢失后仍返回原成功结果；仍校验读取权限。异参返回 `IDEMPOTENCY_CONFLICT`。同一动作的新意图才使用新编号。校验失败/事务回滚未消耗编号，HTTP 响应丢失不能据此推断回滚。
+
+尝试身份唯一 `(run_id, step_id, number)`，派单键为 `task:<run_id>:<step_id>:<number>`，全局唯一。操作可继续由原生队列生成 ID，但 `task_attempts.dispatch_key`、`operation_id` 唯一关联与操作插入同事务提交；有多阶段准备时每阶段使用该键的固定后缀并保存阶段操作，不能覆盖执行轮次 ID。M8 使用已就绪工作区和新建专属会话，不在派单时隐式创建 worktree。
+
+| 故障窗口 | 持久化事实与恢复动作 |
+| --- | --- |
+| 校验/尝试领取前崩溃 | 没有已提交尝试和操作，重算 ready；原请求对账后才能重试 |
+| 尝试、会话、队列、关联、事件任一写入失败 | 同一事务全部回滚；注入每个写入点确认无孤立会话、半份尝试和额度扣减 |
+| COMMIT 响应丢失 | 查原 request_id 或 dispatch_key；找到则读取原操作，找不到且数据库查询可靠完成后才重进同键事务 |
+| 提交后、Wake 或 WebSocket 前崩溃 | 操作仍在队列；后台扫描与现有 PendingOperations 投递原 ID，事件可补查 |
+| 发送后、MarkDelivered 或响应前断线 | 原操作 ID 重送，由既有 Agent 回执/去重恢复；任务层不生成新操作来“补发” |
+| Codex start 成功，轮次仍运行/终止事件丢失 | 继续原轮次对账；无终止证据为 running/unknown，不能使下游 ready |
+| 原生结果落库后、任务归并前崩溃 | 以 attempt 的原操作和证据游标重新归并，事务去重，不重派 CLI |
+| lease 到期，旧 worker 或旧轮次晚到 | 新 worker CAS 增加 lease_generation 后只观察原操作；旧 fence 更新为零行；原始回执保留，当前 worker 再归并 |
+| 取消提交后、停止请求排队前崩溃 | run=cancelling 是持久化停止意图；后台逐尝试补入同键中断，未确认前保留占用 |
+| Agent 重启并失去 CLI/操作所有权 | 沿用引擎现有探测，缺证据保持 unknown；用户核实停止后才可新尝试 |
+
+租约默认 30 秒，10 秒续租；过期比较使用数据库时间，在事务内 CAS 增加代次。lease 只保护控制面归并权，不替代原生执行所有权。所有有副作用的 CLI 都仍经原操作通道；任务服务没有提交事务之前向 Agent 发命令的路径。P7-05 跨机准备若不能放进同一事务，先写持久化阶段意图/outbox，再由现有操作队列以稳定阶段键执行，按阶段原操作对账。
+
+### 6. 授权、占用与预算
+
+用户通过任务启动确认授予“按这个计划在这些工作区用这些权限执行”的范围，服务保存实际用户 ID；后台 actor 为 `task:<task_id>`，记录所依据的 grant_revision，不冒用任何模型。开始、每次派单和返工前复核当前授权；撤销把活动 run 置 cancelling，保留停止未确认状态。扩大工作区、权限、预算必须用户形成新授权版本，不能继承模型输出中的同意。当前系统是单管理员，跨项目隔离仍必须通过 project_id 条件和所有引用的项目一致性校验实现。
+
+M8 每个成员每个 run 创建新的专属会话；普通已有会话只可作明确输入链接，暂不接管其历史权限或自动续聊。新增 `task_session_bindings` 以 `(engine, session_id)` 唯一保存 active attempt/run。事务内检查覆盖所有可开新轮次/转向/原生分叉/归档/删除入口：浏览器、定时任务、协作工具、自动续聊均不能修改仍由任务占用的会话。全局协作 grant 也不能绕过；只读和原生审批/用户提问回答仍可用，回答不派新轮次。任务成员 M8 禁止自行派子会话或对其他会话发指令；动态请求统一到 P7-07。
+
+绑定在整个活动 run 内保留，`active_attempt_id` 可在步骤间为空；执行并发额度只统计 queued/running/unknown 的实际尝试，unknown 也占额度。尝试确认结束才释放执行与工作区占用，run 终态或完成接管才解除会话编排绑定；不能在两步骤之间暂时放开普通入口。
+
+独立会话协作现有深度 2、每来源 2 个活动子会话及续聊额度保持生效；任务成员不是其隐式子会话，不创建 `session_links` 规避额度。任务使用自己公开的并发上限并只允许编排器推进；禁止工具旁路与禁止父自动续聊必须同时验收。用户手动接管先暂停整个 run，要求原尝试可信终止，将会话绑定解除并保留证据；之后手动轮次不能满足任务依赖。恢复该步骤用新的专属会话和新尝试，unknown 未解除时拒绝接管/重跑。
+
+现有工作区并发行为保持不变：Claude/Gemini 的轮次可共享目录，其他写操作遵循既有互斥；Codex 也可并行。任务为同工作区的成员默认增加串行占用（覆盖三种引擎），不同工作区才按依赖并行。此占用约束任务派单，不能保证独立普通会话不改目录，页面明确共享目录可能被其他会话修改；P7-05 的审查依赖不可变成果。普通 Git/文件操作仍经过现有锁，不能用任务占用绕开它。
+
+| 限额 | 默认 / 硬上限 | 持久化与处理 |
+| --- | --- | --- |
+| 计划规模 | 8 成员、50 步骤 / 16 成员、100 步骤 | 任务建立时展示，依赖边最多 1000；请求体最多 1 MiB，单步 instructions 最多 64 KiB |
+| 并发 | 每任务 2 / 4；每成员/会话 1 | ready 派单事务检查，跨 worker 共用计数；同工作区默认 1 |
+| 总尝试 | 每任务 100 / 500；每 run-step 3 / 5 | 初次执行、人工重试和返工均计入；自动重试默认 0，用户可开到 1；只针对已证实未执行的暂时拒绝，不针对执行中断/未知 |
+| 审查返工 | 每步骤 2 / 4 | M9 开放；受每 run-step 尝试和任务总尝试同时约束，展示有效的较小上限 |
+| 计划版本 / 执行次数 | 每任务 10 / 50；每任务 10 / 50 | 新计划/新 run 均不重置任务累计次数；达到上限等用户明确扩额 |
+| 动态消息 | 每任务 100 / 1000；因果链深度 8 / 16 | M10 开放，重复请求不扣第二次，派生链计数跨重启保存 |
+| 步骤 / run 时间 | 60 分钟 / 24 小时；上限 24 小时 / 7 天 | 派单固化 deadline；到期停止新派单并请求中断，未确认则 unknown/cancelling，不把超时当作进程已停止 |
+
+硬上限以内提高预算仍需用户确认。M8 不声称提供金额/token 强制上限：现有三引擎用量不是可靠的预付费截断机制；页面显示可取得的真实用量及缺失值，不以估算阻止对账。标题最多 200 字符、需求最多 64 KiB、验收条件 1–50 条且每条最多 4 KiB；超限直接拒绝，不截断后执行。
+
+### 7. 数据库、保留与版本兼容
+
+P7-02 从 schema 6 追加 migration 7（`task_core`，实施时若序号已被使用则先更新本节），不修改已发布 migration 6，也不重建三种原生线程表。新增表为 `tasks`、`task_plan_revisions`、`task_plan_members`、`task_plan_steps`、`task_step_dependencies`、`task_grant_revisions`、`task_runs`、`task_step_runs`、`task_attempts`、`task_session_bindings`、`task_requests`。成员/步骤/依赖按 plan 快照存储，JSON 与规范化行在同一事务生成并验证摘要一致。
+
+任务事件复用 `events`，stream_id 为 `task:<task_id>`，事件内容为上文 TaskEvent，`sequence`、event_id 和 occurred_at 使用外层既有字段；不再创建另一份事件事实表。`RecordAttemptEvidence` 在 P7-03 追加 `task_attempt_evidence`，保存来源事件 ID、原始摘要、证据分类与取得时间；P7-05/06/07 再追加成果、审查、协作请求和必要 outbox 表，迁移号在各步领取时确定。P7-02 先建立 task 事件再开放写 API。
+
+必须由数据库约束保证：`(task_id,revision)` 计划/授权唯一、`(run_id,step_id,number)` 尝试唯一、dispatch_key 唯一、operation_id 非空时唯一、`(actor_key,project_id,request_id)` 请求唯一、`(task_id,sequence)` 由事件流保证唯一；每任务至多一个活动 run、每会话至多一个活动绑定使用两库均支持的部分唯一索引。父子对象通过复合外键/唯一键保证 task/plan/run 一致；非法跨项目引用仍在事务内校验。状态 CHECK 仅约束任务新表，不修改线上原操作状态。
+
+SQLite/PostgreSQL 使用同一事务语义，SQL 参数走 `Store.Q`，时间/布尔遵循现有类型；JSON 为 TEXT 并在领域层验证，不能只用 PostgreSQL JSON 运算或内存互斥实现约束。PostgreSQL 事务重试回调不得执行事务外副作用；SQLite 沿用已有连接和已登记的取消问题边界，后台任务命令使用服务生命周期管理的有界事务 context，不直接继承已断开的 WebSocket/gRPC 流。两库迁移做 schema6 → 新版本、重复打开、约束冲突、原子回滚和原生会话数据摘要校验；新结构旧制品拒绝启动，回滚恢复备份，不因“只加表”声称旧版本可连新库。
+
+任务及其证据不随项目/工作区/会话删除级联：tasks.project_id 和活动绑定使用 RESTRICT；历史 Attempt 保存来源 ID、路径/仓库身份快照，无指向原生线程的级联外键。归档保留深链；活动/未知关联阻止会话、worktree、工作区和项目删除，包括 force。M8 历史关联仍阻止破坏性删除，提供归档；P7-05 完成证据快照后才可按显式释放流程移除历史源工作区，深链显示来源已删除，不能丢证据。保留任务原操作、任务事件、引用的会话事件和成果文件，`PruneRetainedData` 显式排除全部任务引用，不能依赖当前 kind 恰好被保留。首批没有硬删除任务 API，只有终态归档/恢复。
+
+`internal/store` 在 Agent 依赖树内的变更按 AGENTS 规则同时升 Agent 版本；本设计步骤无源码变更，不升级 0.3.39。M8 复用现有三引擎轮次能力，按 `WorkspaceEngines` 判断可用，不增加没有实现的通用 `task.run` 能力，也不抬高全局最低 Agent。M9/M10 分别增加版本化能力 `task.artifacts.v1`、`task.collaboration.v1`，在 P4 注册表、处理器和只增 wire fixtures 同步落地；新旧 Agent 混用时只禁用缺失能力的步骤，不静默跳过必要成果/审查。
+
+### 8. HTTP、事件和基础工作台
+
+以下为新增设计，全部位于现有鉴权/CSRF 私有路由下；接口 JSON 字段使用 snake_case，错误兼容现有 `error` 字符串并增加 `code`、`details`。越项目 ID 视为 404；未登录 401、无执行授权 403、非法字段/图 400、同键异参或版本/状态冲突 409、有效计划因尚不支持的策略而不能执行 422。运行中资源暂忙以持久化 block_code 返回，不用 HTTP 成功声称已启动 CLI。
+
+| 路由 | 请求/返回与交付步骤 |
+| --- | --- |
+| `POST /api/tasks` | `{request_id, project_id, title, requirement, criteria}` → 201 `{task}`；只建草稿，P7-02 |
+| `GET /api/tasks?project_id=&state=&cursor=&limit=` | `{items,next_cursor}`；limit 默认 50、最大 100，按 updated_at/id 稳定游标，P7-02 |
+| `GET /api/tasks/{taskID}` | `{task,plan?,run?,steps,members,blockers,capabilities,last_sequence}` 一致性快照，P7-02；大证据分页读取 |
+| `PATCH /api/tasks/{taskID}` | `{request_id,expected_version,title?,requirement?,criteria?}` → `{task}`；修改条件增加 spec_version 并使旧计划不可直接启动，P7-02 |
+| `POST /api/tasks/{taskID}/plans` | `{request_id,expected_version,parent_id?,members,steps,reason}` → 201 `{plan,task_version}`；保存冻结快照，不派单，P7-02 |
+| `PUT /api/tasks/{taskID}/grant` | `{request_id,expected_version,enabled,allowed_members,workspace_ids,execution_modes,budgets}` → `{grant,task_version}`；execution_modes 按成员 ID 记录引擎和权限模式，用户授权版本，P7-03 |
+| `POST /api/tasks/{taskID}/runs` | `{request_id,expected_version,plan_id,grant_revision}` → 201 `{run,task_version}`；启动或终态后重新打开，P7-03 |
+| `POST /api/tasks/{taskID}/runs/{runID}/actions` | `{request_id,expected_version,action,reason,...}`，action=`pause/resume/cancel/takeover/retry_step/resolve_unknown`；takeover 指定 attempt，retry 指定 step，resolve 指定证据，→ 202 `{run,request_id}`，P7-03 |
+| `POST /api/tasks/{taskID}/runs/{runID}/acceptance` | `{request_id,expected_version,decision,reason,evidence_hash}`，decision=`accepted/rejected` → `{run}`；M8 基础用户决定，M9 增加成果/审查强校验，P7-04 |
+| `POST /api/tasks/{taskID}/archive` | `{request_id,expected_version,archived}` → `{task}`；只允许无活动 run，P7-04 |
+| `GET /api/tasks/{taskID}/events?after=&limit=` | `{items,next_after,has_more}`，after 为 sequence，默认 100、最大 500，P7-02 |
+| `GET /api/task-requests/{requestID}?project_id=` | 当前用户的原命令 `{action,task_id,response}`；404 后仍以原编号重试，不能仅因短暂查不到换号，P7-02 |
+
+expected_version 对 task 修改取 task.version，对 run 动作取 run.version；命令同时改变对象时响应返回两者。GET 快照的 last_sequence 与投影取同一数据库快照。成功去重返回第一次成功的响应与 HTTP 状态，后续状态变化由 GET 获取。`resolve_unknown` 的用户记录必须说明核实方法、停止时间和证据来源，不能让一个“标记成功”按钮凭空满足依赖。
+
+事件命名固定为 `task.created`、`task.spec.updated`、`task.plan.created`、`task.grant.updated`、`task.run.created`、`task.run.state.changed`、`task.step.state.changed`、`task.attempt.queued`、`task.attempt.state.changed`、`task.attempt.evidence.recorded`、`task.acceptance.recorded`、`task.archived`；M9/M10 再追加 `task.artifact.created`、`task.review.recorded`、`task.request.updated`。新 payload `schema_version=1`，外层保持现有 StreamEvent。WebSocket 只作失效提示，事件未发布可从数据库补读；客户端遇到游标缺口或不认识的事件取完整快照，不从事件推测终态。
+
+P7-07 的工具最小集合为 `wio_get_task_context`（只读）、`wio_request_task_review`、`wio_report_task_blocker`、`wio_propose_task_plan`（后三者持久化请求，不直接派 CLI 或改状态）。写入均带原 request_id；模型只提供目标成员/成果和理由。网关以已认证 server_id、实际 session_ref、operation_id 解析活动 Attempt，再确定 task/run/member/grant；任务 ID、角色和预算不接受模型自报。非任务会话、旧轮次和已经解除绑定的来源拒绝调用；同请求同摘要返回原处理结果，越范围进入待用户处理或明确拒绝。读取上下文只返回任务授权内的材料；新工具仅在 `task.collaboration.v1` 完整注册并实现后暴露。
+
+P7-04 在“会话”旁新增“任务”，规范地址 `/?view=tasks&task=<id>`；项目页增加带 project_id 的创建/筛选入口，首页只新增任务概览，不改既有会话导航。任务页使用 `web/src/data` 和新增 tasks realtime scope，接入现有断线回退刷新；重连、页面重新可见或命令完成后重新读取快照。会话链接仍由 `locationFor("sessions", id, engine)` 生成 `/?view=sessions&engine=<engine>&thread=<id>`，旧引擎深链继续兼容。
+
+创建页先录入需求/条件，再选择角色、引擎、已就绪工作区及执行设置，最后编辑步骤和依赖列表；确认页列出计划版本、权限、预算、共享目录提示和必需输入。M8 不显示尚未开放的模型自动规划、成果传输或图编辑入口。详情页显示需求/条件版本、步骤列表、依赖、成员、真实轮次链接、当前尝试、局部阻塞与待处理事项；执行成功显示“执行已结束，等待用户验收”，不显示“条件已验证”。暂停、取消、重试和停止未确认状态在手机列表上同样可操作；只有未知状态需要用户处理时才提供带证据的解除入口。
+
+### 9. 可重复验收及后续拆分
+
+下列测试名是后续必须实现的场景标识，不表示当前已有这些测试。固定临时数据库、假时钟、假引擎脚本和临时 Git 仓库，不调用真实模型；同场景在 SQLite 和 PostgreSQL 跑，竞争/租约测试在 PostgreSQL 使用两连接和明确屏障，不靠 sleep 证明竞态。
+
+| 步骤 / 场景标识 | 夹具及故障注入 | 必须断言 |
+| --- | --- | --- |
+| P7-02 `TaskCoreMigration` / `TaskCommandAtomicity` | schema6 样本；在 task/plan/member/step/event/request 各写入点失败；同请求重复和异参 | 原生三引擎记录摘要不变、重复迁移一致；全有或全无；相同响应、异参冲突；跨项目/非法 DAG 拒绝 |
+| P7-02 `TaskConcurrentVersion` / `TaskEvidenceRetention` | 双连接同版本更新；项目/工作区/会话删除预检与 force、retention | 一个更新胜出；活动与历史证据均不被清理；归档不变验收状态 |
+| P7-03 `TaskDispatchCrashWindows` | 第 5 节每个窗口注入崩溃、COMMIT 未确认、Wake 丢失、重复回执 | 每个 dispatch_key 恰好一个已关联操作/消息；原 ID 对账；无孤立会话或重复额度 |
+| P7-03 `TaskLeaseFence` / `TaskUnknownOwnership` | 两 worker 竞争；假时钟到期，旧 fence 写入、远端继续运行，迟到原回执 | 只当前 fence 投影，lease 到期不新建操作；unknown 保留占用，可信终止后才可重试 |
+| P7-03 `TaskThreeEngineJoin` / `TaskCodexAcceptanceOnly` | P0-07 真实 HTTP/gRPC/Agent，加三种假引擎；A→B/C→汇总；Codex start 先成功但延迟终止 | 三引擎真实操作 ID 可查，依赖按本 run 汇合；B/C 不同工作区可并行，同成员/目录串行；start 成功不放行 |
+| P7-03 `TaskPauseCancelRestart` | 派单事务与 pause/cancel 设屏障；控制面重启一次；Agent 断连 | 提交后不再新派单，取消保留未确认停止；重启继续原操作，无假 cancelled |
+| P7-03 `TaskAuthorityAndTakeover` | 全局协作开启；浏览器、定时任务、模型工具、父续聊竞争；撤权与用户接管 | 无重复负责人/权限扩张；任务占用入口统一拦截；只读/审批可用；手动轮次不满足任务依赖 |
+| P7-04 `TaskWorkbenchRecovery` | Playwright 桌面/手机三引擎步骤，漏 WS、刷新、重连、能力缺失、预算用尽 | 从快照恢复，可打开实际会话，不能把模型自报当验收；旧链接和普通会话不回归；类型、测试和 bundle 检查通过 |
+| P7-05 `TaskImmutableHandoff` | 捕获未提交 patch 后继续修改；两 Agent 使用不同根目录；坏摘要/越界/错基线/缺能力 | 审查输入不可变，失败不污染目标；不自动提交或清理冲突 worktree |
+| P7-06 `TaskReviewRework` / `TaskAcceptanceVersions` | 审查拒绝一次→新尝试/成果→再审查，预算边界前后重启；旧批准迟到 | 旧审查不能批准新成果，必要检查缺失不可通过；累计预算不重置，只有用户验收 |
+| P7-07 `TaskRequestIdentityAndPlanRevision` | B 请求 C 审查并向 A 反馈；伪造 source/operation；重复消息、回边、扩大权限、新旧计划回执 | 精确任务授权、不用全项目管理；请求幂等且链路有界，新 plan 的失效关系可查 |
+| P7-08/09 `TaskGraphAndRealBrowserFlow` | 图/列表同快照并发编辑；P0-08 浏览器接真实链路，完整一次拒绝返工 | 版本冲突可定位，历史可查，手机可操作，成果/轮次/验收证据一致 |
+
+假引擎证明平台状态、路由、队列、故障恢复与界面，不证明官方 CLI 格式兼容或模型质量。真实 CLI 验收另记录三种 CLI 精确版本、原生恢复和工具能力；真实上游模型调用另记录授权、实际响应及费用，不能用假回复替代。生产升级另做备份/恢复演练与真实 Agent 心跳验收，不因本设计冻结而执行发布。
+
+后续 L 步骤按可独立验收提交拆分：P7-02 先 schema/约束与 Store 命令，再 API/删除保留；P7-03 先事务派单与身份保护，再结果证据/租约恢复，最后三引擎故障矩阵；P7-05 先本地不可变清单，再审查工作区，再跨机传输；每批补齐对应通用、PostgreSQL、跨进程或页面验收后才能开放入口。P7-01 完成不跨级领取 P7-03，也不把尚未实现的协议能力列为当前功能。
+
 ## 步骤
 
 前置、规模和状态以总览进度总表为准。实现时每个 L 步骤先拆成可独立验证的提交，不在一个提交里同时改存储、Agent 和界面。
@@ -147,7 +358,7 @@ flowchart TD
 
 **做法**
 
-1. 按当前提交重新盘点统一会话服务、操作队列、协作授权、事件和 worktree，列出可以复用的真实符号、事务入口与缺口。P2 尚未完成的接口标明为设计依赖，不将草图当作可调用实现。
+1. 按当前提交重新盘点统一会话服务、操作队列、协作授权、事件和 worktree，列出可以复用的真实符号、事务入口与缺口。P2 已完成；区分现有读/定时任务接口和仍需新增的任务派单入口，不将草图当作可调用实现。
 2. 固化对象关系、字段、状态转移矩阵、幂等边界、租约/尝试身份和恢复策略；明确暂停、取消、未知执行、最终验收及重新打开任务的语义。
 3. 设计任务授权和调度身份入口，明确与现有子会话额度、自动续聊和工作区锁的关系；确定各类预算默认值。
 4. 给出 SQLite/PostgreSQL 迁移方案、会话关联和删除保留策略、HTTP/事件契约、基础工作台与任务入口设计，以及未来任务工具的能力声明方式。冻结前在本文件补充具体契约，不在正文中预先宣称已实现。
@@ -299,3 +510,5 @@ flowchart TD
 按时间顺序追加，每条包含日期、步骤编号、会话标识、改动、实际验收结果和遗留事项。
 
 - 2026-11-14，P7-00，11-14 Codex：按用户明确指派，记录 D10、D11 并建立任务编排阶段，补充交付顺序、对象关系、授权和调度边界、成果版本与审查、后续设计/实现步骤及完整链路验收。同步总览、P2、P6、README 和协作协议的规划说明。验收：六份文档的相对链接、尾随空白、代码围栏检查通过；总览 58 个步骤的前置引用、无环依赖及 P7-00 至 P7-09 的章节/表格对应检查通过；`git diff --check` 及新增文件的空白检查通过。仅修改文档，未运行构建、Go/前端测试或 E2E。P7-00 文档验收完成，P7-01 至 P7-09 尚未开始。用户随后授权提交并推送，文档主体提交为 `64a4652`，总览和本条另作提交号登记；原有业务代码的未提交改动未触碰。
+
+- 2026-11-18，P7-01，11-18 Codex（本轮接续）：用户要求继续推进后，按进度表领取下一步；先将本阶段实现盘点基线更新到 `2260a01`（0.3.39 / schema 6），校正 P2 尚未完成的过时前提，再补齐本文“P7-01 冻结契约”九节。内容包含现有符号与缺口、模块/事务端口、对象字段、运行/步骤/尝试状态矩阵、派单崩溃窗口及租约、授权/全局协作旁路防护、预算、双库迁移/删除保留、HTTP/事件/未来工具与任务工作台、分阶段自动化验收。重点固定 Codex 接受不等于轮次完成、queued 不证明未发送、未知执行不重派、返工使旧审查失效等边界。自验模型：GPT-6（Codex，本会话自验）。实际文档检查通过：两份修改文档的 19 个本地 Markdown 文件链接及本地锚点、代码围栏、表格列数、尾随空白；总表 53 个唯一步骤的依赖引用及无环性、P7-01 两项前置均已完成、P7-00 至 P7-09 章节一一对应；盘点表中的 43 个现有符号（23 个源码文件）及 2 个前端接入路径存在；`git diff --check` 通过。仅改文档，按纯文档规则未运行构建、Go/前端测试、PostgreSQL 或 E2E，Agent 版本和数据库结构未变。设计完成不代表任务功能已实现。改动留在 `main` 工作区的 `docs/roadmap/README.md`、`docs/roadmap/P7-task-orchestration.md`，本轮未提交、推送或部署；P7-02 至 P7-09 保持待开始，下一步为 P7-02 的双库任务存储及事务命令实现。
