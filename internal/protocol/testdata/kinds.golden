@@ -165,6 +165,8 @@ session_event
 session_ownership
 session_tool_request
 session_tool_response
+task.artifact.capture
+task.artifact.handoff
 thread.bound
 turn.accepted
 user.message

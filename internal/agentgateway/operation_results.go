@@ -21,6 +21,22 @@ func (g *Gateway) handleOperationResult(ctx context.Context, serverID string, re
 	if operation.ServerID != serverID {
 		return errors.New("operation result server mismatch")
 	}
+	if operation.Kind == protocol.OpTaskArtifactCapture || operation.Kind == protocol.OpTaskArtifactHandoff {
+		id, err := g.store.CompleteTaskArtifact(ctx, operation, result, outcomeUnknown)
+		if errors.Is(err, store.ErrOperationNotActive) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if id != "" {
+			g.hub.Publish(protocol.StreamEvent{StreamID: "task:" + id, Kind: "task.artifact.updated", OccurredAt: time.Now().UTC()})
+		}
+		return nil
+	}
+	if err := g.store.RecordTaskOperationResult(ctx, serverID, result, outcomeUnknown); err != nil {
+		return err
+	}
 	// A queued or in-flight operation may be cancelled from the UI. Ignore a
 	// late Agent result so it cannot resurrect a cancelled turn or overwrite
 	// its snapshot with stale data.

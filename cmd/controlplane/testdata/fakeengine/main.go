@@ -2,16 +2,20 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const fakeSessionID = "550e8400-e29b-41d4-a716-446655440007"
@@ -94,6 +98,11 @@ func markStarted(path string) {
 
 func runClaude() {
 	input, _ := io.ReadAll(os.Stdin)
+	if strings.Contains(string(input), "P7-09 update the fixture output") {
+		prior, _ := os.ReadFile("task-output.txt")
+		_ = os.WriteFile("task-output.txt", append(prior, []byte("fixture development pass\n")...), 0600)
+		requestFixtureReview()
+	}
 	recordEnvironment(string(input))
 	encoder := json.NewEncoder(os.Stdout)
 	_ = encoder.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": fakeSessionID})
@@ -223,6 +232,51 @@ func runCodex() {
 			}
 			activeTurn = ""
 			activeMarker = ""
+		}
+	}
+}
+
+// The P7 fixture calls the same authenticated loopback MCP endpoint as a
+// native tool. Its connection is strictly limited to the local test bridge.
+func requestFixtureReview() {
+	var configuration struct {
+		Servers map[string]struct {
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
+		} `json:"mcpServers"`
+	}
+	for i, argument := range os.Args {
+		if argument != "--mcp-config" || i+1 >= len(os.Args) {
+			continue
+		}
+		raw, err := os.ReadFile(os.Args[i+1])
+		if err != nil || json.Unmarshal(raw, &configuration) != nil {
+			return
+		}
+		break
+	}
+	for _, server := range configuration.Servers {
+		endpoint, err := url.Parse(server.URL)
+		if err != nil || endpoint.Scheme != "http" || endpoint.Hostname() != "127.0.0.1" || endpoint.Path != "/mcp" {
+			continue
+		}
+		body := []byte(`{"jsonrpc":"2.0","id":"fixture-review","method":"tools/call","params":{"name":"wio_request_task_review","arguments":{"request_id":"fixture-review","target_step_id":"review","reason":"Inspect the fixture artifact"}}}`)
+		client := http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+		for i := 0; i < 2; i++ {
+			request, err := http.NewRequest("POST", endpoint.String(), bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			for name, value := range server.Headers {
+				request.Header.Set(name, value)
+			}
+			request.Header.Set("Content-Type", "application/json")
+			response, err := client.Do(request)
+			if err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 65536))
+			_ = response.Body.Close()
 		}
 	}
 }

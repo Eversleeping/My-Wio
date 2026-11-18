@@ -116,6 +116,12 @@ func assertScheduledTaskMigration(t *testing.T, db *sqlx.DB, driver string, conf
 	if err := db.Get(&status, "SELECT last_run_status FROM gemini_scheduled_tasks WHERE id='task-gemini'"); err != nil || status != "succeeded" {
 		t.Fatalf("legacy table changed: %s %v", status, err)
 	}
+	// Contemporary deletion also consults task retention. Keep the legacy source
+	// tables for the assertions above, and add the later non-destructive tables
+	// before exercising today's deletion paths.
+	if _, err := runMigrations(ctx, db, driver, retainedSessionFixtureMigrations()); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.DeleteClaudeThread(ctx, "same-thread"); err != nil {
 		t.Fatal(err)
 	}

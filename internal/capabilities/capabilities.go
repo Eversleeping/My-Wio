@@ -59,6 +59,8 @@ var gates = []gate{
 	{protocol.CapabilityDeployRollbackExact, nil},
 	{protocol.CapabilityCodexSteer, nil},
 	{protocol.CapabilityWorkspaceFileWrite, nil},
+	{protocol.CapabilityTaskArtifacts, nil},
+	{protocol.CapabilityTaskCollaboration, nil},
 	{protocol.CapabilityCodexForkAtMessage, nil},
 	{protocol.CapabilityGeminiSessions, nil},
 	{protocol.CapabilityCLIManage, nil},

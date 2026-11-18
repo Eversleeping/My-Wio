@@ -192,6 +192,33 @@ func (s *Store) purgeRevokedServers(ctx context.Context) error {
 }
 
 func (s *Store) deleteServerRecords(ctx context.Context, tx *sqlx.Tx, serverID string) error {
+	// The immutable baseline also calls this cleanup before migration 7 exists.
+	var taskSchema int
+	if err := tx.GetContext(ctx, &taskSchema, "SELECT COUNT(*) FROM schema_migrations WHERE version=7"); err != nil {
+		return err
+	}
+	if taskSchema > 0 {
+		var taskReferences int
+		if err := tx.GetContext(ctx, &taskReferences, s.Q(`SELECT
+	 (SELECT COUNT(*) FROM task_plan_members m JOIN workspaces w ON w.id=m.workspace_id WHERE w.server_id=?) +
+	 (SELECT COUNT(*) FROM task_attempts WHERE server_id=?)`), serverID, serverID); err != nil {
+			return err
+		}
+		var artifacts int
+		if err := tx.GetContext(ctx, &artifacts, "SELECT COUNT(*) FROM schema_migrations WHERE version=9"); err != nil {
+			return err
+		}
+		if artifacts > 0 {
+			var handoffs int
+			if err := tx.GetContext(ctx, &handoffs, s.Q("SELECT COUNT(*) FROM task_artifact_handoffs h JOIN workspaces w ON w.id=h.workspace_id WHERE w.server_id=?"), serverID); err != nil {
+				return err
+			}
+			taskReferences += handoffs
+		}
+		if taskReferences > 0 {
+			return stateConflict("server has retained task workspaces or attempts")
+		}
+	}
 	var projectIDs []string
 	if err := tx.SelectContext(ctx, &projectIDs, s.Q(`SELECT project_id FROM workspaces WHERE server_id=?
 		UNION SELECT project_id FROM deployment_targets WHERE server_id=?

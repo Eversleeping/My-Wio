@@ -35,6 +35,7 @@ import (
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/sshbootstrap"
 	"github.com/wio-platform/wio/internal/store"
+	"github.com/wio-platform/wio/internal/taskservice"
 )
 
 const sessionCookie = "wio_session"
@@ -55,6 +56,7 @@ const (
 
 type API struct {
 	store          *store.Store
+	tasks          *taskservice.Service
 	hub            *realtime.Hub
 	gateway        *agentgateway.Gateway
 	vault          *security.Vault
@@ -84,6 +86,7 @@ func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault
 	assetDir := os.Getenv("WIO_AGENT_ASSET_DIR")
 	api := &API{
 		store:          s,
+		tasks:          &taskservice.Service{Repository: s},
 		hub:            hub,
 		gateway:        gateway,
 		vault:          vault,

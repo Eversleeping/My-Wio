@@ -1,0 +1,41 @@
+{
+  "baseline": "P7-06",
+  "direction": "operation",
+  "kind": "gemini.turn.start",
+  "source": [
+    "bindTaskReviewTx"
+  ],
+  "payload": {
+    "approval_mode": "default",
+    "goal": {
+      "continuations": 0,
+      "id": "00000000-0000-4000-8000-000000000001",
+      "max_continuations": 5,
+      "max_seconds": 600,
+      "objective": "Verify the tests"
+    },
+    "interactive": true,
+    "model": "flash",
+    "prompt": "Continue the active goal and verify the remaining work.",
+    "session_id": "",
+    "steering": true,
+    "thread_id": "00000000-0000-4000-8000-000000000001",
+    "workspace": "/srv/allowance-7",
+    "task_review_snapshot": {
+      "workspace": "/srv/review",
+      "action": "verify",
+      "digest": "72b0912d03327565b6471974b12a4be49209fa8e5e8895d622386c1e25cc31a5",
+      "manifest": {
+        "base_sha": "1111111111111111111111111111111111111111",
+        "files": [
+          {
+            "path": "notes.txt",
+            "after_hash": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+            "after_mode": "100644",
+            "content": "aGVsbG8K"
+          }
+        ]
+      }
+    }
+  }
+}

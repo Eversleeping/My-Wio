@@ -1,0 +1,22 @@
+{
+  "baseline": "P7-07",
+  "direction": "upstream",
+  "kind": "session_tool_request",
+  "source": [
+    "callSessionTool"
+  ],
+  "payload": {
+    "arguments": {
+      "request_id": "request-review",
+      "target_step_id": "review",
+      "reason": "Inspect terminal implementation evidence"
+    },
+    "id": "00000000-0000-4000-8000-000000000001",
+    "name": "wio_request_task_review",
+    "operation_id": "source-operation",
+    "source": {
+      "engine": "claude",
+      "id": "source-thread"
+    }
+  }
+}

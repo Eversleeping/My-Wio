@@ -1,0 +1,14 @@
+{
+  "baseline": "P7-05",
+  "direction": "operation",
+  "kind": "task.artifact.capture",
+  "source": [
+    "CaptureTaskArtifact"
+  ],
+  "payload": {
+    "workspace": "/srv/worktree",
+    "paths": [
+      "notes.txt"
+    ]
+  }
+}

@@ -57,8 +57,17 @@ func TestBridgeAuthenticatedProtocolAndLifecycle(t *testing.T) {
 			Tools []sessiontools.Tool `json:"tools"`
 		} `json:"result"`
 	}
-	if err = json.Unmarshal(raw, &listed); err != nil || len(listed.Result.Tools) != 16 {
+	if err = json.Unmarshal(raw, &listed); err != nil || len(listed.Result.Tools) != 21 {
 		t.Fatalf("tools missing: %s %v", raw, err)
+	}
+	for _, name := range []string{sessiontools.TaskContext, sessiontools.TaskMessage, sessiontools.TaskReview, sessiontools.TaskBlocker, sessiontools.TaskPlanProposal} {
+		found := false
+		for _, tool := range listed.Result.Tools {
+			found = found || tool.Name == name
+		}
+		if !found {
+			t.Fatal("missing task MCP tool", name)
+		}
 	}
 	_, raw = post(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wio_get_context","arguments":{}}}`, true)
 	if calls != 1 || !bytes.Contains(raw, []byte("bound_session")) {

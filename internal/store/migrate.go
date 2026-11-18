@@ -27,6 +27,11 @@ var schemaMigrations = []migration{
 	{version: 4, name: "agent_capabilities", up: migrateServerCapabilities},
 	{version: 5, name: "retire_session_compatibility_storage", up: migrateSessionCleanup},
 	{version: 6, name: "session_isolation_status", up: migrateSessionIsolation},
+	{version: 7, name: "task_core", up: migrateTaskCore},
+	{version: 8, name: "task_execution", up: migrateTaskExecution},
+	{version: 9, name: "task_artifacts", up: migrateTaskArtifacts},
+	{version: 10, name: "task_reviews", up: migrateTaskReviews},
+	{version: 11, name: "task_team", up: migrateTaskTeam},
 }
 
 // PostgreSQL advisory locks are scoped to a database. All Wio schemas in one

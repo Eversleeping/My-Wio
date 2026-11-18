@@ -21,7 +21,7 @@ func (s *Store) PinClaudeThread(ctx context.Context, id string, pinned bool) err
 	return err
 }
 func (s *Store) ArchiveClaudeProject(ctx context.Context, projectID, serverID string) (int64, error) {
-	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE claude_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running'))) AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=? AND server_id=?)`), time.Now().UTC(), time.Now().UTC(), projectID, serverID)
+	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE claude_threads SET archived_at=?,updated_at=? WHERE NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='claude' AND b.session_id=claude_threads.id AND b.released_at IS NULL) AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running'))) AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=? AND server_id=?)`), time.Now().UTC(), time.Now().UTC(), projectID, serverID)
 	if err != nil {
 		return 0, err
 	}
@@ -41,6 +41,9 @@ func (s *Store) QueueClaudeFork(ctx context.Context, t ClaudeThread, w *protocol
 }
 
 func (s *Store) queueClaudeForkTx(ctx context.Context, tx *sqlx.Tx, t ClaudeThread, w *protocol.GitWorktreeCreateCommand, eventID ...string) (string, string, error) {
+	if err := s.taskMutationGuard(ctx, tx, "claude", t.ID); err != nil {
+		return "", "", err
+	}
 	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), t.ServerID); err != nil {
 		return "", "", err

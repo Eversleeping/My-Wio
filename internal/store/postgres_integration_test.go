@@ -47,6 +47,26 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 	})
 
 	databaseURL := config.GetConnectionURL() + "?sslmode=disable"
+	t.Run("task core migration and storage", func(t *testing.T) {
+		admin, err := sqlx.Connect("pgx", databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		if _, err := admin.Exec("CREATE SCHEMA task_core_test"); err != nil {
+			t.Fatal(err)
+		}
+		db, err := sqlx.Connect("pgx", postgresSchemaURL(t, databaseURL, "task_core_test"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		assertTaskCoreMigration(t, db, "pgx")
+		assertTaskCoreStorage(t, &Store{DB: db, driver: "pgx"})
+		assertTaskExecution(t, &Store{DB: db, driver: "pgx"})
+		assertTaskArtifactsStorage(t, &Store{DB: db, driver: "pgx"})
+		assertTaskReviewReworkAndTeam(t, &Store{DB: db, driver: "pgx"})
+	})
 	t.Run("fixture schema consistency", func(t *testing.T) {
 		assertPostgresFixtureSchemaConsistency(t, databaseURL)
 	})

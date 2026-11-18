@@ -110,6 +110,9 @@ type Tool struct {
 }
 
 func Mutating(name string) bool {
+	if IsTaskTool(name) {
+		return name != TaskContext
+	}
 	switch name {
 	case "wio_create_session", "wio_fork_session", "wio_send_message", "wio_steer_session", "wio_interrupt_session", "wio_update_session", "wio_archive_session", "wio_restore_session":
 		return true
@@ -154,5 +157,5 @@ func Definitions() []Tool {
 		}
 		result = append(result, Tool{e.name, e.description, map[string]any{"type": "object", "properties": p, "required": required, "additionalProperties": false}, map[string]any{"readOnlyHint": !Mutating(e.name), "destructiveHint": false, "openWorldHint": false}})
 	}
-	return result
+	return append(result, taskDefinitions()...)
 }

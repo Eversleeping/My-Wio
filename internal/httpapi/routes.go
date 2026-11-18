@@ -17,6 +17,7 @@ func (api *API) registerRoutes(router chi.Router) {
 			api.registerProjectRoutes(private)
 			api.registerWorkspaceRoutes(private)
 			api.registerScheduledTaskRoutes(private)
+			api.registerTaskRoutes(private)
 			api.registerApprovalRoutes(private)
 			api.registerSecretSetRoutes(private)
 			api.registerCredentialProfileRoutes(private)

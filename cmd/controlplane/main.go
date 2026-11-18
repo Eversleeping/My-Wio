@@ -128,6 +128,7 @@ func run(log *slog.Logger) error {
 	defer signal.Stop(stop)
 	errCh := make(chan error, 1)
 	lifecycle.Go(gateway.RunSessionCollaboration)
+	lifecycle.Go(gateway.RunTasks)
 	lifecycle.Go(func(ctx context.Context) { runWorkspaceFileScanMaintenance(ctx, database, log) })
 	lifecycle.Go(func(ctx context.Context) { runDataRetention(ctx, database, retentionPolicy, log) })
 	lifecycle.Go(func(context.Context) {

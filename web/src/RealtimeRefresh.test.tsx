@@ -12,6 +12,7 @@ afterEach(() => {
 
 describe("realtime refresh scopes", () => {
   test("keeps thread events away from unrelated pages", () => {
+    expect(realtimeScopesForEvent({ kind: "task.attempt.state.changed" })).toEqual(["tasks"]);
     expect(realtimeScopesForEvent({ kind: "codex.item.completed" })).toEqual(["dashboard", "codex"]);
     expect(realtimeScopesForEvent({ kind: "claude.message" })).toEqual(["claude", "operations"]);
     expect(realtimeScopesForEvent({ kind: "approval.requested" })).toEqual(["codex", "approvals"]);
@@ -21,7 +22,7 @@ describe("realtime refresh scopes", () => {
 
   test("falls back to a safe global refresh for unknown events", () => {
     expect(realtimeScopesForEvent({ kind: "operation.succeeded" })).toEqual(expect.arrayContaining(["dashboard", "servers", "projects", "codex", "deployments", "monitoring", "settings", "approvals"]));
-    expect(realtimeScopesForEvent({})).toHaveLength(11);
+    expect(realtimeScopesForEvent({})).toHaveLength(12);
   });
 });
 

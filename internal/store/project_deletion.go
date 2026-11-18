@@ -51,6 +51,7 @@ type ProjectDeletionPlan struct {
 	ActiveDeployments      int                        `json:"active_deployments"`
 	DirtyManagedWorkspaces int                        `json:"dirty_managed_workspaces"`
 	OfflineManagedServers  int                        `json:"offline_managed_servers"`
+	TaskCount              int                        `json:"task_count"`
 	Workspaces             []ProjectDeletionWorkspace `json:"workspaces"`
 	Blockers               []ProjectDeletionBlocker   `json:"blockers"`
 }
@@ -109,12 +110,16 @@ func (s *Store) projectDeletionPlan(ctx context.Context, query deletionQueryer, 
 		}
 	}
 	commonModes := []string{"metadata-only", "managed-files"}
+	if err := query.GetContext(ctx, &plan.TaskCount, s.Q("SELECT COUNT(*) FROM tasks WHERE project_id=?"), projectID); err != nil {
+		return ProjectDeletionPlan{}, err
+	}
+	plan.Blockers = appendDeletionBlocker(plan.Blockers, "task-evidence", "project has retained tasks; archive the project instead", plan.TaskCount, commonModes)
 	plan.Blockers = appendDeletionBlocker(plan.Blockers, "active-agent-operations", "active Agent operations must finish before deleting the project", plan.ActiveAgentOperations, commonModes)
 	plan.Blockers = appendDeletionBlocker(plan.Blockers, "active-codex-tasks", "active Codex tasks must finish before deleting the project", plan.ActiveCodexTasks, commonModes)
 	plan.Blockers = appendDeletionBlocker(plan.Blockers, "active-deployments", "active deployments must finish before deleting the project", plan.ActiveDeployments, commonModes)
 	plan.Blockers = appendDeletionBlocker(plan.Blockers, "dirty-managed-workspaces", "managed workspaces contain uncommitted changes", plan.DirtyManagedWorkspaces, []string{"managed-files"})
 	plan.Blockers = appendDeletionBlocker(plan.Blockers, "offline-managed-servers", "managed workspace servers must be online", plan.OfflineManagedServers, []string{"managed-files"})
-	plan.CanDeleteMetadata = plan.ActiveAgentOperations == 0 && plan.ActiveCodexTasks == 0 && plan.ActiveDeployments == 0
+	plan.CanDeleteMetadata = plan.ActiveAgentOperations == 0 && plan.ActiveCodexTasks == 0 && plan.ActiveDeployments == 0 && plan.TaskCount == 0
 	plan.CanDeleteManagedFiles = plan.CanDeleteMetadata && plan.DirtyManagedWorkspaces == 0 && plan.OfflineManagedServers == 0
 	return plan, nil
 }

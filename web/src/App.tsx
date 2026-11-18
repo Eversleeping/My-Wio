@@ -1,7 +1,7 @@
 import { DataProvider, clearResourceMemory } from "./data/resources";
 import { lazy, useMemo, useState, useCallback, useEffect, Suspense } from "react";
 import { useI18n } from "./i18n";
-import { readLocationState, isEngine, type View, navigateToLocation, navigation } from "./navigation";
+import { readLocationState, isEngine, type View, navigateToLocation, navigation, tasksLocation, type TaskLocation } from "./navigation";
 import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
 import { type Session, type Approval } from "./types";
 import { useRealtime } from "./realtime/useRealtime";
@@ -17,6 +17,8 @@ import { UserRound, LogOut, Menu, Wifi, WifiOff, ShieldCheck, Check } from "luci
 type AuthState = "loading" | "setup" | "login" | "authenticated";
 
 const UnifiedSessionsPage = lazy(() => import("./sessions/UnifiedSessionsPage"));
+
+const TasksPage = lazy(() => import("./tasks/TasksPage"));
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 
@@ -39,6 +41,7 @@ export default function App() {
   const [view, setView] = useState<View>(initialLocation.view);
   const [sessionThreadID, setSessionThreadID] = useState(initialLocation.threadID);
   const [sessionEngine, setSessionEngine] = useState(initialLocation.engine);
+  const [taskLocation, setTaskLocation] = useState<TaskLocation>(initialLocation.task ?? {});
   const [sessionEntry, setSessionEntry] = useState(initialLocation.entry);
   const [initialFilter, setInitialFilter] = useState(() => initialLocation.initialFilter ? {engine: initialLocation.initialFilter} : undefined);
   const [mobileNav, setMobileNav] = useState(false);
@@ -104,6 +107,7 @@ export default function App() {
       setSessionThreadID(location.threadID);
       setSessionEngine(location.engine);
       setSessionEntry(location.entry);
+      setTaskLocation(location.task ?? {});
       setInitialFilter(location.initialFilter ? {engine:location.initialFilter} : undefined);
       if (isEngine(new URLSearchParams(window.location.search).get("view"))) navigateToLocation(location.view, location.threadID, true, location.engine);
       setMobileNav(false);
@@ -129,6 +133,7 @@ export default function App() {
   const selectView = (next: View, threadID = "", replace = false) => {
     const nextThreadID = next === "sessions" ? threadID : "";
     setSessionEngine(undefined); setInitialFilter(undefined); setSessionEntry(undefined);
+    if (next === "tasks") setTaskLocation({});
     setView(next);
     setSessionThreadID(nextThreadID);
     setMobileNav(false);
@@ -138,11 +143,19 @@ export default function App() {
     setView("sessions"); setSessionThreadID(ref?.id ?? ""); setSessionEngine(ref?.engine); setMobileNav(false);
     navigateToLocation("sessions", ref?.id ?? "", replace, ref?.engine);
   };
+  const selectTask = (next: TaskLocation, replace = false) => {
+    const url = tasksLocation(next);
+    if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history[replace ? "replaceState" : "pushState"](null, "", url);
+    }
+    setTaskLocation(next);
+  };
   const page = {
     dashboard: <Suspense fallback={<PageLoading />}><DashboardPage onNavigate={selectView} /></Suspense>,
     servers: <ServersPage notify={setToast} />,
     projects: <Suspense fallback={<PageLoading />}><ProjectsPageRoute notify={setToast} /></Suspense>,
     sessions: <Suspense fallback={<PageLoading />}><UnifiedSessionsPage entry={sessionEntry} onEntryConsumed={() => navigateToLocation("sessions", sessionThreadID, true, sessionEngine)} initialFilter={initialFilter} realtime={realtimeRevisions.codex + realtimeRevisions.gemini + realtimeRevisions.claude} streamRevisions={streamRevisions} approvals={approvals.data ?? []} approvalSignal={approvalSignal} reloadApprovals={approvals.reload} notify={setToast} selected={sessionEngine && sessionThreadID ? { engine: sessionEngine, id: sessionThreadID } : undefined} onSelect={selectSession} /></Suspense>,
+    tasks: <Suspense fallback={<PageLoading />}><TasksPage location={taskLocation} onNavigate={selectTask} connected={socketConnected} /></Suspense>,
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><LogsPageRoute /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute /></Suspense>,

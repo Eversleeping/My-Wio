@@ -140,6 +140,9 @@ func (s *Store) queueClaudeInput(ctx context.Context, thread ClaudeThread, editI
 }
 
 func (s *Store) queueClaudeInputTx(ctx context.Context, tx *sqlx.Tx, thread ClaudeThread, editID, prompt, model, mode, effort string, run *scheduledRun, images ...protocol.TurnImage) (protocol.StreamEvent, error) {
+	if err := s.taskMutationGuard(ctx, tx, "claude", thread.ID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
 	var err error
 	// Serialize a new turn with credential changes and CLI installation.
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), thread.ServerID); err != nil {
@@ -248,6 +251,9 @@ func (s *Store) InterruptClaudeTurn(ctx context.Context, thread ClaudeThread) er
 }
 
 func (s *Store) interruptClaudeTurnTx(ctx context.Context, tx *sqlx.Tx, thread ClaudeThread) (string, error) {
+	if err := s.taskMutationGuard(ctx, tx, "claude", thread.ID); err != nil {
+		return "", err
+	}
 	var err error
 	locked, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND kind='claude.turn.start' AND status IN ('queued','delivered','running')"), thread.OperationID)
 	if err != nil {
@@ -295,6 +301,10 @@ func (s *Store) ConfirmClaudeStopped(ctx context.Context, threadID, operationID 
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.taskMutationGuard(ctx, tx, "claude", threadID); err != nil {
+		return err
+	}
+
 	result, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND kind='claude.turn.start' AND status IN ('delivered','running')"), operationID)
 	if err != nil {
 		return err
@@ -324,7 +334,7 @@ func (s *Store) UpdateClaudeThread(ctx context.Context, id, title string, archiv
 		now := time.Now().UTC()
 		at = &now
 	}
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE claude_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running')))"), title, at, time.Now().UTC(), id)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE claude_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='claude' AND b.session_id=claude_threads.id AND b.released_at IS NULL) AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running')))"), title, at, time.Now().UTC(), id)
 	if err != nil {
 		return err
 	}
@@ -340,6 +350,9 @@ func (s *Store) DeleteClaudeThread(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.taskSessionGuard(ctx, tx, "claude", id); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM claude_threads WHERE id=? AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=claude_threads.operation_id AND status IN ('queued','delivered','running')))"), id)
 	if err != nil {
 		return err

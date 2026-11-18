@@ -185,6 +185,9 @@ func (s *Store) queueGeminiRun(ctx context.Context, run *scheduledRun, thread Ge
 }
 
 func (s *Store) queueGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread GeminiThread, prompt, model, mode, editEventID string, images []protocol.TurnImage, goal *protocol.GeminiGoalCommand, run *scheduledRun, thinking ...string) (protocol.StreamEvent, error) {
+	if err := s.taskMutationGuard(ctx, tx, "gemini", thread.ID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
 	level := thread.ThinkingLevel
 	if len(thinking) > 0 {
 		level = thinking[0]
@@ -320,6 +323,9 @@ func (s *Store) InterruptGeminiTurn(ctx context.Context, thread GeminiThread, go
 }
 
 func (s *Store) interruptGeminiTurnTx(ctx context.Context, tx *sqlx.Tx, thread GeminiThread, goalAction ...string) (string, error) {
+	if err := s.taskMutationGuard(ctx, tx, "gemini", thread.ID); err != nil {
+		return "", err
+	}
 	var err error
 	// Serialize ownership checks, cancellation, and human confirmation on
 	// the operation row before changing the associated thread.
@@ -408,6 +414,10 @@ func (s *Store) ConfirmGeminiStopped(ctx context.Context, threadID, operationID 
 		return protocol.StreamEvent{}, err
 	}
 	defer tx.Rollback()
+	if err := s.taskMutationGuard(ctx, tx, "gemini", threadID); err != nil {
+		return protocol.StreamEvent{}, err
+	}
+
 	now := time.Now().UTC()
 	result, err := tx.ExecContext(ctx, s.Q("UPDATE agent_operations SET status=status WHERE id=? AND kind IN ('gemini.turn.start','gemini.turn.rewrite') AND status IN ('delivered','running')"), operationID)
 	if err != nil {
@@ -458,6 +468,9 @@ func (s *Store) DeleteGeminiThread(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.taskSessionGuard(ctx, tx, "gemini", id); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM gemini_threads WHERE id=? AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))"), id)
 	if err != nil {
 		return err
@@ -491,7 +504,7 @@ func (s *Store) UpdateGeminiThread(ctx context.Context, id, title string, archiv
 		now := time.Now().UTC()
 		at = &now
 	}
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE gemini_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))"), title, at, time.Now().UTC(), id)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE gemini_threads SET title=?,archived_at=?,updated_at=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='gemini' AND b.session_id=gemini_threads.id AND b.released_at IS NULL) AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running')))"), title, at, time.Now().UTC(), id)
 	if err != nil {
 		return err
 	}

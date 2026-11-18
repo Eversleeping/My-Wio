@@ -159,7 +159,7 @@ func (a *API) revokeServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not revoke server")
+		writeStoreError(w, err, "could not revoke server")
 		return
 	}
 	session := currentSession(r)

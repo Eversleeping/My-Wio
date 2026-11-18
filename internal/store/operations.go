@@ -58,6 +58,10 @@ func (s *Store) queueOperationPayload(ctx context.Context, serverID, kind, paylo
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
+	if err := s.taskOperationGuard(ctx, kind, payload); err != nil {
+		return "", err
+	}
+
 	// Legacy callers supply import metadata only in the payload. Indexed import
 	// lookups need the project association on new writes as well as migrated rows.
 	if kind == protocol.OpGitImport && resource.ProjectID == "" {

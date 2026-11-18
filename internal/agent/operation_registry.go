@@ -93,6 +93,8 @@ var operationHandlers = map[string]operationHandler{
 	protocol.OpGitWorkspaceWrite:          {run: (*Client).runGitWorkspaceWriteOperation},
 	protocol.OpGitWorktreeCleanup:         {run: (*Client).runGitWorktreeCleanupOperation},
 	protocol.OpGitWorktreeCreate:          {run: (*Client).runGitWorktreeCreateOperation},
+	protocol.OpTaskArtifactCapture:        {run: (*Client).runTaskArtifactCapture},
+	protocol.OpTaskArtifactHandoff:        {run: (*Client).runTaskArtifactHandoff},
 	protocol.OpInventoryScan:              commandOperation((*Client).executeInventoryScan),
 	protocol.OpOperationInterrupt:         {run: (*Client).runOperationInterruptOperation},
 	protocol.OpWorkspaceChanges:           {run: (*Client).runWorkspaceChangesOperation},

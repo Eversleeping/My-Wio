@@ -435,6 +435,15 @@ func (s *Store) continueCollaboration(ctx context.Context, sourceKey string) err
 			return err
 		}
 	}
+	{
+		ref := refFromKey(sourceKey)
+		if err := s.taskMutationGuard(ctx, tx, ref.Engine, ref.ID); err != nil {
+			if errors.Is(err, ErrStateConflict) {
+				return nil
+			}
+			return err
+		}
+	}
 	source, err := s.collaborationSession(ctx, tx, refFromKey(sourceKey))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil

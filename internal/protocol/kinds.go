@@ -84,6 +84,8 @@ const (
 	OpGitWorkspaceWrite          = "git.workspace.write"
 	OpGitWorktreeCleanup         = "git.worktree.cleanup"
 	OpGitWorktreeCreate          = "git.worktree.create"
+	OpTaskArtifactCapture        = "task.artifact.capture"
+	OpTaskArtifactHandoff        = "task.artifact.handoff"
 	OpInventoryScan              = "inventory.scan"
 	OpOperationInterrupt         = "operation.interrupt"
 	OpWorkspaceChanges           = "workspace.changes"

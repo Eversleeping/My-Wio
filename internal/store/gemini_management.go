@@ -27,7 +27,7 @@ func (s *Store) ArchiveGeminiProject(ctx context.Context, projectID string, serv
 		scope = " AND server_id=?"
 		args = append(args, serverOption[0])
 	}
-	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running'))) AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`)`), args...)
+	r, err := s.DB.ExecContext(ctx, s.Q(`UPDATE gemini_threads SET archived_at=?,updated_at=? WHERE NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='gemini' AND b.session_id=gemini_threads.id AND b.released_at IS NULL) AND archived_at IS NULL AND status NOT IN ('queued','running','interrupting') AND (status<>'interrupted' OR NOT EXISTS (SELECT 1 FROM agent_operations WHERE id=gemini_threads.operation_id AND status IN ('queued','delivered','running'))) AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`)`), args...)
 	if err != nil {
 		return 0, err
 	}
@@ -50,6 +50,9 @@ func (s *Store) QueueGeminiFork(ctx context.Context, thread GeminiThread, eventI
 }
 
 func (s *Store) queueGeminiForkTx(ctx context.Context, tx *sqlx.Tx, thread GeminiThread, eventID string, worktree *protocol.GitWorktreeCreateCommand) (string, string, error) {
+	if err := s.taskMutationGuard(ctx, tx, "gemini", thread.ID); err != nil {
+		return "", "", err
+	}
 	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE servers SET status=status WHERE id=?"), thread.ServerID); err != nil {
 		return "", "", err

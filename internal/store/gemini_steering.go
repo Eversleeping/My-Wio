@@ -31,6 +31,9 @@ func (s *Store) QueueGeminiSteer(ctx context.Context, threadID, expected, reques
 }
 
 func (s *Store) queueGeminiSteerTx(ctx context.Context, tx *sqlx.Tx, threadID, expected, requestID, prompt string, images ...protocol.TurnImage) (protocol.StreamEvent, string, error) {
+	if err := s.taskMutationGuard(ctx, tx, "gemini", threadID); err != nil {
+		return protocol.StreamEvent{}, "", err
+	}
 	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE gemini_threads SET status=status WHERE id=?"), threadID); err != nil {
 		return protocol.StreamEvent{}, "", err

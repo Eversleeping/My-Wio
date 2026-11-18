@@ -129,6 +129,9 @@ func (b transactionPort) Update(ctx context.Context, t CollaborationSession, too
 }
 
 func (s *Store) updateCollaborationTx(ctx context.Context, tx *sqlx.Tx, target CollaborationSession, tool string, p sessiontools.Params) error {
+	if err := s.taskMutationGuard(ctx, tx, target.Engine, target.ID); err != nil {
+		return err
+	}
 	var err error
 	sets := []string{"updated_at=?"}
 	args := []any{time.Now().UTC()}

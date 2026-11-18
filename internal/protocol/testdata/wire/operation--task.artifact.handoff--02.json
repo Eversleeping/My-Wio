@@ -1,0 +1,35 @@
+{
+  "baseline": "P7-05",
+  "direction": "operation",
+  "kind": "task.artifact.handoff",
+  "source": [
+    "HandoffTaskArtifact: replacement in an existing review worktree"
+  ],
+  "payload": {
+    "workspace": "/srv/review",
+    "action": "apply",
+    "digest": "72b0912d03327565b6471974b12a4be49209fa8e5e8895d622386c1e25cc31a5",
+    "manifest": {
+      "base_sha": "1111111111111111111111111111111111111111",
+      "files": [
+        {
+          "path": "notes.txt",
+          "after_hash": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "after_mode": "100644",
+          "content": "aGVsbG8K"
+        }
+      ]
+    },
+    "previous": {
+      "base_sha": "1111111111111111111111111111111111111111",
+      "files": [
+        {
+          "path": "notes.txt",
+          "after_hash": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "after_mode": "100644",
+          "content": "b2xkCg=="
+        }
+      ]
+    }
+  }
+}

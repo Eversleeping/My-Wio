@@ -178,6 +178,9 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 
 func (c *Client) dispatchOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (string, json.RawMessage, bool, error) {
 	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
+	if err := c.verifyTaskReview(ctx, envelope); err != nil {
+		return "", nil, false, err
+	}
 	if handler, ok := operationHandlerFor(envelope.Kind); ok {
 		return handler(c, ctx, envelope)
 	}

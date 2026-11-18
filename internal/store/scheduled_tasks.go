@@ -335,6 +335,13 @@ func (s *Store) HasPendingTurnCancellation(ctx context.Context, threadID string)
 }
 
 func (s *Store) CancelOperation(ctx context.Context, id, message string) (bool, error) {
+	var taskOwned int
+	if err := s.DB.GetContext(ctx, &taskOwned, s.Q("SELECT COUNT(*) FROM task_attempts a JOIN task_runs r ON r.id=a.run_id WHERE a.operation_id=? AND r.state IN ('running','paused','blocked','cancelling','awaiting_acceptance')"), id); err != nil {
+		return false, err
+	}
+	if taskOwned > 0 {
+		return false, stateConflict("cancel the task run instead of its native operation")
+	}
 	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE agent_operations SET status='cancelled',result=?,completed_at=? WHERE id=? AND status IN ('queued','delivered','running')"), message, time.Now().UTC(), id)
 	if err != nil {
 		return false, err

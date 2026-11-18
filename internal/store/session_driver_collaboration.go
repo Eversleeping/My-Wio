@@ -67,6 +67,9 @@ func (s *Store) collaborationSteer(ctx context.Context, tx *sqlx.Tx, t Collabora
 }
 
 func (s *Store) collaborationFork(ctx context.Context, tx *sqlx.Tx, source CollaborationSession, target string, worktree *protocol.GitWorktreeCreateCommand, eventID string) (string, error) {
+	if err := s.taskMutationGuard(ctx, tx, source.Engine, source.ID); err != nil {
+		return "", err
+	}
 	d := s.collaborationDriver(source.Engine)
 	if d == nil {
 		return "", sessiontools.Fail("CAPABILITY_UNSUPPORTED", "native fork is unavailable")
@@ -103,6 +106,9 @@ func (s *Store) collaborationGemini(ctx context.Context, tx *sqlx.Tx, id string)
 }
 
 func (s *Store) queueCodexTurnTx(ctx context.Context, tx *sqlx.Tx, t Thread, command protocol.StartTurnCommand) (string, protocol.StreamEvent, error) {
+	if err := s.taskMutationGuard(ctx, tx, "codex", t.ID); err != nil {
+		return "", protocol.StreamEvent{}, err
+	}
 	result, err := tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',updated_at=? WHERE id=? AND archived_at IS NULL AND status NOT IN ('queued','running')"), time.Now().UTC(), t.ID)
 	if err != nil {
 		return "", protocol.StreamEvent{}, err

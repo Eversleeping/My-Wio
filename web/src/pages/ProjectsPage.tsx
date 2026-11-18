@@ -1,4 +1,4 @@
-import { Boxes,MessageSquare,GitBranch,LoaderCircle,Pencil,Plus,RefreshCw,RotateCcw,Settings,Trash2 } from "lucide-react";
+import { Boxes,ListChecks,MessageSquare,GitBranch,LoaderCircle,Pencil,Plus,RefreshCw,RotateCcw,Settings,Trash2 } from "lucide-react";
 import { useEffect,useState,type ReactNode } from "react";
 import { Dialog as AccessibleDialog,DialogActions,type DialogProps } from "../components/Dialog";
 import { DataTable,Section,Status } from "../components/PageUI";
@@ -6,7 +6,7 @@ import { projects as projectEndpoints } from "../data/projects";
 import { useResource } from "../data/resources";
 import { servers as serverEndpoints } from "../data/servers";
 import { relative,shortSHA } from "../format";
-import { workspaceSessionsLocation } from "../navigation";
+import { tasksLocation, workspaceSessionsLocation } from "../navigation";
 import { useI18n } from "../i18n";
 import type { Project,ProjectDeletionPlan,Workspace,WorkspaceDeletionPlan } from "../types";
 import {
@@ -255,7 +255,7 @@ export function ProjectsPage({ notify }: ProjectsPageProps) {
         const targetServer = (servers.data ?? []).find(server => server.id === project.import_server_id);
         const blankFailure = project.status === "failed" || project.status === "partial";
         const retryAvailable = blankFailure || targetServer?.status === "online";
-        return <><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{failed && <button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button>}<button className="icon-button danger" disabled={projectAction !== null || projectDeletionBusy} title={t("project.deleteTitle")} onClick={() => void openProjectDeletion(project)}><Trash2 size={15} /></button></>;
+        return <><a className="icon-button" href={tasksLocation({projectID: project.id})} aria-label={t("tasks.projectTasks")} title={t("tasks.projectTasks")}><ListChecks size={15} /></a><a className="icon-button" href={tasksLocation({projectID: project.id, create: true})} aria-label={t("tasks.new")} title={t("tasks.new")}><Plus size={15} /></a><button className="icon-button" title={t("project.edit")} onClick={() => { setDetailError(""); setDetailProjectID(project.id); }}><Pencil size={15} /></button>{failed && <button className="icon-button" disabled={projectAction !== null || !retryAvailable} title={retryAvailable ? t(blankFailure ? "project.retryCreate" : "project.retryImport") : t("project.retryOffline")} onClick={() => void retryProject(project)}>{action === "retry" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button>}<button className="icon-button danger" disabled={projectAction !== null || projectDeletionBusy} title={t("project.deleteTitle")} onClick={() => void openProjectDeletion(project)}><Trash2 size={15} /></button></>;
       }} />
     </Section>
     <Section title={t("project.workspaces")} icon={<Boxes size={18} />}>

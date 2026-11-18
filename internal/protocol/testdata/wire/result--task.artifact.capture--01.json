@@ -1,0 +1,19 @@
+{
+  "baseline": "P7-05",
+  "direction": "result",
+  "kind": "task.artifact.capture",
+  "source": [
+    "runTaskArtifactCapture"
+  ],
+  "payload": {
+    "base_sha": "1111111111111111111111111111111111111111",
+    "files": [
+      {
+        "path": "notes.txt",
+        "after_hash": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+        "after_mode": "100644",
+        "content": "aGVsbG8K"
+      }
+    ]
+  }
+}

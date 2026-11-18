@@ -68,6 +68,9 @@ func (s *Store) saveCodexRequest(ctx context.Context, tx *sqlx.Tx, threadID, req
 }
 
 func (s *Store) lockCodexRequestThread(ctx context.Context, tx *sqlx.Tx, threadID string) error {
+	if err := s.taskMutationGuard(ctx, tx, "codex", threadID); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, s.Q("UPDATE codex_threads SET status=status WHERE id=?"), threadID)
 	if err != nil {
 		return err

@@ -421,16 +421,17 @@ type StreamEvent struct {
 }
 
 type StartTurnCommand struct {
-	OperationID     string      `json:"-"`
-	ThreadID        string      `json:"thread_id"`
-	CodexThread     string      `json:"codex_thread_id,omitempty"`
-	WorkspaceID     string      `json:"workspace_id"`
-	Workspace       string      `json:"workspace"`
-	Prompt          string      `json:"prompt"`
-	Images          []TurnImage `json:"images,omitempty"`
-	Model           string      `json:"model,omitempty"`
-	ReasoningEffort string      `json:"reasoning_effort,omitempty"`
-	ApprovalMode    string      `json:"approval_mode"`
+	TaskReviewSnapshot *TaskArtifactHandoff `json:"task_review_snapshot,omitempty"`
+	OperationID        string               `json:"-"`
+	ThreadID           string               `json:"thread_id"`
+	CodexThread        string               `json:"codex_thread_id,omitempty"`
+	WorkspaceID        string               `json:"workspace_id"`
+	Workspace          string               `json:"workspace"`
+	Prompt             string               `json:"prompt"`
+	Images             []TurnImage          `json:"images,omitempty"`
+	Model              string               `json:"model,omitempty"`
+	ReasoningEffort    string               `json:"reasoning_effort,omitempty"`
+	ApprovalMode       string               `json:"approval_mode"`
 }
 
 type RewriteTurnCommand struct {

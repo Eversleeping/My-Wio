@@ -5,6 +5,8 @@ import { useResource } from "../data/resources";
 import { relative, shortSHA } from "../format";
 import { useI18n } from "../i18n";
 
+import RecentTasks from "../tasks/RecentTasks";
+
 type DashboardDestination = "servers" | "projects" | "deployments" | "monitoring";
 
 export function DashboardPage({ onNavigate }: { onNavigate: (view: DashboardDestination) => void }) {
@@ -20,6 +22,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (view: DashboardDest
   ] as const;
   return <div className="page-stack">
     <section className="stat-grid">{stats.map(([label, value, detail, Icon, tone, target]) => <button className="stat" key={label} onClick={() => onNavigate(target)}><span className={`stat-icon ${tone}`}><Icon size={20} /></span><span><small>{label}</small><strong>{value ?? 0}</strong><em>{detail}</em></span><ChevronRight size={17} /></button>)}</section>
+    <RecentTasks />
     <div className="two-column">
       <Section title={t("dashboard.recentDeployments")} icon={<Rocket size={18} />} action={<button className="text-button" onClick={() => onNavigate("deployments")}>{t("common.viewAll")}<ChevronRight size={15} /></button>}>
         <DataTable headers={[t("column.project"), t("column.environment"), t("column.commit"), t("column.status"), t("column.started")]} empty={t("dashboard.noDeployments")}>{(summary.data.deployments ?? []).map(item => <tr key={item.id}><td><strong>{item.project_name}</strong></td><td>{item.environment}</td><td><code>{shortSHA(item.resolved_commit || item.commit_ref)}</code></td><td><Status value={item.status} /></td><td>{relative(item.created_at)}</td></tr>)}</DataTable>

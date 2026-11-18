@@ -1,6 +1,7 @@
 import type { Engine } from "./sessions/types";
 import {
   LayoutDashboard,
+  ListChecks,
   Server as ServerIcon,
   GitBranch,
   MessageSquare,
@@ -10,18 +11,28 @@ import {
   Settings
 } from "lucide-react";
 
-export type View = "dashboard" | "servers" | "projects" | "sessions" | "deployments" | "operations" | "monitoring" | "settings";
+export type View = "dashboard" | "servers" | "projects" | "sessions" | "tasks" | "deployments" | "operations" | "monitoring" | "settings";
 
 export const navigation: Array<{ id: View; labelKey: string; icon: typeof LayoutDashboard }> = [
   { id: "dashboard", labelKey: "nav.overview", icon: LayoutDashboard },
   { id: "servers", labelKey: "nav.servers", icon: ServerIcon },
   { id: "projects", labelKey: "nav.projects", icon: GitBranch },
   { id: "sessions", labelKey: "nav.sessions", icon: MessageSquare },
+  { id: "tasks", labelKey: "nav.tasks", icon: ListChecks },
   { id: "deployments", labelKey: "nav.deployments", icon: Rocket },
   { id: "operations", labelKey: "nav.operations", icon: ScrollText },
   { id: "monitoring", labelKey: "nav.monitoring", icon: Activity },
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];
+
+export type TaskLocation = { projectID?: string; taskID?: string; create?: boolean };
+export function tasksLocation({ projectID, taskID, create }: TaskLocation = {}) {
+  const params = new URLSearchParams({ view: "tasks" });
+  if (projectID) params.set("project_id", projectID);
+  if (taskID) params.set("task", taskID);
+  if (create) params.set("create", "1");
+  return `${window.location.pathname}?${params}${window.location.hash}`;
+}
 
 export type SessionEntry = { workspaceID: string; create: boolean };
 
@@ -31,11 +42,16 @@ export function workspaceSessionsLocation(workspaceID: string, create = false) {
   return `${window.location.pathname}?${params}${window.location.hash}`;
 }
 
-export function readLocationState(): { view: View; threadID: string; engine?: Engine; initialFilter?: Engine; entry?: SessionEntry } {
+export function readLocationState(): { view: View; threadID: string; engine?: Engine; initialFilter?: Engine; entry?: SessionEntry; task?: TaskLocation } {
   const params = new URLSearchParams(window.location.search);
   const requestedView = params.get("view");
   if (isEngine(requestedView)) return { view: "sessions", engine: requestedView, threadID: params.get("thread") ?? "", ...(!params.get("thread") ? { initialFilter: requestedView } : {}) };
   const view = navigation.some(item => item.id === requestedView) ? requestedView as View : "dashboard";
+  if (view === "tasks") return { view, threadID: "", task: {
+    projectID: params.get("project_id") || undefined,
+    taskID: params.get("task") || undefined,
+    create: params.get("create") === "1"
+  } };
   const engine = params.get("engine");
   if (view === "sessions") return { view, ...(params.get("workspace") ? {entry:{workspaceID:params.get("workspace")!,create:params.get("create")==="1"}} : {}), engine: isEngine(engine) ? engine : undefined, threadID: isEngine(engine) ? params.get("thread") ?? "" : "" };
   return { view, threadID: "" };

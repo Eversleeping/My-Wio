@@ -1,11 +1,13 @@
 package agentgateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
@@ -330,6 +332,19 @@ func (g *Gateway) flush(stream protocol.AgentServiceConnectServer, serverID stri
 				continue
 			}
 		}
+		if requiresTaskArtifacts(op.Kind, payload) {
+			var declared capabilities.Declaration
+			if err := g.store.DB.GetContext(stream.Context(), &declared, g.store.Q("SELECT (SELECT capabilities FROM server_capabilities WHERE server_id=?)"), serverID); err != nil {
+				return err
+			}
+			if !capabilities.Supports(protocol.CapabilityTaskArtifacts, agentVersion, declared) {
+				rejected := protocol.OperationResult{OperationID: op.ID, Status: "failed", Message: "Agent does not declare task artifact support"}
+				if err := g.handleOperationResult(stream.Context(), serverID, rejected, op.Status != "queued" || op.DeliveredAt != nil); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		if op.Kind == protocol.OpAgentAccessUpdate {
 			var command protocol.AgentAccessCommand
 			if json.Unmarshal(payload, &command) == nil && command.Settings != nil && command.Settings.SessionIsolation {
@@ -409,4 +424,20 @@ func first(values []string) string {
 		return ""
 	}
 	return values[0]
+}
+
+func requiresTaskArtifacts(kind string, payload json.RawMessage) bool {
+	switch kind {
+	case protocol.OpTaskArtifactCapture, protocol.OpTaskArtifactHandoff:
+		return true
+	case protocol.OpCodexTurnStart, protocol.OpClaudeTurnStart, protocol.OpGeminiTurnStart:
+		if !bytes.Contains(payload, []byte(`"task_review_snapshot"`)) {
+			return false
+		}
+		var fields struct {
+			Review json.RawMessage `json:"task_review_snapshot"`
+		}
+		return json.Unmarshal(payload, &fields) == nil && len(fields.Review) > 0 && string(fields.Review) != "null"
+	}
+	return false
 }

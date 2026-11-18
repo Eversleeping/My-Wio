@@ -74,6 +74,13 @@ func (s *Store) workspaceDeletionPlan(ctx context.Context, query deletionQueryer
 	if plan.ChildWorkspaces != 0 {
 		plan.RecordBlockers = append(plan.RecordBlockers, "workspace has linked worktrees")
 	}
+	taskReferences, err := s.taskWorkspaceReferences(ctx, query, workspaceID)
+	if err != nil {
+		return WorkspaceDeletionPlan{}, err
+	}
+	if taskReferences > 0 {
+		plan.RecordBlockers = append(plan.RecordBlockers, "workspace is retained by a task plan or attempt")
+	}
 	plan.CanRemoveRecord = len(plan.RecordBlockers) == 0
 	plan.FileBlockers = append([]string(nil), plan.RecordBlockers...)
 	if workspace.Kind == "worktree" && plan.Managed {
@@ -99,6 +106,9 @@ func (s *Store) workspaceDeletionPlan(ctx context.Context, query deletionQueryer
 	}
 	if !plan.Managed {
 		plan.FileBlockers = append(plan.FileBlockers, "workspace is not managed")
+	}
+	if taskReferences > 0 && workspace.Kind == "worktree" && plan.Managed {
+		plan.FileBlockers = append(plan.FileBlockers, "workspace is retained by a task plan or attempt")
 	}
 	if plan.Dirty && !force {
 		plan.FileBlockers = append(plan.FileBlockers, "workspace has uncommitted changes")
@@ -182,6 +192,15 @@ func (s *Store) QueueWorkspaceLifecycle(ctx context.Context, workspace Workspace
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, s.Q("UPDATE workspaces SET status=status WHERE id=?"), workspace.ID); err != nil {
 		return "", err
+	}
+	if command.Action == "delete" {
+		n, err := s.taskWorkspaceReferences(ctx, tx, workspace.ID)
+		if err != nil {
+			return "", err
+		}
+		if n > 0 {
+			return "", stateConflict("workspace is retained by a task plan or attempt")
+		}
 	}
 	var active int
 	if err = tx.GetContext(ctx, &active, s.Q("SELECT COUNT(*) FROM agent_operations WHERE workspace_id=? AND (workspace_write=1 OR kind='git.worktree.create') AND status IN ('waiting','queued','delivered','running')"), workspace.ID); err != nil {

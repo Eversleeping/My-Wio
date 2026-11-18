@@ -15,6 +15,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	golang.org/x/crypto v0.25.0
 	golang.org/x/net v0.27.0
+	golang.org/x/sys v0.22.0
 	google.golang.org/grpc v1.65.0
 	modernc.org/sqlite v1.31.1
 )
@@ -39,7 +40,6 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sync v0.7.0 // indirect
-	golang.org/x/sys v0.22.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240528184218-531527333157 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect

@@ -29,6 +29,9 @@ func (s *Store) QueueClaudeSteer(ctx context.Context, command protocol.ClaudeSte
 }
 
 func (s *Store) queueClaudeSteerTx(ctx context.Context, tx *sqlx.Tx, command protocol.ClaudeSteerCommand) (protocol.StreamEvent, string, error) {
+	if err := s.taskMutationGuard(ctx, tx, "claude", command.ThreadID); err != nil {
+		return protocol.StreamEvent{}, "", err
+	}
 	var err error
 	if _, err = tx.ExecContext(ctx, s.Q("UPDATE claude_threads SET status=status WHERE id=?"), command.ThreadID); err != nil {
 		return protocol.StreamEvent{}, "", err

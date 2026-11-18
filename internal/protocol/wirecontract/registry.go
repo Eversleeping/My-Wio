@@ -75,6 +75,8 @@ var operations = map[string]Contract{
 	protocol.OpGitWorkspaceWrite:          operation[protocol.GitWorkspaceWriteCommand, protocol.GitWorkspaceWriteResult](),
 	protocol.OpGitWorktreeCleanup:         command[protocol.GitWorktreeCleanupCommand](),
 	protocol.OpGitWorktreeCreate:          operation[protocol.GitWorktreeCreateCommand, protocol.GitWorktreeCreateResult](),
+	protocol.OpTaskArtifactCapture:        operation[protocol.TaskArtifactCapture, protocol.ArtifactManifest](),
+	protocol.OpTaskArtifactHandoff:        operation[protocol.TaskArtifactHandoff, protocol.TaskArtifactReceipt](),
 	protocol.OpInventoryScan:              command[struct{}](),
 	protocol.OpOperationInterrupt:         command[protocol.OperationInterruptCommand](),
 	protocol.OpWorkspaceChanges:           operation[protocol.WorkspaceChangesCommand, protocol.WorkspaceChangesResult](),

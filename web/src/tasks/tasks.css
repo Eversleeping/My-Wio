@@ -1,0 +1,59 @@
+.task-toolbar, .task-inline, .task-actions, .task-detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.task-toolbar { align-items: end; justify-content: space-between; }
+.task-toolbar .field { flex: 1 1 14rem; max-width: 25rem; }
+.task-layout { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2.3fr); gap: 18px; align-items: start; }
+.task-selection, .task-layout > .section { min-width: 0; }
+.task-list, .task-detail, .task-form fieldset, .task-step { display: grid; gap: 12px; }
+.task-list { padding: 0 16px 16px; }
+.task-detail { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+.task-detail-header { justify-content: space-between; align-items: start; }
+.task-detail-header > div { min-width: 0; }
+.task-layout .section-heading h2, .task-detail h2, .task-detail h3, .task-detail h4, .task-notice p, .task-form h3 { margin: 0; }
+.task-detail-header h2 { margin-bottom: 8px; overflow-wrap: anywhere; }
+.task-detail section > ul { padding-left: 22px; }
+.task-layout .task-step-list { display: grid; gap: 10px; list-style: none; padding: 0; }
+.task-list-row, .task-recent-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 10px; }
+.task-list-row { border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
+.task-list-row[aria-current], .task-list-row:hover { background: var(--panel-hover); }
+.task-list-row strong, .task-text, .task-step, .task-recent-row { overflow-wrap: anywhere; }
+.task-recent-row { margin: 0 14px; border-top: 1px solid var(--line); }
+.task-recent-row small, .task-detail small { color: var(--muted); }
+.task-status { border-radius: 100px; padding: 3px 8px; background: var(--panel-hover); color: var(--muted); font-size: .78rem; white-space: nowrap; }
+.task-status-succeeded, .task-status-accepted { color: var(--green); }
+.task-status-blocked, .task-status-unknown, .task-status-awaiting_acceptance, .task-status-paused { color: var(--amber); }
+.task-status-failed, .task-status-rejected { color: var(--red); }
+.task-step { border: 1px solid var(--line); padding: 12px; border-radius: 8px; }
+.task-text { white-space: pre-wrap; margin: 0; }
+.task-dependencies { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+.task-notice { background: var(--panel-elevated); border-left: 3px solid var(--amber); padding: 10px 12px; margin: 0; }
+.task-notice .task-actions { margin-top: 8px; }
+.task-attempt { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.task-attempt pre { margin: 6px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-form fieldset { min-width: 0; margin: 0; border: 0; padding: 0; }
+.task-form fieldset.task-form-card, .task-form fieldset.task-checks { border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.task-form fieldset legend { padding: 0 5px; }
+.task-form .task-inline .field { flex: 1 1 12rem; min-width: 0; }
+.task-form .toggle-row { justify-content: flex-start; }
+.task-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.task-form h3, .task-form p { margin: 0; }
+.task-form > fieldset > button, .task-form-card > button, .task-checks > button { justify-self: start; }
+.task-form button { white-space: normal; }
+.task-form textarea { resize: vertical; }
+@media (max-width: 760px) {
+  .task-layout, .task-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .task-selected .task-selection { grid-row: 1; }
+  .task-toolbar { align-items: stretch; }
+  .task-toolbar .field { max-width: none; }
+}
+.task-graph-scroll { max-width: 100%; overflow: auto; }
+.task-graph { position: relative; display: flex; gap: 32px; width: max-content; min-width: 100%; padding: 8px 0; }
+.task-graph canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.task-graph-layer { display: grid; align-content: center; gap: 10px; width: 158px; z-index: 1; }
+.task-graph-node { display: grid; gap: 4px; text-align: left; padding: 8px; background: var(--panel-elevated); color: inherit; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+button.task-graph-node:hover { background: var(--panel-hover); }
+.task-graph-node small { color: var(--muted); }

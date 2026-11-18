@@ -36,4 +36,6 @@ const (
 	CapabilityClaudeQuestions      = "claude.questions"
 	CapabilityCredentialsScoped    = "credentials.scoped"
 	CapabilitySessionCollaboration = "session.collaboration"
+	CapabilityTaskArtifacts        = "task.artifacts.v1"
+	CapabilityTaskCollaboration    = "task.collaboration.v1"
 )

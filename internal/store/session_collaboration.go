@@ -233,6 +233,8 @@ func collaborationError(id string, err error) sessiontools.Reply {
 	var e *sessiontools.Error
 	if !errors.As(err, &e) {
 		switch {
+		case errors.Is(err, ErrStateConflict):
+			e = &sessiontools.Error{Code: "STATE_CONFLICT", Message: err.Error()}
 		case errors.Is(err, ErrThreadActive):
 			// ErrThreadActive's text predates non-Codex sessions.
 			e = &sessiontools.Error{Code: "SESSION_BUSY", Message: "session is running, archived or cannot accept this action now"}
@@ -342,6 +344,9 @@ func refFromKey(key string) sessiontools.Ref {
 // ExecuteCollaboration atomically records requests together with their side
 // effects. A lost response can be reconciled without re-running a task.
 func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call sessiontools.Call) sessiontools.Reply {
+	if sessiontools.IsTaskTool(call.Name) {
+		return s.ExecuteTaskTool(ctx, serverID, call)
+	}
 	p, err := decodeCollaborationParams(call)
 	if err != nil {
 		return collaborationError(p.RequestID, err)
@@ -357,6 +362,11 @@ func (s *Store) ExecuteCollaboration(ctx context.Context, serverID string, call 
 	}
 	if source.ServerID != serverID || source.ArchivedAt != nil || !source.Busy() || source.OperationID == "" || source.OperationID != call.OperationID {
 		return collaborationError(p.RequestID, sessiontools.Fail("OUT_OF_SCOPE", "source is not the active bound session turn"))
+	}
+	if sessiontools.Mutating(call.Name) {
+		if err := s.taskMutationGuard(ctx, tx, source.Engine, source.ID); err != nil {
+			return collaborationError(p.RequestID, err)
+		}
 	}
 	// Look up root grant key for per-session limits and delegation
 	root := call.Source.Key()

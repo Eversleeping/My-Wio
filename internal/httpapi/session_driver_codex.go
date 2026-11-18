@@ -147,7 +147,7 @@ func (a *codexHTTPDriver) deleteThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Codex session not found")
 		return
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not delete Codex session")
+		writeStoreError(w, err, "could not delete Codex session")
 		return
 	}
 	session := currentSession(r)
@@ -392,7 +392,7 @@ func (a *codexHTTPDriver) interruptTurn(w http.ResponseWriter, r *http.Request) 
 	if operationErr == nil && activeOperation.Status == "queued" {
 		cancelled, cancelErr := a.store.CancelOperation(r.Context(), activeOperation.ID, "cancelled before Codex turn started")
 		if cancelErr != nil {
-			writeError(w, http.StatusInternalServerError, "could not cancel queued Codex turn")
+			writeStoreError(w, cancelErr, "could not cancel queued Codex turn")
 			return
 		}
 		if cancelled {

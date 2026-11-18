@@ -358,6 +358,9 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.taskSessionGuard(ctx, tx, "codex", id); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, s.Q("DELETE FROM codex_threads WHERE id=? AND status NOT IN ('queued','running')"), id)
 	if err != nil {
 		return err
@@ -398,7 +401,7 @@ func (s *Store) SetThreadStatus(ctx context.Context, id, status string) error {
 }
 
 func (s *Store) ClaimThreadForTurn(ctx context.Context, id string) error {
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',updated_at=? WHERE id=? AND status NOT IN ('queued','running')"), time.Now().UTC(), id)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET status='queued',updated_at=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='codex' AND b.session_id=codex_threads.id AND b.released_at IS NULL) AND status NOT IN ('queued','running')"), time.Now().UTC(), id)
 	if err != nil {
 		return err
 	}
@@ -450,7 +453,7 @@ func (s *Store) UpdateThread(ctx context.Context, id string, title *string, pinn
 	}
 	sets = append(sets, "updated_at=?")
 	args = append(args, now, id)
-	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET "+strings.Join(sets, ",")+" WHERE id=?"), args...)
+	result, err := s.DB.ExecContext(ctx, s.Q("UPDATE codex_threads SET "+strings.Join(sets, ",")+" WHERE id=? AND NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='codex' AND b.session_id=codex_threads.id AND b.released_at IS NULL)"), args...)
 	if err != nil {
 		return Thread{}, err
 	}
@@ -471,7 +474,7 @@ func (s *Store) ArchiveProjectThreads(ctx context.Context, projectID string, ser
 		scope = " AND server_id=?"
 		args = append(args, serverOption[0])
 	}
-	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE codex_threads SET archived_at=?,updated_at=? WHERE archived_at IS NULL AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`) AND status NOT IN ('queued','running')`), args...)
+	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE codex_threads SET archived_at=?,updated_at=? WHERE NOT EXISTS (SELECT 1 FROM task_session_bindings b WHERE b.engine='codex' AND b.session_id=codex_threads.id AND b.released_at IS NULL) AND archived_at IS NULL AND workspace_id IN (SELECT id FROM workspaces WHERE project_id=?`+scope+`) AND status NOT IN ('queued','running')`), args...)
 	if err != nil {
 		return 0, err
 	}

@@ -57,6 +57,7 @@ function defaultResponse(path: string, method: string, configured: boolean): Moc
   if (path === "/auth/session" && method === "GET") return { body: session };
   if (path === "/auth/login" && method === "POST") return { body: session };
   if (path === "/setup" && method === "POST") return { body: { username: "admin", auth_mode: "password" } };
+  if (path === "/tasks/recent" && method === "GET") return { body: { items: [] } };
   if (path === "/summary" && method === "GET") return { body: summary };
   if (path === "/approvals" && method === "GET") return { body: [] };
   if (path === "/projects/hidden" && method === "GET") return { body: [] };

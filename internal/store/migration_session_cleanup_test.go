@@ -36,10 +36,10 @@ func TestSessionCleanupMigration(t *testing.T) {
 }
 
 // Historical-state fixtures retain the schema 4 source tables, with the
-// additive isolation table required by today's server projection. Migration 5
+// additive tables required by today's server and task projections. Migration 5
 // remains pending so Open still performs the cleanup after old rows are added.
 func retainedSessionFixtureMigrations() []migration {
-	return append(append([]migration(nil), schemaMigrations[:4]...), schemaMigrations[5])
+	return append(append([]migration(nil), schemaMigrations[:4]...), schemaMigrations[5:]...)
 }
 
 func openPreCleanupTestStore(dsn string) (*Store, error) {
