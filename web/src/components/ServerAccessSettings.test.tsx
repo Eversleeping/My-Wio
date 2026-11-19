@@ -25,6 +25,7 @@ test("configures through the enrolled Agent with no SSH credentials and confirms
  expect(screen.queryByRole("button",{name:"Check fingerprint"})).not.toBeInTheDocument();
  const sudo=screen.getByRole("checkbox",{name:/Allow passwordless sudo/});
  await waitFor(()=>expect(sudo).toBeEnabled());expect(sudo).toBeChecked();
+ expect(screen.getByRole("button",{name:"Apply server settings"})).toBeEnabled();
  expect(screen.getByRole("button",{name:"Upgrade Agent"})).toBeEnabled();
  expect(screen.queryByRole("checkbox",{name:/Enable session isolation/})).not.toBeInTheDocument();
  await user.click(sudo);
@@ -43,8 +44,11 @@ test("keeps an offline or older Agent disabled without asking for a key",async()
  await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"legacy");
  expect(screen.getByRole("button",{name:"Upgrade Agent"})).toBeEnabled();
  expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).toBeDisabled();
+ expect(screen.getByRole("button",{name:"Apply server settings"})).toBeDisabled();
  await user.selectOptions(screen.getByRole("combobox",{name:"Select server"}),"offline");
  expect(screen.getByText(/Server offline/)).toBeInTheDocument();
+ expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).toBeDisabled();
+ expect(screen.getByRole("button",{name:"Apply server settings"})).toBeDisabled();
  expect(screen.queryByRole("checkbox",{name:/Enable session isolation/})).not.toBeInTheDocument();
  expect(fetch).toHaveBeenCalledTimes(1);
 });
@@ -59,8 +63,12 @@ test("ignores a response for a previously selected server",async()=>{
  }));
  render(<I18nProvider><ServerAccessSettings/></I18nProvider>);const user=userEvent.setup();
  await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
+ // Nothing can be applied before the Agent has reported its settings.
+ expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).toBeDisabled();
+ expect(screen.getByRole("button",{name:"Apply server settings"})).toBeDisabled();
  await user.selectOptions(screen.getByRole("combobox",{name:"Select server"}),"other");
  await waitFor(()=>expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).toBeEnabled());
+ expect(screen.getByRole("button",{name:"Apply server settings"})).toBeEnabled();
  resolveRead(new Response(JSON.stringify({operation_id:"late"})));
  await waitFor(()=>expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).not.toBeChecked());
 });
@@ -80,6 +88,8 @@ test("resumes a pending restart and confirms success only after its recovery rec
  await user.selectOptions(await screen.findByRole("combobox",{name:"Select server"}),"node");
  expect(await screen.findByText(/The previous change still needs a restart/)).toBeInTheDocument();
  expect(screen.getByRole("checkbox",{name:/Allow passwordless sudo/})).toBeDisabled();
+ // The pending change cannot be edited, but applying it again is how the restart is resumed.
+ expect(screen.getByRole("button",{name:"Apply server settings"})).toBeEnabled();
  expect(screen.queryByRole("checkbox",{name:/Enable session isolation/})).not.toBeInTheDocument();
  await user.click(screen.getByRole("button",{name:"Apply server settings"}));
  await waitFor(()=>expect(reads).toBeGreaterThanOrEqual(2));

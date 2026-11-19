@@ -1,7 +1,7 @@
 import { DataProvider, clearResourceMemory } from "./data/resources";
 import { lazy, useMemo, useState, useCallback, useEffect, Suspense, type MouseEvent } from "react";
 import { useI18n } from "./i18n";
-import { readLocationState, isEngine, type View, navigateToLocation, navigation, tasksLocation, type TaskLocation } from "./navigation";
+import { readLocationState, isEngine, type View, navigateToLocation, navigation, tasksLocation, type TaskLocation, settingsLocation, type SettingsSection } from "./navigation";
 import { type AuthMode, SetupScreen, LoginScreen } from "./AuthScreens";
 import { type Session, type Approval } from "./types";
 import { useRealtime } from "./realtime/useRealtime";
@@ -42,6 +42,7 @@ export default function App() {
   const [sessionThreadID, setSessionThreadID] = useState(initialLocation.threadID);
   const [sessionEngine, setSessionEngine] = useState(initialLocation.engine);
   const [taskLocation, setTaskLocation] = useState<TaskLocation>(initialLocation.task ?? {});
+  const [settingsSection, setSettingsSection] = useState(initialLocation.settingsSection);
   const [sessionEntry, setSessionEntry] = useState(initialLocation.entry);
   const [initialFilter, setInitialFilter] = useState(() => initialLocation.initialFilter ? {engine: initialLocation.initialFilter} : undefined);
   const [mobileNav, setMobileNav] = useState(false);
@@ -107,6 +108,7 @@ export default function App() {
     setSessionEngine(location.engine);
     setSessionEntry(location.entry);
     setTaskLocation(location.task ?? {});
+    setSettingsSection(location.settingsSection);
     setInitialFilter(location.initialFilter ? { engine: location.initialFilter } : undefined);
     if (isEngine(new URLSearchParams(window.location.search).get("view"))) {
       navigateToLocation(location.view, location.threadID, true, location.engine);
@@ -149,6 +151,7 @@ export default function App() {
     const nextThreadID = next === "sessions" ? threadID : "";
     setSessionEngine(undefined); setInitialFilter(undefined); setSessionEntry(undefined);
     if (next === "tasks") setTaskLocation({});
+    setSettingsSection(undefined);
     setView(next);
     setSessionThreadID(nextThreadID);
     setMobileNav(false);
@@ -166,6 +169,11 @@ export default function App() {
     }
     setTaskLocation(next);
   };
+  const selectSettingsSection = (next: SettingsSection) => {
+    const url = settingsLocation(next);
+    if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) window.history.pushState(null, "", url);
+    setSettingsSection(next);
+  };
   const page = {
     dashboard: <Suspense fallback={<PageLoading />}><DashboardPage onNavigate={selectView} /></Suspense>,
     servers: <ServersPage notify={setToast} />,
@@ -175,7 +183,7 @@ export default function App() {
     deployments: <Suspense fallback={<PageLoading />}><DeploymentsPageRoute notify={setToast} /></Suspense>,
     operations: <Suspense fallback={<PageLoading />}><LogsPageRoute /></Suspense>,
     monitoring: <Suspense fallback={<PageLoading />}><MonitoringPageRoute /></Suspense>,
-    settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute notify={setToast} /></Suspense>
+    settings: <Suspense fallback={<PageLoading />}><SettingsPageRoute notify={setToast} section={settingsSection} onSectionChange={selectSettingsSection} /></Suspense>
   }[view];
 
   return (

@@ -1,0 +1,85 @@
+
+/* -------------------------------------------------------------------------- */
+/* Settings: a category list beside the panel of the selected category        */
+/* -------------------------------------------------------------------------- */
+/* The scroll margin is the sticky top bar plus the page padding above it. */
+.settings-layout { display: grid; grid-template-columns: 244px minmax(0, 1fr); align-items: start; gap: 20px; scroll-margin-top: 94px; }
+.settings-nav { position: sticky; top: 94px; display: grid; gap: 2px; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35); }
+.settings-nav a { display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 2px 10px; padding: 9px 11px; color: var(--muted); border-radius: 8px; text-decoration: none; transition: all 0.15s ease; }
+.settings-nav a strong { color: #c9d1d9; font-size: 13px; font-weight: 600; line-height: 1.4; }
+.settings-nav a small { grid-column: 2; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.settings-nav a:hover { background: rgba(255, 255, 255, 0.05); }
+.settings-nav a:hover strong { color: #ffffff; }
+.settings-nav a:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.settings-nav a.active { color: #38bdf8; background: rgba(6, 182, 212, 0.12); box-shadow: inset 3px 0 0 #06b6d4; }
+.settings-nav a.active strong { color: #38bdf8; }
+.settings-panels { min-width: 0; }
+.settings-panel[hidden] { display: none; }
+/* A schedule expression stays on one line; the name and prompt absorb a narrow column. */
+.settings-panel td.nowrap { white-space: nowrap; }
+.settings-note { margin: 0; padding: 14px 16px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+
+.settings-content { display: grid; gap: 14px; padding: 16px; min-width: 0; }
+.settings-content > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.settings-content > p[role="status"] { color: var(--ink); }
+.settings-content > .field { max-width: 420px; margin: 0; }
+.settings-content .error-banner { margin: 0; color: #fca5a5; }
+.settings-content .error-banner > button { margin-left: auto; }
+.settings-content .agent-access-option { margin: 0; }
+.settings-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.collaboration-settings { display: grid; gap: 12px; font-size: 13px; }
+.collaboration-settings fieldset { min-width: 0; display: grid; gap: 10px; margin: 0; padding: 10px 14px 14px; border: 1px solid var(--line); border-radius: 8px; }
+.collaboration-settings fieldset:disabled { opacity: .6; }
+.collaboration-settings legend { padding: 0 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.collaboration-settings label { display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.collaboration-settings input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; flex: 0 0 auto; margin: 2px 0 0; padding: 0; accent-color: var(--cyan); }
+.collaboration-settings p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.collaboration-settings .collaboration-hint { margin-top: -6px; padding-left: 26px; }
+.collaboration-modes { max-width: 720px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+.collaboration-modes > p { grid-column: 1 / -1; color: var(--ink); font-size: 13px; }
+.collaboration-modes label { display: grid; gap: 6px; }
+.collaboration-modes label > span { color: var(--muted); font-size: 11px; font-weight: 680; }
+.collaboration-settings .dialog-actions { margin-top: 2px; }
+
+.cli-version-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 16px; padding: 14px 16px; border-top: 1px solid var(--line); }
+.cli-version-row:first-child { border-top: 0; }
+.cli-version-summary { min-width: 0; display: grid; gap: 5px; }
+.cli-version-summary strong { color: #ffffff; font-size: 14px; }
+.cli-version-summary span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.cli-version-summary small { color: var(--muted); font-size: 11px; }
+.cli-version-summary code { color: var(--ink); font-size: 13px; font-weight: 650; }
+.cli-version-summary em { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-size: 11px; font-style: normal; font-weight: 650; }
+.cli-version-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.cli-version-actions select { width: 170px; }
+.cli-version-row > .error-banner { grid-column: 1 / -1; margin: 0; }
+
+[data-theme="light"] .settings-nav { box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04); }
+[data-theme="light"] .settings-nav a strong { color: #334155; }
+[data-theme="light"] .settings-nav a:hover { background: rgba(15, 23, 42, 0.04); }
+[data-theme="light"] .settings-nav a:hover strong { color: #0f172a; }
+[data-theme="light"] .settings-nav a.active { color: #0284c7; background: rgba(2, 132, 199, 0.08); box-shadow: inset 3px 0 0 #0284c7; }
+[data-theme="light"] .settings-nav a.active strong { color: #0284c7; }
+[data-theme="light"] .cli-version-summary strong { color: #0f172a; }
+[data-theme="light"] .settings-content .error-banner { color: #991b1b; }
+
+/* Beside the console sidebar the category list leaves the tables too narrow on laptop
+   screens, where they would scroll sideways, so there it becomes a strip above them. */
+@media (max-width: 1500px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .settings-nav { position: relative; top: auto; display: flex; gap: 4px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
+  .settings-nav::-webkit-scrollbar { display: none; }
+  .settings-nav a { flex: 0 0 auto; display: flex; gap: 7px; padding: 8px 12px; white-space: nowrap; }
+  .settings-nav a small { display: none; }
+  .settings-nav a.active, [data-theme="light"] .settings-nav a.active { box-shadow: none; }
+}
+
+@media (max-width: 780px) {
+  .settings-layout { scroll-margin-top: 78px; }
+  .cli-version-row { grid-template-columns: minmax(0, 1fr); }
+  .cli-version-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .cli-version-actions select { width: 100%; }
+  .cli-version-actions button:last-child { grid-column: 1 / -1; }
+  .collaboration-modes { grid-template-columns: minmax(0, 1fr); }
+}

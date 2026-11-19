@@ -39,15 +39,19 @@ afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
 test("selects Claude target independently and saves Claude API profiles with masked keys", async () => {
   const {user,requests} = setup();
+  await user.click(screen.getByRole("link",{name:"CLI versions"}));
   const version = await screen.findByRole("combobox",{name:"Select a Claude CLI version"});
   await waitFor(() => expect(version).toHaveValue("2.1.318"));
   await user.selectOptions(version,"2.1.317");
   const section = version.closest("section")!;
-  await user.click(within(section).getByRole("button",{name:"Apply version"}));
+  await user.click(within(screen.getByRole("group",{name:"Claude CLI"})).getByRole("button",{name:"Apply version"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/settings/claude-cli/select-version",body:{version:"2.1.317"}}));
   expect(within(section).queryByText("Claude API")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button",{name:"Apply Claude API to server"})).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button",{name:"New credential profile"}));
+  await user.click(screen.getByRole("link",{name:"Credentials & secrets"}));
+  const create = await screen.findByRole("button",{name:"New credential profile"});
+  // Applying a profile to a server belongs to the Servers page, whichever category is open here.
+  expect(screen.queryByRole("button",{name:"Apply Claude API to server",hidden:true})).not.toBeInTheDocument();
+  await user.click(create);
   const dialog = await screen.findByRole("dialog");
   await user.click(within(dialog).getByRole("tab",{name:"Claude API"}));
   expect(within(dialog).getByRole("tab",{name:"Claude API"})).toHaveAttribute("aria-selected","true");

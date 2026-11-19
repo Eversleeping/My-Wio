@@ -10,7 +10,7 @@
 
 会话接口返回统一的 `capabilities` 对象。CLI 条件由 Agent 根据实际探测版本决定是否声明，规则与边界测试见 [capabilities](../internal/capabilities/capabilities.go) 及其[测试](../internal/capabilities/capabilities_test.go)。
 
-SSH 注册/修复会安装最新正式版；已有服务器可在 **设置 → Gemini CLI 版本管理** 选择目标版本，再到 **服务器 → 管理 AI Agent** 安装。网页安装依赖 Node.js/npm，校验后才切换受管版本，失败保留旧选择。
+SSH 注册/修复会安装最新正式版；已有服务器可在 **设置 → CLI 版本** 选择 Gemini CLI 的目标版本，再到 **服务器 → 管理 AI Agent** 安装。网页安装依赖 Node.js/npm，校验后才切换受管版本，失败保留旧选择。
 
 官方控制面镜像已内置 Gemini CLI，但当前 [Dockerfile](../deploy/controlplane.Dockerfile) 基线为 **0.65.0**，使用需要 0.66.0 的能力前须单独更新。Wio 控制面、目标 Agent 和 CLI 三者都应满足门槛。
 
@@ -24,7 +24,7 @@ SSH 注册/修复会安装最新正式版；已有服务器可在 **设置 → G
 
 ## 托管 API 配置
 
-1. **设置 → 服务器凭据预设 → Gemini API**：填写名称、原生 API 基础地址、模型和密钥。官方地址为 `https://generativelanguage.googleapis.com`，模型可用 `auto`。
+1. **设置 → 凭据与密钥 → 服务器凭据预设 → Gemini API**：填写名称、原生 API 基础地址、模型和密钥。官方地址为 `https://generativelanguage.googleapis.com`，模型可用 `auto`。
 2. **服务器 → 修改服务器凭据 → Gemini API**：选择预设并应用；等待成功回执，编辑预设后重新应用。
 3. 打开 Gemini 会话，刷新模型或填写自定义模型，然后验证实际调用。
 

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsPage } from "./pages/SettingsPage";
 import { I18nProvider } from "./i18n";
+import type { SettingsSection } from "./navigation";
 
 const scheduledTask = {
   id: "scheduled-1", thread_id: "thread-1", thread_title: "Review releases", workspace_id: "workspace-1", project_id: "project-1", project_name: "Console", server_id: "server-1", server_name: "production", server_status: "online", codex_thread_id: "codex-thread-1", workspace_path: "/srv/console",
@@ -27,6 +28,7 @@ function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Re
     if (url === "/api/settings/collaboration") return jsonResponse({ enabled: false, target_modes: {} });
     if (url === "/api/settings/codex-cli") return jsonResponse({ target_version: "1.0.0", versions: ["1.0.0"] });
     if (url === "/api/settings/gemini-cli") return jsonResponse({ target_version: "0.65.0", versions: ["0.65.0"] });
+    if (url === "/api/settings/claude-cli") return jsonResponse({ target_version: "2.1.318", versions: ["2.1.318"] });
     if (url === "/api/servers") return jsonResponse([]);
     if (url === "/api/credential-profiles") return jsonResponse([profile]);
     if (url === "/api/secret-sets") return jsonResponse([secretSet]);
@@ -41,9 +43,20 @@ function installSettingsFetch(onDelete?: (url: string) => Promise<Response> | Re
   return requests;
 }
 
+const revisions = {};
+
 function renderSettings() {
-  return render(<I18nProvider><DataProvider revisions={{}}><SettingsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
+  return render(<I18nProvider><DataProvider revisions={revisions}><SettingsPage notify={vi.fn()} /></DataProvider></I18nProvider>);
 }
+
+/** Renders the page the way the application does: the owner of the address bar chooses the category. */
+function renderOwnedSettings(section: SettingsSection | undefined, onSectionChange = vi.fn()) {
+  const page = (next: SettingsSection | undefined) => <I18nProvider><DataProvider revisions={revisions}><SettingsPage notify={vi.fn()} section={next} onSectionChange={onSectionChange} /></DataProvider></I18nProvider>;
+  const view = render(page(section));
+  return { onSectionChange, show: (next: SettingsSection | undefined) => view.rerender(page(next)) };
+}
+
+const category = (name: string) => screen.getByRole("link", { name });
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -55,6 +68,7 @@ test("requires explicit confirmation before deleting settings resources", async 
   const requests = installSettingsFetch();
   const user = userEvent.setup();
   renderSettings();
+  await user.click(category("Scheduled tasks"));
   await screen.findByText(scheduledTask.name);
 
   await user.click(screen.getByRole("button", { name: "Delete scheduled task" }));
@@ -65,7 +79,8 @@ test("requires explicit confirmation before deleting settings resources", async 
   await waitFor(() => expect(requests).toContainEqual({ url: `/api/scheduled-tasks/${scheduledTask.id}`, method: "DELETE" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete scheduled task" })).not.toBeInTheDocument());
 
-  await user.click(screen.getByRole("button", { name: "Delete credential profile" }));
+  await user.click(category("Credentials & secrets"));
+  await user.click(await screen.findByRole("button", { name: "Delete credential profile" }));
   const profileConfirmation = await screen.findByRole("dialog", { name: "Delete credential profile" });
   expect(within(profileConfirmation).getByRole("alert")).toHaveTextContent("Installed servers will keep their current local copy");
   await user.click(within(profileConfirmation).getByRole("button", { name: "Delete credential profile" }));
@@ -89,6 +104,7 @@ test("keeps a failed settings deletion available for retry and blocks duplicate 
   });
   const user = userEvent.setup();
   renderSettings();
+  await user.click(category("Credentials & secrets"));
   await screen.findByText(profile.name);
 
   await user.click(screen.getByRole("button", { name: "Delete credential profile" }));
@@ -116,6 +132,7 @@ test("loads settings session choices from every unified cursor page", async () =
  window.localStorage.setItem("wio_language","en");
  const requests=installSettingsFetch(undefined,true), user=userEvent.setup();
  renderSettings();
+ await user.click(category("Scheduled tasks"));
  await screen.findByText(scheduledTask.name);
  await user.click(screen.getByRole("button",{name:"New scheduled task"}));
  const dialog=await screen.findByRole("dialog",{name:"New scheduled task"});
@@ -123,4 +140,102 @@ test("loads settings session choices from every unified cursor page", async () =
  await within(dialog).findByRole("option",{name:/Later Claude session/});
  expect(requests.some(request=>request.url.includes("cursor=next-page"))).toBe(true);
  expect(requests.some(request=>/\/api\/(?:threads|claude\/threads|gemini\/threads)/.test(request.url))).toBe(false);
+});
+
+test("shows one category at a time and loads each on its first visit", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const requests = installSettingsFetch();
+  const user = userEvent.setup();
+  renderSettings();
+  const categories = within(screen.getByRole("navigation", { name: "Settings categories" }));
+  expect(categories.getAllByRole("link").map(link => link.getAttribute("aria-label"))).toEqual(["Session collaboration", "Server runtime", "CLI versions", "Scheduled tasks", "Credentials & secrets"]);
+  expect(category("Session collaboration")).toHaveAttribute("aria-current", "page");
+  expect(category("Session collaboration")).toHaveAccessibleDescription("Child sessions and permissions");
+  await screen.findByRole("checkbox", { name: "Allow creating and managing child sessions" });
+  expect(new Set(requests.map(request => request.url))).toEqual(new Set(["/api/settings/collaboration"]));
+
+  await user.click(category("Scheduled tasks"));
+  await screen.findByText(scheduledTask.name);
+  expect(category("Scheduled tasks")).toHaveAttribute("aria-current", "page");
+  expect(category("Session collaboration")).not.toHaveAttribute("aria-current");
+  expect(screen.queryByRole("checkbox", { name: "Allow creating and managing child sessions" })).not.toBeInTheDocument();
+  expect(requests.some(request => request.url === "/api/credential-profiles" || request.url.startsWith("/api/settings/codex-cli"))).toBe(false);
+
+  await user.click(category("CLI versions"));
+  for (const name of ["Codex CLI", "Gemini CLI", "Claude CLI"]) {
+    expect(await within(screen.getByRole("group", { name })).findByText(name === "Codex CLI" ? "1.0.0" : name === "Gemini CLI" ? "0.65.0" : "2.1.318")).toBeVisible();
+  }
+  expect(screen.queryByText(scheduledTask.name)).not.toBeVisible();
+});
+
+test("keeps unsaved edits of a category while another one is shown", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const requests = installSettingsFetch();
+  const user = userEvent.setup();
+  renderSettings();
+  const enable = await screen.findByRole("checkbox", { name: "Allow creating and managing child sessions" });
+  await waitFor(() => expect(enable).toBeEnabled());
+  await user.click(enable);
+
+  await user.click(category("Server runtime"));
+  expect(await screen.findByRole("combobox", { name: "Select server" })).toBeVisible();
+  await user.click(category("Session collaboration"));
+  expect(screen.getByRole("checkbox", { name: "Allow creating and managing child sessions" })).toBeChecked();
+  expect(requests.filter(request => request.url === "/api/settings/collaboration")).toHaveLength(1);
+});
+
+test("opens the category chosen by its owner and leaves the next choice to it", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const requests = installSettingsFetch();
+  const user = userEvent.setup();
+  const { onSectionChange, show } = renderOwnedSettings("credentials");
+  await screen.findByText(profile.name);
+  expect(category("Credentials & secrets")).toHaveAttribute("aria-current", "page");
+  expect(category("Credentials & secrets")).toHaveAttribute("href", "/?view=settings&section=credentials");
+  expect(category("Session collaboration")).toHaveAttribute("href", "/?view=settings");
+  expect(requests.some(request => request.url === "/api/settings/collaboration")).toBe(false);
+
+  await user.click(category("Scheduled tasks"));
+  expect(onSectionChange).toHaveBeenCalledExactlyOnceWith("scheduled-tasks");
+  expect(category("Credentials & secrets")).toHaveAttribute("aria-current", "page");
+  expect(requests.some(request => request.url === "/api/scheduled-tasks")).toBe(false);
+  // Choosing the current category again is not a navigation.
+  await user.click(category("Credentials & secrets"));
+  expect(onSectionChange).toHaveBeenCalledTimes(1);
+
+  show("scheduled-tasks");
+  await screen.findByText(scheduledTask.name);
+  expect(screen.getByText(profile.name)).not.toBeVisible();
+  // Without a category in the address the first one is shown.
+  show(undefined);
+  expect(await screen.findByRole("checkbox", { name: "Allow creating and managing child sessions" })).toBeVisible();
+  expect(category("Session collaboration")).toHaveAttribute("aria-current", "page");
+});
+
+test("closes the dialogs of a category that is no longer shown", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const requests = installSettingsFetch();
+  const user = userEvent.setup();
+  const { show } = renderOwnedSettings("scheduled-tasks");
+  await screen.findByText(scheduledTask.name);
+  await user.click(screen.getByRole("button", { name: "New scheduled task" }));
+  await screen.findByRole("dialog", { name: "New scheduled task" });
+
+  // The browser's Back button changes the category while the dialog is open.
+  show("credentials");
+  await screen.findByText(profile.name);
+  await waitFor(() => expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument());
+  await user.click(screen.getByRole("button", { name: "New credential profile" }));
+  await screen.findByRole("dialog");
+
+  show("scheduled-tasks");
+  await waitFor(() => expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument());
+  expect(screen.getByText(scheduledTask.name)).toBeVisible();
+
+  show("credentials");
+  await user.click(screen.getByRole("button", { name: "Delete secret set" }));
+  await screen.findByRole("dialog", { name: "Delete secret set" });
+  show(undefined);
+  await waitFor(() => expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument());
+  expect(requests.some(request => request.method !== "GET")).toBe(false);
 });

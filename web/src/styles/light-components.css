@@ -26,8 +26,7 @@
 [data-theme="light"] .git-stat strong,
 [data-theme="light"] .git-command-bar > strong,
 [data-theme="light"] .git-commit-row strong,
-[data-theme="light"] .deletion-summary-grid strong,
-[data-theme="light"] .codex-version-summary strong {
+[data-theme="light"] .deletion-summary-grid strong {
   color: #0f172a;
 }
 [data-theme="light"] .readonly-path,

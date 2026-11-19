@@ -39,15 +39,19 @@ afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
 test("selects Gemini target independently and saves Gemini API profiles with masked keys", async () => {
   const {user,requests} = setup();
+  await user.click(screen.getByRole("link",{name:"CLI versions"}));
   const version = await screen.findByRole("combobox",{name:"Select a Gemini CLI version"});
   await waitFor(() => expect(version).toHaveValue("0.65.0"));
   await user.selectOptions(version,"0.64.0");
   const section = version.closest("section")!;
-  await user.click(within(section).getByRole("button",{name:"Apply version"}));
+  await user.click(within(screen.getByRole("group",{name:"Gemini CLI"})).getByRole("button",{name:"Apply version"}));
   await waitFor(() => expect(requests).toContainEqual({url:"/api/settings/gemini-cli/select-version",body:{version:"0.64.0"}}));
   expect(within(section).queryByText("Gemini API")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button",{name:"Apply Gemini API to server"})).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button",{name:"New credential profile"}));
+  await user.click(screen.getByRole("link",{name:"Credentials & secrets"}));
+  const create = await screen.findByRole("button",{name:"New credential profile"});
+  // Applying a profile to a server belongs to the Servers page, whichever category is open here.
+  expect(screen.queryByRole("button",{name:"Apply Gemini API to server",hidden:true})).not.toBeInTheDocument();
+  await user.click(create);
   const dialog = await screen.findByRole("dialog");
   await user.click(within(dialog).getByRole("tab",{name:"Gemini API"}));
   expect(within(dialog).getByRole("tab",{name:"Gemini API"})).toHaveAttribute("aria-selected","true");

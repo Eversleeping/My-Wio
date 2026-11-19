@@ -69,7 +69,7 @@ test("keeps unavailable engines disabled with a backend reason and a settings li
   const {dialog, writes} = setup({unavailable: "claude"});
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("Apply an API credential profile");
   expect(within(dialog).getByRole("option", {name: /Claude · Apply/})).toBeDisabled();
-  expect(within(dialog).getByRole("link", {name: "Settings"})).toHaveAttribute("href", "/?view=settings");
+  expect(within(dialog).getByRole("link", {name: "Settings"})).toHaveAttribute("href", "/?view=settings&section=credentials");
   expect(within(dialog).queryByRole("button", {name: "New Claude session"})).not.toBeInTheDocument();
   expect(writes).toEqual([]);
 });

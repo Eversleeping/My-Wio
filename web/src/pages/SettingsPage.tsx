@@ -1,169 +1,74 @@
-import { ServerAccessSettings } from "../components/ServerAccessSettings";
+import { CalendarClock, KeyRound, Network, ShieldCheck, SquareTerminal } from "lucide-react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { CollaborationSettings } from "../components/CollaborationSettings";
-import { engineModule } from "../sessions/engineModules";
-import {
-AlertTriangle,
-CalendarClock,
-Check,
-Code2,
-Database,
-GitBranch,
-KeyRound,
-LoaderCircle,
-LockKeyhole,
-Pause,
-Pencil,
-Play,
-Plus,
-RefreshCw,
-ShieldCheck,
-SquareTerminal,
-Trash2,
-UserRound,
-X
-} from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { defaultCodexComposerPreferences } from "../codexComposerPreferences";
-import { ClaudeSettings } from "../components/ClaudeSettings";
-import { CodexModelPicker } from "../components/CodexModelPicker";
-import { ConfirmDialog } from "../components/ConfirmDialog";
-import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
-import { GeminiSettings } from "../components/GeminiSettings";
-import { DataTable, ErrorState, PageLoading, Section, Status } from "../components/PageUI";
-import { useSessionChoices } from "../sessions/useSessionChoices";
-import { useResource, useResourceRevision } from "../data/resources";
-import { settings as settingEndpoints } from "../data/settings";
-import { formatDate, relative } from "../format";
+import { ServerAccessSettings } from "../components/ServerAccessSettings";
 import { useI18n } from "../i18n";
-import type { CredentialProfile, ScheduledTask, SecretSet } from "../types";
-import { ScheduledTaskDialog } from "./ScheduledTaskDialog";
+import { defaultSettingsSection, settingsLocation, settingsSections, type SettingsSection } from "../navigation";
+import { CLIVersionSettings } from "./settings/CLIVersionSettings";
+import { CredentialSettings } from "./settings/CredentialSettings";
+import { ScheduledTaskSettings } from "./settings/ScheduledTaskSettings";
 
 export interface PageProps {
   notify: (text: string) => void;
+  /** The category to show. Without `onSectionChange` it only chooses the first one shown. */
+  section?: SettingsSection;
+  /** Lets the owner of the address bar follow the category. */
+  onSectionChange?: (section: SettingsSection) => void;
 }
 
-const defaultCodexModel = defaultCodexComposerPreferences.model;
+const categories: Record<SettingsSection, { label: string; hint: string; Icon: typeof Network }> = {
+  collaboration: { label: "collaboration.title", hint: "settings.sectionCollaborationHint", Icon: Network },
+  servers: { label: "settings.sectionServers", hint: "settings.sectionServersHint", Icon: ShieldCheck },
+  cli: { label: "settings.cliVersions", hint: "settings.sectionCLIHint", Icon: SquareTerminal },
+  "scheduled-tasks": { label: "settings.scheduledTasks", hint: "settings.sectionScheduledTasksHint", Icon: CalendarClock },
+  credentials: { label: "settings.sectionCredentials", hint: "settings.sectionCredentialsHint", Icon: KeyRound },
+};
 
-
-function message(error: unknown) {
-  return error instanceof Error ? error.message : "Request failed";
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="field"><span>{label}</span>{children}</label>;
-}
-
-function Dialog(props: Omit<DialogProps, "closeLabel">) {
+export function SettingsPage({ notify, section, onSectionChange }: PageProps) {
   const { t } = useI18n();
-  return <AccessibleDialog {...props} closeLabel={t("common.close")} />;
-}
-
-
-function ErrorBanner({ text }: { text: string }) {
-  return <div className="error-banner"><AlertTriangle size={16} />{text}</div>;
-}
-
-type SettingsConfirmation =
-  | { type: "scheduled-task"; task: ScheduledTask }
-  | { type: "credential-profile"; profile: CredentialProfile }
-  | { type: "secret-set"; secret: SecretSet };
-
-export function SettingsPage({ notify }: PageProps) {
-  const { t } = useI18n();
-  const codexSettings = useResource(settingEndpoints.cli("codex"));
-  const profiles = useResource(settingEndpoints.profiles());
-  const secrets = useResource(settingEndpoints.secrets());
-  const scheduledTasks = useResource(settingEndpoints.scheduledTasks());
-  const sessionRevision = useResourceRevision(["settings", "codex", "gemini", "claude"]);
-  const sessions = useSessionChoices({}, sessionRevision);
-  const [profileDialog, setProfileDialog] = useState(false);
-  const [profileBusy, setProfileBusy] = useState(false);
-  const [profileForm, setProfileForm] = useState({ id: "", kind: "codex" as CredentialProfile["kind"], name: "", endpoint: "https://api.openai.com/v1", username: "", model: defaultCodexModel, commit_name: "", commit_email: "", secret: "" });
-  const [secretDialog, setSecretDialog] = useState(false);
-  const [name, setName] = useState("");
-  const [lines, setLines] = useState("");
-  const [codexTargetBusy, setCodexTargetBusy] = useState(false);
-  const [codexVersions, setCodexVersions] = useState<string[]>([]);
-  const [selectedCodexVersion, setSelectedCodexVersion] = useState("");
-  const [scheduledTarget, setScheduledTarget] = useState<{ task?: ScheduledTask; threadID?: string } | null>(null);
-  const [scheduledBusy, setScheduledBusy] = useState("");
-  const [settingsConfirmation, setSettingsConfirmation] = useState<SettingsConfirmation | null>(null);
-  const [settingsDeleteBusy, setSettingsDeleteBusy] = useState("");
-  const settingsDeleteBusyRef = useRef("");
+  const [localSection, setLocalSection] = useState<SettingsSection>(section ?? defaultSettingsSection);
+  const active = onSectionChange ? section ?? defaultSettingsSection : localSection;
+  // A category loads on its first visit and then stays mounted, so unsaved
+  // edits and operations awaiting an Agent survive switching between categories.
+  const [visited, setVisited] = useState<ReadonlySet<SettingsSection>>(() => new Set([active]));
+  if (!visited.has(active)) setVisited(new Set(visited).add(active));
+  const layout = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (!codexSettings.data) return;
-    setCodexVersions(codexSettings.data.versions?.length ? codexSettings.data.versions : [codexSettings.data.target_version]);
-    setSelectedCodexVersion(codexSettings.data.target_version);
-  }, [codexSettings.data]);
-  const openProfile = (profile?: CredentialProfile, kind: CredentialProfile["kind"] = "codex") => {
-    setProfileForm(profile ? { id: profile.id, kind: profile.kind, name: profile.name, endpoint: profile.endpoint, username: profile.username, model: profile.kind !== "git" ? profile.model || (profile.kind === "gemini" ? "auto" : profile.kind === "claude" ? "sonnet" : defaultCodexModel) : "", commit_name: profile.commit_name, commit_email: profile.commit_email, secret: "" } : { id: "", kind, name: "", endpoint: kind === "gemini" ? "https://generativelanguage.googleapis.com" : kind === "claude" ? "https://api.anthropic.com" : "https://api.openai.com/v1", username: "", model: kind === "gemini" ? "auto" : kind === "claude" ? "sonnet" : defaultCodexModel, commit_name: "", commit_email: "", secret: "" });
-    setProfileDialog(true);
+    // On narrow screens the categories scroll sideways; keep the current one in view.
+    const current = list.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!list.current || !current) return;
+    const start = current.offsetLeft - 8, end = current.offsetLeft + current.offsetWidth + 8;
+    if (start < list.current.scrollLeft) list.current.scrollLeft = start;
+    else if (end > list.current.scrollLeft + list.current.clientWidth) list.current.scrollLeft = end - list.current.clientWidth;
+  }, [active]);
+  const select = (event: MouseEvent<HTMLAnchorElement>, next: SettingsSection) => {
+    // Modified clicks keep the browser behaviour, such as opening a new tab.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (next === active) return;
+    (onSectionChange ?? setLocalSection)(next);
+    layout.current?.scrollIntoView?.({ block: "start" });
   };
-  const changeProfileKind = (kind: CredentialProfile["kind"]) => setProfileForm(current => current.id ? current : { ...current, kind, endpoint: kind === "codex" ? "https://api.openai.com/v1" : kind === "gemini" ? "https://generativelanguage.googleapis.com" : kind === "claude" ? "https://api.anthropic.com" : "https://github.com", username: "", model: kind === "codex" ? defaultCodexModel : kind === "gemini" ? "auto" : kind === "claude" ? "sonnet" : "", commit_name: "", commit_email: "", secret: "" });
-  const saveProfile = async (event: FormEvent) => {
-    event.preventDefault(); setProfileBusy(true);
-    try {
-      await settingEndpoints.saveProfile(profileForm);
-      setProfileDialog(false); notify(t("settings.profileSaved"));
-    } catch (err) { notify(message(err)); } finally { setProfileBusy(false); }
+  const panel = (id: SettingsSection) => {
+    switch (id) {
+      case "collaboration": return <CollaborationSettings notify={notify} />;
+      case "servers": return <ServerAccessSettings />;
+      case "cli": return <CLIVersionSettings notify={notify} />;
+      case "scheduled-tasks": return <ScheduledTaskSettings notify={notify} active={id === active} />;
+      case "credentials": return <CredentialSettings notify={notify} active={id === active} />;
+    }
   };
-  const submitSecretSet = async (event: FormEvent) => { event.preventDefault(); const values: Record<string, string> = {}; for (const line of lines.split("\n")) { const index = line.indexOf("="); if (index > 0) values[line.slice(0, index).trim()] = line.slice(index + 1); } try { await settingEndpoints.createSecret(name, values); setSecretDialog(false); setLines(""); notify(t("settings.secretSaved")); } catch (err) { notify(message(err)); } };
-  const checkCodexUpdates = async () => { setCodexTargetBusy(true); try { const result = await settingEndpoints.checkUpdates("codex"); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); notify(t(result.updated ? "settings.codexUpdateFound" : "settings.codexAlreadyLatest", { version: result.latest_version ?? result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
-  const applyCodexVersion = async () => { if (!selectedCodexVersion) return; setCodexTargetBusy(true); try { const result = await settingEndpoints.selectVersion("codex", selectedCodexVersion); setCodexVersions(result.versions ?? [result.target_version]); setSelectedCodexVersion(result.target_version); notify(t("settings.codexVersionApplied", { version: result.target_version })); } catch (err) { notify(message(err)); } finally { setCodexTargetBusy(false); } };
-  const openScheduledTask = (task?: ScheduledTask) => setScheduledTarget(task ? { task } : {});
-  const toggleScheduledTask = async (task: ScheduledTask) => {
-    if (scheduledBusy) return;
-    setScheduledBusy(task.id);
-    try { await settingEndpoints.saveScheduledTask(task.id, { enabled: !task.enabled }); } catch (err) { notify(message(err)); } finally { setScheduledBusy(""); }
-  };
-  const deleteScheduledTask = async (task: ScheduledTask) => {
-    if (scheduledBusy || settingsDeleteBusyRef.current) return;
-    const busyKey = `scheduled-task:${task.id}`;
-    settingsDeleteBusyRef.current = busyKey;
-    setSettingsDeleteBusy(busyKey);
-    try { await settingEndpoints.removeScheduledTask(task.id); notify(t("settings.scheduledTaskDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
-  };
-  const deleteProfile = async (profile: CredentialProfile) => {
-    if (settingsDeleteBusyRef.current) return;
-    const busyKey = `credential-profile:${profile.id}`;
-    settingsDeleteBusyRef.current = busyKey;
-    setSettingsDeleteBusy(busyKey);
-    try { await settingEndpoints.removeProfile(profile.id); notify(t("settings.profileDeleted")); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
-  };
-  const deleteSecretSet = async (secret: SecretSet) => {
-    if (settingsDeleteBusyRef.current) return;
-    const busyKey = `secret-set:${secret.id}`;
-    settingsDeleteBusyRef.current = busyKey;
-    setSettingsDeleteBusy(busyKey);
-    try { await settingEndpoints.removeSecret(secret.id); setSettingsConfirmation(null); } catch (err) { notify(message(err)); } finally { settingsDeleteBusyRef.current = ""; setSettingsDeleteBusy(""); }
-  };
-  return <div className="page-stack">
-    <CollaborationSettings notify={notify} />
-    <ServerAccessSettings />
-    <Section title={t("settings.codexCLIManagement")} icon={<SquareTerminal size={18} />}>
-      <div className="codex-version-control"><div className="codex-version-summary"><small>{t("settings.codexTargetVersion")}</small><strong>{codexSettings.data?.target_version ?? "-"}</strong><span><ShieldCheck size={14} />{t("settings.codexStableRelease")}</span></div><div className="codex-version-actions"><select aria-label={t("settings.selectCodexVersion")} value={selectedCodexVersion} disabled={codexTargetBusy || !codexVersions.length} onChange={event => setSelectedCodexVersion(event.target.value)}>{codexVersions.map((version, index) => <option key={version} value={version}>{index === 0 ? t("settings.latestCodexVersion", { version }) : version}</option>)}</select><button className="secondary-button" disabled={codexTargetBusy || !selectedCodexVersion || selectedCodexVersion === codexSettings.data?.target_version} onClick={() => void applyCodexVersion()}><Check size={16} />{t("settings.applyCodexVersion")}</button><button className="primary-button" disabled={codexTargetBusy || !codexSettings.data} onClick={() => void checkCodexUpdates()}>{codexTargetBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{t(codexTargetBusy ? "settings.checkingCodexUpdates" : "settings.checkCodexUpdates")}</button></div></div>
-    </Section>
-    <GeminiSettings notify={notify} />
-    <ClaudeSettings notify={notify} />
-    <Section title={t("settings.scheduledTasks")} icon={<CalendarClock size={18} />} action={<button className="primary-button" onClick={() => openScheduledTask()}><Plus size={17} />{t("settings.newScheduledTask")}</button>}>
-      <DataTable headers={[t("settings.name"), t("settings.scheduledThread"), t("settings.schedule"), t("settings.nextRun"), t("column.state"), ""]} empty={t("settings.noScheduledTasks")}>
-        {(scheduledTasks.data ?? []).map(task => <tr key={task.id}><td><div className="cell-main"><strong>{task.name}</strong><small title={task.prompt}>{task.prompt}</small></div></td><td><div className="cell-main"><strong>{engineModule(task.agent_kind ?? "codex").label} · {task.thread_title}</strong><small>{task.project_name} / {task.server_name}</small></div></td><td><code title={task.timezone}>{task.schedule}</code></td><td>{task.enabled ? formatDate(task.next_run_at) : t("settings.scheduleDisabled")}</td><td><div className="cell-main"><Status value={task.enabled ? "enabled" : "disabled"} />{task.last_run_status && <small title={task.last_run_message || undefined}>{t("settings.lastRun", { status: task.last_run_status })}</small>}</div></td><td><div className="row-actions"><button className="icon-button" title={t("common.edit")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => openScheduledTask(task)}><Pencil size={15} /></button><button className="icon-button" title={t(task.enabled ? "settings.disableScheduledTask" : "settings.enableScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => void toggleScheduledTask(task)}>{scheduledBusy === task.id ? <LoaderCircle className="spin" size={15} /> : task.enabled ? <Pause size={15} /> : <Play size={15} />}</button><button className="icon-button danger" title={t("settings.deleteScheduledTask")} disabled={Boolean(scheduledBusy || settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "scheduled-task", task })}><Trash2 size={15} /></button></div></td></tr>)}
-      </DataTable>
-    </Section>
-    <Section title={t("settings.credentialProfiles")} icon={<KeyRound size={18} />} action={<button className="primary-button" onClick={() => openProfile()}><Plus size={17} />{t("settings.newProfile")}</button>}>
-      <DataTable headers={[t("settings.type"), t("settings.name"), t("settings.endpoint"), t("settings.profileDetail"), t("column.updated"), ""]} empty={t("settings.noProfiles")}>{(profiles.data ?? []).map(profile => <tr key={profile.id}><td><Status value={profile.kind} /></td><td><strong>{profile.name}</strong></td><td><code className="truncate-code" title={profile.endpoint}>{profile.endpoint}</code></td><td>{profile.kind !== "git" ? <code>{profile.model}</code> : <div className="cell-main"><span className="inline"><UserRound size={14} />{profile.username}</span><small>{profile.commit_name && profile.commit_email ? `${profile.commit_name} · ${profile.commit_email}` : t("settings.gitIdentityMissing")}</small></div>}</td><td>{relative(profile.updated_at)}</td><td><div className="row-actions"><button className="icon-button" title={t("settings.editProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => openProfile(profile)}><Pencil size={15} /></button><button className="icon-button danger" title={t("settings.deleteProfile")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "credential-profile", profile })}><Trash2 size={15} /></button></div></td></tr>)}</DataTable>
-    </Section>
-    <Section title={t("settings.vaultSets")} icon={<Database size={18} />} action={<button className="primary-button" onClick={() => setSecretDialog(true)}><Plus size={17} />{t("settings.newSecretSet")}</button>}><DataTable headers={[t("settings.name"), t("column.updated"), ""]} empty={t("settings.noSecretSets")}>{(secrets.data ?? []).map(item => <tr key={item.id}><td><span className="inline"><KeyRound size={14} /><strong>{item.name}</strong></span></td><td>{relative(item.updated_at)}</td><td><button className="icon-button danger" title={t("settings.deleteSecretSet")} disabled={Boolean(settingsDeleteBusy)} onClick={() => setSettingsConfirmation({ type: "secret-set", secret: item })}><X size={16} /></button></td></tr>)}</DataTable></Section>
-    <Dialog open={profileDialog} title={t(profileForm.id ? "settings.editProfile" : "settings.newProfile")} onClose={() => { if (!profileBusy) setProfileDialog(false); }} wide><form onSubmit={saveProfile}>
-      <div className="segmented-control" role="tablist" aria-label={t("settings.type")}><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "codex"} aria-selected={profileForm.kind === "codex"} className={profileForm.kind === "codex" ? "active" : ""} onClick={() => changeProfileKind("codex")}><Code2 size={15} />{t("settings.codexType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "gemini"} aria-selected={profileForm.kind === "gemini"} className={profileForm.kind === "gemini" ? "active" : ""} onClick={() => changeProfileKind("gemini")}><Code2 size={15} />{t("settings.geminiType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "claude"} aria-selected={profileForm.kind === "claude"} className={profileForm.kind === "claude" ? "active" : ""} onClick={() => changeProfileKind("claude")}><Code2 size={15} />{t("settings.claudeType")}</button><button type="button" role="tab" disabled={Boolean(profileForm.id) && profileForm.kind !== "git"} aria-selected={profileForm.kind === "git"} className={profileForm.kind === "git" ? "active" : ""} onClick={() => changeProfileKind("git")}><GitBranch size={15} />{t("settings.gitType")}</button></div>
-      <div className="form-grid"><Field label={t("settings.name")}><input value={profileForm.name} onChange={e => setProfileForm({ ...profileForm, name: e.target.value })} required /></Field><Field label={t("settings.endpoint")}><input type="url" value={profileForm.endpoint} onChange={e => setProfileForm({ ...profileForm, endpoint: e.target.value })} required /></Field></div>
-      {profileForm.kind === "codex" ? <Field label={t("server.codexModel")}><CodexModelPicker value={profileForm.model} onChange={model => setProfileForm({ ...profileForm, model })} required /></Field> : profileForm.kind === "gemini" ? <><p className="gemini-settings-help">{t("settings.geminiAPIHelp")}</p><Field label={t("gemini.model")}><input value={profileForm.model} onChange={event => setProfileForm({ ...profileForm, model: event.target.value })} maxLength={128} required /></Field></> : profileForm.kind === "claude" ? <><p className="gemini-settings-help">{t("settings.claudeAPIHelp")}</p><Field label={t("claude.model")}><input value={profileForm.model} onChange={event => setProfileForm({ ...profileForm, model: event.target.value })} maxLength={128} required /></Field></> : <><Field label={t("settings.gitUsername")}><input value={profileForm.username} onChange={e => setProfileForm({ ...profileForm, username: e.target.value })} autoComplete="username" required /></Field><div className="form-divider"><span>{t("settings.gitCommitIdentity")}</span></div><div className="form-grid"><Field label={t("settings.gitCommitName")}><input value={profileForm.commit_name} onChange={e => setProfileForm({ ...profileForm, commit_name: e.target.value })} autoComplete="name" required /></Field><Field label={t("settings.gitCommitEmail")}><input type="email" value={profileForm.commit_email} onChange={e => setProfileForm({ ...profileForm, commit_email: e.target.value })} autoComplete="email" placeholder={t("settings.gitCommitEmailPlaceholder")} required /></Field></div></>}
-      <Field label={t(profileForm.kind === "codex" ? "server.codexAPIKey" : profileForm.kind === "gemini" ? "settings.geminiAPIKey" : profileForm.kind === "claude" ? "settings.claudeAPIKey" : "settings.gitToken")}><input type="password" autoComplete="new-password" value={profileForm.secret} onChange={e => setProfileForm({ ...profileForm, secret: e.target.value })} placeholder={profileForm.id ? t("settings.keepExistingSecret") : ""} required={!profileForm.id} /></Field>
-      <DialogActions><button type="button" className="secondary-button" disabled={profileBusy} onClick={() => setProfileDialog(false)}>{t("common.cancel")}</button><button className="primary-button" disabled={profileBusy}>{profileBusy ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />}{t("settings.encryptSave")}</button></DialogActions>
-    </form></Dialog>
-    <Dialog open={secretDialog} title={t("settings.secretSetTitle")} onClose={() => setSecretDialog(false)}><form onSubmit={submitSecretSet}><Field label={t("settings.name")}><input value={name} onChange={e => setName(e.target.value)} required /></Field><Field label={t("settings.environmentValues")}><textarea value={lines} onChange={e => setLines(e.target.value)} rows={8} placeholder={"DATABASE_URL=...\nAPI_TOKEN=..."} required /></Field><DialogActions><button type="button" className="secondary-button" onClick={() => setSecretDialog(false)}>{t("common.cancel")}</button><button className="primary-button"><KeyRound size={16} />{t("settings.encryptSave")}</button></DialogActions></form></Dialog>
-    <ScheduledTaskDialog open={scheduledTarget !== null} task={scheduledTarget?.task} threads={[]} sessions={sessions.data} sessionNotice={sessions.error ? <ErrorState error={sessions.error} reload={sessions.reload} /> : sessions.loading ? <PageLoading /> : null} notify={notify} onClose={() => setScheduledTarget(null)} onSaved={() => {}} />
-    {settingsConfirmation?.type === "scheduled-task" ? <ConfirmDialog open danger title={t("settings.deleteScheduledTask")} impact={t("settings.confirmDeleteScheduledTask", { name: settingsConfirmation.task.name })} confirmLabel={t("settings.deleteScheduledTask")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteScheduledTask(settingsConfirmation.task)} /> : settingsConfirmation?.type === "credential-profile" ? <ConfirmDialog open danger title={t("settings.deleteProfile")} impact={t("settings.confirmDeleteProfile", { name: settingsConfirmation.profile.name })} confirmLabel={t("settings.deleteProfile")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteProfile(settingsConfirmation.profile)} /> : settingsConfirmation?.type === "secret-set" ? <ConfirmDialog open danger title={t("settings.deleteSecretSet")} impact={t("settings.confirmDelete", { name: settingsConfirmation.secret.name })} confirmLabel={t("settings.deleteSecretSet")} cancelLabel={t("common.cancel")} closeLabel={t("common.close")} busy={Boolean(settingsDeleteBusy)} onClose={() => setSettingsConfirmation(null)} onConfirm={() => deleteSecretSet(settingsConfirmation.secret)} /> : null}
+  return <div className="settings-layout" ref={layout}>
+    <nav className="settings-nav" ref={list} aria-label={t("settings.sections")}>
+      {settingsSections.map(id => {
+        const { label, hint, Icon } = categories[id];
+        return <a key={id} href={settingsLocation(id)} className={id === active ? "active" : ""} aria-current={id === active ? "page" : undefined} aria-label={t(label)} aria-describedby={`settings-nav-${id}-hint`} onClick={event => select(event, id)}><Icon size={17} /><strong>{t(label)}</strong><small id={`settings-nav-${id}-hint`}>{t(hint)}</small></a>;
+      })}
+    </nav>
+    <div className="settings-panels">
+      {settingsSections.map(id => visited.has(id) && <div key={id} className="settings-panel page-stack" hidden={id !== active}>{panel(id)}</div>)}
+    </div>
   </div>;
 }
 

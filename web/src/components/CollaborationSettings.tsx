@@ -3,6 +3,7 @@ import { Network } from "lucide-react";
 import { useResource } from "../data/resources";
 import { settings as endpoints, type CollaborationGrant } from "../data/settings";
 import { useI18n } from "../i18n";
+import { engineModule } from "../sessions/engineModules";
 import { Section } from "./PageUI";
 import { DialogActions } from "./Dialog";
 type Engine = "codex" | "claude" | "gemini";
@@ -25,11 +26,11 @@ export function CollaborationSettings({ notify }: { notify: (message: string) =>
   const modeLabel = (mode: string) => ({ plan: t("collaboration.planMode"), default: t("collaboration.defaultPermissions"), acceptEdits: t("collaboration.allowFileEdits"), auto_edit: t("collaboration.allowFileEdits"), bypassPermissions: t("collaboration.bypassPermissions"), yolo: t("collaboration.automaticallyApprove"), untrusted: t("collaboration.approveUntrusted"), "on-request": t("collaboration.approveOnRequest"), never: t("collaboration.neverApprove") }[mode] ?? mode);
  return <Section title={t("collaboration.title")} icon={<Network size={18} />}><div className="settings-content">
  <p>{t("collaboration.settingsScope")}</p>
- {state.error && <p role="alert">{state.error}<button onClick={state.reload}>{t("common.retry")}</button></p>}
+ {state.error && <p className="error-banner" role="alert">{state.error}<button type="button" className="secondary-button small" onClick={state.reload}>{t("common.retry")}</button></p>}
  <fieldset className="settings-fields" disabled={busy || !state.data}>
       <form className="collaboration-settings" onSubmit={event => { event.preventDefault(); void save(); }}>
         <label><input type="checkbox" checked={grant.enabled} onChange={event => setGrant({ ...grant, enabled: event.target.checked })} />{t("collaboration.allowChildren")}</label>
-        <p>{t("collaboration.authorizedTask")}</p>
+        <p className="collaboration-hint">{t("collaboration.authorizedTask")}</p>
         <fieldset disabled={busy}>
           <legend>{t("collaboration.informationDisplay")}</legend>
           <label><input type="checkbox" checked={grant.show_unread_results ?? false} onChange={event => setGrant({ ...grant, show_unread_results: event.target.checked })} />{t("collaboration.showUnread")}</label>
@@ -40,10 +41,12 @@ export function CollaborationSettings({ notify }: { notify: (message: string) =>
           <label><input type="checkbox" checked={grant.worktree} onChange={event => setGrant({ ...grant, worktree: event.target.checked })} />{t("collaboration.allowWorktrees")}</label>
           <label><input type="checkbox" checked={grant.auto_continue} onChange={event => setGrant({ ...grant, auto_continue: event.target.checked })} />{t("collaboration.autoContinue")}</label>
           <label><input type="checkbox" checked={grant.delegate} onChange={event => setGrant({ ...grant, delegate: event.target.checked })} />{t("collaboration.allowDelegation")}</label>
-          <p>{t("collaboration.crossModelPermissions")}</p>
-          {(["codex", "claude", "gemini"] as const).map(value => <label key={value}>{value}<select aria-label={`${value} ${t("collaboration.permissions")}`} value={grant.target_modes?.[value] ?? ""} onChange={event => setGrant({ ...grant, target_modes: { ...grant.target_modes, [value]: event.target.value || undefined } })}><option value="">{t("collaboration.notGranted")}</option>{modes[value].map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}</select></label>)}
+          <div className="collaboration-modes">
+            <p>{t("collaboration.crossModelPermissions")}</p>
+            {(["codex", "claude", "gemini"] as const).map(value => <label key={value}><span>{engineModule(value).label}</span><select aria-label={`${value} ${t("collaboration.permissions")}`} value={grant.target_modes?.[value] ?? ""} onChange={event => setGrant({ ...grant, target_modes: { ...grant.target_modes, [value]: event.target.value || undefined } })}><option value="">{t("collaboration.notGranted")}</option>{modes[value].map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}</select></label>)}
+          </div>
           <label><input type="checkbox" checked={grant.all_project_sessions ?? false} onChange={event => setGrant({ ...grant, all_project_sessions: event.target.checked })} />{t("collaboration.allowOtherSessions")}</label>
-          <p>{t("collaboration.authorizeWorkspaces")}</p>
+          <p className="collaboration-hint">{t("collaboration.authorizeWorkspaces")}</p>
         </fieldset>
         {error && <p className="error-banner" role="alert">{error}</p>}
         <DialogActions><button className="primary-button" disabled={busy || !state.data}>{busy ? t("common.loading") : t("common.save")}</button></DialogActions>

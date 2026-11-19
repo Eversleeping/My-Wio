@@ -119,7 +119,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml logs --tail=100 cont
 
 **确认挂载范围后再启动**：默认 Compose 挂载宿主机 `/srv`、`/opt`、`/home` 和 Docker socket。镜像已包含 Git、Docker CLI/Compose、Node.js/npm、Codex、Gemini、Claude CLI，内置 Agent 可操作这些挂载；它看到的指标和目录受容器环境影响。Docker socket 具有宿主机高权限。需要专用工作区隔离或宿主机代理时，使用部署指南中的 `docker-compose.host-proxy.yml`；仅填写 `WIO_WORKSPACE_ROOT` 不会改变默认方案的挂载。
 
-镜像中的 CLI 基线固定在 [Dockerfile](deploy/controlplane.Dockerfile)，与 SSH 注册时获取最新正式版的流程不同。例如当前镜像的 Gemini CLI 基线为 `0.65.0`，使用需要 `0.66.0+` 的目标模式或技能管理前，须通过 **设置 → Gemini CLI 版本管理** 与 **服务器 → 管理 AI Agent** 更新。
+镜像中的 CLI 基线固定在 [Dockerfile](deploy/controlplane.Dockerfile)，与 SSH 注册时获取最新正式版的流程不同。例如当前镜像的 Gemini CLI 基线为 `0.65.0`，使用需要 `0.66.0+` 的目标模式或技能管理前，须通过 **设置 → CLI 版本** 与 **服务器 → 管理 AI Agent** 更新。
 
 Linux 控制面默认运行内置“控制机”Agent，该服务器记录不能撤销。设置 `WIO_CONTROL_AGENT_ENABLED=false` 可停用它，记录保留为离线。直接从源码运行控制面时，所需工具、目录权限和凭据须由运行环境提供。
 

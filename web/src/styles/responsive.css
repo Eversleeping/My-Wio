@@ -111,10 +111,6 @@
   .deletion-summary-grid > div:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
   .deletion-workspace-list > div { grid-template-columns: minmax(0, 1fr) auto; }
   .deletion-workspace-list code { grid-column: 1 / -1; grid-row: 2; }
-  .codex-version-control { align-items: stretch; flex-direction: column; }
-  .codex-version-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
-  .codex-version-actions select { width: 100%; }
-  .codex-version-actions .primary-button { grid-column: 1 / -1; width: 100%; }
   .totp-grid { grid-template-columns: minmax(0, 1fr); }
   .auth-password-fields { grid-template-columns: minmax(0, 1fr); }
   .qr { margin: 0 auto; }

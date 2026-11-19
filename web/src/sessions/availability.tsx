@@ -1,6 +1,6 @@
 import { useResourceRevision } from "../data/resources";
 import { useI18n } from "../i18n";
-import { locationFor } from "../navigation";
+import { locationFor, settingsLocation } from "../navigation";
 import { useData } from "../useData";
 import type { Engine, SessionCapabilities } from "./types";
 
@@ -14,5 +14,5 @@ export function useWorkspaceEngines(workspaceID: string) {
 export function EngineUnavailable({ reason }: { reason: string }) {
   const { t } = useI18n();
   const settings = reason === "credentials_missing";
-  return <p className="error-banner" role="alert"><span>{t(`sessions.unavailable.${reason}`)}</span> <a href={locationFor(settings ? "settings" : "servers")}>{t(settings ? "nav.settings" : "nav.servers")}</a></p>;
+  return <p className="error-banner" role="alert"><span>{t(`sessions.unavailable.${reason}`)}</span> <a href={settings ? settingsLocation("credentials") : locationFor("servers")}>{t(settings ? "nav.settings" : "nav.servers")}</a></p>;
 }

@@ -102,26 +102,30 @@ export function ServerAccessSettings() {
   }catch(err){if(generation.current===run){setError(String(err));setNotice("");}}
   finally{if(generation.current===run)setBusy(false);}
  }
+ // The sudo switch and its apply button share one condition; they used to share a fieldset.
+ const editable=!busy&&!upgrading&&Boolean(access)&&server?.status==="online"&&Boolean(server.agent_access_supported);
  return <Section title={t("server.runtime.title")} icon={<ShieldCheck size={18}/>}><div className="settings-content">
   <p>{t("server.runtime.instructions")}</p>
-  {servers.error && <p role="alert">{servers.error}<button onClick={servers.reload}>{t("common.retry")}</button></p>}
+  {servers.error && <p className="error-banner" role="alert">{servers.error}<button type="button" className="secondary-button small" onClick={servers.reload}>{t("common.retry")}</button></p>}
   <label className="field"><span>{t("server.runtime.server")}</span><select value={id} onChange={event=>{setID(event.target.value);setUpgrading(false);}}><option value="">{t("server.runtime.chooseServer")}</option>{(servers.data??[]).map(item=><option key={item.id} value={item.id}>{item.is_control_plane?t("server.controlPlane"):item.name}</option>)}</select></label>
   {server?.is_control_plane ? <p>{t("server.runtime.builtIn")}</p> : server && <>
    {server.status!=="online" && <p role="status">{t("server.runtime.offline")}</p>}
    {!server.agent_access_supported && <p>{t("server.runtime.upgradeRequired")}</p>}
-   {server.agent_update_available&&server.agent_update_supported&&<button disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):t("server.runtime.upgrade")}</button>}
-   <fieldset className="settings-fields" disabled={busy||upgrading||!access||server.status!=="online"||!server.agent_access_supported}>
+   {!server.agent_restart_supported&&server.agent_access_supported&&<p>{t("server.runtime.upgradeForRestart")}</p>}
+   <fieldset className="settings-fields" disabled={!editable}>
     <label className={`agent-access-option ${access?.allow_sudo?"enabled":""}`}><input type="checkbox" checked={access?.allow_sudo??false} disabled={access?.restart_required} onChange={event=>{if(access)setAccess({...access,allow_sudo:event.target.checked});}}/><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
-    <button className="primary-button" onClick={()=>void apply()}>{t("server.runtime.apply")}</button>
    </fieldset>
    {access?.restart_required&&!busy&&<p role="status">{t("server.runtime.restartPending")}</p>}
    {access&&!access.applied&&!access.restart_required&&!busy&&<p role="status">{t("server.runtime.savedUnconfirmed")}</p>}
-   <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{t("server.runtime.restart")}</button>
-   {!server.agent_restart_supported&&server.agent_access_supported&&<p>{t("server.runtime.upgradeForRestart")}</p>}
-   <button className="secondary-button" disabled={busy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{t("server.runtime.readAgain")}</button>
+   <div className="settings-actions">
+    <button className="primary-button" disabled={!editable} onClick={()=>void apply()}>{t("server.runtime.apply")}</button>
+    <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{t("server.runtime.restart")}</button>
+    <button className="secondary-button" disabled={busy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{t("server.runtime.readAgain")}</button>
+    {server.agent_update_available&&server.agent_update_supported&&<button className="secondary-button" disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):t("server.runtime.upgrade")}</button>}
+   </div>
   </>}
   {busy&&<p role="status">{t("common.loading")}</p>}
-  {error&&<p role="alert">{error}</p>}
+  {error&&<p className="error-banner" role="alert">{error}</p>}
   {notice&&<p role="status">{notice}</p>}
  </div></Section>;
 }

@@ -25,6 +25,18 @@ export const navigation: Array<{ id: View; labelKey: string; icon: typeof Layout
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];
 
+// Settings categories are addressable, so a refresh, a shared link and the
+// browser history all land on the same category.
+export const settingsSections = ["collaboration", "servers", "cli", "scheduled-tasks", "credentials"] as const;
+export type SettingsSection = typeof settingsSections[number];
+export const defaultSettingsSection: SettingsSection = "collaboration";
+export function isSettingsSection(value: unknown): value is SettingsSection { return settingsSections.includes(value as SettingsSection); }
+export function settingsLocation(section: SettingsSection = defaultSettingsSection) {
+  const params = new URLSearchParams({ view: "settings" });
+  if (section !== defaultSettingsSection) params.set("section", section);
+  return `${window.location.pathname}?${params}${window.location.hash}`;
+}
+
 export type TaskLocation = { projectID?: string; taskID?: string; create?: boolean };
 export function tasksLocation({ projectID, taskID, create }: TaskLocation = {}) {
   const params = new URLSearchParams({ view: "tasks" });
@@ -42,7 +54,7 @@ export function workspaceSessionsLocation(workspaceID: string, create = false) {
   return `${window.location.pathname}?${params}${window.location.hash}`;
 }
 
-export function readLocationState(): { view: View; threadID: string; engine?: Engine; initialFilter?: Engine; entry?: SessionEntry; task?: TaskLocation } {
+export function readLocationState(): { view: View; threadID: string; engine?: Engine; initialFilter?: Engine; entry?: SessionEntry; task?: TaskLocation; settingsSection?: SettingsSection } {
   const params = new URLSearchParams(window.location.search);
   const requestedView = params.get("view");
   if (isEngine(requestedView)) return { view: "sessions", engine: requestedView, threadID: params.get("thread") ?? "", ...(!params.get("thread") ? { initialFilter: requestedView } : {}) };
@@ -54,6 +66,8 @@ export function readLocationState(): { view: View; threadID: string; engine?: En
   } };
   const engine = params.get("engine");
   if (view === "sessions") return { view, ...(params.get("workspace") ? {entry:{workspaceID:params.get("workspace")!,create:params.get("create")==="1"}} : {}), engine: isEngine(engine) ? engine : undefined, threadID: isEngine(engine) ? params.get("thread") ?? "" : "" };
+  const section = params.get("section");
+  if (view === "settings" && isSettingsSection(section)) return { view, threadID: "", settingsSection: section };
   return { view, threadID: "" };
 }
 
