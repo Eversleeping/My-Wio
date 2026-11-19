@@ -17,7 +17,7 @@ test("displays child provenance without per-session settings", async () => {
   const user = userEvent.setup();
   render(<I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={0} /></I18nProvider>);
   await screen.findByRole("button", { name: /Subagents/ });
-  expect(screen.getByRole("link", { name: /Test task/ })).toHaveAttribute("href", "/?view=claude&thread=child");
+  expect(await screen.findByRole("link", { name: /Test task/ })).toHaveAttribute("href", "/?view=claude&thread=child");
   expect(screen.getByText("Waiting for the source turn to end")).toBeInTheDocument();
   expect(screen.getByText("delegate-test")).toBeInTheDocument();
   expect(screen.queryByText("send-test")).not.toBeInTheDocument();
@@ -43,7 +43,7 @@ test("hides deleted and archived children and deletes a child after confirmation
   const user = userEvent.setup();
   render(<I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={0} /></I18nProvider>);
   await screen.findByRole("button", { name: /Subagents/ });
-  expect(screen.getByRole("link", { name: /Finished child/ })).toBeInTheDocument();
+  expect(await screen.findByRole("link", { name: /Finished child/ })).toBeInTheDocument();
   expect(screen.queryByText(/Archived child/)).not.toBeInTheDocument();
   expect(screen.queryByText(/provenance retained/)).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Delete child session Running child" })).toBeDisabled();
@@ -61,7 +61,7 @@ test("uses global display preferences supplied by the collaboration state", asyn
  render(<I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={0}/></I18nProvider>);
  await screen.findByRole("button", {name:/Session collaboration/});
  expect(screen.getByText("1 unread results")).toBeInTheDocument();
- expect(screen.getByText("create-success")).toBeInTheDocument();
+ expect(await screen.findByText("create-success")).toBeInTheDocument();
  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
 });
 
