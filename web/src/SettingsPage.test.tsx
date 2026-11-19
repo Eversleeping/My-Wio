@@ -56,7 +56,7 @@ function renderOwnedSettings(section: SettingsSection | undefined, onSectionChan
   return { onSectionChange, show: (next: SettingsSection | undefined) => view.rerender(page(next)) };
 }
 
-const category = (name: string) => screen.getByRole("link", { name });
+const category = (name: string) => screen.getByRole("tab", { name });
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -147,21 +147,23 @@ test("shows one category at a time and loads each on its first visit", async () 
   const requests = installSettingsFetch();
   const user = userEvent.setup();
   renderSettings();
-  const categories = within(screen.getByRole("navigation", { name: "Settings categories" }));
-  expect(categories.getAllByRole("link").map(link => link.getAttribute("aria-label"))).toEqual(["Session collaboration", "Server runtime", "CLI versions", "Scheduled tasks", "Credentials & secrets"]);
-  expect(category("Session collaboration")).toHaveAttribute("aria-current", "page");
+  const categories = within(screen.getByRole("tablist", { name: "Settings categories" }));
+  expect(categories.getAllByRole("tab").map(tab => tab.textContent)).toEqual(["Session collaboration", "Server runtime", "CLI versions", "Scheduled tasks", "Credentials & secrets"]);
+  expect(category("Session collaboration")).toHaveAttribute("aria-selected", "true");
   expect(category("Session collaboration")).toHaveAccessibleDescription("Child sessions and permissions");
   await screen.findByRole("checkbox", { name: "Allow creating and managing child sessions" });
   expect(new Set(requests.map(request => request.url))).toEqual(new Set(["/api/settings/collaboration"]));
 
   await user.click(category("Scheduled tasks"));
   await screen.findByText(scheduledTask.name);
-  expect(category("Scheduled tasks")).toHaveAttribute("aria-current", "page");
-  expect(category("Session collaboration")).not.toHaveAttribute("aria-current");
+  expect(category("Scheduled tasks")).toHaveAttribute("aria-selected", "true");
+  expect(category("Session collaboration")).toHaveAttribute("aria-selected", "false");
   expect(screen.queryByRole("checkbox", { name: "Allow creating and managing child sessions" })).not.toBeInTheDocument();
   expect(requests.some(request => request.url === "/api/credential-profiles" || request.url.startsWith("/api/settings/codex-cli"))).toBe(false);
 
-  await user.click(category("CLI versions"));
+  await user.keyboard("{ArrowLeft}");
+  expect(category("CLI versions")).toHaveFocus();
+  expect(screen.getByRole("tabpanel", { name: "CLI versions" })).toBeVisible();
   for (const name of ["Codex CLI", "Gemini CLI", "Claude CLI"]) {
     expect(await within(screen.getByRole("group", { name })).findByText(name === "Codex CLI" ? "1.0.0" : name === "Gemini CLI" ? "0.65.0" : "2.1.318")).toBeVisible();
   }
@@ -190,14 +192,14 @@ test("opens the category chosen by its owner and leaves the next choice to it", 
   const user = userEvent.setup();
   const { onSectionChange, show } = renderOwnedSettings("credentials");
   await screen.findByText(profile.name);
-  expect(category("Credentials & secrets")).toHaveAttribute("aria-current", "page");
+  expect(category("Credentials & secrets")).toHaveAttribute("aria-selected", "true");
   expect(category("Credentials & secrets")).toHaveAttribute("href", "/?view=settings&section=credentials");
   expect(category("Session collaboration")).toHaveAttribute("href", "/?view=settings");
   expect(requests.some(request => request.url === "/api/settings/collaboration")).toBe(false);
 
   await user.click(category("Scheduled tasks"));
   expect(onSectionChange).toHaveBeenCalledExactlyOnceWith("scheduled-tasks");
-  expect(category("Credentials & secrets")).toHaveAttribute("aria-current", "page");
+  expect(category("Credentials & secrets")).toHaveAttribute("aria-selected", "true");
   expect(requests.some(request => request.url === "/api/scheduled-tasks")).toBe(false);
   // Choosing the current category again is not a navigation.
   await user.click(category("Credentials & secrets"));
@@ -209,7 +211,7 @@ test("opens the category chosen by its owner and leaves the next choice to it", 
   // Without a category in the address the first one is shown.
   show(undefined);
   expect(await screen.findByRole("checkbox", { name: "Allow creating and managing child sessions" })).toBeVisible();
-  expect(category("Session collaboration")).toHaveAttribute("aria-current", "page");
+  expect(category("Session collaboration")).toHaveAttribute("aria-selected", "true");
 });
 
 test("closes the dialogs of a category that is no longer shown", async () => {

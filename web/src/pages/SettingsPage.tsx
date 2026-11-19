@@ -1,5 +1,5 @@
 import { CalendarClock, KeyRound, Network, ShieldCheck, SquareTerminal } from "lucide-react";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { CollaborationSettings } from "../components/CollaborationSettings";
 import { ServerAccessSettings } from "../components/ServerAccessSettings";
 import { useI18n } from "../i18n";
@@ -33,22 +33,41 @@ export function SettingsPage({ notify, section, onSectionChange }: PageProps) {
   const [visited, setVisited] = useState<ReadonlySet<SettingsSection>>(() => new Set([active]));
   if (!visited.has(active)) setVisited(new Set(visited).add(active));
   const layout = useRef<HTMLDivElement>(null);
-  const list = useRef<HTMLElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // On narrow screens the categories scroll sideways; keep the current one in view.
-    const current = list.current?.querySelector<HTMLElement>('[aria-current="page"]');
-    if (!list.current || !current) return;
-    const start = current.offsetLeft - 8, end = current.offsetLeft + current.offsetWidth + 8;
-    if (start < list.current.scrollLeft) list.current.scrollLeft = start;
-    else if (end > list.current.scrollLeft + list.current.clientWidth) list.current.scrollLeft = end - list.current.clientWidth;
+    const tabs = list.current;
+    const current = tabs?.querySelector<HTMLAnchorElement>('[aria-selected="true"]');
+    if (!tabs || !current) return;
+    const start = current.offsetLeft - 4;
+    const end = current.offsetLeft + current.offsetWidth + 4;
+    if (start < tabs.scrollLeft) tabs.scrollLeft = start;
+    else if (end > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = end - tabs.clientWidth;
   }, [active]);
-  const select = (event: MouseEvent<HTMLAnchorElement>, next: SettingsSection) => {
-    // Modified clicks keep the browser behaviour, such as opening a new tab.
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
+  const select = (next: SettingsSection) => {
     if (next === active) return;
     (onSectionChange ?? setLocalSection)(next);
     layout.current?.scrollIntoView?.({ block: "start" });
+  };
+  const follow = (event: MouseEvent<HTMLAnchorElement>, next: SettingsSection) => {
+    // Modified clicks keep the browser behaviour, such as opening a new tab.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    select(next);
+  };
+  const handleTabKey = (event: KeyboardEvent<HTMLAnchorElement>, index: number) => {
+    const count = settingsSections.length;
+    let next: number;
+    if (event.key === "ArrowRight") next = (index + 1) % count;
+    else if (event.key === "ArrowLeft") next = (index + count - 1) % count;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = count - 1;
+    else if (event.key === " ") next = index;
+    else return;
+    event.preventDefault();
+    const id = settingsSections[next];
+    select(id);
+    list.current?.querySelector<HTMLAnchorElement>(`#settings-tab-${id}`)?.focus();
   };
   const panel = (id: SettingsSection) => {
     switch (id) {
@@ -59,16 +78,18 @@ export function SettingsPage({ notify, section, onSectionChange }: PageProps) {
       case "credentials": return <CredentialSettings notify={notify} active={id === active} />;
     }
   };
-  return <div className="settings-layout" ref={layout}>
-    <nav className="settings-nav" ref={list} aria-label={t("settings.sections")}>
-      {settingsSections.map(id => {
+  return <div className="page-stack settings-layout" ref={layout}>
+    <div className="segmented-control settings-tabs" ref={list} role="tablist" aria-label={t("settings.sections")}>
+      {settingsSections.map((id, index) => {
         const { label, hint, Icon } = categories[id];
-        return <a key={id} href={settingsLocation(id)} className={id === active ? "active" : ""} aria-current={id === active ? "page" : undefined} aria-label={t(label)} aria-describedby={`settings-nav-${id}-hint`} onClick={event => select(event, id)}><Icon size={17} /><strong>{t(label)}</strong><small id={`settings-nav-${id}-hint`}>{t(hint)}</small></a>;
+        return <a key={id} id={`settings-tab-${id}`} href={settingsLocation(id)} role="tab" aria-selected={id === active} aria-controls={`settings-panel-${id}`} tabIndex={id === active ? 0 : -1} title={t(hint)} onClick={event => follow(event, id)} onKeyDown={event => handleTabKey(event, index)}>
+          <Icon size={15} aria-hidden="true" />{t(label)}
+        </a>;
       })}
-    </nav>
-    <div className="settings-panels">
-      {settingsSections.map(id => visited.has(id) && <div key={id} className="settings-panel page-stack" hidden={id !== active}>{panel(id)}</div>)}
     </div>
+    {settingsSections.map(id => <div key={id} id={`settings-panel-${id}`} role="tabpanel" aria-labelledby={`settings-tab-${id}`} className="settings-panel page-stack" hidden={id !== active}>
+      {visited.has(id) && panel(id)}
+    </div>)}
   </div>;
 }
 

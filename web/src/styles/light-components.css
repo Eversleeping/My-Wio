@@ -6,14 +6,14 @@
   background: #f1f5f9;
   border-color: #cbd5e1;
 }
-[data-theme="light"] .segmented-control button {
+[data-theme="light"] .segmented-control :is(button, a) {
   color: #64748b;
 }
-[data-theme="light"] .segmented-control button:hover {
+[data-theme="light"] .segmented-control :is(button, a):hover {
   color: #0f172a;
 }
 [data-theme="light"] .segmented-control button.active,
-[data-theme="light"] .segmented-control button[aria-selected="true"] {
+[data-theme="light"] .segmented-control :is(button, a)[aria-selected="true"] {
   color: #0284c7;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1), inset 0 0 0 1px rgba(2, 132, 199, 0.3);
