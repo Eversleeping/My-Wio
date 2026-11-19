@@ -78,7 +78,7 @@ test("unified workspace opens Codex, Gemini and Claude conversations", async ({ 
   // A persisted collaboration result and its unread notification retain old URLs.
   await page.goto("/?view=codex&thread=shared-id");
   await expect(page).toHaveURL(/view=sessions&engine=codex&thread=shared-id/);
-  await page.getByRole("button",{name:/Session collaboration/}).click();
+  await expect(page.getByRole("button",{name:/Session collaboration|Subagents/})).toBeVisible();
   await expect(page.getByText("1 unread results")).toBeVisible();
   await page.getByRole("link",{name:"Historical result · claude"}).click();
   await expect(page).toHaveURL(/view=sessions&engine=claude&thread=shared-id/);

@@ -114,3 +114,52 @@ process.exit(child.status ?? 1);`), 0600); err != nil {
 		t.Fatalf("loader did not survive CLI relaunch: %v %s", err, output)
 	}
 }
+
+func TestLoaderForwardsSubagentToolsThroughActualNodeModule(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node.js not installed")
+	}
+	dir := filepath.Join(t.TempDir(), "node_modules", "@google", "gemini-cli")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "subagents.mjs")
+	source := `
+const updates=[];
+class Session {
+  async sendUpdate(update) { updates.push(update); }
+  async runTool() {
+    const abortSignal=new AbortController().signal;
+    const callId='child', args={task:'Review'};
+    const invocation={ async execute({updateOutput}) {
+      updateOutput({isSubagentProgress:true,agentName:'reviewer',state:'running',recentActivity:[{id:'private',type:'thought',content:'hidden'},{id:'tool',type:'tool_call',content:'Read'}]});
+      return {};
+    }};
+    const toolResult = await invocation.execute({ abortSignal });
+  }
+}
+await new Session().runTool();
+await new Promise(resolve=>setTimeout(resolve,5));
+const agent=updates[0]?._meta?.wioSubagent;
+if (!agent || agent.name!=='reviewer' || agent.recentActivity.length!==1 || agent.recentActivity[0].type!=='tool_call') process.exit(2);
+console.log('SUBAGENT_FORWARDED');`
+	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	environment, cleanup, err := acpHistoryEnvironment(os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, path)
+	cmd.Env = environment
+	if output, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(output), "SUBAGENT_FORWARDED") {
+		t.Fatalf("subagent progress lost: %v %s", err, output)
+	}
+	if current, err := os.ReadFile(path); err != nil || string(current) != source {
+		t.Fatal("installed source changed")
+	}
+}

@@ -169,6 +169,7 @@ const (
 	EventOperationCancelled               = "operation.cancelled"
 	EventOperationFailed                  = "operation.failed"
 	EventOperationSucceeded               = "operation.succeeded"
+	EventSessionSubagentUpdated           = "session.subagent.updated"
 	EventSessionCollaborationChild        = "session.collaboration.child"
 	EventSessionCollaborationGrantUpdated = "session.collaboration.grant.updated"
 	EventSessionCollaborationRequest      = "session.collaboration.request"

@@ -16,7 +16,7 @@ test("displays child provenance without per-session settings", async () => {
   }));
   const user = userEvent.setup();
   render(<I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={0} /></I18nProvider>);
-  await user.click(await screen.findByRole("button", { name: /Session collaboration/ }));
+  await screen.findByRole("button", { name: /Subagents/ });
   expect(screen.getByRole("link", { name: /Test task/ })).toHaveAttribute("href", "/?view=claude&thread=child");
   expect(screen.getByText("Waiting for the source turn to end")).toBeInTheDocument();
   expect(screen.getByText("delegate-test")).toBeInTheDocument();
@@ -42,7 +42,7 @@ test("hides deleted and archived children and deletes a child after confirmation
   }));
   const user = userEvent.setup();
   render(<I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={0} /></I18nProvider>);
-  await user.click(await screen.findByRole("button", { name: /Session collaboration/ }));
+  await screen.findByRole("button", { name: /Subagents/ });
   expect(screen.getByRole("link", { name: /Finished child/ })).toBeInTheDocument();
   expect(screen.queryByText(/Archived child/)).not.toBeInTheDocument();
   expect(screen.queryByText(/provenance retained/)).not.toBeInTheDocument();
@@ -59,8 +59,34 @@ test("uses global display preferences supplied by the collaboration state", asyn
  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(state))));
  const user = userEvent.setup();
  render(<I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={0}/></I18nProvider>);
- await user.click(await screen.findByRole("button", {name:/Session collaboration/}));
+ await screen.findByRole("button", {name:/Session collaboration/});
  expect(screen.getByText("1 unread results")).toBeInTheDocument();
  expect(screen.getByText("create-success")).toBeInTheDocument();
  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+});
+
+test("shows native subagent status and keeps its content while new events arrive", async () => {
+ localStorage.setItem("wio_language", "en");
+ const child = { id:"native", name:"Review code", status:"running", prompt:"Inspect the change", detail:"activity", updated_at:"2026-11-19T00:00:00Z" };
+ let completed = false;
+ vi.stubGlobal("fetch",vi.fn(async (input: RequestInfo | URL) => {
+  const url=String(input);
+  if (url.endsWith("/collaboration")) return new Response(JSON.stringify({supported:true,grant:{enabled:true},links:[],requests:[]}));
+  if (url.endsWith("/subagents")) return new Response(JSON.stringify({items:[{...child,status:completed?"succeeded":"running"}]}));
+  const after=Number(new URL(url,"http://localhost").searchParams.get("after"));
+  const all=[{sequence:1,event_id:"e1",payload:{entry:{id:"tool",kind:"tool",tool:"Read",status:"running"}}},...(completed?[{sequence:2,event_id:"e2",payload:{entry:{id:"tool",kind:"tool",status:"succeeded",output:"Source inspected"}}},{sequence:3,event_id:"e3",payload:{entry:{id:"answer",kind:"message",text:"Review done"}}}]:[])];
+  const items=all.filter(event=>event.sequence>after);
+  return new Response(JSON.stringify({items,next:items.at(-1)?.sequence??after,has_more:false}));
+ }));
+ const user=userEvent.setup();
+ const view=(revision:number)=><I18nProvider><SessionCollaboration engine="claude" id="parent" workspaceID="workspace" projectID="project" revision={revision}/></I18nProvider>;
+ const {rerender}=render(view(0));
+ await user.click(await screen.findByRole("button",{name:/Review code/}));
+ const dialog=await screen.findByRole("dialog",{name:"Review code"});
+ expect(dialog).toHaveTextContent("Inspect the change");
+ expect(await screen.findByText("Read")).toBeVisible();
+ completed=true;
+ rerender(view(1));
+ expect(await screen.findByText("Review done")).toBeVisible();
+ expect(dialog.querySelectorAll(".subagent-transcript article")).toHaveLength(2);
 });

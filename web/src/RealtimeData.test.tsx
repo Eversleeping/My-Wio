@@ -39,7 +39,7 @@ test("collaboration results update through the source session revision", async (
   vi.stubGlobal("fetch", vi.fn(async () => response({supported: true, grant: {enabled: true}, requests: [], links: [{source_key: "codex:source", target_key: "claude:child", missing: false, session: {engine: "claude", id: "child", title, status: "completed", workspace_id: "workspace", url: "/?view=claude&thread=child"}}]})));
   const view = (revision: number) => <I18nProvider><SessionCollaboration engine="codex" id="source" workspaceID="workspace" projectID="project" revision={revision} /></I18nProvider>;
   const rendered = render(view(0));
-  fireEvent.click(await screen.findByRole("button", {name: /Session collaboration/}));
+  await screen.findByRole("button", {name: /Session collaboration|Subagents/});
   expect(await screen.findByRole("link", {name: /Preparing child/})).toBeInTheDocument();
   title = "Finished child"; rendered.rerender(view(1));
   expect(await screen.findByRole("link", {name: /Finished child/})).toBeInTheDocument();

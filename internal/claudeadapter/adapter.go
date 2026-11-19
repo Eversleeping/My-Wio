@@ -151,6 +151,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 		}
 		return emit(event)
 	}
+	children := claudeSubagents{stream: command.ThreadID, operation: operationID, emit: emit, agents: map[string]protocol.SubagentUpdate{}, tasks: map[string]string{}}
 	initializeID := ""
 	var initializeTimer *time.Timer
 	if live != nil {
@@ -160,7 +161,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 		initial := []byte(input)
 		if command.Questions {
 			initializeID = uuid.NewString()
-			initial, _ = json.Marshal(map[string]any{"type": "control_request", "request_id": initializeID, "request": map[string]any{"subtype": "initialize"}})
+			initial, _ = json.Marshal(map[string]any{"type": "control_request", "request_id": initializeID, "request": map[string]any{"subtype": "initialize", "forwardSubagentText": true}})
 			initial = append(initial, '\n')
 			initializeTimer = time.AfterFunc(30*time.Second, cancel)
 			defer initializeTimer.Stop()
@@ -249,6 +250,9 @@ func run(parent context.Context, executable, operationID string, command protoco
 		}
 		if err := json.Unmarshal(scan.Bytes(), &data); err != nil {
 			streamErr = errors.New("Claude Code returned invalid stream-json output")
+			break
+		}
+		if streamErr = children.frame(scan.Bytes()); streamErr != nil {
 			break
 		}
 		if data.ParentToolUseID != nil && !strings.HasPrefix(*data.ParentToolUseID, "forked-command-") {
@@ -397,6 +401,9 @@ func run(parent context.Context, executable, operationID string, command protoco
 		cancel()
 	}
 	waitErr := stdout.Wait()
+	if err := children.finish(ctx.Err() != nil); streamErr == nil {
+		streamErr = err
+	}
 	if streamErr != nil {
 		return streamErr
 	}

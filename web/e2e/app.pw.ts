@@ -977,7 +977,7 @@ test("the /collab command creates a collaboration session through the current mo
   });
   await page.goto(`/?view=sessions&engine=codex&thread=${codexThread.id}`);
 
-  await page.getByRole("button", { name: /Session collaboration/ }).click();
+  await expect(page.getByRole("button", { name: /Session collaboration|Subagents/ })).toBeVisible();
   // The pending request proves the panel rendered; finished creation results are opt-in.
   await expect(page.getByText("create-2", { exact: true })).toBeVisible();
   await expect(page.getByText("create-1", { exact: true })).toHaveCount(0);

@@ -10,6 +10,8 @@ func (api *API) registerUnifiedSessionRoutes(private chi.Router) {
 	private.Patch(base, api.unifiedSessionAction("update"))
 	private.Delete(base, api.unifiedSessionAction("delete"))
 	private.Get(base+"/events", api.unifiedSessionAction("events"))
+	private.Get(base+"/subagents", api.sessionSubagents)
+	private.Get(base+"/subagents/{subagentID}/events", api.sessionSubagents)
 	private.Get(base+"/usage", api.unifiedSessionAction("usage"))
 	for _, action := range []string{"turns", "steer", "interrupt", "confirm-stopped", "fork", "fork-worktree", "compact"} {
 		private.Post(base+"/"+action, api.unifiedSessionAction(action))

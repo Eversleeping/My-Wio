@@ -17,21 +17,36 @@ export async function load(url, context, nextLoad) {
   if (result.format !== 'module' || result.source == null) return result;
   const source = typeof result.source === 'string'
     ? result.source : Buffer.from(result.source).toString('utf8');
+  // ACP normally discards the subagent executor's progress callback. Forward
+  // only its public tool activity; the parent tool's final ACP result carries
+  // the final answer. Keep this adaptation local to this CLI process.
+  const execute = /const toolResult = await invocation\.execute\(\{\s*abortSignal\s*\}\);/g;
+  const observed = source.replace(execute, `const toolResult = await invocation.execute({
+    abortSignal,
+    updateOutput: (progress) => {
+      if (!progress || progress.isSubagentProgress !== true) return;
+      const recentActivity = (progress.recentActivity ?? []).filter(item => item.type === 'tool_call');
+      void this.sendUpdate({ sessionUpdate: 'tool_call_update', toolCallId: callId,
+        _meta: { wioSubagent: { name: progress.agentName, prompt: args,
+          state: progress.state, recentActivity, result: progress.result } }
+      }).catch(() => {});
+    }
+  });`);
   const targets = [
     ['session.streamHistory(messages).catch(',
       'await session.streamHistory(messages).then(() => { response._meta = { ...response._meta, wioHistoryReplayed: true }; }).catch('],
     ['await session.streamHistory(messages);',
       'await session.streamHistory(messages); response._meta = { ...response._meta, wioHistoryReplayed: true };'],
-  ].filter(([target]) => source.includes(target));
-  if (targets.length === 0) return result;
+  ].filter(([target]) => observed.includes(target));
+  if (targets.length === 0) return observed === source ? result : { ...result, source: observed };
   if (targets.length !== 1) {
     throw new Error('Ambiguous Gemini ACP history implementation');
   }
   const [target, replacement] = targets[0];
-  if (source.indexOf(target) !== source.lastIndexOf(target)) {
+  if (observed.indexOf(target) !== observed.lastIndexOf(target)) {
     throw new Error('Ambiguous Gemini ACP history implementation');
   }
-  let patched = source.replace(target, replacement);
+  let patched = observed.replace(target, replacement);
   // The CLI entry point relaunches Node before importing the ACP module.
   // Keep our bootstrap through that relaunch, then restore the original flags
   // in the actual CLI process before it starts tools or MCP children.

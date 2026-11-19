@@ -26,7 +26,7 @@ type acpMessage struct {
 	Error  json.RawMessage `json:"error"`
 }
 
-func (a *Adapter) runACP(parent context.Context, op string, command protocol.GeminiTurnCommand, executable string, environment []string) error {
+func (a *Adapter) runACP(parent context.Context, op string, command protocol.GeminiTurnCommand, executable string, environment []string) (runErr error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	environment, model, err := thinkingEnvironment(environment, command.Model, command.ThinkingLevel)
@@ -83,7 +83,7 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		defer closeSteering()
 	}
 
-	if command.SessionID != "" {
+	{
 		var cleanup func()
 		environment, cleanup, err = acpHistoryEnvironment(environment)
 		if err != nil {
@@ -155,6 +155,12 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 		raw, _ := json.Marshal(payload)
 		return a.emit(protocol.StreamEvent{StreamID: command.ThreadID, Kind: protocol.EventGeminiPrefix + kind, Payload: raw})
 	}
+	children := geminiSubagents{stream: command.ThreadID, operation: op, emit: a.emit, agents: map[string]protocol.SubagentUpdate{}, entries: map[string]string{}}
+	defer func() {
+		if err := children.finish(ctx.Err() != nil); runErr == nil {
+			runErr = err
+		}
+	}()
 	replay := true
 	resuming := command.SessionID != ""
 	sessionID := command.SessionID
@@ -222,6 +228,9 @@ func (a *Adapter) runACP(parent context.Context, op string, command protocol.Gem
 					}
 					if json.Unmarshal(msg.Params, &p) != nil {
 						return nil, errors.New("invalid Gemini update")
+					}
+					if err := children.update(msg.Params); err != nil {
+						return nil, err
 					}
 					u := p.Update
 					var err error

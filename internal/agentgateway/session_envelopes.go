@@ -69,6 +69,9 @@ func (g *Gateway) processCodexEvent(ctx context.Context, serverID string, event 
 	if thread.ServerID != serverID {
 		return errors.New("Agent event server mismatch")
 	}
+	if event.Kind == protocol.EventSessionSubagentUpdated {
+		return g.publishSubagent(ctx, event)
+	}
 	if event.Kind == protocol.EventCodexThreadTokenUsageUpdated {
 		event.Payload = codexUsagePayload(event.Payload)
 	}

@@ -27,3 +27,21 @@
 .session-engine-choices { display: flex; flex-wrap: wrap; gap: 10px; }
 
 .thread-project-toggle.workspace-focused { box-shadow: inset 3px 0 var(--cyan, #22d3ee); }
+
+.native-subagent-card { align-items: center; }
+.native-subagent-card time { color: var(--muted); font-size: 11px; }
+.subagent-open { flex: 1; min-width: 0; display: grid; gap: 4px; padding: 4px 0; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.subagent-open strong, .subagent-open small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-open small { color: var(--muted); }
+.subagent-open:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.subagent-details { display: grid; gap: 12px; padding: 16px; min-width: 0; }
+.subagent-details > p { margin: 0; }
+.subagent-detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.subagent-detail-meta code { color: var(--muted); overflow-wrap: anywhere; font-size: 11px; }
+.subagent-prompt, .subagent-entry-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.subagent-prompt, .subagent-notice { font-size: 12px; color: var(--muted); }
+.subagent-transcript { display: grid; gap: 12px; min-width: 0; }
+.subagent-transcript article { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.subagent-transcript header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+.subagent-transcript pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.subagent-transcript details { margin-top: 8px; }

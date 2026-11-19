@@ -20,6 +20,7 @@ import (
 	"github.com/wio-platform/wio/internal/childprocess"
 	"github.com/wio-platform/wio/internal/codexconfig"
 	"github.com/wio-platform/wio/internal/protocol"
+	"github.com/wio-platform/wio/internal/subagent"
 )
 
 type EmitFunc func(protocol.StreamEvent) error
@@ -40,11 +41,13 @@ type Adapter struct {
 	cancel  context.CancelFunc
 	nextID  atomic.Int64
 	// launching is non-zero while ensureStarted brings up a new app-server.
-	launching atomic.Int32
-	pending   map[string]chan rpcMessage
-	approve   map[string]approvalRequest
-	threads   map[string]string
-	turns     map[string]turnState
+	launching     atomic.Int32
+	pending       map[string]chan rpcMessage
+	approve       map[string]approvalRequest
+	subagents     map[string]codexSubagent
+	subagentReads map[string]bool
+	threads       map[string]string
+	turns         map[string]turnState
 	// events delivers emitted events in order without blocking readLoop.
 	events emitQueue
 }
@@ -210,6 +213,9 @@ func (a *Adapter) codexOperation(ctx context.Context, kind string, payload json.
 	if base.CodexThread != "" && base.ThreadID != "" {
 		a.mu.Lock()
 		if a.threads == nil {
+			a.closeSubagents()
+			a.subagents = make(map[string]codexSubagent)
+			a.subagentReads = make(map[string]bool)
 			a.threads = make(map[string]string)
 		}
 		a.threads[base.CodexThread] = base.ThreadID
@@ -1348,6 +1354,10 @@ func (a *Adapter) handleServerRequest(message rpcMessage) {
 	event, err := newEvent("", protocol.EventApprovalRequested, map[string]any{"request_id": requestID, "kind": message.Method, "detail": json.RawMessage(message.Params)})
 	a.mu.Lock()
 	wioThread := a.threads[codexThread]
+	if child, ok := a.subagents[codexThread]; ok {
+		wioThread = child.Stream
+		a.publishChild(child.Stream, protocol.SubagentUpdate{ID: codexThread, Status: "waiting_user"})
+	}
 	if wioThread != "" && err == nil {
 		a.approve[requestID] = approvalRequest{ID: append(json.RawMessage(nil), message.ID...), Method: message.Method, ThreadID: wioThread, Detail: append(json.RawMessage(nil), message.Params...)}
 		event.StreamID = wioThread
@@ -1373,9 +1383,18 @@ func (a *Adapter) handleNotification(message rpcMessage) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.subagents == nil {
+		a.subagents = map[string]codexSubagent{}
+	}
+	if a.childNotification(message, codexThread) {
+		return
+	}
 	wioThread := a.threads[codexThread]
 	if wioThread == "" {
 		return
+	}
+	for _, update := range subagent.CodexUpdates(message.Params) {
+		a.observeChild(wioThread, codexThread, update)
 	}
 	if message.Method == "serverRequest/resolved" {
 		var params struct {
@@ -1521,6 +1540,8 @@ func (a *Adapter) resetLocked(reason error) {
 		close(response)
 	}
 	a.approve = make(map[string]approvalRequest)
+	a.subagents = make(map[string]codexSubagent)
+	a.subagentReads = make(map[string]bool)
 	a.threads = make(map[string]string)
 	a.turns = make(map[string]turnState)
 	for _, event := range deferred {

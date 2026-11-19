@@ -37,6 +37,9 @@ func (g *Gateway) processClaudeEvent(ctx context.Context, serverID string, event
 	if payload.OperationID == "" || payload.OperationID != thread.OperationID {
 		return nil
 	}
+	if event.Kind == protocol.EventSessionSubagentUpdated {
+		return g.publishSubagent(ctx, event)
+	}
 	switch event.Kind {
 	case protocol.EventClaudeInit:
 		op, lookupErr := g.store.Operation(ctx, payload.OperationID)

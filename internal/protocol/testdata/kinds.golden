@@ -161,6 +161,7 @@ session.collaboration.child
 session.collaboration.grant.updated
 session.collaboration.request
 session.collaboration.updated
+session.subagent.updated
 session_event
 session_ownership
 session_tool_request

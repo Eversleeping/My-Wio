@@ -1,3 +1,5 @@
+import { SubagentDetails, type NativeSubagent } from "../../../components/SubagentDetails";
+import { useData, useThrottledValue } from "../../../useData";
 import { useComposerDraft } from "../../composerDrafts";
 import {
 Activity,
@@ -136,6 +138,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const composerFormRef = useRef<HTMLFormElement>(null);
   const submitPrompt = useSubmitPrompt(composerFormRef, prompt, setPrompt);
   const [subagentsOpen, setSubagentsOpen] = useState(false);
+  const [selectedSubagent, setSelectedSubagent] = useState<NativeSubagent | null>(null);
   const [compactBusy, setCompactBusy] = useState(false);
   const [statusSnapshot, setStatusSnapshot] = useState<CodexSnapshot<CodexStatusData> | null>(null);
   const [mcpSnapshot, setMcpSnapshot] = useState<CodexSnapshot<CodexMCPServer[]> | null>(null);
@@ -169,8 +172,15 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const chatEvents = useMemo(() => conversationEvents(sourceEvents), [sourceEvents]);
   const forkTargets = useMemo(() => messageForkTargets(sourceEvents, chatEvents), [sourceEvents, chatEvents]);
   const displayItems = useMemo(() => groupCommandEvents(chatEvents), [chatEvents]);
-  const subagents = useMemo(() => collectSubagentActivity(sourceEvents), [sourceEvents]);
-  const activeSubagents = subagents.filter(agent => ["pendingInit", "running"].includes(agent.status));
+  const legacySubagents = useMemo(() => collectSubagentActivity(sourceEvents), [sourceEvents]);
+  const subagentRevision = useThrottledValue(realtime, 500);
+  const observedSubagents = useData<{ items: NativeSubagent[] }>(`/sessions/codex/${encodeURIComponent(thread.id)}/subagents`, subagentRevision);
+  const subagents = observedSubagents.data?.items?.map(agent => ({
+    threadID: agent.id, path: agent.name || "", status: agent.status || "unknown",
+    prompt: agent.prompt || "", message: agent.summary || "", model: agent.model || "",
+    reasoningEffort: legacySubagents.find(item => item.threadID === agent.id)?.reasoningEffort || "", updatedAt: agent.updated_at
+  })) ?? legacySubagents;
+  const activeSubagents = subagents.filter(agent => ["pendingInit", "queued", "running"].includes(agent.status));
   const activeTurn = thread.status === "queued" || thread.status === "running";
   const steering = thread.status === "running" && composerMode === "message" && !editingEventID;
   const composerBlocked = activeTurn && !steering;
@@ -553,7 +563,8 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     </form></div>}
     <Dialog open={mcpOpen} title={t("codex.mcpTitle")} onClose={() => setMcpOpen(false)}><SnapshotNotice snapshot={mcpSnapshot} loading={nativeBusy === "mcp"} error={nativeError} />{mcpSnapshot?.data?.length ? <div className="native-list">{mcpSnapshot.data.map(server => <article key={server.name}><header><strong>{server.name}</strong><Status value={server.auth_status || "unknown"} /></header>{(server.server_name || server.server_version) && <small>{[server.server_name, server.server_version].filter(Boolean).join(" ")}</small>}<p>{server.tools.length ? server.tools.join(", ") : t("codex.noTools")}</p><small>{t("codex.mcpResources", { resources: server.resource_count, templates: server.resource_template_count })}</small></article>)}</div> : !nativeBusy && <Empty icon={<Network size={24} />} text={t("codex.noMCPServers")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "mcp"} onClick={() => void loadSnapshot<CodexMCPServer[]>("mcp", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
     <Dialog open={skillsOpen} title={t("codex.skillsTitle")} onClose={() => setSkillsOpen(false)}><SnapshotNotice snapshot={skillsSnapshot} loading={nativeBusy === "skills"} error={nativeError} />{skillsSnapshot?.data?.length ? <div className="native-list">{skillsSnapshot.data.map(skill => <article key={`${skill.scope}:${skill.name}`}><header><strong>{skill.display_name || skill.name}</strong><Status value={skill.enabled ? "enabled" : "disabled"} /></header><p>{skill.short_description || skill.description}</p><small>{skill.scope}</small></article>)}</div> : !nativeBusy && <Empty icon={<Boxes size={24} />} text={t("codex.noSkills")} />}<DialogActions><button type="button" className="secondary-button" disabled={nativeBusy === "skills"} onClick={() => void loadSnapshot<CodexSkill[]>("skills", true)}><RefreshCw size={16} />{t("common.refresh")}</button></DialogActions></Dialog>
-    <Dialog open={subagentsOpen} title={t("codex.subagentsTitle")} onClose={() => setSubagentsOpen(false)} wide>{subagents.length > 0 ? <div className="subagent-list">{subagents.map(agent => <article key={agent.threadID}><header><span><Users size={15} /><strong>{agent.path || t("codex.subagent")}</strong></span><Status value={agent.status} /></header><code>{agent.threadID}</code>{(agent.model || agent.reasoningEffort) && <small>{[agent.model, agent.reasoningEffort].filter(Boolean).join(" · ")}</small>}{agent.prompt && <p>{agent.prompt}</p>}{agent.message && <p className="subagent-message">{agent.message}</p>}</article>)}</div> : <Empty icon={<Users size={24} />} text={t("codex.noSubagents")} />}</Dialog>
+    <Dialog open={subagentsOpen} title={t("codex.subagentsTitle")} onClose={() => setSubagentsOpen(false)} wide>{subagents.length > 0 ? <div className="subagent-list">{subagents.map(agent => <article key={agent.threadID}><header><span><Users size={15} /><strong>{agent.path || t("codex.subagent")}</strong></span><Status value={agent.status} /></header><code>{agent.threadID}</code>{(agent.model || agent.reasoningEffort) && <small>{[agent.model, agent.reasoningEffort].filter(Boolean).join(" · ")}</small>}{agent.prompt && <p>{agent.prompt}</p>}{agent.message && <p className="subagent-message">{agent.message}</p>}<button type="button" className="secondary-button" onClick={() => setSelectedSubagent({ id: agent.threadID, native_id: agent.threadID, name: agent.path, status: agent.status, prompt: agent.prompt, model: agent.model, updated_at: agent.updatedAt, summary: agent.message })}>{t("subagents.viewContent")}</button></article>)}</div> : <Empty icon={<Users size={24} />} text={t("codex.noSubagents")} />}</Dialog>
+    {selectedSubagent && <SubagentDetails key={selectedSubagent.id} agent={selectedSubagent} path={`/sessions/codex/${encodeURIComponent(thread.id)}/subagents`} revision={realtime} onClose={() => setSelectedSubagent(null)} />}
     <CollaborationTaskDialog open={collabOpen} engine="codex" sessionID={thread.id} workspaceID={thread.workspace_id} currentModel={model} onClose={() => setCollabOpen(false)} onSubmit={text => { setCollabOpen(false); setComposerMode("message"); setEditingEventID(""); submitPrompt(text); }} />
     <Dialog open={planOpen} title={t("codex.planTitle")} onClose={() => setPlanOpen(false)}><div className="unsupported-state"><StickyNote size={24} /><strong>{t("codex.planUnsupportedTitle")}</strong><p>{t("codex.planUnsupportedReason")}</p></div></Dialog>
   </>;

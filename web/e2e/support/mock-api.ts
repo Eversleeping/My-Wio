@@ -65,6 +65,7 @@ function defaultResponse(path: string, method: string, configured: boolean): Moc
   if (/^\/workspaces\/[^/]+\/codex\/models\/refresh$/.test(path) && method === "POST") return { body: {} };
   if (/^\/workspaces\/[^/]+\/codex\/models$/.test(path) && method === "GET") return { body: { status: "succeeded", supported: true, data: [], error: "" } };
   if (path === "/settings/codex-cli" && method === "GET") return { body: { target_version: "1.0.0", versions: ["1.0.0"] } };
+  if (/^\/sessions\/(codex|claude|gemini)\/[^/]+\/subagents$/.test(path) && method === "GET") return { body: { items: [] } };
   if (/^\/sessions\/(codex|claude|gemini)\/[^/]+\/collaboration$/.test(path) && method === "GET") return { body: { grant: { enabled: false }, supported: true, links: [], requests: [], notifications: [] } };
   return undefined;
 }

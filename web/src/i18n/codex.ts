@@ -1,4 +1,16 @@
 export const en = {
+  "subagents.title": "Subagents",
+  "subagents.viewContent": "View content",
+  "subagents.agent": "Subagent",
+  "subagents.child": "Nested agent",
+  "subagents.running": "{count} running",
+  "subagents.content": "Subagent content",
+  "subagents.tool": "Tool",
+  "subagents.input": "Input",
+  "subagents.output": "Output",
+  "subagents.loadMore": "Load more",
+  "subagents.resultOnly": "This record contains the task and result summary. Detailed activity was not recorded by this CLI or Agent version.",
+  "subagents.noContent": "No recorded content yet.",
   "codex.sessions": "Sessions",
   "codex.resizeSidebarHeight": "Drag to resize sessions and project files; double-click to reset",
   "codex.projectFiles": "Project files",
@@ -321,6 +333,19 @@ export const en = {
 } satisfies Record<string, string>;
 
 export const zh: Record<keyof typeof en, string> = {
+  "subagents.title": "子 Agent",
+  "subagents.viewContent": "查看内容",
+  "subagents.agent": "子 Agent",
+  "subagents.child": "嵌套子 Agent",
+  "subagents.running": "{count} 个正在运行",
+  "subagents.content": "子 Agent 内容",
+  "subagents.tool": "工具",
+  "subagents.input": "输入",
+  "subagents.output": "输出",
+  "subagents.loadMore": "加载更多",
+  "subagents.resultOnly": "这份记录包含任务和结果摘要。此 CLI 或 Agent 版本没有记录详细活动。",
+  "subagents.noContent": "暂时没有内容记录。",
+
   "codex.sessions": "会话",
   "codex.resizeSidebarHeight": "拖动调整会话与项目文件高度，双击恢复默认",
   "codex.projectFiles": "项目文件",
