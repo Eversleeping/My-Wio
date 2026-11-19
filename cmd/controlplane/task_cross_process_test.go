@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/agentgateway"
 	"github.com/wio-platform/wio/internal/httpapi"
+	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/realtime"
 	"github.com/wio-platform/wio/internal/security"
 	"github.com/wio-platform/wio/internal/store"
@@ -160,8 +162,9 @@ func TestTaskThreeEngineRestartAcceptance(t *testing.T) {
 	}](t, api, "POST", "/api/tasks", task.Create{Meta: task.Meta{RequestID: "accept-create"}, ProjectID: workspace.ProjectID, Title: "Three engine task", Requirement: "Plan then develop and research, then summarize", Criteria: []task.Criterion{{ID: "done", Text: "Every required engine executes"}}}, 201).Task
 	path := "/api/tasks/" + created.ID
 	scope := "?project_id=" + workspace.ProjectID
+	completionGate := filepath.Join(root, "complete-first-turn")
 	plan := task.AppendPlan{Meta: task.Meta{RequestID: "accept-plan", ExpectedVersion: 1}, Reason: "explicit integration-test plan", Members: []task.Member{{ID: "coordinator", Role: "coordinator", Engine: "codex", WorkspaceID: workspaces[0], Mode: "on-request", DirectoryMode: "shared"}, {ID: "developer", Role: "developer", Engine: "claude", WorkspaceID: workspaces[1], Model: "sonnet", Mode: "default", DirectoryMode: "shared"}, {ID: "researcher", Role: "researcher", Engine: "gemini", WorkspaceID: workspaces[2], Model: "flash", Mode: "default", DirectoryMode: "shared"}}, Steps: []task.Step{
-		{ID: "a", MemberID: "coordinator", Kind: "plan", Title: "Plan", Instructions: "P7-03 plan", Required: true, CompletionPolicy: "execution"},
+		{ID: "a", MemberID: "coordinator", Kind: "plan", Title: "Plan", Instructions: "P7-03 plan P0-07-RELEASE=" + base64.RawURLEncoding.EncodeToString([]byte(completionGate)), Required: true, CompletionPolicy: "execution"},
 		{ID: "b", MemberID: "developer", Kind: "develop", Title: "Develop", Instructions: "P7-03 develop", Required: true, CompletionPolicy: "execution", DependsOn: []string{"a"}},
 		{ID: "c", MemberID: "researcher", Kind: "research", Title: "Research", Instructions: "P7-03 research", Required: true, CompletionPolicy: "execution", DependsOn: []string{"a"}},
 		{ID: "d", MemberID: "coordinator", Kind: "summarize", Title: "Summarize", Instructions: "P7-03 summarize", Required: true, CompletionPolicy: "execution", DependsOn: []string{"b", "c"}},
@@ -175,15 +178,35 @@ func TestTaskThreeEngineRestartAcceptance(t *testing.T) {
 	g := taskAcceptanceJSON[task.GrantResult](t, api, "PUT", path+"/grant"+scope, grant, 200)
 	start := task.Start{Meta: task.Meta{RequestID: "accept-start", ExpectedVersion: g.TaskVersion}, PlanID: p.Plan.ID, GrantRevision: g.Grant.Revision}
 	r := taskAcceptanceJSON[task.RunResult](t, api, "POST", path+"/runs"+scope, start, 201)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		var events []struct {
+			Kind     string `db:"kind"`
+			Sequence int64  `db:"sequence"`
+		}
+		err := database.DB.Select(&events, database.Q("SELECT kind,sequence FROM events WHERE stream_id IN (SELECT session_id FROM task_attempts WHERE run_id=?) ORDER BY stream_id,sequence"), r.Run.ID)
+		t.Logf("native task events at failure: %+v (query error: %v)", events, err)
+	})
 	var firstOperation string
 	eventually(t, 15*time.Second, "first real task operation", func() (bool, string) {
 		err := database.DB.Get(&firstOperation, database.Q("SELECT operation_id FROM task_attempts WHERE run_id=? AND step_id='a'"), r.Run.ID)
 		return err == nil && firstOperation != "", fmt.Sprint(err)
 	})
+	// Hold the fixture inside turn/start until the replacement gateway has
+	// processed a heartbeat. Otherwise the instant fake completion can race
+	// transport shutdown, which tests unacknowledged event delivery rather than
+	// recovery of an operation that is still executing across the restart.
+	eventually(t, 15*time.Second, "Codex executing before control plane restart", func() (bool, string) {
+		_, err := os.Stat(completionGate + ".started")
+		return err == nil, fmt.Sprint(err)
+	})
 	// Replace the entire HTTP/gRPC/gateway/worker instance and reopen its DB.
 	// The same Agent reconnects; the old worker's lease and operation survive.
 	stopPlane()
 	stopPlane = nil
+	reconnectAfter := time.Now().UTC()
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +218,17 @@ func TestTaskThreeEngineRestartAcceptance(t *testing.T) {
 	replayed := taskAcceptanceJSON[task.RunResult](t, api, "POST", path+"/runs"+scope, start, 201)
 	if replayed.Run.ID != r.Run.ID {
 		t.Fatal("restart duplicated the task run")
+	}
+	eventually(t, 15*time.Second, "Agent reconnected after control plane restart", func() (bool, string) {
+		server, err := database.Server(ctx, store.ControlPlaneServerID)
+		return err == nil && server.LastSeenAt != nil && server.LastSeenAt.After(reconnectAfter), fmt.Sprintf("heartbeat=%v err=%v", server.LastSeenAt, err)
+	})
+	var acceptedBeforeRelease int
+	if err := database.DB.Get(&acceptedBeforeRelease, database.Q("SELECT COUNT(*) FROM events WHERE stream_id IN (SELECT session_id FROM task_attempts WHERE run_id=?) AND kind=?"), r.Run.ID, protocol.EventTurnAccepted); err != nil || acceptedBeforeRelease != 0 {
+		t.Fatal("Codex fixture completed turn/start before release", acceptedBeforeRelease, err)
+	}
+	if err := os.WriteFile(completionGate, []byte("complete\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	eventually(t, 60*time.Second, "three engine task after control plane restart", func() (bool, string) {
 		response, err := api.request("GET", path+scope, nil)

@@ -22,6 +22,7 @@ const fakeSessionID = "550e8400-e29b-41d4-a716-446655440007"
 
 var hangPattern = regexp.MustCompile(`P0-07-HANG=([A-Za-z0-9_-]+)`)
 var environmentPattern = regexp.MustCompile(`P5-02-ENV=([A-Za-z0-9_-]+)`)
+var releasePattern = regexp.MustCompile(`P0-07-RELEASE=([A-Za-z0-9_-]+)`)
 
 func main() {
 	engine := filepath.Base(os.Args[0])
@@ -206,6 +207,22 @@ func runCodex() {
 			respond(message.ID, map[string]any{"thread": map[string]string{"id": threadID}})
 		case "turn/start":
 			recordEnvironment(string(message.Params))
+			if match := releasePattern.FindStringSubmatch(string(message.Params)); len(match) == 2 {
+				if path, err := base64.RawURLEncoding.DecodeString(match[1]); err == nil {
+					markStarted(string(path) + ".started")
+					deadline := time.Now().Add(30 * time.Second)
+					for {
+						if _, err := os.Stat(string(path)); err == nil {
+							break
+						}
+						if time.Now().After(deadline) {
+							fmt.Fprintln(os.Stderr, "timed out waiting for the test to release turn/start")
+							return
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
+				}
+			}
 			turnNumber++
 			activeTurn = fmt.Sprintf("p0-07-turn-%d", turnNumber)
 			respond(message.ID, map[string]any{"turn": map[string]string{"id": activeTurn}})
