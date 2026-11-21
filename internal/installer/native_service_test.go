@@ -99,6 +99,9 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
+		if t.Failed() {
+			nativeServiceDiagnostics(t, layout)
+		}
 		cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
 		defer stop()
 		_ = uninstallPortableLocal(cleanup, layout)
