@@ -1,6 +1,8 @@
 // Package-wide wire identifiers. Values are persisted and must remain compatible.
 package protocol
 
+const EventServerRegistrationUpdated = "server.registration.updated"
+
 // Agent envelope kinds.
 const (
 	AgentKindAgentUpdateStatus     = "agent_update_status"

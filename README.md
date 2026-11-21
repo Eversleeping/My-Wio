@@ -157,6 +157,8 @@ Linux 控制面默认运行内置“控制机”Agent，该服务器记录不能
 | `WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT` | 空；需要额外传给子进程的变量名，用逗号分隔 |
 | `WIO_CONTROL_AGENT_INSECURE_SKIP_VERIFY` | `false`，仅可用于临时开发 |
 
+Linux 服务器可在网页中选择 SSH 远程安装，或生成限时注册命令后在目标机交互终端执行；两者共用安装器。命令注册只需目标机出站访问控制面，详见[服务器管理](docs/USER_GUIDE.md#4-服务器管理)。
+
 外部 Agent 配置位于 `/etc/wio-agent/config.json`；网页注册负责生成配置和 systemd 服务。默认状态目录为 `/var/lib/wio-agent`，克隆目录为其中的 `projects`，发布目录为其中的 `releases`。
 
 ## 开发与验证
@@ -176,7 +178,7 @@ npm --prefix web run dev
 | 命令 | 用途 |
 | --- | --- |
 | `make build` | 构建前端，生成当前平台的 `bin/wio-controlplane` 和 `bin/wio-agent` |
-| `make agent-linux` | 额外构建 Linux amd64 Agent |
+| `make agent-linux` | 额外构建 Linux amd64/arm64 Agent |
 | `make test` | PostgreSQL 迁移/存储集成测试、前端构建、Go 测试、Vitest 和类型检查 |
 | `make verify` | 推送前的本地门槛，对应 CI 的 `web`、`go` 两个作业：先做 `gofmt` 格式检查，再用 `npm ci` 重装前端依赖后构建，检查 Agent 版本及护栏脚本用例，再运行 Vitest 和类型检查、固定版本的 staticcheck 安全检查、`go vet`、`go test ./...` 并编译控制面和 Agent；不含 PostgreSQL 集成测试和 E2E |
 | `make version-check` | 对本地待推送改动（含工作区及未忽略的新 Go 文件）检查 Agent 版本递增；可用 `scripts/check-agent-version.sh BASE HEAD` 精确检查提交范围 |
@@ -242,7 +244,9 @@ internal/gitprovider      Git 托管平台 API
 internal/deployer         Git release、Compose、镜像与回滚
 internal/deploymenttemplate 版本化自动部署模板
 internal/scanner          仓库发现、文件预览与写入
-internal/sshbootstrap     SSH 指纹、安装与修复
+internal/sshbootstrap     兼容既有 SSH 安装接口
+internal/installer        网页与目标机共用的 Linux 安装器
+internal/enrollment       目标机临时注册与断网恢复
 internal/prerequisite     受限部署依赖助手
 internal/scheduler        三种引擎的定时任务执行
 internal/security         密码、令牌、Vault 与脱敏

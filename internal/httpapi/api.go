@@ -55,27 +55,28 @@ const (
 )
 
 type API struct {
-	store          *store.Store
-	tasks          *taskservice.Service
-	hub            *realtime.Hub
-	gateway        *agentgateway.Gateway
-	vault          *security.Vault
-	log            *slog.Logger
-	frontend       fs.FS
-	frontendHash   string
-	bootstrapper   serverBootstrapper
-	agentUpdates   *agentupdate.Store
-	codexReleases  *codexcli.ReleaseChecker
-	geminiReleases *codexcli.ReleaseChecker
-	claudeReleases *codexcli.ReleaseChecker
-	gitProviders   gitprovider.Creator
-	publicURL      string
-	secureCookie   bool
-	trustedProxies TrustedProxies
-	setupMu        sync.Mutex
-	setupToken     string
-	bootstrapMu    sync.Mutex
-	login          *loginLimiter
+	store              *store.Store
+	tasks              *taskservice.Service
+	hub                *realtime.Hub
+	gateway            *agentgateway.Gateway
+	vault              *security.Vault
+	log                *slog.Logger
+	frontend           fs.FS
+	frontendHash       string
+	bootstrapper       serverBootstrapper
+	agentUpdates       *agentupdate.Store
+	codexReleases      *codexcli.ReleaseChecker
+	geminiReleases     *codexcli.ReleaseChecker
+	claudeReleases     *codexcli.ReleaseChecker
+	gitProviders       gitprovider.Creator
+	publicURL          string
+	secureCookie       bool
+	trustedProxies     TrustedProxies
+	setupMu            sync.Mutex
+	setupToken         string
+	bootstrapMu        sync.Mutex
+	login              *loginLimiter
+	registrationClaims *loginLimiter
 	// wsSessionCheck is how often open WebSockets re-validate their session.
 	wsSessionCheck time.Duration
 }
@@ -85,23 +86,24 @@ type sessionContextKey struct{}
 func New(s *store.Store, hub *realtime.Hub, gateway *agentgateway.Gateway, vault *security.Vault, log *slog.Logger, frontend fs.FS, publicURL string, devInsecure bool, options ...Option) http.Handler {
 	assetDir := os.Getenv("WIO_AGENT_ASSET_DIR")
 	api := &API{
-		store:          s,
-		tasks:          &taskservice.Service{Repository: s},
-		hub:            hub,
-		gateway:        gateway,
-		vault:          vault,
-		log:            log,
-		frontend:       frontend,
-		frontendHash:   fingerprintFrontend(frontend),
-		bootstrapper:   sshbootstrap.New(assetDir),
-		agentUpdates:   agentupdate.New(assetDir),
-		codexReleases:  codexcli.NewReleaseChecker(nil, ""),
-		geminiReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/google-gemini/gemini-cli/releases", "v"),
-		claudeReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/anthropics/claude-code/releases", "v"),
-		gitProviders:   gitprovider.Client{},
-		publicURL:      strings.TrimRight(strings.TrimSpace(publicURL), "/"),
-		secureCookie:   strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
-		login:          newLoginLimiter(),
+		store:              s,
+		tasks:              &taskservice.Service{Repository: s},
+		hub:                hub,
+		gateway:            gateway,
+		vault:              vault,
+		log:                log,
+		frontend:           frontend,
+		frontendHash:       fingerprintFrontend(frontend),
+		bootstrapper:       sshbootstrap.New(assetDir),
+		agentUpdates:       agentupdate.New(assetDir),
+		codexReleases:      codexcli.NewReleaseChecker(nil, ""),
+		geminiReleases:     codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/google-gemini/gemini-cli/releases", "v"),
+		claudeReleases:     codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/anthropics/claude-code/releases", "v"),
+		gitProviders:       gitprovider.Client{},
+		publicURL:          strings.TrimRight(strings.TrimSpace(publicURL), "/"),
+		secureCookie:       strings.HasPrefix(strings.ToLower(publicURL), "https://") && !devInsecure,
+		login:              newLoginLimiter(),
+		registrationClaims: newLoginLimiter(),
 	}
 	for _, option := range options {
 		option(api)

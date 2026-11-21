@@ -12,6 +12,7 @@ export const initialRealtimeRevisions = (): RealtimeRevisions => ({ dashboard: 0
 
 export function realtimeScopesForEvent(event: Pick<Partial<StreamEvent>, "kind">): RealtimeScope[] {
   const kind = event.kind ?? "";
+  if (kind === "server.registration.updated") return ["servers"];
   if (kind === "session.subagent.updated") return ["codex", "claude", "gemini"];
   if (kind.startsWith("task.")) return ["tasks"];
   if (kind.startsWith("gemini.")) return ["gemini", "operations"];

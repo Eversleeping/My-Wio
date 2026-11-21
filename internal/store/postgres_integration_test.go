@@ -67,6 +67,23 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		assertTaskArtifactsStorage(t, &Store{DB: db, driver: "pgx"})
 		assertTaskReviewReworkAndTeam(t, &Store{DB: db, driver: "pgx"})
 	})
+	t.Run("server registrations", func(t *testing.T) {
+		admin, err := sqlx.Connect("pgx", databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		if _, err := admin.Exec("CREATE SCHEMA server_registration_test"); err != nil {
+			t.Fatal(err)
+		}
+		db, err := Open(postgresSchemaURL(t, databaseURL, "server_registration_test"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		assertServerRegistrationLifecycle(t, db)
+	})
+
 	t.Run("fixture schema consistency", func(t *testing.T) {
 		assertPostgresFixtureSchemaConsistency(t, databaseURL)
 	})

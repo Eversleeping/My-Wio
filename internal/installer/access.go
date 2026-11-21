@@ -1,4 +1,4 @@
-package sshbootstrap
+package installer
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"golang.org/x/crypto/ssh"
 )
 
 var ErrAccessSettings = errors.New("could not apply server access settings")
@@ -101,7 +99,7 @@ func (s *Service) Access(ctx context.Context, request AccessRequest) (AccessSett
 	return result, err
 }
 
-func applyAccess(client *ssh.Client, root bool, updated []byte, settings AccessSettings) error {
+func applyAccess(client commandHost, root bool, updated []byte, settings AccessSettings) error {
 	directory, err := run(client, elevated(root, "umask 077; mktemp -d /etc/wio-agent/access.XXXXXXXX"))
 	directory = strings.TrimSpace(directory)
 	if err != nil || !strings.HasPrefix(directory, "/etc/wio-agent/access.") || strings.ContainsAny(directory, "\r\n ") {

@@ -1,4 +1,4 @@
-package sshbootstrap
+package installer
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func TestBootstrapResolvesLatestStableVersionsForAllCLIs(t *testing.T) {
 	service.geminiReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/gemini", "v")
 	service.claudeReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/claude", "v")
 	versions, err := service.latestCLIVersions(context.Background())
-	if err != nil || versions.codex != "0.165.0" || versions.gemini != "0.66.0" || versions.claude != "2.1.318" {
+	if err != nil || versions.Codex != "0.165.0" || versions.Gemini != "0.66.0" || versions.Claude != "2.1.318" {
 		t.Fatalf("bootstrap did not select all newest formal releases: %+v %v", versions, err)
 	}
 }
@@ -58,7 +58,7 @@ func TestBootstrapCannotSilentlyUsePinnedVersionWhenDiscoveryFails(t *testing.T)
 			service.geminiReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/gemini", "v")
 			service.claudeReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL+"/claude", "v")
 			versions, err := service.latestCLIVersions(context.Background())
-			if !errors.Is(err, ErrCLIReleasesUnavailable) || versions != (cliVersions{}) {
+			if !errors.Is(err, ErrCLIReleasesUnavailable) || versions != (CLIVersions{}) {
 				t.Fatalf("discovery failure fell back to an old version: %+v %v", versions, err)
 			}
 		})

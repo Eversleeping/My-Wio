@@ -30,15 +30,18 @@ func main() {
 
 func run(log *slog.Logger, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: wio-agent <enroll|run|prerequisite-helper> [options]")
+		return errors.New("usage: wio-agent <install|enroll|run|prerequisite-helper> [options]")
 	}
 	switch args[0] {
 	case "version", "--version", "-version":
 		fmt.Println(buildinfo.Version)
 		return nil
+	case "install":
+		return installAgent(args[1:])
 	case "enroll":
 		flags := flag.NewFlagSet("enroll", flag.ContinueOnError)
 		controlURL := flags.String("url", "", "Wio control-plane URL")
+		registrationID := flags.String("registration", "", "installation registration ID")
 		token := flags.String("token", "", "one-time enrollment token (visible to other local users in the process list; prefer --token-file)")
 		tokenFile := flags.String("token-file", "", "read the one-time enrollment token from this file, or from standard input when set to -")
 		configPath := flags.String("config", defaultConfig(), "configuration file")
@@ -71,7 +74,7 @@ func run(log *slog.Logger, args []string) error {
 				allowSudoValue = previous.AllowSudo
 			}
 		}
-		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, AllowSudo: allowSudoValue})
+		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{RegistrationID: *registrationID, ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, AllowSudo: allowSudoValue})
 		if err != nil {
 			return err
 		}

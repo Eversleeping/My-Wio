@@ -1,4 +1,4 @@
-package sshbootstrap
+package installer
 
 // Keep dependency setup separate from enrollment: repair uses the same path,
 // and every installed tool is checked again as the service account.

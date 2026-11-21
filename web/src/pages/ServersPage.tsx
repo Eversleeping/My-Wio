@@ -28,6 +28,8 @@ import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Dialog as AccessibleDialog, DialogActions, type DialogProps } from "../components/Dialog";
 import { DataTable, Section, Status } from "../components/PageUI";
+import { ServerRegistrations } from "../components/ServerRegistrations";
+import { registrations, type RegistrationCommand } from "../data/registrations";
 import { ServerCLIManager } from "../components/ServerCLIManager";
 import { ServerCredentialDialog } from "../components/ServerCredentialDialog";
 import { SSHCommandInput } from "../components/SSHCommandInput";
@@ -62,6 +64,8 @@ export function ServersPage({ notify }: ServersPageProps) {
   const codexProfiles = (credentialProfiles.data ?? []).filter(profile => profile.kind === "codex");
   const gitProfiles = (credentialProfiles.data ?? []).filter(profile => profile.kind === "git");
   const [dialog, setDialog] = useState(false);
+  const [registrationMode, setRegistrationMode] = useState<"ssh" | "command">("ssh");
+  const [registrationCommand, setRegistrationCommand] = useState<RegistrationCommand | null>(null);
   const [cliServer, setCLIServer] = useState<Server | null>(null);
 	const [repairingServer, setRepairingServer] = useState<Server | null>(null);
   const [step, setStep] = useState<"form" | "fingerprint" | "complete">("form");
@@ -93,7 +97,7 @@ export function ServersPage({ notify }: ServersPageProps) {
     if (dialog && firstCodexProfile) setForm(current => current.codexProfileID ? current : { ...current, codexProfileID: firstCodexProfile.id });
   }, [credentialProfiles.data, dialog]);
   const reset = () => {
-    setStep("form"); setError(""); setHostKey(null); setResult(null); setInstallLogs([]); setBusy(false);
+    setRegistrationMode("ssh"); setStep("form"); setError(""); setHostKey(null); setResult(null); setInstallLogs([]); setBusy(false);
     setForm({ name: "", roots: "/srv, /opt, /home", host: "", port: "22", user: "root", authMethod: "private_key", password: "", privateKey: "", privateKeyPassphrase: "", configuration: "", notes: "", codexProfileID: codexProfiles[0]?.id ?? "", gitProfileID: "" });
   };
   const open = () => { reset(); setRepairingServer(null); setDialog(true); };
@@ -118,6 +122,10 @@ export function ServersPage({ notify }: ServersPageProps) {
     event.preventDefault();
     setBusy(true); setError("");
     try {
+      if (registrationMode === "command" && !repairingServer) {
+        const generated = await registrations.create({os: "linux", name: form.name.trim(), scan_roots: form.roots.split(",").map(value => value.trim()).filter(Boolean), configuration: form.configuration.trim(), notes: form.notes.trim(), codex_profile_id: form.codexProfileID, git_profile_id: form.gitProfileID});
+        setRegistrationCommand(generated); setDialog(false); reset(); return;
+      }
       setHostKey(await serverEndpoints.probe( { host: form.host.trim(), port: Number(form.port) }));
       setStep("fingerprint");
     } catch (err) { setError(enrollmentMessage(err, t)); } finally { setBusy(false); }
@@ -254,15 +262,18 @@ export function ServersPage({ notify }: ServersPageProps) {
     {error && <ErrorBanner text={error} />}
     {repairingServer && <p className="security-notice">{t("server.repairDescription")}</p>}
     <p className="security-notice">{t("server.automaticDependencies")}</p>
+    {!repairingServer && <Field label={t("server.registration.method")}><select value={registrationMode} onChange={event => setRegistrationMode(event.target.value as "ssh" | "command")}><option value="ssh">{t("server.registration.ssh")}</option><option value="command">{t("server.registration.command")}</option></select></Field>}
     {!repairingServer && <div className="form-grid"><Field label={t("server.name")}><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></Field><Field label={t("server.scanRoots")}><input value={form.roots} onChange={e => setForm({ ...form, roots: e.target.value })} required /></Field></div>}
     <div className="form-grid"><Field label={t("server.configuration")}><textarea rows={3} maxLength={4096} value={form.configuration} onChange={e => setForm({ ...form, configuration: e.target.value })} placeholder={t("server.configurationPlaceholder")} /></Field><Field label={t("server.notes")}><textarea rows={3} maxLength={4096} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder={t("server.notesPlaceholder")} /></Field></div>
+    {(registrationMode === "ssh" || repairingServer) && <>
     <SSHCommandInput onApply={connection => { setForm(current => ({ ...current, host: connection.host, port: String(connection.port), user: connection.user ?? current.user, authMethod: current.password || current.privateKey ? current.authMethod : "none" })); setHostKey(null); setError(""); }} />
     <div className="form-grid thirds"><Field label={t("server.sshHost")}><input value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} placeholder="192.0.2.10" required /></Field><Field label={t("server.sshPort")}><input type="number" min="1" max="65535" value={form.port} onChange={e => setForm({ ...form, port: e.target.value })} required /></Field><Field label={t("server.sshUser")}><input value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} placeholder="root / ubuntu / ec2-user" required /></Field></div>
     <Field label={t("server.authMethod")}><select value={form.authMethod} onChange={e => setForm({ ...form, authMethod: e.target.value })}><option value="private_key">{t("server.authPrivateKey")}</option><option value="password">{t("server.authPassword")}</option><option value="none">{t("server.authNone")}</option></select></Field>
     {form.authMethod === "private_key" ? <div className="form-grid"><Field label={t("server.privateKeyFile")}><input type="file" accept=".pem,.key,text/plain" onChange={e => void choosePrivateKey(e.target.files?.[0])} required={!form.privateKey} /></Field><Field label={t("server.privateKeyPassphrase")}><input type="password" autoComplete="off" value={form.privateKeyPassphrase} onChange={e => setForm({ ...form, privateKeyPassphrase: e.target.value })} placeholder={t("common.optional")} /></Field></div> : form.authMethod === "none" ? <p className="security-notice">{t("server.authNoneHelp")}</p> : <Field label={t("server.sshPassword")}><input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field>}
+    </>}
     <div className="form-divider"><span>{t("server.credentialProfiles")}</span></div>
     <div className="form-grid"><Field label={t("server.codexProfile")}><select value={form.codexProfileID} onChange={e => setForm({ ...form, codexProfileID: e.target.value })} required><option value="">{t(codexProfiles.length ? "server.selectCodexProfile" : "server.noCodexProfiles")}</option>{codexProfiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} &middot; {profile.model}</option>)}</select></Field><Field label={t("server.gitProfile")}><select value={form.gitProfileID} onChange={e => setForm({ ...form, gitProfileID: e.target.value })}><option value="">{t("server.noGitProfile")}</option>{gitProfiles.map(profile => { const ready = Boolean(profile.commit_name && profile.commit_email); return <option value={profile.id} key={profile.id} disabled={!ready}>{profile.name} &middot; {profile.username}{ready ? "" : ` ${String.fromCharCode(183)} ${t("settings.gitIdentityMissing")}`}</option>; })}</select></Field></div>
-    <DialogActions><button type="button" className="secondary-button" onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{busy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
+    <DialogActions><button type="button" className="secondary-button" onClick={close}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{registrationMode === "command" ? t("server.registration.generate") : busy ? t("server.probing") : t("server.probeFingerprint")}</button></DialogActions>
   </form> : step === "fingerprint" && hostKey ? <div className="enrollment-step">
     {error && <ErrorBanner text={error} />}
     <div className="fingerprint-status"><ShieldCheck size={28} /><div><strong>{t("server.fingerprint")}</strong><span>{form.host}:{form.port} &middot; {hostKey.key_type}</span></div></div>
@@ -271,6 +282,7 @@ export function ServersPage({ notify }: ServersPageProps) {
     {installLogs.length > 0 && <div className="install-log" aria-live="polite"><div className="install-log-heading"><SquareTerminal size={16} /><strong>{t("server.installLog")}</strong></div><div className="install-log-lines">{installLogs.map(entry => <div className={`install-log-entry ${entry.status}`} key={entry.step}>{entry.status === "running" ? <LoaderCircle className="spin" size={15} /> : entry.status === "done" ? <Check size={15} /> : <AlertTriangle size={15} />}<span>{t(`server.progress.${entry.step}`)}</span>{entry.total > 0 && <code>{Math.min(100, Math.round((entry.current / entry.total) * 100))}%</code>}{entry.detail && <small>{entry.detail}</small>}</div>)}</div></div>}
     <DialogActions><button type="button" className="secondary-button" disabled={busy} onClick={() => { setStep("form"); setError(""); setInstallLogs([]); }}><Undo2 size={16} />{t("server.back")}</button><button className="primary-button" disabled={busy} onClick={() => void install()}>{busy ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}{busy ? t("server.installing") : t("server.confirmInstall")}</button></DialogActions>
   </div> : <div className="enrollment-step enrollment-complete"><div className="completion-mark"><Check size={28} /></div><h3>{t(repairingServer ? "server.repaired" : "server.installed")}</h3>{result && <p>{t("server.installedSummary", { hostname: result.hostname, architecture: result.architecture })}</p>}{result && result.warnings.length > 0 && <div className="warning-list"><strong>{t("server.warningTitle")}</strong>{result.warnings.map(warning => <span key={warning}><AlertTriangle size={15} />{t(`server.warning.${warning}`)}</span>)}</div>}<DialogActions>{result && result.warnings.length > 0 && <button type="button" className="secondary-button" disabled={busy} onClick={() => void retryDependencies()}><Wrench size={16} />{t("server.retryDependencies")}</button>}<button className="primary-button" disabled={busy} onClick={close}><Check size={16} />{t("common.done")}</button></DialogActions></div>}</Dialog>
+  <ServerRegistrations created={registrationCommand} onDismiss={() => setRegistrationCommand(null)} notify={notify} />
   <Dialog open={retiringServer !== null} title={t("server.retireTitle", { name: retiringServer?.name ?? "" })} onClose={closeRetirement} wide>
     {retireStep === "form" ? <form onSubmit={probeRetirement}>
       {retireError && <ErrorBanner text={retireError} />}

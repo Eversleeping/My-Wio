@@ -1,4 +1,4 @@
-package sshbootstrap
+package installer
 
 import (
 	"context"
@@ -8,30 +8,30 @@ import (
 	"github.com/wio-platform/wio/internal/codexcli"
 )
 
-type cliVersions struct {
-	codex  string
-	gemini string
-	claude string
+type CLIVersions struct {
+	Codex  string
+	Gemini string
+	Claude string
 }
 
 // Resolve formal releases at enrollment time, using the same official discovery
 // and npm fallback as the version manager. Never fall back to a pinned old CLI.
-func (s *Service) latestCLIVersions(ctx context.Context) (cliVersions, error) {
+func (s *Service) latestCLIVersions(ctx context.Context) (CLIVersions, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	codex, err := s.codexReleases.LatestStable(ctx)
 	if err != nil {
-		return cliVersions{}, fmt.Errorf("%w: Codex: %v", ErrCLIReleasesUnavailable, err)
+		return CLIVersions{}, fmt.Errorf("%w: Codex: %v", ErrCLIReleasesUnavailable, err)
 	}
 	gemini, err := s.geminiReleases.LatestStable(ctx)
 	if err != nil {
-		return cliVersions{}, fmt.Errorf("%w: Gemini: %v", ErrCLIReleasesUnavailable, err)
+		return CLIVersions{}, fmt.Errorf("%w: Gemini: %v", ErrCLIReleasesUnavailable, err)
 	}
 	claude, err := s.claudeReleases.LatestStable(ctx)
 	if err != nil {
-		return cliVersions{}, fmt.Errorf("%w: Claude: %v", ErrCLIReleasesUnavailable, err)
+		return CLIVersions{}, fmt.Errorf("%w: Claude: %v", ErrCLIReleasesUnavailable, err)
 	}
-	return cliVersions{codex: codex, gemini: gemini, claude: claude}, nil
+	return CLIVersions{Codex: codex, Gemini: gemini, Claude: claude}, nil
 }
 
 func installBootstrapCLI(kind, version, registry string, run func(string) (string, error)) (string, error) {

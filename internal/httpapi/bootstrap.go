@@ -363,6 +363,13 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 		PreserveAccessSettings: serverID != "",
 		Progress:               progress,
 	})
+	// A service or heartbeat failure can happen after identity registration.
+	// Retain preset bindings so the visible server can be repaired consistently.
+	if result.ServerID != "" && input.CodexProfileID != "" {
+		if bindErr := a.store.SetServerCredentialProfiles(r.Context(), result.ServerID, input.CodexProfileID, input.GitProfileID); bindErr != nil {
+			a.log.Warn("could not record installed server credential profiles", "server_id", result.ServerID)
+		}
+	}
 	if err != nil {
 		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		_ = a.store.DeleteUnusedEnrollment(cleanupContext, enrollmentID)
@@ -370,12 +377,6 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 		a.log.Warn("SSH server bootstrap failed", "host", strings.TrimSpace(input.Host), "error", err)
 		return sshbootstrap.InstallResult{}, err
 	}
-	if input.CodexProfileID != "" {
-		if err := a.store.SetServerCredentialProfiles(r.Context(), result.ServerID, input.CodexProfileID, input.GitProfileID); err != nil {
-			a.log.Warn("could not record installed server credential profiles", "server_id", result.ServerID, "error", err)
-		}
-	}
-
 	session := currentSession(r)
 	_ = a.store.Audit(r.Context(), session.UserID, "server.ssh.bootstrap", "server", result.ServerID, map[string]any{
 		"name": input.Name, "host": strings.TrimSpace(input.Host), "port": input.Port, "user": strings.TrimSpace(input.User), "repair": serverID != "",
@@ -463,6 +464,8 @@ func bootstrapErrorInfo(err error) (int, string, string) {
 		return http.StatusUnprocessableEntity, "ssh_auth_failed", "the SSH username or credential was rejected"
 	case errors.Is(err, sshbootstrap.ErrPrivilegeRequired):
 		return http.StatusBadRequest, "sudo_required", "the SSH user must be root or have passwordless sudo"
+	case errors.Is(err, sshbootstrap.ErrHeartbeatPending):
+		return http.StatusUnprocessableEntity, "agent_heartbeat_pending", "Agent installed but no heartbeat was received; inspect the service and network"
 	case errors.Is(err, sshbootstrap.ErrUnsupportedPlatform):
 		return http.StatusBadRequest, "unsupported_platform", "only Linux amd64 and arm64 servers are supported"
 	case errors.Is(err, sshbootstrap.ErrAssetsUnavailable):

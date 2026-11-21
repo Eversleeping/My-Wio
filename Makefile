@@ -15,6 +15,7 @@ build:
 agent-linux:
 	mkdir -p bin
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/wio-agent-linux-amd64 ./cmd/agent
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o bin/wio-agent-linux-arm64 ./cmd/agent
 
 test: test-postgres
 	npm --prefix web run build

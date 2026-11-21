@@ -36,6 +36,13 @@ func (api *API) registerPublicRoutes(r chi.Router) {
 	r.Post("/setup", api.setup)
 	r.Post("/auth/login", api.loginHandler)
 	r.Post("/agent/enroll", api.enrollAgent)
+	r.Get("/agent/install.sh", api.agentInstallScript)
+	r.Get("/agent/install-status", api.agentInstallStatus)
+	r.Get("/agent/install-package/{architecture}", api.downloadInstallerPackage)
+	r.Post("/agent/registrations/{registrationID}/claim", api.claimServerRegistration)
+	r.Get("/agent/registrations/{registrationID}/session", api.installationSession)
+	r.Post("/agent/registrations/{registrationID}/enroll", api.enrollRegisteredAgent)
+	r.Post("/agent/registrations/{registrationID}/progress", api.installationProgress)
 	r.Get("/agent/update-package/{architecture}", api.downloadAgentUpdate)
 }
 
@@ -73,6 +80,10 @@ func (api *API) registerGeminiRoutes(private chi.Router) {
 
 func (api *API) registerServerRoutes(private chi.Router) {
 	private.Get("/servers", api.servers)
+	private.Get("/servers/registrations", api.listServerRegistrations)
+	private.Post("/servers/registrations", api.createServerRegistration)
+	private.Get("/servers/registrations/{registrationID}", api.serverRegistration)
+	private.Delete("/servers/registrations/{registrationID}", api.revokeServerRegistration)
 	private.Patch("/servers/{serverID}", api.updateServer)
 	private.Post("/servers/{serverID}/credential-profiles", api.updateServerCredentialProfiles)
 	private.Post("/servers/{serverID}/agent-update", api.updateAgent)

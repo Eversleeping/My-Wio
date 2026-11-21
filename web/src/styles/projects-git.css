@@ -185,3 +185,15 @@
 .credential-profile-option strong, .credential-profile-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .credential-profile-option strong { font-size: 12px; }
 .credential-profile-option small { color: inherit; font-size: 10px; }
+
+.registration-history { display: grid; gap: 8px; }
+.registration-history > button { width: 100%; display: flex; justify-content: space-between; gap: 12px; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+.registration-history > button > span:first-child { min-width: 0; }
+.registration-history > button > span:last-child { flex-shrink: 0; color: var(--muted); font-size: 12px; }
+.registration-command { width: 100%; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+
+.registration-progress { display: grid; gap: 12px; }
+.registration-progress > .field { margin: 0; }
+.registration-progress > p { display: block; margin: 0; font-size: 12px; line-height: 1.6; }
+.registration-progress > .secondary-button { justify-self: start; }
+.registration-progress > strong { overflow-wrap: anywhere; }

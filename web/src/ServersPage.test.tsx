@@ -358,3 +358,37 @@ test("keeps installed engines distinct from failed version checks",async()=>{
  await waitFor(()=>expect(screen.getAllByText("Installed; version check unavailable")).toHaveLength(3));
  expect(screen.queryByText("Not installed")).not.toBeInTheDocument();
 });
+
+test("generates a Linux command without SSH credentials and keeps registration history without retaining the code", async () => {
+  localStorage.setItem("wio_language", "en");
+  const requests: Array<{url: string; method: string; body: unknown}> = [];
+  const registration = {id: "11111111-1111-4111-8111-111111111111", name: "command-node", state: "pending", server_id: "", expires_at: "2099-01-01T00:15:00Z", session_expires_at: "2099-01-01T01:00:00Z", error_code: "", progress: [], result: {}};
+  let history: typeof registration[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input), method = init.method ?? "GET";
+    if (method !== "GET") requests.push({url, method, body: init.body ? JSON.parse(String(init.body)) : null});
+    if (url === "/api/servers/registrations" && method === "POST") {
+      history = [registration];
+      return new Response(JSON.stringify({registration, command: "curl -fsSL https://wio.example.test/api/agent/install.sh | sudo sh -s -- --registration 11111111-1111-4111-8111-111111111111", code: "synthetic-one-time-code"}));
+    }
+    const data = url === "/api/servers/registrations" ? history : url === "/api/credential-profiles" ? [{id: "codex", kind: "codex", name: "Codex", model: "gpt-6.1-sol"}] : [];
+    return new Response(JSON.stringify(data));
+  }));
+  render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage notify={vi.fn()} /></DataProvider></I18nProvider>);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", {name: "Enroll server"}));
+  const form = screen.getByRole("dialog", {name: "Enroll Linux server"});
+  await user.selectOptions(within(form).getByRole("combobox", {name: "Registration method"}), "command");
+  expect(within(form).queryByRole("textbox", {name: "SSH host or IP"})).not.toBeInTheDocument();
+  await user.type(within(form).getByRole("textbox", {name: "Server name"}), "command-node");
+  await user.click(within(form).getByRole("button", {name: "Generate registration command"}));
+  const progress = await screen.findByRole("dialog", {name: "Registration progress"});
+  expect(within(progress).getByRole("textbox", {name: "One-time registration code"})).toHaveValue("synthetic-one-time-code");
+  expect(within(progress).getByRole("textbox", {name: "Enrollment command"})).not.toHaveValue(expect.stringContaining("synthetic-one-time-code"));
+  expect(requests).toEqual([{url: "/api/servers/registrations", method: "POST", body: {os: "linux", name: "command-node", scan_roots: ["/srv", "/opt", "/home"], configuration: "", notes: "", codex_profile_id: "codex", git_profile_id: ""}}]);
+  await user.click(within(progress).getAllByRole("button", {name: "Close"}).at(-1)!);
+  await user.click(await screen.findByRole("button", {name: /command-node.*Waiting for execution/}));
+  const reopened = screen.getByRole("dialog", {name: "Registration progress"});
+  expect(within(reopened).queryByRole("textbox", {name: "One-time registration code"})).not.toBeInTheDocument();
+  expect(within(reopened).getByText(/The code is shown only when created/)).toBeInTheDocument();
+});

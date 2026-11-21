@@ -39,6 +39,7 @@ var schemaMigrations = []migration{
 		_, err := tx.ExecContext(ctx, "CREATE INDEX task_attempts_interrupt_idx ON task_attempts(interrupt_operation_id)")
 		return err
 	}},
+	{version: 13, name: "server_registrations", up: migrateServerRegistrations},
 }
 
 // PostgreSQL advisory locks are scoped to a database. All Wio schemas in one

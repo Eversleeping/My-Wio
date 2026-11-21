@@ -14,6 +14,7 @@ import (
 )
 
 type EnrollmentOptions struct {
+	RegistrationID     string
 	AllowSudo          bool
 	ControlURL         string
 	EnrollmentToken    string
@@ -37,12 +38,23 @@ func Enroll(ctx context.Context, options EnrollmentOptions) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	payload, _ := json.Marshal(map[string]string{"enrollment_token": options.EnrollmentToken, "hostname": hostname})
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, options.ControlURL+"/api/agent/enroll", bytes.NewReader(payload))
+	fields := map[string]string{"hostname": hostname}
+	if options.RegistrationID == "" {
+		fields["enrollment_token"] = options.EnrollmentToken
+	}
+	payload, _ := json.Marshal(fields)
+	endpoint := options.ControlURL + "/api/agent/enroll"
+	if options.RegistrationID != "" {
+		endpoint = options.ControlURL + "/api/agent/registrations/" + url.PathEscape(options.RegistrationID) + "/enroll"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return Config{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if options.RegistrationID != "" {
+		request.Header.Set("Authorization", "Bearer "+options.EnrollmentToken)
+	}
 	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: options.InsecureSkipVerify}}}
 	response, err := client.Do(request)
 	if err != nil {

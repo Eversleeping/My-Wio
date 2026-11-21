@@ -1,0 +1,923 @@
+package installer
+
+import (
+	"bytes"
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/gitidentity"
+)
+
+var (
+	ErrInvalidTarget          = errors.New("invalid SSH target")
+	ErrHostKeyMismatch        = errors.New("SSH host key fingerprint changed")
+	ErrConnection             = errors.New("SSH connection failed")
+	ErrAuthentication         = errors.New("SSH authentication failed")
+	ErrPrivilegeRequired      = errors.New("root or passwordless sudo is required")
+	ErrUnsupportedPlatform    = errors.New("unsupported Linux architecture")
+	ErrAssetsUnavailable      = errors.New("agent installation assets are unavailable")
+	ErrCLIReleasesUnavailable = errors.New("latest stable CLI versions are unavailable")
+	ErrInstallation           = errors.New("agent installation failed")
+	ErrServerMismatch         = errors.New("installed Agent belongs to a different server")
+	ErrUninstallation         = errors.New("agent uninstallation failed")
+)
+
+const (
+	officialNPMRegistry = "https://registry.npmjs.org"
+	mainlandNPMRegistry = "https://registry.npmmirror.com"
+	playwrightVersion   = "1.61.1"
+	playwrightMirror    = "https://npmmirror.com/mirrors/playwright"
+)
+
+type Target struct {
+	Host                 string `json:"host"`
+	Port                 int    `json:"port"`
+	User                 string `json:"user"`
+	AuthMethod           string `json:"auth_method"`
+	Password             string `json:"password,omitempty"`
+	PrivateKey           string `json:"private_key,omitempty"`
+	PrivateKeyPassphrase string `json:"private_key_passphrase,omitempty"`
+}
+
+type HostTarget struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
+type HostKeyResult struct {
+	Fingerprint string `json:"fingerprint"`
+	KeyType     string `json:"key_type"`
+}
+
+type InstallRequest struct {
+	Target                 Target
+	ExpectedFingerprint    string
+	ControlURL             string
+	EnrollmentToken        string
+	CodexAPIURL            string
+	CodexAPIKey            string
+	CodexModel             string
+	GitEndpoint            string
+	GitUsername            string
+	GitToken               string
+	GitCommitName          string
+	GitCommitEmail         string
+	AllowSudo              bool
+	ExpectedServerID       string
+	PreserveAccessSettings bool
+	Progress               func(InstallProgress)     `json:"-"`
+	OnInstalled            func(InstallResult) error `json:"-"`
+	RegistrationID         string
+	Versions               CLIVersions
+}
+
+type InstallProgress struct {
+	Step    string `json:"step"`
+	Current int64  `json:"current,omitempty"`
+	Total   int64  `json:"total,omitempty"`
+}
+
+type InstallResult struct {
+	ServerID     string   `json:"server_id"`
+	Hostname     string   `json:"hostname"`
+	Architecture string   `json:"architecture"`
+	Warnings     []string `json:"warnings"`
+}
+
+type UninstallRequest struct {
+	Target              Target
+	ExpectedFingerprint string
+	ExpectedServerID    string
+}
+
+type UninstallResult struct {
+	ServerID string `json:"server_id"`
+	Hostname string `json:"hostname"`
+}
+
+type Service struct {
+	assetDir       string
+	codexReleases  *codexcli.ReleaseChecker
+	geminiReleases *codexcli.ReleaseChecker
+	claudeReleases *codexcli.ReleaseChecker
+}
+
+func New(assetDir string) *Service {
+	if strings.TrimSpace(assetDir) == "" {
+		assetDir = "/usr/local/share/wio"
+	}
+	return &Service{
+		assetDir:       assetDir,
+		codexReleases:  codexcli.NewReleaseChecker(nil, ""),
+		geminiReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/google-gemini/gemini-cli/releases", "v"),
+		claudeReleases: codexcli.NewTaggedReleaseChecker(nil, "https://api.github.com/repos/anthropics/claude-code/releases", "v"),
+	}
+}
+
+func (s *Service) Probe(ctx context.Context, target HostTarget) (HostKeyResult, error) {
+	target, err := normalizeHostTarget(target)
+	if err != nil {
+		return HostKeyResult{}, err
+	}
+	return probeHostKey(ctx, target)
+}
+
+func (s *Service) Install(ctx context.Context, request InstallRequest) (InstallResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
+	defer cancel()
+	target, err := normalizeTarget(request.Target)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	request.Target = target
+	if err := validateInstallRequest(request); err != nil {
+		return InstallResult{}, err
+	}
+	request.report("connecting", 0, 0)
+	client, hostKey, err := connect(ctx, request.Target, request.ExpectedFingerprint)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	clientDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = client.Close()
+		case <-clientDone:
+		}
+	}()
+	defer func() {
+		close(clientDone)
+		_ = client.Close()
+	}()
+	return s.launchInstaller(ctx, client, hostKey, request)
+}
+
+func (s *Service) Uninstall(ctx context.Context, request UninstallRequest) (UninstallResult, error) {
+	target, err := normalizeTarget(request.Target)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	request.Target = target
+	request.ExpectedServerID = strings.TrimSpace(request.ExpectedServerID)
+	if err := validateUninstallRequest(request); err != nil {
+		return UninstallResult{}, err
+	}
+	client, hostKey, err := connect(ctx, request.Target, request.ExpectedFingerprint)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	clientDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = client.Close()
+		case <-clientDone:
+		}
+	}()
+	defer func() {
+		close(clientDone)
+		_ = client.Close()
+	}()
+	probe, err := inspect(client, hostKey)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	if !strings.EqualFold(probe.OS, "linux") {
+		return UninstallResult{}, fmt.Errorf("%w: %s", ErrUnsupportedPlatform, probe.OS)
+	}
+	if !probe.SudoReady {
+		return UninstallResult{}, ErrPrivilegeRequired
+	}
+
+	root := isRoot(client)
+	rawConfig, err := run(client, elevated(root, "cat /etc/wio-agent/config.json"))
+	if err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: could not read the installed Agent identity", ErrUninstallation)
+	}
+	serverID, err := installedServerID(rawConfig)
+	if err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: installed Agent configuration is invalid", ErrUninstallation)
+	}
+	if serverID != request.ExpectedServerID {
+		return UninstallResult{}, ErrServerMismatch
+	}
+	if output, err := run(client, elevated(root, uninstallServicesScript())); err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: could not stop Agent services: %s", ErrUninstallation, remoteErrorDetail(output, err))
+	}
+	if output, err := run(client, elevated(root, uninstallFilesScript())); err != nil {
+		return UninstallResult{}, fmt.Errorf("%w: could not remove Agent files: %s", ErrUninstallation, remoteErrorDetail(output, err))
+	}
+	return UninstallResult{ServerID: serverID, Hostname: probe.Hostname}, nil
+}
+
+func installedServerID(raw string) (string, error) {
+	var config struct {
+		ServerID string `json:"server_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		return "", err
+	}
+	config.ServerID = strings.TrimSpace(config.ServerID)
+	if !validServerID(config.ServerID) {
+		return "", errors.New("invalid server ID")
+	}
+	return config.ServerID, nil
+}
+
+func uninstallServicesScript() string {
+	return `set -eu
+if [ -f /etc/systemd/system/wio-agent.service ]; then
+  systemctl disable --now wio-agent.service >/dev/null
+else
+  systemctl stop wio-agent.service >/dev/null 2>&1 || true
+fi
+if [ -f /etc/systemd/system/wio-prerequisite.service ]; then
+  systemctl disable --now wio-prerequisite.service >/dev/null
+else
+  systemctl stop wio-prerequisite.service >/dev/null 2>&1 || true
+fi
+rm -f /etc/systemd/system/wio-agent.service /etc/systemd/system/wio-prerequisite.service
+systemctl daemon-reload
+systemctl reset-failed wio-agent.service wio-prerequisite.service >/dev/null 2>&1 || true`
+}
+
+func agentSetupScript(allowSudo bool) string {
+	setup := `set -eu
+getent group docker >/dev/null 2>&1 || groupadd --system docker
+id -u wio-agent >/dev/null 2>&1 || useradd --system --home /var/lib/wio-agent --create-home --shell /usr/sbin/nologin wio-agent
+usermod -aG docker wio-agent
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/projects
+install -d -o wio-agent -g wio-agent -m 0700 /var/lib/wio-agent/.Codex
+install -d -o root -g wio-agent -m 0750 /etc/wio-agent`
+	if allowSudo {
+		setup += `
+command -v sudo >/dev/null 2>&1 || { echo 'sudo is required when Agent sudo is enabled' >&2; exit 1; }
+install -d -o root -g root -m 0755 /etc/sudoers.d
+printf '%s\n' 'wio-agent ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wio-agent
+chmod 0440 /etc/sudoers.d/wio-agent
+if command -v visudo >/dev/null 2>&1; then visudo -cf /etc/sudoers.d/wio-agent >/dev/null; fi`
+	} else {
+		setup += `
+rm -f /etc/sudoers.d/wio-agent`
+	}
+	return setup
+}
+
+func uninstallFilesScript() string {
+	return `set -eu
+if [ -L /usr/local/bin/playwright ]; then
+  playwright_target=$(readlink /usr/local/bin/playwright || true)
+  case "$playwright_target" in
+    /var/lib/wio-agent/playwright/*) rm -f /usr/local/bin/playwright ;;
+  esac
+fi
+if id -u wio-agent >/dev/null 2>&1; then userdel wio-agent; fi
+if getent group wio-agent >/dev/null 2>&1; then groupdel wio-agent; fi
+rm -f /etc/sudoers.d/wio-agent
+rm -rf /var/lib/wio-agent
+rm -f /usr/local/bin/wio-agent
+rm -rf /etc/wio-agent`
+}
+
+func npmCountryDetectionScript() string {
+	return `fetch_country() {
+  endpoint=$1
+  if command -v curl >/dev/null 2>&1; then
+    curl -4fsS --connect-timeout 3 --max-time 6 "$endpoint" 2>/dev/null || true
+  elif command -v wget >/dev/null 2>&1; then
+    wget -4qO- -T 6 "$endpoint" 2>/dev/null || true
+  fi
+}
+for endpoint in \
+  https://ipapi.co/country/ \
+  https://ifconfig.co/country-iso \
+  https://ipinfo.io/country
+do
+  country=$(fetch_country "$endpoint" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+  case "$country" in
+    [A-Z][A-Z]) printf '%s\n' "$country" ;;
+  esac
+done`
+}
+
+func npmRegistryForCountries(output string) string {
+	cnVotes := 0
+	totalVotes := 0
+	for _, country := range strings.Fields(output) {
+		country = strings.ToUpper(strings.TrimSpace(country))
+		if len(country) != 2 || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z' {
+			continue
+		}
+		totalVotes++
+		if country == "CN" {
+			cnVotes++
+		}
+	}
+	if cnVotes >= 2 || (cnVotes == 1 && totalVotes == 1) {
+		return mainlandNPMRegistry
+	}
+	return officialNPMRegistry
+}
+
+func npmRegistryConfigurationScript(registry string) string {
+	return `set -eu
+npm config set registry ` + shellQuote(registry) + ` --location=user --userconfig=/root/.npmrc
+npm config set replace-registry-host always --location=user --userconfig=/root/.npmrc
+npm config set registry ` + shellQuote(registry) + ` --location=user --userconfig=/var/lib/wio-agent/.npmrc
+npm config set replace-registry-host always --location=user --userconfig=/var/lib/wio-agent/.npmrc
+chown root:root /root/.npmrc
+chmod 0600 /root/.npmrc
+chown wio-agent:wio-agent /var/lib/wio-agent/.npmrc
+chmod 0600 /var/lib/wio-agent/.npmrc`
+}
+
+func playwrightPackageInstallationScript() string {
+	prefix := playwrightPrefix()
+	install := "env HOME=/var/lib/wio-agent npm install --prefix " + shellQuote(prefix) + " --omit=dev " + shellQuote("playwright@"+playwrightVersion)
+	return `set -eu
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/playwright/versions
+su -s /bin/sh -c ` + shellQuote(install) + ` wio-agent
+test -x ` + shellQuote(playwrightCLI()) + `
+ln -sfn ` + shellQuote(playwrightCLI()) + ` /usr/local/bin/playwright`
+}
+
+func playwrightDependenciesInstallationScript() string {
+	return `set -eu
+` + shellQuote(playwrightCLI()) + ` install-deps chromium`
+}
+
+func playwrightBrowserInstallationScript(npmRegistry string) string {
+	environment := "env HOME=/var/lib/wio-agent PLAYWRIGHT_BROWSERS_PATH=/var/lib/wio-agent/.cache/ms-playwright"
+	if npmRegistry == mainlandNPMRegistry {
+		environment += " PLAYWRIGHT_DOWNLOAD_HOST=" + shellQuote(playwrightMirror)
+	}
+	install := environment + " timeout 10m " + shellQuote(playwrightCLI()) + " install chromium"
+	return `set -eu
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/.cache
+install -d -o wio-agent -g wio-agent -m 0750 /var/lib/wio-agent/.cache/ms-playwright
+su -s /bin/sh -c ` + shellQuote(install) + ` wio-agent`
+}
+
+func playwrightVerificationScript() string {
+	javascript := `const { chromium } = require(` + strconv.Quote(path.Join(playwrightPrefix(), "node_modules", "playwright")) + `); (async () => { const browser = await chromium.launch({ headless: true }); console.log(await browser.version()); await browser.close(); })().catch(error => { console.error(error); process.exit(1); });`
+	verify := "env HOME=/var/lib/wio-agent PLAYWRIGHT_BROWSERS_PATH=/var/lib/wio-agent/.cache/ms-playwright node -e " + shellQuote(javascript)
+	return `set -eu
+` + shellQuote(playwrightCLI()) + ` --version
+su -s /bin/sh -c ` + shellQuote(verify) + ` wio-agent`
+}
+
+func playwrightPrefix() string {
+	return "/var/lib/wio-agent/playwright/versions/" + playwrightVersion
+}
+
+func playwrightCLI() string {
+	return path.Join(playwrightPrefix(), "node_modules", ".bin", "playwright")
+}
+
+func agentServiceUnit(unit []byte, allowSudo bool) []byte {
+	if !allowSudo {
+		return unit
+	}
+	content := string(unit)
+	for from, to := range map[string]string{
+		"NoNewPrivileges=true":  "NoNewPrivileges=false",
+		"ProtectSystem=strict":  "ProtectSystem=false",
+		"ProtectHome=read-only": "ProtectHome=false",
+		"RestrictSUIDSGID=true": "RestrictSUIDSGID=false",
+	} {
+		content = strings.ReplaceAll(content, from, to)
+	}
+	return []byte(content)
+}
+
+func (request InstallRequest) report(step string, current, total int64) {
+	if request.Progress != nil {
+		request.Progress(InstallProgress{Step: step, Current: current, Total: total})
+	}
+}
+
+func validateInstallRequest(request InstallRequest) error {
+	if _, err := normalizeTarget(request.Target); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(request.ExpectedFingerprint, "SHA256:") || strings.TrimSpace(request.ControlURL) == "" || strings.TrimSpace(request.EnrollmentToken) == "" {
+		return ErrInvalidTarget
+	}
+	if !validAPIURL(request.CodexAPIURL) || !validAPIKey(request.CodexAPIKey) || !validModel(request.CodexModel) {
+		return ErrInvalidTarget
+	}
+	if request.GitEndpoint != "" {
+		if !validAPIURL(request.GitEndpoint) || strings.TrimSpace(request.GitUsername) == "" || len(request.GitUsername) > 256 || strings.ContainsAny(request.GitUsername, "\r\n\x00") || !validAPIKey(request.GitToken) {
+			return ErrInvalidTarget
+		}
+		if _, _, err := gitidentity.Normalize(request.GitCommitName, request.GitCommitEmail); err != nil {
+			return ErrInvalidTarget
+		}
+	}
+	return nil
+}
+
+func validateUninstallRequest(request UninstallRequest) error {
+	if _, err := normalizeTarget(request.Target); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(strings.TrimSpace(request.ExpectedFingerprint), "SHA256:") || !validServerID(strings.TrimSpace(request.ExpectedServerID)) {
+		return ErrInvalidTarget
+	}
+	return nil
+}
+
+func validServerID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for index, char := range value {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || index > 0 && (char == '-' || char == '_' || char == '.' || char == ':') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func normalizeHostTarget(target HostTarget) (HostTarget, error) {
+	target.Host = strings.TrimSpace(target.Host)
+	if target.Port == 0 {
+		target.Port = 22
+	}
+	if !validHost(target.Host) || target.Port < 1 || target.Port > 65535 {
+		return HostTarget{}, ErrInvalidTarget
+	}
+	return target, nil
+}
+
+func normalizeTarget(target Target) (Target, error) {
+	host, err := normalizeHostTarget(HostTarget{Host: target.Host, Port: target.Port})
+	if err != nil {
+		return Target{}, err
+	}
+	target.Host = host.Host
+	target.Port = host.Port
+	target.User = strings.TrimSpace(target.User)
+	target.AuthMethod = strings.TrimSpace(target.AuthMethod)
+	if !validUser(target.User) {
+		return Target{}, ErrInvalidTarget
+	}
+	switch target.AuthMethod {
+	case "none":
+		target.Password = ""
+		target.PrivateKey = ""
+		target.PrivateKeyPassphrase = ""
+	case "password":
+		if target.Password == "" || len(target.Password) > 4096 {
+			return Target{}, ErrInvalidTarget
+		}
+	case "private_key":
+		if strings.TrimSpace(target.PrivateKey) == "" || len(target.PrivateKey) > 256<<10 || len(target.PrivateKeyPassphrase) > 4096 {
+			return Target{}, ErrInvalidTarget
+		}
+	default:
+		return Target{}, ErrInvalidTarget
+	}
+	return target, nil
+}
+
+func validHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	for _, part := range strings.Split(host, ".") {
+		if part == "" || len(part) > 63 || part[0] == '-' || part[len(part)-1] == '-' {
+			return false
+		}
+		for _, char := range part {
+			if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validUser(user string) bool {
+	if user == "" || len(user) > 64 {
+		return false
+	}
+	for _, char := range user {
+		if char <= 32 || char == 127 {
+			return false
+		}
+	}
+	return true
+}
+
+func connect(ctx context.Context, target Target, expectedFingerprint string) (*sshHost, hostKeyInfo, error) {
+	auth, err := authentication(target)
+	if err != nil {
+		return nil, hostKeyInfo{}, err
+	}
+	var keyInfo hostKeyInfo
+	mismatch := false
+	configuration := &ssh.ClientConfig{
+		User:    target.User,
+		Timeout: 12 * time.Second,
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			keyInfo = hostKeyInfo{Fingerprint: ssh.FingerprintSHA256(key), Type: key.Type()}
+			if expectedFingerprint != "" && subtle.ConstantTimeCompare([]byte(keyInfo.Fingerprint), []byte(expectedFingerprint)) != 1 {
+				mismatch = true
+				return ErrHostKeyMismatch
+			}
+			return nil
+		},
+	}
+	if auth != nil {
+		configuration.Auth = []ssh.AuthMethod{auth}
+	}
+	address := net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
+	connection, err := (&net.Dialer{Timeout: 12 * time.Second}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, hostKeyInfo{}, fmt.Errorf("%w: %v", ErrConnection, err)
+	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = connection.Close()
+	})
+	defer stop()
+	_ = connection.SetDeadline(handshakeDeadline(ctx, 90*time.Second))
+	clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, configuration)
+	if err != nil {
+		connection.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, hostKeyInfo{}, fmt.Errorf("%w: %w", ErrConnection, ctxErr)
+		}
+		if mismatch {
+			return nil, hostKeyInfo{}, ErrHostKeyMismatch
+		}
+		return nil, hostKeyInfo{}, classifyHandshakeError(err)
+	}
+	if err := connection.SetDeadline(time.Time{}); err != nil {
+		_ = clientConnection.Close()
+		return nil, hostKeyInfo{}, fmt.Errorf("%w: could not clear SSH handshake deadline: %v", ErrConnection, err)
+	}
+	return &sshHost{ssh.NewClient(clientConnection, channels, requests)}, keyInfo, nil
+}
+
+func handshakeDeadline(ctx context.Context, maxDuration time.Duration) time.Time {
+	limit := time.Now().Add(maxDuration)
+	if d, ok := ctx.Deadline(); ok && d.Before(limit) {
+		return d
+	}
+	return limit
+}
+
+func classifyHandshakeError(err error) error {
+	var authenticationError *ssh.ServerAuthError
+	if errors.As(err, &authenticationError) {
+		return fmt.Errorf("%w: %v", ErrAuthentication, err)
+	}
+	return fmt.Errorf("%w: %v", ErrConnection, err)
+}
+
+var errHostKeyCaptured = errors.New("SSH host key captured")
+
+func probeHostKey(ctx context.Context, target HostTarget) (HostKeyResult, error) {
+	address := net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
+	connection, err := (&net.Dialer{Timeout: 12 * time.Second}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return HostKeyResult{}, fmt.Errorf("%w: %v", ErrConnection, err)
+	}
+	defer connection.Close()
+	stop := context.AfterFunc(ctx, func() {
+		_ = connection.Close()
+	})
+	defer stop()
+	_ = connection.SetDeadline(handshakeDeadline(ctx, 15*time.Second))
+	var result HostKeyResult
+	configuration := &ssh.ClientConfig{
+		User:    "wio-host-key-probe",
+		Timeout: 12 * time.Second,
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			result = HostKeyResult{Fingerprint: ssh.FingerprintSHA256(key), KeyType: key.Type()}
+			return errHostKeyCaptured
+		},
+	}
+	_, _, _, err = ssh.NewClientConn(connection, address, configuration)
+	if result.Fingerprint != "" && errors.Is(err, errHostKeyCaptured) {
+		return result, nil
+	}
+	if result.Fingerprint != "" {
+		return result, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return HostKeyResult{}, fmt.Errorf("%w: %w", ErrConnection, ctxErr)
+	}
+	return HostKeyResult{}, fmt.Errorf("%w: %v", ErrConnection, err)
+}
+
+func authentication(target Target) (ssh.AuthMethod, error) {
+	if target.AuthMethod == "none" {
+		// SSH always attempts the none method first. An empty method list lets
+		// an already-authorized gateway accept it without inventing credentials.
+		return nil, nil
+	}
+	if target.AuthMethod == "password" {
+		return ssh.Password(target.Password), nil
+	}
+	key := []byte(target.PrivateKey)
+	signer, err := ssh.ParsePrivateKey(key)
+	if err != nil && target.PrivateKeyPassphrase != "" {
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(target.PrivateKeyPassphrase))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: private key could not be parsed", ErrInvalidTarget)
+	}
+	return ssh.PublicKeys(signer), nil
+}
+
+type hostKeyInfo struct {
+	Fingerprint string
+	Type        string
+}
+
+type inspection struct {
+	Hostname     string
+	OS           string
+	Architecture string
+	SudoReady    bool
+	DockerReady  bool
+	ComposeReady bool
+	GitReady     bool
+	CodexReady   bool
+	NPMReady     bool
+}
+
+func inspect(client commandHost, _ hostKeyInfo) (inspection, error) {
+	hostname, err := runTrimmed(client, "hostname")
+	if err != nil {
+		return inspection{}, fmt.Errorf("%w: could not inspect hostname", ErrConnection)
+	}
+	osName, err := runTrimmed(client, "uname -s")
+	if err != nil {
+		return inspection{}, fmt.Errorf("%w: could not inspect operating system", ErrConnection)
+	}
+	architecture, err := runTrimmed(client, "uname -m")
+	if err != nil {
+		return inspection{}, fmt.Errorf("%w: could not inspect architecture", ErrConnection)
+	}
+	uid, _ := runTrimmed(client, "id -u")
+	root := uid == "0"
+	sudoReady := root
+	if !root {
+		_, sudoErr := run(client, "sudo -n true")
+		sudoReady = sudoErr == nil
+	}
+	return inspection{
+		Hostname:     strings.TrimSpace(hostname),
+		OS:           strings.ToLower(strings.TrimSpace(osName)),
+		Architecture: normalizedArchitecture(architecture),
+		SudoReady:    sudoReady,
+		DockerReady:  rootCommandWorks(client, root, `docker info --format '{{.ServerVersion}}'`),
+		ComposeReady: rootCommandWorks(client, root, "docker compose version --short"),
+		GitReady:     rootCommandWorks(client, root, "git --version"),
+		CodexReady:   rootCommandWorks(client, root, "codex --version"),
+		NPMReady:     rootCommandWorks(client, root, `node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)' && npm --version`),
+	}, nil
+}
+
+func rootCommandWorks(client commandHost, root bool, command string) bool {
+	_, err := run(client, elevated(root, command))
+	return err == nil
+}
+
+func agentCommandWorks(client commandHost, root bool, command string) bool {
+	_, err := run(client, elevated(root, "su -s /bin/sh -c "+shellQuote(command)+" wio-agent"))
+	return err == nil
+}
+
+func normalizedArchitecture(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "x86_64", "amd64":
+		return "amd64"
+	case "aarch64", "arm64":
+		return "arm64"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func agentAsset(architecture string) (string, error) {
+	switch normalizedArchitecture(architecture) {
+	case "amd64":
+		return "wio-agent-linux-amd64", nil
+	case "arm64":
+		return "wio-agent-linux-arm64", nil
+	default:
+		return "", fmt.Errorf("%w: %s", ErrUnsupportedPlatform, architecture)
+	}
+}
+
+func isRoot(client commandHost) bool {
+	uid, err := runTrimmed(client, "id -u")
+	return err == nil && uid == "0"
+}
+
+func commandAvailable(client commandHost, command string) bool {
+	_, err := run(client, "command -v "+command+" >/dev/null 2>&1")
+	return err == nil
+}
+
+func upload(client commandHost, root bool, destination, mode string, content []byte, progress func(int64, int64)) error {
+	allowed := map[string]string{
+		"/usr/local/bin/wio-agent":                     "0755",
+		"/etc/systemd/system/wio-agent.service":        "0644",
+		"/etc/systemd/system/wio-prerequisite.service": "0644",
+		"/etc/wio-agent/codex.key":                     "0600",
+		"/var/lib/wio-agent/.Codex/config.toml":        "0600",
+		"/var/lib/wio-agent/.git-credentials":          "0600",
+		"/var/lib/wio-agent/.gitconfig":                "0600",
+	}
+	if allowed[destination] != mode {
+		return ErrInstallation
+	}
+	temporary := fmt.Sprintf(`set -eu
+umask 077
+tmp=%s
+trap 'rm -f "$tmp"' EXIT
+mkdir -p %s
+cat > "$tmp"
+chmod %s "$tmp"
+mv -f "$tmp" %s
+`, shellQuote(destination+".wio-new"), shellQuote(filepath.Dir(destination)), mode, shellQuote(destination))
+	output := &limitedBuffer{remaining: 4 << 10}
+	reader := io.Reader(bytes.NewReader(content))
+	if progress != nil {
+		reader = &progressReader{reader: reader, total: int64(len(content)), notify: progress, lastAt: time.Now()}
+	}
+	if err := executeCommand(client, elevated(root, temporary), reader, output); err != nil {
+		return fmt.Errorf("%w: %s", ErrInstallation, remoteErrorDetail(output.String(), err))
+	}
+	return nil
+}
+
+type progressReader struct {
+	reader      io.Reader
+	total       int64
+	current     int64
+	lastCurrent int64
+	lastAt      time.Time
+	notify      func(int64, int64)
+}
+
+func (reader *progressReader) Read(buffer []byte) (int, error) {
+	count, err := reader.reader.Read(buffer)
+	reader.current += int64(count)
+	if reader.current == reader.total || reader.current-reader.lastCurrent >= 256<<10 || time.Since(reader.lastAt) >= time.Second {
+		reader.notify(reader.current, reader.total)
+		reader.lastCurrent = reader.current
+		reader.lastAt = time.Now()
+	}
+	return count, err
+}
+
+func remoteErrorDetail(output string, err error) string {
+	detail := strings.Join(strings.Fields(output), " ")
+	if detail == "" {
+		detail = err.Error()
+	}
+	if len(detail) > 512 {
+		detail = detail[:512]
+	}
+	return detail
+}
+
+func elevated(root bool, script string) string {
+	if root {
+		return "sh -c " + shellQuote(script)
+	}
+	return "sudo -n sh -c " + shellQuote(script)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func validAPIURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+func validAPIKey(value string) bool {
+	if len(value) < 8 || len(value) > 16<<10 {
+		return false
+	}
+	for _, char := range value {
+		if char == 0 || char == '\r' || char == '\n' {
+			return false
+		}
+	}
+	return true
+}
+
+var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+func validModel(value string) bool {
+	return modelPattern.MatchString(strings.TrimSpace(value))
+}
+
+func gitCredential(endpoint, username, token string) (string, error) {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(endpoint), "/"))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", ErrInvalidTarget
+	}
+	parsed.User = url.UserPassword(strings.TrimSpace(username), token)
+	return parsed.String(), nil
+}
+
+func runTrimmed(client commandHost, command string) (string, error) {
+	output, err := run(client, command)
+	return strings.TrimSpace(output), err
+}
+
+func run(client commandHost, command string) (string, error) {
+	return runWithInput(client, command, nil)
+}
+
+// runWithInput runs command with input as its standard input. Secrets are
+// passed this way so that they never appear on a remote command line.
+func runWithInput(client commandHost, command string, input []byte) (string, error) {
+	output := &limitedBuffer{remaining: 64 << 10}
+	err := executeCommand(client, command, bytes.NewReader(input), output)
+	return output.String(), err
+}
+
+type limitedBuffer struct {
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	remaining int
+}
+
+func (b *limitedBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	original := len(value)
+	if b.remaining > 0 {
+		if len(value) > b.remaining {
+			value = value[:b.remaining]
+		}
+		_, _ = b.buffer.Write(value)
+		b.remaining -= len(value)
+	}
+	return original, nil
+}
+
+func (b *limitedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+var enrolledServerPattern = regexp.MustCompile(`Enrolled server ([0-9a-fA-F-]+);`)
+
+// enrollCommand enrolls the Agent with the token read from standard input.
+// --token-file is available on the target because Install uploads the Agent
+// binary shipped with this control plane (built from the same source tree)
+// to /usr/local/bin/wio-agent before it enrolls.
+func enrollCommand(controlURL, codexPath string) string {
+	return "/usr/local/bin/wio-agent enroll --url " + shellQuote(controlURL) + " --token-file - --codex " + shellQuote(codexPath)
+}
+
+func enrollCommandOptions(controlURL, codexPath string, allowSudo bool) string {
+	command := enrollCommand(controlURL, codexPath)
+	if allowSudo {
+		command += " --allow-sudo"
+	}
+	return command
+}
+
+func enrollmentServerID(output string) string {
+	match := enrolledServerPattern.FindStringSubmatch(output)
+	if len(match) != 2 {
+		return ""
+	}
+	return match[1]
+}
