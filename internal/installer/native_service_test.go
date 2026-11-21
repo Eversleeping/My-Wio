@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/agent"
+	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/protocol"
 	"google.golang.org/grpc"
@@ -120,8 +121,9 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 	if err := atomicPortableWrite(layout.Key, []byte("native-test-key\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	probe, verifyDependency := nativeDependencyProbe(t, layout, binary)
 	id := "11111111-1111-4111-8111-111111111111"
-	config := agent.Config{ControlURL: "http://" + listener.Addr().String(), ServerID: id, AgentToken: "native-test-token", StateDir: layout.State, CloneRoot: filepath.Join(layout.State, "projects"), ScanRoots: []string{layout.State}, CodexPath: "wio-no-test-cli"}
+	config := agent.Config{ControlURL: "http://" + listener.Addr().String(), ServerID: id, AgentToken: "native-test-token", StateDir: layout.State, CloneRoot: filepath.Join(layout.State, "projects"), ScanRoots: []string{layout.State}, CodexPath: probe}
 	if err := agent.SaveConfig(layout.Config, config); err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +135,9 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 	}
 	select {
 	case h := <-control.heartbeats:
+		if verifyDependency && (!h.CodexReady || h.CodexVersion != buildinfo.Version) {
+			t.Fatalf("service could not execute normalized dependency: ready=%v version=%q", h.CodexReady, h.CodexVersion)
+		}
 		if h.OS != runtime.GOOS || h.Architecture != runtime.GOARCH {
 			t.Fatalf("wrong platform: %+v", h)
 		}

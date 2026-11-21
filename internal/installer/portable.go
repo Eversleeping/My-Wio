@@ -123,6 +123,12 @@ func installPortable(ctx context.Context, request InstallRequest) (InstallResult
 			return InstallResult{}, err
 		}
 	}
+	// Dependencies extracted in a private administrator temp directory can retain
+	// that ACL when moved into Program Files. Normalize permissions before the
+	// unprivileged CLI installation service starts, including newly written keys.
+	if err := protectPortableState(ctx, layout, state); err != nil {
+		return InstallResult{}, err
+	}
 	request.report("installing_codex", 0, 0)
 	cliWarnings, err := installPortableCLIs(ctx, state, versions)
 	if err != nil {

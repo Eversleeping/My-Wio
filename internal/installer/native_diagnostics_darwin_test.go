@@ -8,3 +8,7 @@ import (
 )
 
 func nativeServiceDiagnostics(*testing.T, hostplatform.Layout) {}
+
+func nativeDependencyProbe(*testing.T, hostplatform.Layout, []byte) (string, bool) {
+	return "wio-no-test-cli", false
+}
