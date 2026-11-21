@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -80,5 +81,22 @@ func TestManagedCLISelectionSurvivesFailedRepair(t *testing.T) {
 		if err != nil || string(raw) != "1.0.0" {
 			t.Fatal("failed CLI replaced selection")
 		}
+	}
+}
+
+type windowsInspectionHost struct{}
+
+func (windowsInspectionHost) execute(_ string, _ io.Reader, out io.Writer) error {
+	_, err := io.WriteString(out, `{"architecture":"x64","admin":true}`)
+	return err
+}
+func TestWindowsInspectionNormalizesDotNetArchitecture(t *testing.T) {
+	probe, err := inspectWindows(windowsInspectionHost{}, "windows-host")
+	if err != nil || probe.Architecture != "amd64" || probe.OS != "windows" || !probe.SudoReady {
+		t.Fatalf("Windows OpenSSH platform: %+v %v", probe, err)
+	}
+	asset, err := platformAgentAsset(probe.OS, probe.Architecture)
+	if err != nil || asset != "wio-agent-windows-amd64.exe" {
+		t.Fatalf("Windows OpenSSH asset: %q %v", asset, err)
 	}
 }

@@ -683,7 +683,7 @@ func inspect(client commandHost, _ hostKeyInfo) (inspection, error) {
 	if err != nil {
 		return inspectWindows(client, hostname)
 	}
-	if strings.Contains(strings.ToLower(osName), "mingw") || strings.Contains(strings.ToLower(osName), "msys") {
+	if strings.Contains(strings.ToLower(osName), "mingw") || strings.Contains(strings.ToLower(osName), "msys") || strings.HasPrefix(strings.ToLower(osName), "windows") {
 		return inspectWindows(client, hostname)
 	}
 	architecture, err := runTrimmed(client, "uname -m")
@@ -722,7 +722,7 @@ func agentCommandWorks(client commandHost, root bool, command string) bool {
 
 func normalizedArchitecture(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "x86_64", "amd64":
+	case "x86_64", "amd64", "x64":
 		return "amd64"
 	case "aarch64", "arm64":
 		return "arm64"
