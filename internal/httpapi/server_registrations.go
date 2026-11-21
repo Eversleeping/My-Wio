@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 
@@ -27,6 +27,7 @@ type registrationConfiguration struct {
 	CodexProfileID        string   `json:"codex_profile_id"`
 	GitProfileID          string   `json:"git_profile_id"`
 	OS                    string   `json:"os"`
+	RepairServerID        string   `json:"repair_server_id,omitempty"`
 	CredentialsCiphertext string   `json:"credentials_ciphertext,omitempty"`
 }
 
@@ -48,8 +49,8 @@ func (a *API) createServerRegistration(w http.ResponseWriter, r *http.Request) {
 	if input.OS == "" {
 		input.OS = "linux"
 	}
-	if input.OS != "linux" {
-		writeBootstrapCode(w, 400, "unsupported_platform", "only Linux amd64 and arm64 servers are supported")
+	if !hostplatform.Supported(input.OS, "amd64") {
+		writeBootstrapCode(w, 400, "unsupported_platform", "supported platforms: Linux/macOS amd64 or arm64, Windows amd64")
 		return
 	}
 	if input.Name == "" || len(input.Name) > 128 || input.CodexProfileID == "" {
@@ -57,7 +58,7 @@ func (a *API) createServerRegistration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(input.ScanRoots) == 0 {
-		input.ScanRoots = []string{"/srv", "/opt", "/home"}
+		input.ScanRoots = hostplatform.For(input.OS).Roots
 	}
 	if len(input.ScanRoots) > 32 {
 		writeError(w, 400, "too many scan roots")
@@ -65,11 +66,11 @@ func (a *API) createServerRegistration(w http.ResponseWriter, r *http.Request) {
 	}
 	for i, root := range input.ScanRoots {
 		root = strings.TrimSpace(root)
-		if !path.IsAbs(root) || strings.ContainsAny(root, "\x00\r\n") || len(root) > 4096 {
-			writeBootstrapCode(w, 400, "scan_roots_invalid", "scan roots must be absolute Linux paths")
+		if !hostplatform.Absolute(input.OS, root) || strings.ContainsAny(root, "\x00\r\n") || len(root) > 4096 {
+			writeBootstrapCode(w, 400, "scan_roots_invalid", "scan roots must be absolute paths for the selected operating system")
 			return
 		}
-		input.ScanRoots[i] = path.Clean(root)
+		input.ScanRoots[i] = hostplatform.Clean(input.OS, root)
 	}
 	metadata, err := normalizeServerMetadata(input.Address, input.Configuration, input.Notes)
 	if err != nil {
@@ -82,7 +83,7 @@ func (a *API) createServerRegistration(w http.ResponseWriter, r *http.Request) {
 		a.writeBootstrapError(w, err)
 		return
 	}
-	snapshot := installer.InstallRequest{CodexAPIURL: resolved.CodexAPIURL, CodexAPIKey: resolved.CodexAPIKey, CodexModel: resolved.CodexModel, GitEndpoint: resolved.GitEndpoint, GitUsername: resolved.GitUsername, GitToken: resolved.GitToken, GitCommitName: resolved.GitCommitName, GitCommitEmail: resolved.GitCommitEmail}
+	snapshot := installer.InstallRequest{OS: input.OS, CodexAPIURL: resolved.CodexAPIURL, CodexAPIKey: resolved.CodexAPIKey, CodexModel: resolved.CodexModel, GitEndpoint: resolved.GitEndpoint, GitUsername: resolved.GitUsername, GitToken: resolved.GitToken, GitCommitName: resolved.GitCommitName, GitCommitEmail: resolved.GitCommitEmail}
 	agentToken, err := security.RandomToken(32)
 	if err != nil {
 		writeError(w, 500, "could not create Agent credentials")
@@ -98,7 +99,14 @@ func (a *API) createServerRegistration(w http.ResponseWriter, r *http.Request) {
 		writeBootstrapCode(w, 503, "assets_unavailable", "Agent installation packages are unavailable")
 		return
 	}
-	if _, err := a.agentUpdates.Command(); err != nil {
+	packages, packageErr := a.agentUpdates.Command()
+	available := false
+	for key := range packages.Packages {
+		if strings.HasPrefix(key, input.OS+"-") {
+			available = true
+		}
+	}
+	if packageErr != nil || !available {
 		writeBootstrapCode(w, 503, "assets_unavailable", "Agent installation packages are unavailable")
 		return
 	}
@@ -107,16 +115,39 @@ func (a *API) createServerRegistration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not create registration code")
 		return
 	}
+	if input.RepairServerID != "" {
+		server, err := a.store.Server(r.Context(), input.RepairServerID)
+		if err != nil || server.IsControlPlane {
+			writeError(w, 400, "invalid repair server")
+			return
+		}
+		if server.OS != "" && server.OS != input.OS {
+			writeError(w, 400, "repair operating system differs")
+			return
+		}
+		input.Name = server.Name
+	}
 	raw, _ := json.Marshal(input)
 	registration, err := a.store.CreateServerRegistration(r.Context(), input.Name, code, string(raw))
 	if err != nil {
 		writeError(w, 500, "could not create registration")
 		return
 	}
+	if input.RepairServerID != "" {
+		if err := a.store.BindRepairRegistration(r.Context(), registration.ID, input.RepairServerID); err != nil {
+			_ = a.store.RevokeServerRegistration(r.Context(), registration.ID)
+			writeError(w, 500, "could not bind repair")
+			return
+		}
+		registration.RepairServerID = input.RepairServerID
+	}
 	origin := a.agentControlURL(r)
 	arguments := " -s -- --url " + registrationShellQuote(origin) + " --registration " + registrationShellQuote(registration.ID)
 	command := "curl -fsSL " + registrationShellQuote(origin+"/api/agent/install.sh") + " | (if [ \"$(id -u)\" = 0 ]; then sh" + arguments + "; else sudo sh" + arguments + "; fi)"
-	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.registration.create", "registration", registration.ID, map[string]any{"name": input.Name, "os": "linux"}, clientIP(r))
+	if input.OS == "windows" {
+		command = "& { " + `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $work=Join-Path $env:TEMP ([Guid]::NewGuid().ToString('N')+'.ps1'); try { Invoke-WebRequest -UseBasicParsing ` + installer.PowerShellQuote(origin+"/api/agent/install.ps1") + ` -OutFile $work; & ([scriptblock]::Create([IO.File]::ReadAllText($work))) -Url ` + installer.PowerShellQuote(origin) + ` -Registration ` + installer.PowerShellQuote(registration.ID) + ` } finally { Remove-Item -Force $work -ErrorAction SilentlyContinue } }`
+	}
+	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.registration.create", "registration", registration.ID, map[string]any{"name": input.Name, "os": input.OS}, clientIP(r))
 	a.publishRegistration(registration.ID)
 	writeJSON(w, 201, map[string]any{"registration": registration, "command": command, "code": code})
 }
@@ -203,13 +234,21 @@ func (a *API) claimServerRegistration(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.OS != "linux" || input.Architecture != "amd64" && input.Architecture != "arm64" {
-		writeBootstrapCode(w, 400, "unsupported_platform", "only Linux amd64 and arm64 servers are supported")
+	if !hostplatform.Supported(input.OS, input.Architecture) {
+		writeBootstrapCode(w, 400, "unsupported_platform", "supported platforms: Linux/macOS amd64 or arm64, Windows amd64")
 		return
 	}
 	if len(input.Code) > 256 || len(input.DeviceKey) < 32 || len(input.DeviceKey) > 256 {
 		writeError(w, 401, "registration credentials rejected")
 		return
+	}
+	target, lookupErr := a.store.ServerRegistration(r.Context(), chi.URLParam(r, "registrationID"))
+	if lookupErr == nil {
+		cfg, cfgErr := a.registrationInput(target)
+		if cfgErr != nil || (cfg.OS != "" && cfg.OS != input.OS) {
+			writeBootstrapCode(w, 400, "unsupported_platform", "registration operating system differs")
+			return
+		}
 	}
 	row, err := a.store.ClaimServerRegistration(r.Context(), chi.URLParam(r, "registrationID"), input.Code, input.DeviceKey)
 	if err != nil {
@@ -276,7 +315,10 @@ func (a *API) writeRegistrationPlan(w http.ResponseWriter, r *http.Request, row 
 	request.RegistrationID = row.ID
 	request.EnrollmentToken = key
 	request.ExpectedServerID = row.ServerID
-	request.PreserveAccessSettings = row.ServerID != ""
+	if request.ExpectedServerID == "" {
+		request.ExpectedServerID = row.RepairServerID
+	}
+	request.PreserveAccessSettings = request.ExpectedServerID != ""
 
 	writeJSON(w, 200, map[string]any{"registration": row, "request": request})
 }

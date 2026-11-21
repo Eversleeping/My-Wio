@@ -30,6 +30,8 @@ type ControlEnvelope struct {
 }
 
 type Heartbeat struct {
+	OS               string                  `json:"os,omitempty"`
+	Architecture     string                  `json:"architecture,omitempty"`
 	SessionIsolation *SessionIsolationStatus `json:"session_isolation,omitempty"`
 	Capabilities     []string                `json:"capabilities,omitempty"`
 	Hostname         string                  `json:"hostname"`
@@ -501,6 +503,7 @@ type AgentUpdatePackage struct {
 }
 
 type AgentUpdateCommand struct {
+	Rollback bool                          `json:"rollback,omitempty"`
 	Version  string                        `json:"version"`
 	Packages map[string]AgentUpdatePackage `json:"packages"`
 }

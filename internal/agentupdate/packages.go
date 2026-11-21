@@ -78,8 +78,13 @@ func (s *Store) load() (result map[string]Package, loadErr error) {
 	packages := make(map[string]Package)
 	files := make(map[string]os.FileInfo)
 	for architecture, filename := range map[string]string{
-		"amd64": "wio-agent-linux-amd64",
-		"arm64": "wio-agent-linux-arm64",
+		"amd64":         "wio-agent-linux-amd64",
+		"arm64":         "wio-agent-linux-arm64",
+		"linux-amd64":   "wio-agent-linux-amd64",
+		"linux-arm64":   "wio-agent-linux-arm64",
+		"darwin-amd64":  "wio-agent-darwin-amd64",
+		"darwin-arm64":  "wio-agent-darwin-arm64",
+		"windows-amd64": "wio-agent-windows-amd64.exe",
 	} {
 		path := filepath.Join(s.assetDir, filename)
 		info, err := os.Stat(path)

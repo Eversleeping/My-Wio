@@ -1,8 +1,8 @@
 package geminiadapter
 
 import (
+	"github.com/wio-platform/wio/internal/childprocess"
 	"os/exec"
-	"time"
 )
 
-func configureProcess(cmd *exec.Cmd) { cmd.WaitDelay = 5 * time.Second }
+func configureProcess(cmd *exec.Cmd) { childprocess.Configure(cmd) }

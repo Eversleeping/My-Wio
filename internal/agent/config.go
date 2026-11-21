@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/hostplatform"
 )
 
 type Config struct {
@@ -66,31 +67,34 @@ func SaveConfig(filename string, config Config) error {
 	if err := os.Chmod(temporary, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(temporary, filename)
+	return hostplatform.ReplaceFile(temporary, filename)
 }
 
 func (c *Config) defaults() {
 	c.ControlURL = strings.TrimRight(strings.TrimSpace(c.ControlURL), "/")
 	if len(c.ScanRoots) == 0 {
-		c.ScanRoots = []string{"/srv", "/opt", "/home"}
+		c.ScanRoots = hostplatform.Current().Roots
 	}
 	if c.CloneRoot == "" {
-		c.CloneRoot = "/var/lib/wio-agent/projects"
+		c.CloneRoot = filepath.Join(hostplatform.Current().State, "projects")
 	}
 	if c.StateDir == "" {
-		c.StateDir = "/var/lib/wio-agent"
+		c.StateDir = hostplatform.Current().State
 	}
 	if c.CodexPath == "" {
 		c.CodexPath = "codex"
 	}
 	if c.CodexAPIKeyFile == "" {
-		c.CodexAPIKeyFile = "/etc/wio-agent/codex.key"
+		c.CodexAPIKeyFile = hostplatform.Current().Key
 	}
 	if c.DockerPath == "" {
 		c.DockerPath = "docker"
 	}
 	if c.PrerequisiteSocket == "" {
-		c.PrerequisiteSocket = "/run/wio-prerequisites/helper.sock"
+		c.PrerequisiteSocket = filepath.Join(hostplatform.Current().State, "helper.sock")
+		if hostplatform.Current().State == "/var/lib/wio-agent" {
+			c.PrerequisiteSocket = "/run/wio-prerequisites/helper.sock"
+		}
 	}
 }
 

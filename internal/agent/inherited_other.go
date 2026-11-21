@@ -1,9 +1,8 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package agent
 
 import "log/slog"
 
-// ReapInheritedChildren is only needed where the Agent replaces itself with
-// syscall.Exec, which is Linux-only.
+// Windows workers are replaced by their service supervisor, which owns their process job.
 func ReapInheritedChildren(*slog.Logger) int { return 0 }

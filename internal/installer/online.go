@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"io"
 	"net/http"
 	"os"
@@ -13,7 +14,7 @@ import (
 var ErrHeartbeatPending = errors.New("Agent heartbeat has not been received")
 
 func verifyInstalledAgent(ctx context.Context, controlURL, serverID string) error {
-	raw, err := os.ReadFile("/etc/wio-agent/config.json")
+	raw, err := os.ReadFile(hostplatform.Current().Config)
 	if err != nil {
 		return ErrHeartbeatPending
 	}

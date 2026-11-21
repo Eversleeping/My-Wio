@@ -82,6 +82,8 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		}
 		defer db.Close()
 		assertServerRegistrationLifecycle(t, db)
+		assertHeartbeatPlatform(t, db)
+		assertRepairRegistration(t, db)
 	})
 
 	t.Run("fixture schema consistency", func(t *testing.T) {

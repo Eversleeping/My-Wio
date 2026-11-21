@@ -59,3 +59,10 @@ func readInstallationCode(ctx context.Context) (string, error) {
 	}
 	return code, nil
 }
+
+func installationPreflight() error {
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		return errors.New("a running systemd is required")
+	}
+	return nil
+}

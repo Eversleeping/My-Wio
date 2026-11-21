@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/installer"
 )
 
@@ -129,7 +130,7 @@ func deviceKey(directory string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !info.IsDir() || info.Mode().Perm() != 0700 {
+	if !info.IsDir() || !hostplatform.Private(info, directory, 0700) {
 		return "", errors.New("installation state directory must be private")
 	}
 	file := filepath.Join(directory, "device.key")
@@ -167,7 +168,7 @@ func deviceKey(directory string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+	if !info.Mode().IsRegular() || !hostplatform.Private(info, file, 0600) {
 		return "", errors.New("installation device key must be a private regular file")
 	}
 	stored, err := os.ReadFile(file)
@@ -221,11 +222,11 @@ func Run(ctx context.Context, controlURL, id, stateRoot string, readCode func() 
 		fmt.Fprintln(output, "Agent is already registered and online.")
 		return nil
 	}
-	if raw, err := os.ReadFile("/etc/wio-agent/config.json"); err == nil {
+	if raw, err := os.ReadFile(hostplatform.Current().Config); err == nil {
 		var installed struct {
 			ServerID string `json:"server_id"`
 		}
-		if json.Unmarshal(raw, &installed) != nil || installed.ServerID == "" || installed.ServerID != plan.Registration.ServerID {
+		if json.Unmarshal(raw, &installed) != nil || installed.ServerID == "" || installed.ServerID != plan.Request.ExpectedServerID {
 			return errors.New("this machine already has another Agent identity; use repair registration")
 		}
 	} else if !os.IsNotExist(err) {
@@ -328,7 +329,7 @@ func bindControlURL(directory, controlURL string) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+	if !info.Mode().IsRegular() || !hostplatform.Private(info, file, 0600) {
 		return errors.New("installation origin must be a private regular file")
 	}
 	raw, err := os.ReadFile(file)

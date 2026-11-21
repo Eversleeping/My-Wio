@@ -15,6 +15,7 @@ DELETE /api/workspaces/{workspaceID}/git/branches/{branch} middleware=5
 DELETE /api/workspaces/{workspaceID}/git/remotes/{remote} middleware=5
 GET /api/agent/install-package/{architecture} middleware=3
 GET /api/agent/install-status middleware=3
+GET /api/agent/install.ps1 middleware=3
 GET /api/agent/install.sh middleware=3
 GET /api/agent/registrations/{registrationID}/session middleware=3
 GET /api/agent/update-package/{architecture} middleware=3

@@ -1189,7 +1189,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 		cancel()
 		return err
 	}
-	if err := process.Start(); err != nil {
+	if err := childprocess.Start(process); err != nil {
 		cancel()
 		return fmt.Errorf("start codex app-server: %w", err)
 	}
@@ -1210,7 +1210,7 @@ func (a *Adapter) ensureStarted(ctx context.Context) error {
 	}()
 	go a.stderrLoop(stderr)
 	go func() {
-		err := process.Wait()
+		err := childprocess.Wait(process)
 		cancel()
 		a.log.Warn("Codex app-server exited", "error", err)
 		a.resetProcess(process, fmt.Errorf("Codex app-server exited: %w", err))

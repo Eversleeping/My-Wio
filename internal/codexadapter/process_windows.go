@@ -8,10 +8,10 @@ import (
 	"github.com/wio-platform/wio/internal/childprocess"
 )
 
-func configureProcess(cmd *exec.Cmd) { cmd.WaitDelay = childprocess.WaitDelay }
+func configureProcess(cmd *exec.Cmd) { childprocess.Configure(cmd) }
 
 func killProcess(cmd *exec.Cmd) {
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		_ = childprocess.KillTree(cmd)
 	}
 }

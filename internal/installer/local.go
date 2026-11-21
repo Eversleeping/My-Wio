@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/deploy"
+	"github.com/wio-platform/wio/internal/agent"
 	"github.com/wio-platform/wio/internal/codexcli"
+	"github.com/wio-platform/wio/internal/hostplatform"
 )
 
 // Event is shared by SSH streaming and the local command. Error details from
@@ -32,11 +34,18 @@ type Event struct {
 // InstallLocal runs from a temporary executable, then atomically publishes the
 // installed binary. Embedded systemd templates match the container assets.
 func InstallLocal(ctx context.Context, request InstallRequest) (InstallResult, error) {
-	if runtime.GOOS != "linux" {
+	if request.OS != "" && request.OS != runtime.GOOS {
 		return InstallResult{}, ErrUnsupportedPlatform
 	}
 	if err := ValidateConfiguration(request); err != nil {
 		return InstallResult{}, err
+	}
+	previous, err := agent.LoadConfig(hostplatform.Current().Config)
+	if err == nil && (request.ExpectedServerID == "" || previous.ServerID != request.ExpectedServerID) {
+		return InstallResult{}, ErrServerMismatch
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return InstallResult{}, ErrAccessSettings
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
 	defer cancel()
@@ -58,7 +67,12 @@ func InstallLocal(ctx context.Context, request InstallRequest) (InstallResult, e
 			return InstallResult{}, err
 		}
 	}
-	result, err := New(staging).installOnHost(ctx, localHost{ctx}, request)
+	var result InstallResult
+	if runtime.GOOS == "linux" {
+		result, err = New(staging).installOnHost(ctx, localHost{ctx}, request)
+	} else {
+		result, err = installPortable(ctx, request)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -109,13 +123,16 @@ func (s *Service) launchInstaller(ctx context.Context, client *sshHost, key host
 	if err != nil {
 		return InstallResult{}, err
 	}
-	if probe.OS != "linux" {
+	if request.OS != "" && request.OS != probe.OS {
 		return InstallResult{}, ErrUnsupportedPlatform
+	}
+	if probe.OS == "windows" {
+		return s.launchWindowsInstaller(ctx, client, probe, request)
 	}
 	if !probe.SudoReady {
 		return InstallResult{}, ErrPrivilegeRequired
 	}
-	asset, err := agentAsset(probe.Architecture)
+	asset, err := platformAgentAsset(probe.OS, probe.Architecture)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -146,6 +163,10 @@ func (s *Service) launchInstaller(ctx context.Context, client *sshHost, key host
 	if err := executeCommand(client, elevated(root, script), reader, output); err != nil {
 		return InstallResult{}, ErrInstallation
 	}
+	return launchRemoteSession(client, elevated(root, shellQuote(directory+"/wio-agent")+" install --request-stdin"), request)
+}
+
+func launchRemoteSession(client *sshHost, command string, request InstallRequest) (InstallResult, error) {
 	// The target needs no SSH login credentials or host fingerprint.
 	request.Target = Target{}
 	request.ExpectedFingerprint = ""
@@ -164,7 +185,7 @@ func (s *Service) launchInstaller(ctx context.Context, client *sshHost, key host
 		return InstallResult{}, err
 	}
 	session.Stderr = io.Discard
-	if err := session.Start(elevated(root, shellQuote(directory+"/wio-agent")+" install --request-stdin")); err != nil {
+	if err := session.Start(command); err != nil {
 		return InstallResult{}, ErrInstallation
 	}
 	var result *InstallResult

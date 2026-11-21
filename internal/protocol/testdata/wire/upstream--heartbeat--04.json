@@ -1,0 +1,21 @@
+{
+  "baseline": "2355af0+P8-02-04",
+  "direction": "upstream",
+  "kind": "heartbeat",
+  "source": ["github.com/wio-platform/wio/internal/agent.(*Client).enqueueHeartbeat"],
+  "payload": {
+    "os": "windows",
+    "architecture": "amd64",
+    "capabilities": ["agent.self_update", "agent.restart"],
+    "hostname": "fixture-windows",
+    "agent_version": "0.3.47",
+    "codex_version": "",
+    "codex_ready": false,
+    "gemini_version": "",
+    "gemini_ready": false,
+    "claude_version": "",
+    "claude_ready": false,
+    "scan_roots": ["C:/Projects"],
+    "managed_roots": ["C:/ProgramData/Wio/projects"]
+  }
+}

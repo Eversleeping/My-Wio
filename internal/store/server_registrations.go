@@ -10,6 +10,7 @@ import (
 )
 
 type ServerRegistration struct {
+	RepairServerID   string           `db:"repair_server_id" json:"repair_server_id,omitempty"`
 	ID               string           `db:"id" json:"id"`
 	Name             string           `db:"name" json:"name"`
 	CodeHash         string           `db:"code_hash" json:"-"`
@@ -111,6 +112,27 @@ func (s *Store) EnrollServerRegistration(ctx context.Context, id, device, hostna
 		}
 		return serverID, tx.Commit()
 	}
+	var repairID string
+	if err := tx.GetContext(ctx, &repairID, s.Q("SELECT repair_server_id FROM server_registrations WHERE id=?"), id); err != nil {
+		return "", err
+	}
+	if repairID != "" {
+		result, err := tx.ExecContext(ctx, s.Q(`UPDATE agent_credentials SET token_hash=?,created_at=?,revoked_at=NULL WHERE server_id IN (SELECT id FROM servers WHERE id=? AND revoked_at IS NULL AND is_control_plane=0)`), HashToken(agentToken), now, repairID)
+		if err != nil {
+			return "", err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return "", err
+		}
+		if count != 1 {
+			return "", sql.ErrNoRows
+		}
+		if _, err := tx.ExecContext(ctx, s.Q("UPDATE server_registrations SET server_id=? WHERE id=?"), repairID, id); err != nil {
+			return "", err
+		}
+		return repairID, tx.Commit()
+	}
 	serverID = NewID()
 	if _, err = tx.ExecContext(ctx, s.Q(`INSERT INTO servers(id,name,hostname,scan_roots) VALUES(?,?,?,?)`), serverID, e.ServerName, hostname, e.ScanRoots); err != nil {
 		return "", err
@@ -173,4 +195,16 @@ func (j *RegistrationJSON) UnmarshalJSON(data []byte) error {
 	}
 	*j = append((*j)[:0], data...)
 	return nil
+}
+
+func (s *Store) BindRepairRegistration(ctx context.Context, id, server string) error {
+	result, err := s.DB.ExecContext(ctx, s.Q(`UPDATE server_registrations SET repair_server_id=? WHERE id=? AND state='pending' AND device_hash='' AND EXISTS(SELECT 1 FROM servers WHERE id=? AND revoked_at IS NULL AND is_control_plane=0)`), server, id, server)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err == nil && count != 1 {
+		return sql.ErrNoRows
+	}
+	return err
 }

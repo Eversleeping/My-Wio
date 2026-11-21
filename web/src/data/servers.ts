@@ -3,7 +3,7 @@ import { api, postStream, post, put } from "./api";
 import { invalidateResources, mutation, query, readResource, writeResource } from "./resources";
 
 export type SSHAccess = {host: string; port: number; user: string; auth_method: string; password: string; private_key: string; private_key_passphrase: string; host_key_fingerprint: string};
-type Bootstrap = SSHAccess & {name: string; scan_roots: string[]; configuration: string; notes: string; codex_profile_id: string; git_profile_id: string; allow_sudo?: boolean};
+type Bootstrap = SSHAccess & {os?: "linux" | "darwin" | "windows";name: string; scan_roots: string[]; configuration: string; notes: string; codex_profile_id: string; git_profile_id: string; allow_sudo?: boolean};
 export type ServerAccessSettings = { allow_sudo: boolean; revision: string };
 export type AgentAccessSettings = ServerAccessSettings & {applied: boolean; restart_required: boolean; instance_id?:string};
 export type AgentAccessProgress = {status:string;settings?:AgentAccessSettings;error?:string};
@@ -28,5 +28,5 @@ export const servers = {
   uninstall: (id: string, input: SSHAccess & {confirmation: string}) => writeResource(mutation(`/servers/${id}/ssh/uninstall`, "POST", ["servers"]), input),
   revoke: (id: string) => writeResource(mutation(`/servers/${id}`, "DELETE", ["servers"])),
   update: (id: string, input: Pick<Server, "address" | "configuration" | "notes">) => writeResource(mutation(`/servers/${id}`, "PATCH", ["servers"]), input),
-  updateAgent: (id: string) => writeResource(mutation(`/servers/${id}/agent-update`, "POST", []), {}),
+  updateAgent: (id: string, rollback = false) => writeResource(mutation(`/servers/${id}/agent-update`, "POST", []), rollback ? {rollback:true} : {}),
 };

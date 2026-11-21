@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/go-chi/chi/v5"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/store"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -398,10 +398,10 @@ func newWorktreeCommand(workspace store.Workspace, input createWorktreeInput) (p
 	target := strings.TrimSpace(input.Path)
 	if target == "" {
 		name := strings.NewReplacer("/", "-", "\\", "-", " ", "-").Replace(branch)
-		target = filepath.Join(filepath.Dir(workspace.Path), filepath.Base(workspace.Path)+"-"+name)
+		target = hostplatform.Join(hostplatform.Dir(workspace.Path), hostplatform.Base(workspace.Path)+"-"+name)
 	}
-	if !filepath.IsAbs(target) {
+	if !hostplatform.Absolute(hostplatform.TargetOS(workspace.Path), target) {
 		return protocol.GitWorktreeCreateCommand{}, errors.New("worktree path must be absolute")
 	}
-	return protocol.GitWorktreeCreateCommand{SourceWorkspaceID: workspace.ID, TargetWorkspaceID: store.NewID(), ProjectID: workspace.ProjectID, SourcePath: workspace.Path, TargetPath: filepath.Clean(target), Branch: branch, BaseRef: strings.TrimSpace(input.BaseRef)}, nil
+	return protocol.GitWorktreeCreateCommand{SourceWorkspaceID: workspace.ID, TargetWorkspaceID: store.NewID(), ProjectID: workspace.ProjectID, SourcePath: workspace.Path, TargetPath: hostplatform.Clean(hostplatform.TargetOS(workspace.Path), target), Branch: branch, BaseRef: strings.TrimSpace(input.BaseRef)}, nil
 }

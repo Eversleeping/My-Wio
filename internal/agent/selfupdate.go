@@ -18,17 +18,21 @@ import (
 	"time"
 
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/protocol"
 )
 
 const maxAgentUpdateSize = 256 << 20
 
 type agentUpdateManifest struct {
-	Version        string `json:"version"`
-	Binary         string `json:"binary"`
-	SHA256         string `json:"sha256"`
-	State          string `json:"state"`
-	PreviousBinary string `json:"previous_binary,omitempty"`
+	Version         string `json:"version"`
+	Binary          string `json:"binary"`
+	SHA256          string `json:"sha256"`
+	State           string `json:"state"`
+	PreviousBinary  string `json:"previous_binary,omitempty"`
+	PreviousVersion string `json:"previous_version,omitempty"`
+	PreviousSHA256  string `json:"previous_sha256,omitempty"`
+	AllowRollback   bool   `json:"allow_rollback,omitempty"`
 }
 
 func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpdateCommand) (restartPath string, updateErr error) {
@@ -50,13 +54,19 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 			c.releaseAgentUpdate()
 		}
 	}()
+	if command.Rollback {
+		return stageAgentRollback(c.config.StateDir)
+	}
 	if strings.TrimSpace(command.Version) == "" {
 		return "", errors.New("Agent update version is required")
 	}
 	if !buildinfo.UpdateAvailable(buildinfo.Version, command.Version) {
 		return "", fmt.Errorf("Agent update version %s is not newer than %s", command.Version, buildinfo.Version)
 	}
-	pkg, ok := command.Packages[runtime.GOARCH]
+	pkg, ok := command.Packages[runtime.GOOS+"-"+runtime.GOARCH]
+	if !ok && runtime.GOOS == "linux" {
+		pkg, ok = command.Packages[runtime.GOARCH]
+	}
 	if !ok {
 		return "", fmt.Errorf("Agent update does not support architecture %s", runtime.GOARCH)
 	}
@@ -73,7 +83,7 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 	}
 	updatesRoot := filepath.Join(c.config.StateDir, "updates")
 	targetDir := filepath.Join(updatesRoot, strings.ToLower(pkg.SHA256))
-	targetPath := filepath.Join(targetDir, "wio-agent")
+	targetPath := filepath.Join(targetDir, agentExecutableName())
 	if matchesFileHash(targetPath, pkg.SHA256) {
 		if matchesCurrentExecutable(targetPath) {
 			return "", nil
@@ -86,19 +96,21 @@ func (c *Client) stageAgentUpdate(ctx context.Context, command protocol.AgentUpd
 			return "", err
 		}
 	}
-	previous := ""
+	previous, previousVersion, previousSHA := "", "", ""
 	if old, _, err := readAgentUpdateManifest(updatesRoot); err == nil {
-		previous = old.Binary
-		if previous == filepath.ToSlash(filepath.Join(strings.ToLower(pkg.SHA256), "wio-agent")) {
-			previous = old.PreviousBinary
+		previous, previousVersion, previousSHA = old.Binary, old.Version, old.SHA256
+		if previous == filepath.ToSlash(filepath.Join(strings.ToLower(pkg.SHA256), agentExecutableName())) {
+			previous, previousVersion, previousSHA = old.PreviousBinary, old.PreviousVersion, old.PreviousSHA256
 		}
 	}
 	manifest := agentUpdateManifest{
-		Version:        command.Version,
-		Binary:         filepath.ToSlash(filepath.Join(strings.ToLower(pkg.SHA256), "wio-agent")),
-		SHA256:         strings.ToLower(pkg.SHA256),
-		State:          "pending",
-		PreviousBinary: previous,
+		Version:         command.Version,
+		Binary:          filepath.ToSlash(filepath.Join(strings.ToLower(pkg.SHA256), agentExecutableName())),
+		SHA256:          strings.ToLower(pkg.SHA256),
+		State:           "pending",
+		PreviousBinary:  previous,
+		PreviousVersion: previousVersion,
+		PreviousSHA256:  previousSHA,
 	}
 	if err := writeAgentUpdateManifest(updatesRoot, manifest); err != nil {
 		return "", err
@@ -223,6 +235,9 @@ func (c *Client) downloadAgentUpdate(ctx context.Context, source, target string,
 }
 
 func ActivateCurrentUpdate(stateDir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	updatesRoot := filepath.Join(stateDir, "updates")
 	manifest, binary, err := readAgentUpdateManifest(updatesRoot)
 	if errors.Is(err, os.ErrNotExist) {
@@ -233,18 +248,30 @@ func ActivateCurrentUpdate(stateDir string) error {
 		return err
 	}
 	if !matchesFileHash(binary, manifest.SHA256) {
-		_ = os.Remove(filepath.Join(updatesRoot, "current.json"))
+		previous, restoreErr := restorePreviousAgentUpdate(updatesRoot, manifest)
+		if restoreErr != nil {
+			return restoreErr
+		}
+		if previous != "" {
+			return execAgentBinary(previous)
+		}
 		return errors.New("current Agent update checksum is invalid")
 	}
 	if matchesCurrentExecutable(binary) {
 		return nil
 	}
-	if !buildinfo.UpdateAvailable(buildinfo.Version, manifest.Version) {
+	if !manifest.AllowRollback && !buildinfo.UpdateAvailable(buildinfo.Version, manifest.Version) {
 		_ = os.Remove(filepath.Join(updatesRoot, "current.json"))
 		return nil
 	}
 	if manifest.State == "attempting" {
-		_ = os.Remove(filepath.Join(updatesRoot, "current.json"))
+		previous, err := restorePreviousAgentUpdate(updatesRoot, manifest)
+		if err != nil {
+			return err
+		}
+		if previous != "" {
+			return execAgentBinary(previous)
+		}
 		return fmt.Errorf("Agent update %s did not start successfully and was rolled back", manifest.Version)
 	}
 	// A confirmed binary remains healthy across boots, including control-plane
@@ -265,6 +292,16 @@ func ActivateCurrentUpdate(stateDir string) error {
 }
 
 func activateStagedUpdate(stateDir, expectedPath string) error {
+	if expectedPath == "rollback-base" {
+		base := hostplatform.Current().Binary
+		if _, err := os.Stat(base); err != nil {
+			return err
+		}
+		if err := os.Remove(filepath.Join(stateDir, "updates", "current.json")); err != nil {
+			return err
+		}
+		return execAgentBinary(base)
+	}
 	updatesRoot := filepath.Join(stateDir, "updates")
 	manifest, binary, err := readAgentUpdateManifest(updatesRoot)
 	if err != nil {
@@ -274,6 +311,9 @@ func activateStagedUpdate(stateDir, expectedPath string) error {
 		return errors.New("staged Agent update changed before activation")
 	}
 	manifest.State = "attempting"
+	if runtime.GOOS == "windows" {
+		manifest.State = "pending"
+	}
 	if err := writeAgentUpdateManifest(updatesRoot, manifest); err != nil {
 		return err
 	}
@@ -385,15 +425,7 @@ func samePath(left, right string) bool {
 	return leftErr == nil && rightErr == nil && filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
 }
 
-func replaceFile(source, target string) error {
-	if err := os.Rename(source, target); err == nil {
-		return nil
-	}
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Rename(source, target)
-}
+func replaceFile(source, target string) error { return hostplatform.ReplaceFile(source, target) }
 
 // Keep both the confirmed binary and the previous version for recovery. Only
 // package directories named by a SHA256 digest belong to this cleanup policy.
@@ -406,7 +438,7 @@ func pruneAgentUpdates(root string, manifest agentUpdateManifest) error {
 	for _, binary := range []string{manifest.Binary, manifest.PreviousBinary} {
 		clean := filepath.Clean(filepath.FromSlash(binary))
 		parts := strings.Split(clean, string(filepath.Separator))
-		if len(parts) == 2 && parts[1] == "wio-agent" {
+		if len(parts) == 2 && parts[1] == agentExecutableName() {
 			keep[parts[0]] = true
 		}
 	}
@@ -420,7 +452,7 @@ func pruneAgentUpdates(root string, manifest agentUpdateManifest) error {
 			if !entry.IsDir() || err != nil || len(digest) != sha256.Size || keep[entry.Name()] {
 				continue
 			}
-			info, err := os.Stat(filepath.Join(root, entry.Name(), "wio-agent"))
+			info, err := os.Stat(filepath.Join(root, entry.Name(), agentExecutableName()))
 			if err == nil && info.Mode().IsRegular() && (previous == "" || info.ModTime().After(newest)) {
 				previous, newest = entry.Name(), info.ModTime()
 			}
@@ -440,4 +472,105 @@ func pruneAgentUpdates(root string, manifest agentUpdateManifest) error {
 		}
 	}
 	return cleanupErr
+}
+
+func agentExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "wio-agent.exe"
+	}
+	return "wio-agent"
+}
+
+// ServiceUpdateBinary is called by the Windows service supervisor before each
+// worker. An unconfirmed crashed update falls back to the immutable base.
+func ServiceUpdateBinary(stateDir, base string) (string, error) {
+	root := filepath.Join(stateDir, "updates")
+	m, binary, err := readAgentUpdateManifest(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return base, nil
+	}
+	if err != nil {
+		return base, err
+	}
+	if !m.AllowRollback && !buildinfo.UpdateAvailable(buildinfo.Version, m.Version) {
+		if err := os.Remove(filepath.Join(root, "current.json")); err != nil {
+			return base, err
+		}
+		return base, nil
+	}
+	if !matchesFileHash(binary, m.SHA256) || m.State == "attempting" {
+		previous, err := restorePreviousAgentUpdate(root, m)
+		if err != nil {
+			return base, err
+		}
+		if previous != "" {
+			return previous, nil
+		}
+		return base, errors.New("unconfirmed or invalid service update was rolled back")
+	}
+	if m.State != "healthy" {
+		m.State = "attempting"
+		if err := writeAgentUpdateManifest(root, m); err != nil {
+			return base, err
+		}
+	}
+	return binary, nil
+}
+
+func previousAgentManifest(m agentUpdateManifest) (agentUpdateManifest, error) {
+	if m.PreviousBinary == "" || m.PreviousVersion == "" || m.PreviousSHA256 == "" {
+		return agentUpdateManifest{}, errors.New("no previous Agent package")
+	}
+	previous := agentUpdateManifest{Version: m.PreviousVersion, Binary: m.PreviousBinary, SHA256: m.PreviousSHA256, State: "pending", AllowRollback: true}
+	return previous, nil
+}
+func validatedPreviousAgent(root string, m agentUpdateManifest) (agentUpdateManifest, string, error) {
+	previous, err := previousAgentManifest(m)
+	if err != nil {
+		return previous, "", err
+	}
+	relative := filepath.Clean(filepath.FromSlash(previous.Binary))
+	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return previous, "", errors.New("invalid previous Agent path")
+	}
+	binary := filepath.Join(root, relative)
+	if !matchesFileHash(binary, previous.SHA256) {
+		return previous, "", errors.New("previous Agent checksum mismatch")
+	}
+	return previous, binary, nil
+}
+func restorePreviousAgentUpdate(root string, m agentUpdateManifest) (string, error) {
+	previous, binary, err := validatedPreviousAgent(root, m)
+	if err != nil {
+		if removeErr := os.Remove(filepath.Join(root, "current.json")); removeErr != nil && !os.IsNotExist(removeErr) {
+			return "", removeErr
+		}
+		return "", nil
+	}
+	previous.State = "healthy"
+	if err := writeAgentUpdateManifest(root, previous); err != nil {
+		return "", err
+	}
+	return binary, nil
+}
+func stageAgentRollback(state string) (string, error) {
+	root := filepath.Join(state, "updates")
+	manifest, _, err := readAgentUpdateManifest(root)
+	if err != nil {
+		return "", errors.New("no Agent update to roll back")
+	}
+	if manifest.PreviousBinary == "" || manifest.PreviousVersion == "" || manifest.PreviousSHA256 == "" {
+		if _, err := os.Stat(hostplatform.Current().Binary); err != nil {
+			return "", err
+		}
+		return "rollback-base", nil
+	}
+	previous, binary, err := validatedPreviousAgent(root, manifest)
+	if err != nil {
+		return "", err
+	}
+	if err := writeAgentUpdateManifest(root, previous); err != nil {
+		return "", err
+	}
+	return binary, nil
 }

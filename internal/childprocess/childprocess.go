@@ -8,9 +8,11 @@
 package childprocess
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -24,6 +26,7 @@ func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = Environment(ctx)
 	cmd.WaitDelay = WaitDelay
+	configurePlatformCommand(cmd)
 	return cmd
 }
 
@@ -39,12 +42,31 @@ func Result(err error) error {
 
 // Output is cmd.Output with Result applied.
 func Output(cmd *exec.Cmd) ([]byte, error) {
+	if runtime.GOOS == "windows" {
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		if cmd.Stderr == nil {
+			cmd.Stderr = &stderr
+		}
+		err := Run(cmd)
+		if exit, ok := err.(*exec.ExitError); ok {
+			exit.Stderr = stderr.Bytes()
+		}
+		return stdout.Bytes(), Result(err)
+	}
 	output, err := cmd.Output()
 	return output, Result(err)
 }
 
 // CombinedOutput is cmd.CombinedOutput with Result applied.
 func CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
+	if runtime.GOOS == "windows" {
+		var output bytes.Buffer
+		cmd.Stdout = &output
+		cmd.Stderr = &output
+		err := Run(cmd)
+		return output.Bytes(), Result(err)
+	}
 	output, err := cmd.CombinedOutput()
 	return output, Result(err)
 }

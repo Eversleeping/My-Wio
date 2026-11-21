@@ -38,13 +38,13 @@ export function ServerAccessSettings() {
  useEffect(() => {
   const run=++generation.current;
   setAccess(null);setError("");setNotice("");setBusy(false);
-  if(!id||!server?.agent_access_supported||server.status!=="online"||server.is_control_plane)return () => {++generation.current;};
+  if(!id||!(server?.agent_access_supported||server?.agent_restart_supported)||server.status!=="online"||server.is_control_plane)return () => {++generation.current;};
   setBusy(true);
   void read(id,run).then(value=>{if(value&&generation.current===run)setAccess(value);}).catch(err=>{if(generation.current===run)setError(String(err));}).finally(()=>{if(generation.current===run)setBusy(false);});
   return () => {++generation.current;};
   // Server identity and availability define the lifetime of an Agent request.
   // eslint-disable-next-line react-hooks/exhaustive-deps
- },[id,server?.agent_access_supported,server?.status,reload]);
+ },[id,server?.agent_access_supported,server?.agent_restart_supported,server?.status,reload]);
  useEffect(() => {
   if(!upgrading)return;
   const timer=setInterval(servers.reload,3000);
@@ -110,7 +110,7 @@ export function ServerAccessSettings() {
   <label className="field"><span>{t("server.runtime.server")}</span><select value={id} onChange={event=>{setID(event.target.value);setUpgrading(false);}}><option value="">{t("server.runtime.chooseServer")}</option>{(servers.data??[]).map(item=><option key={item.id} value={item.id}>{item.is_control_plane?t("server.controlPlane"):item.name}</option>)}</select></label>
   {server?.is_control_plane ? <p>{t("server.runtime.builtIn")}</p> : server && <>
    {server.status!=="online" && <p role="status">{t("server.runtime.offline")}</p>}
-   {!server.agent_access_supported && <p>{t("server.runtime.upgradeRequired")}</p>}
+   {!server.agent_access_supported && <p>{t(server.os&&server.os!=="linux"?"server.runtime.platformNoAccess":"server.runtime.upgradeRequired")}</p>}
    {!server.agent_restart_supported&&server.agent_access_supported&&<p>{t("server.runtime.upgradeForRestart")}</p>}
    <fieldset className="settings-fields" disabled={!editable}>
     <label className={`agent-access-option ${access?.allow_sudo?"enabled":""}`}><input type="checkbox" checked={access?.allow_sudo??false} disabled={access?.restart_required} onChange={event=>{if(access)setAccess({...access,allow_sudo:event.target.checked});}}/><span><strong>{t("server.allowAgentSudo")}</strong><small>{t("server.allowAgentSudoWarning")}</small></span></label>
@@ -120,7 +120,7 @@ export function ServerAccessSettings() {
    <div className="settings-actions">
     <button className="primary-button" disabled={!editable} onClick={()=>void apply()}>{t("server.runtime.apply")}</button>
     <button className="secondary-button" disabled={busy||upgrading||server.status!=="online"||!server.agent_restart_supported} onClick={()=>void restartAgent()}>{t("server.runtime.restart")}</button>
-    <button className="secondary-button" disabled={busy||server.status!=="online"||!server.agent_access_supported} onClick={()=>setReload(value=>value+1)}>{t("server.runtime.readAgain")}</button>
+    <button className="secondary-button" disabled={busy||server.status!=="online"||!(server.agent_access_supported||server.agent_restart_supported)} onClick={()=>setReload(value=>value+1)}>{t("server.runtime.readAgain")}</button>
     {server.agent_update_available&&server.agent_update_supported&&<button className="secondary-button" disabled={upgrading||busy||server.status!=="online"} onClick={()=>void upgrade()}>{upgrading?t("common.loading"):t("server.runtime.upgrade")}</button>}
    </div>
   </>}

@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"net/http"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +42,7 @@ type sshConnectionInput struct {
 }
 
 type sshBootstrapInput struct {
+	OS string `json:"os"`
 	sshConnectionInput
 	Name               string   `json:"name"`
 	ScanRoots          []string `json:"scan_roots"`
@@ -304,13 +305,20 @@ func decodeSSHBootstrapInput(w http.ResponseWriter, r *http.Request) (sshBootstr
 	input.Host = metadata.Address
 	input.Configuration = metadata.Configuration
 	input.Notes = metadata.Notes
+	if input.OS == "" {
+		input.OS = "linux"
+	}
+	if !hostplatform.Supported(input.OS, "amd64") {
+		writeBootstrapCode(w, 400, "unsupported_platform", "unsupported operating system")
+		return sshBootstrapInput{}, false
+	}
 	if len(input.ScanRoots) == 0 {
-		input.ScanRoots = []string{"/srv", "/opt", "/home"}
+		input.ScanRoots = hostplatform.For(input.OS).Roots
 	}
 	for index, root := range input.ScanRoots {
-		root = path.Clean(strings.TrimSpace(root))
-		if !path.IsAbs(root) {
-			writeBootstrapCode(w, http.StatusBadRequest, "scan_roots_invalid", "scan roots must be absolute Linux paths")
+		root = hostplatform.Clean(input.OS, strings.TrimSpace(root))
+		if !hostplatform.Absolute(input.OS, root) {
+			writeBootstrapCode(w, http.StatusBadRequest, "scan_roots_invalid", "scan roots must be absolute paths for the selected operating system")
 			return sshBootstrapInput{}, false
 		}
 		input.ScanRoots[index] = root
@@ -346,6 +354,7 @@ func (a *API) runServerBootstrap(r *http.Request, input sshBootstrapInput, serve
 	}
 
 	result, err := a.bootstrapper.Install(r.Context(), sshbootstrap.InstallRequest{
+		OS:                     input.OS,
 		Target:                 input.target(),
 		ExpectedFingerprint:    strings.TrimSpace(input.HostKeyFingerprint),
 		ControlURL:             a.agentControlURL(r),

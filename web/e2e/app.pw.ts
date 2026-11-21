@@ -554,7 +554,7 @@ test("an administrator enrolls a server after verifying its SSH fingerprint", as
   await page.goto("/?view=servers");
 
   await page.getByRole("button", { name: "Enroll server", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Enroll Linux server" });
+  const dialog = page.getByRole("dialog", { name: "Enroll server" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Server name").fill(enrolledServer.name);
   await dialog.getByLabel("SSH host or IP").fill(enrolledServer.address);

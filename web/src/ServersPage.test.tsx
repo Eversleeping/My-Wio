@@ -49,7 +49,7 @@ test("enrolls without server runtime settings in the registration dialog", async
   render(<I18nProvider><DataProvider revisions={{ servers: 0 }}><ServersPage notify={vi.fn()} /></DataProvider></I18nProvider>);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
-  const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  const dialog = screen.getByRole("dialog", { name: "Enroll server" });
   expect(within(dialog).queryByRole("checkbox", {name:/session isolation|passwordless sudo/i})).not.toBeInTheDocument();
   await user.type(within(dialog).getByRole("textbox", { name: "Server name" }), "isolated-node");
   await user.type(within(dialog).getByRole("textbox", { name: "SSH host or IP" }), "node.example.test");
@@ -81,7 +81,7 @@ test("enrolls a pre-authorized SSH command through the existing fingerprint flow
   render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
-  const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  const dialog = screen.getByRole("dialog", { name: "Enroll server" });
   expect(within(dialog).getByRole("combobox", { name: "Authentication" })).toHaveValue("private_key");
   await user.type(within(dialog).getByRole("textbox", { name: "Server name" }), "SSH container");
   await user.click(within(dialog).getByRole("textbox", { name: "SSH connection command (optional)" }));
@@ -111,7 +111,7 @@ test("keeps manual credentials and fields editable and leaves them untouched whe
   render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
-  const dialog = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  const dialog = screen.getByRole("dialog", { name: "Enroll server" });
   await user.selectOptions(within(dialog).getByRole("combobox", { name: "Authentication" }), "password");
   await user.type(within(dialog).getByLabelText("SSH password"), "existing-test-password");
   const command = within(dialog).getByRole("textbox", { name: "SSH connection command (optional)" });
@@ -156,7 +156,7 @@ test("shows automatic dependency setup and retries an incomplete enrollment as S
   const user = userEvent.setup();
   render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage  notify={vi.fn()} /></DataProvider></I18nProvider>);
   await user.click(await screen.findByRole("button", { name: "Enroll server" }));
-  const form = screen.getByRole("dialog", { name: "Enroll Linux server" });
+  const form = screen.getByRole("dialog", { name: "Enroll server" });
   expect(within(form).getByText(/will be installed and checked automatically/)).toBeInTheDocument();
   expect(within(form).getByText(/install the latest stable Codex, Gemini and Claude CLI versions/)).toBeInTheDocument();
   await user.type(within(form).getByRole("textbox", { name: "Server name" }), server.name);
@@ -359,7 +359,7 @@ test("keeps installed engines distinct from failed version checks",async()=>{
  expect(screen.queryByText("Not installed")).not.toBeInTheDocument();
 });
 
-test("generates a Linux command without SSH credentials and keeps registration history without retaining the code", async () => {
+test.each([{os:"linux",roots:["/srv","/opt","/home"]},{os:"darwin",roots:["/Users","/opt"]},{os:"windows",roots:["C:\\Projects"]}])("generates a $os command without SSH credentials and keeps registration history without retaining the code", async ({os,roots}) => {
   localStorage.setItem("wio_language", "en");
   const requests: Array<{url: string; method: string; body: unknown}> = [];
   const registration = {id: "11111111-1111-4111-8111-111111111111", name: "command-node", state: "pending", server_id: "", expires_at: "2099-01-01T00:15:00Z", session_expires_at: "2099-01-01T01:00:00Z", error_code: "", progress: [], result: {}};
@@ -377,7 +377,8 @@ test("generates a Linux command without SSH credentials and keeps registration h
   render(<I18nProvider><DataProvider revisions={{servers: 0}}><ServersPage notify={vi.fn()} /></DataProvider></I18nProvider>);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", {name: "Enroll server"}));
-  const form = screen.getByRole("dialog", {name: "Enroll Linux server"});
+  const form = screen.getByRole("dialog", {name: "Enroll server"});
+  await user.selectOptions(within(form).getByRole("combobox", {name:"Operating system"}),os);
   await user.selectOptions(within(form).getByRole("combobox", {name: "Registration method"}), "command");
   expect(within(form).queryByRole("textbox", {name: "SSH host or IP"})).not.toBeInTheDocument();
   await user.type(within(form).getByRole("textbox", {name: "Server name"}), "command-node");
@@ -385,10 +386,27 @@ test("generates a Linux command without SSH credentials and keeps registration h
   const progress = await screen.findByRole("dialog", {name: "Registration progress"});
   expect(within(progress).getByRole("textbox", {name: "One-time registration code"})).toHaveValue("synthetic-one-time-code");
   expect(within(progress).getByRole("textbox", {name: "Enrollment command"})).not.toHaveValue(expect.stringContaining("synthetic-one-time-code"));
-  expect(requests).toEqual([{url: "/api/servers/registrations", method: "POST", body: {os: "linux", name: "command-node", scan_roots: ["/srv", "/opt", "/home"], configuration: "", notes: "", codex_profile_id: "codex", git_profile_id: ""}}]);
+  expect(requests).toEqual([{url: "/api/servers/registrations", method: "POST", body: {os, name: "command-node", scan_roots: roots, configuration: "", notes: "", codex_profile_id: "codex", git_profile_id: ""}}]);
   await user.click(within(progress).getAllByRole("button", {name: "Close"}).at(-1)!);
   await user.click(await screen.findByRole("button", {name: /command-node.*Waiting for execution/}));
   const reopened = screen.getByRole("dialog", {name: "Registration progress"});
   expect(within(reopened).queryByRole("textbox", {name: "One-time registration code"})).not.toBeInTheDocument();
   expect(within(reopened).getByText(/The code is shown only when created/)).toBeInTheDocument();
+});
+
+test("generates a Windows repair command bound to the existing server",async()=>{
+ localStorage.setItem("wio_language","en");let saved:unknown;
+ vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,init:RequestInit={})=>{
+  const url=String(input);
+  if(url==="/api/servers/registrations"&&init.method==="POST"){saved=JSON.parse(String(init.body));return new Response(JSON.stringify({registration:{id:"repair",name:server.name,state:"pending",progress:[],result:{}},command:"PowerShell repair command",code:"repair-once"}));}
+  return new Response(JSON.stringify(url==="/api/servers"?[{...server,os:"windows",architecture:"amd64"}]:url==="/api/credential-profiles"?[{id:"codex",kind:"codex",name:"Codex",model:"gpt-6.1-sol"}]:[]));
+ }));
+ render(<I18nProvider><DataProvider revisions={{servers:0}}><ServersPage notify={vi.fn()}/></DataProvider></I18nProvider>);
+ const user=userEvent.setup();await user.click(await screen.findByRole("button",{name:"Repair registration"}));
+ const form=screen.getByRole("dialog",{name:"Repair server registration"});
+ expect(within(form).getByLabelText("Operating system")).toHaveValue("windows");
+ await user.selectOptions(within(form).getByLabelText("Registration method"),"command");
+ await user.click(within(form).getByRole("button",{name:"Generate registration command"}));
+ await screen.findByRole("dialog",{name:"Registration progress"});
+ expect(saved).toMatchObject({os:"windows",repair_server_id:server.id,scan_roots:["C:\\Projects"]});
 });

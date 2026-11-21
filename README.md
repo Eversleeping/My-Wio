@@ -1,8 +1,8 @@
 # Wio
 
-Wio 是面向小规模 Linux 服务器集群的个人自托管控制平台。通过一个响应式 Web / PWA 界面，管理服务器、Git 项目与工作区、Codex / Gemini / Claude 会话、Docker Compose 部署、监控、告警和加密凭据。
+Wio 是面向小规模服务器集群的个人自托管控制平台。通过一个响应式 Web / PWA 界面，管理服务器、Git 项目与工作区、Codex / Gemini / Claude 会话、Docker Compose 部署、监控、告警和加密凭据。
 
-面向单管理员、1–20 台 Linux 服务器、约 200 个项目的使用场景。控制面可在 Linux、macOS、Windows 上开发运行；Agent 与部署执行端仅支持 Linux。Wio 不提供通用终端或完整 Web IDE，不面向多租户或 Kubernetes。
+面向单管理员、1–20 台服务器、约 200 个项目的使用场景。控制面可在 Linux、macOS、Windows 上开发运行；Agent 新增 Linux、macOS 和 Windows 平台实现（macOS/Windows 原生发布验收待完成），Docker Compose 部署执行端仅支持 Linux。Wio 不提供通用终端或完整 Web IDE，不面向多租户或 Kubernetes。
 
 ## 产品演示
 
@@ -46,7 +46,7 @@ flowchart LR
   Browser[React PWA] <-->|HTTPS / WebSocket| Proxy[Caddy / TLS 代理]
   Proxy <-->|HTTP / h2c| Control[Go 控制面]
   Control <--> DB[(PostgreSQL / SQLite)]
-  Agent[Linux Agent] -->|出站 gRPC 双向流| Control
+  Agent[Wio Agent] -->|出站 gRPC 双向流| Control
   Agent <-->|stdio / JSONL / ACP| AI[Codex / Gemini / Claude CLI]
   Agent --> Git[Git 与工作区文件]
   Agent --> Docker[Docker Compose]
@@ -62,7 +62,7 @@ Wio 向 Agent 下发结构化操作；AI CLI 和 Compose 项目仍会按执行�
 | --- | --- |
 | 本地开发 | Go 1.22+、Node.js 22+、npm；先构建前端再编译控制面 |
 | 生产控制面 | Linux、Docker Engine、Compose v2、公共域名和 HTTPS 入口；默认 Caddy 使用 80/443 |
-| 外部 Agent | Linux amd64/arm64、systemd、SSH；注册账号为 root 或可免交互 sudo 的用户 |
+| 外部 Agent | Linux amd64/arm64（systemd）、macOS amd64/arm64（launchd）、Windows amd64（Windows Service）；macOS/Windows 原生发布验收待完成。SSH 或限时命令注册，需 root/sudo 或 Windows 管理员 |
 | 外部连接 | Agent 可访问控制面；按需访问 Git、模型服务及 npm/浏览器下载源 |
 
 SSH 注册/修复会尝试补装 Git、Docker/Compose、Node.js/npm、三种 AI CLI 和 Playwright/Chromium，支持 apt-get、dnf、yum。核心 Agent 安装失败会终止流程；可选依赖失败会保留能力警告。CLI 已安装不代表模型认证成功。
@@ -91,7 +91,7 @@ curl --fail --silent http://127.0.0.1:8080/api/health
 首次使用顺序：
 
 1. 在 **设置** 创建 Codex API 预设；需要私有仓库和提交时创建带姓名、邮箱的 Git 预设。
-2. 在 **服务器** 注册 Linux 主机并核对 SSH 指纹；或使用已具备运行环境的内置控制机 Agent。
+2. 在 **服务器** 选择系统并注册主机并核对 SSH 指纹；或使用已具备运行环境的内置控制机 Agent。
 3. 等待服务器在线，检查所需 CLI、Git、Docker 与凭据状态。
 4. 在 **项目** 创建、克隆或发现仓库，再在 **会话 → 新建会话** 选择工作区和引擎。Gemini / Claude 认证可在注册后单独配置。
 5. 需要发布时创建 Vault 密钥集和部署目标。完整步骤见[用户手册](docs/USER_GUIDE.md)。
@@ -157,7 +157,7 @@ Linux 控制面默认运行内置“控制机”Agent，该服务器记录不能
 | `WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT` | 空；需要额外传给子进程的变量名，用逗号分隔 |
 | `WIO_CONTROL_AGENT_INSECURE_SKIP_VERIFY` | `false`，仅可用于临时开发 |
 
-Linux 服务器可在网页中选择 SSH 远程安装，或生成限时注册命令后在目标机交互终端执行；两者共用安装器。命令注册只需目标机出站访问控制面，详见[服务器管理](docs/USER_GUIDE.md#4-服务器管理)。
+服务器可在网页中选择 SSH 远程安装，或生成限时注册命令后在目标机交互终端执行；两者共用安装器。命令注册只需目标机出站访问控制面，详见[服务器管理](docs/USER_GUIDE.md#4-服务器管理)。
 
 外部 Agent 配置位于 `/etc/wio-agent/config.json`；网页注册负责生成配置和 systemd 服务。默认状态目录为 `/var/lib/wio-agent`，克隆目录为其中的 `projects`，发布目录为其中的 `releases`。
 
@@ -179,6 +179,7 @@ npm --prefix web run dev
 | --- | --- |
 | `make build` | 构建前端，生成当前平台的 `bin/wio-controlplane` 和 `bin/wio-agent` |
 | `make agent-linux` | 额外构建 Linux amd64/arm64 Agent |
+| `make agent-all` | 构建 Linux/macOS 两架构及 Windows amd64 Agent |
 | `make test` | PostgreSQL 迁移/存储集成测试、前端构建、Go 测试、Vitest 和类型检查 |
 | `make verify` | 推送前的本地门槛，对应 CI 的 `web`、`go` 两个作业：先做 `gofmt` 格式检查，再用 `npm ci` 重装前端依赖后构建，检查 Agent 版本及护栏脚本用例，再运行 Vitest 和类型检查、固定版本的 staticcheck 安全检查、`go vet`、`go test ./...` 并编译控制面和 Agent；不含 PostgreSQL 集成测试和 E2E |
 | `make version-check` | 对本地待推送改动（含工作区及未忽略的新 Go 文件）检查 Agent 版本递增；可用 `scripts/check-agent-version.sh BASE HEAD` 精确检查提交范围 |
@@ -223,7 +224,7 @@ Wio 面向可信单管理员环境。SSH 凭据仅用于当前请求；API Key�
 
 ```text
 cmd/controlplane          控制面入口、数据保留与后台维护
-cmd/agent                 Linux Agent 入口
+cmd/agent                 跨平台 Agent 入口
 internal/agent            连接、操作调度、CLI/凭据管理与自更新
 internal/httpapi          浏览器 API、身份认证与权限校验
 internal/agentgateway     已认证的双向 gRPC 网关
@@ -245,7 +246,7 @@ internal/deployer         Git release、Compose、镜像与回滚
 internal/deploymenttemplate 版本化自动部署模板
 internal/scanner          仓库发现、文件预览与写入
 internal/sshbootstrap     兼容既有 SSH 安装接口
-internal/installer        网页与目标机共用的 Linux 安装器
+internal/installer        网页与目标机共用的跨平台安装器
 internal/enrollment       目标机临时注册与断网恢复
 internal/prerequisite     受限部署依赖助手
 internal/scheduler        三种引擎的定时任务执行

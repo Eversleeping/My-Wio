@@ -27,7 +27,7 @@ test("configures server runtime access and global collaboration from Settings", 
  await page.goto("/?view=servers");
  await expect(page.getByText("Isolation unavailable",{exact:true})).toHaveCount(0);
  await page.getByRole("button",{name:"Enroll server",exact:true}).click();
- const dialog = page.getByRole("dialog",{name:"Enroll Linux server"});
+ const dialog = page.getByRole("dialog",{name:"Enroll server"});
  await expect(dialog.getByRole("checkbox",{name:/session isolation|passwordless sudo/i})).toHaveCount(0);
  await dialog.getByRole("button",{name:"Cancel",exact:true}).click();
  await page.goto("/?view=settings");

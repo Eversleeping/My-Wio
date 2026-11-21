@@ -40,6 +40,7 @@ var schemaMigrations = []migration{
 		return err
 	}},
 	{version: 13, name: "server_registrations", up: migrateServerRegistrations},
+	{version: 14, name: "server_platforms", up: migrateServerPlatforms},
 }
 
 // PostgreSQL advisory locks are scoped to a database. All Wio schemas in one

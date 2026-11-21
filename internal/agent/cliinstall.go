@@ -102,7 +102,7 @@ func managedClaudePrefix(stateDir, version string) string {
 }
 
 func managedClaudeExecutable(stateDir, version string) string {
-	return filepath.Join(managedClaudePrefix(stateDir, version), "node_modules", ".bin", "claude")
+	return managedCLIExecutable(managedClaudePrefix(stateDir, version), "claude")
 }
 
 func effectiveClaudePath(stateDir string) string {
@@ -139,7 +139,7 @@ func installGeminiCLI(ctx context.Context, stateDir, version string) error {
 }
 
 func managedGeminiExecutable(stateDir, version string) string {
-	return filepath.Join(managedGeminiPrefix(stateDir, version), "node_modules", ".bin", "gemini")
+	return managedCLIExecutable(managedGeminiPrefix(stateDir, version), "gemini")
 }
 
 func managedGeminiPrefix(stateDir, version string) string {

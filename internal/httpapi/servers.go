@@ -36,7 +36,13 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 	for index := range servers {
 		servers[index].AgentTargetVersion = buildinfo.Version
 		servers[index].AgentUpdateSupported = servers[index].Supports(protocol.CapabilityAgentSelfUpdate)
-		servers[index].AgentUpdateAvailable = packagesAvailable && servers[index].AgentUpdateSupported && buildinfo.UpdateAvailable(servers[index].AgentVersion, buildinfo.Version)
+		available := packagesAvailable
+		if servers[index].OS != "" && a.agentUpdates != nil {
+			_, err := a.agentUpdates.Package(servers[index].OS + "-" + servers[index].Architecture)
+			available = err == nil
+		}
+		servers[index].AgentRollbackSupported = !servers[index].IsControlPlane && servers[index].AgentUpdateSupported && buildinfo.VersionAtLeast(servers[index].AgentVersion, "0.3.47")
+		servers[index].AgentUpdateAvailable = available && servers[index].AgentUpdateSupported && buildinfo.UpdateAvailable(servers[index].AgentVersion, buildinfo.Version)
 		servers[index].CodexTargetVersion = codexTarget
 		servers[index].CodexUpdateSupported = servers[index].Supports(protocol.CapabilityCodexCLIUpdate)
 		servers[index].GeminiCredentialsSupported = servers[index].Supports(protocol.CapabilityGeminiCredentials)

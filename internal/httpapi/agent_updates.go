@@ -18,6 +18,14 @@ import (
 )
 
 func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Rollback bool `json:"rollback"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+	}
 	serverID := chi.URLParam(r, "serverID")
 	server, err := a.store.Server(r.Context(), serverID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -36,18 +44,32 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "Agent must be reinstalled once before remote updates are supported")
 		return
 	}
-	if !buildinfo.UpdateAvailable(server.AgentVersion, buildinfo.Version) {
+	if !input.Rollback && !buildinfo.UpdateAvailable(server.AgentVersion, buildinfo.Version) {
 		writeError(w, http.StatusConflict, "Agent is already up to date")
 		return
 	}
-	if a.agentUpdates == nil {
-		writeError(w, http.StatusServiceUnavailable, "Agent update packages are unavailable")
-		return
-	}
-	command, err := a.agentUpdates.Command()
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "Agent update packages are unavailable")
-		return
+	command := protocol.AgentUpdateCommand{Rollback: input.Rollback}
+	if input.Rollback {
+		if server.IsControlPlane || !buildinfo.VersionAtLeast(server.AgentVersion, "0.3.47") {
+			writeError(w, 409, "Agent rollback requires a managed Agent 0.3.47 or newer")
+			return
+		}
+	} else {
+		if a.agentUpdates == nil {
+			writeError(w, 503, "Agent update packages are unavailable")
+			return
+		}
+		command, err = a.agentUpdates.Command()
+		if err != nil {
+			writeError(w, 503, "Agent update packages are unavailable")
+			return
+		}
+		if server.OS != "" && server.Architecture != "" {
+			if _, ok := command.Packages[server.OS+"-"+server.Architecture]; !ok {
+				writeError(w, 409, "no Agent package for this server platform")
+				return
+			}
+		}
 	}
 	active, err := a.store.HasActiveOperation(r.Context(), server.ID, protocol.OpAgentUpdate)
 	if err != nil {

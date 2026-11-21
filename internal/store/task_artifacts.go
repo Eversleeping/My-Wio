@@ -5,8 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"path"
-	"strings"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -221,13 +220,10 @@ func (s *Store) HandoffTaskArtifact(ctx context.Context, project, id, artifact s
 }
 
 func containsArtifactPath(root, other string) bool {
-	// Artifacts execute on Linux Agents. Interpret their workspace names as
-	// POSIX paths even when the control plane was built on Windows.
-	if !path.IsAbs(root) || !path.IsAbs(other) {
+	if !hostplatform.Absolute(hostplatform.TargetOS(root), root) || !hostplatform.Absolute(hostplatform.TargetOS(other), other) {
 		return true
 	}
-	root, other = path.Clean(root), path.Clean(other)
-	return root == other || strings.HasPrefix(other, strings.TrimSuffix(root, "/")+"/")
+	return hostplatform.Contains(root, other)
 }
 
 func (s *Store) taskArtifactEventTx(ctx context.Context, tx *sqlx.Tx, id string, meta task.Meta, kind string, payload any) error {

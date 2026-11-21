@@ -22,6 +22,7 @@ import (
 
 	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/gitidentity"
+	"github.com/wio-platform/wio/internal/hostplatform"
 )
 
 var (
@@ -30,7 +31,7 @@ var (
 	ErrConnection             = errors.New("SSH connection failed")
 	ErrAuthentication         = errors.New("SSH authentication failed")
 	ErrPrivilegeRequired      = errors.New("root or passwordless sudo is required")
-	ErrUnsupportedPlatform    = errors.New("unsupported Linux architecture")
+	ErrUnsupportedPlatform    = errors.New("unsupported operating system or architecture")
 	ErrAssetsUnavailable      = errors.New("agent installation assets are unavailable")
 	ErrCLIReleasesUnavailable = errors.New("latest stable CLI versions are unavailable")
 	ErrInstallation           = errors.New("agent installation failed")
@@ -66,6 +67,7 @@ type HostKeyResult struct {
 }
 
 type InstallRequest struct {
+	OS                     string
 	Target                 Target
 	ExpectedFingerprint    string
 	ControlURL             string
@@ -97,6 +99,7 @@ type InstallResult struct {
 	ServerID     string   `json:"server_id"`
 	Hostname     string   `json:"hostname"`
 	Architecture string   `json:"architecture"`
+	OS           string   `json:"os,omitempty"`
 	Warnings     []string `json:"warnings"`
 }
 
@@ -199,8 +202,8 @@ func (s *Service) Uninstall(ctx context.Context, request UninstallRequest) (Unin
 	if err != nil {
 		return UninstallResult{}, err
 	}
-	if !strings.EqualFold(probe.OS, "linux") {
-		return UninstallResult{}, fmt.Errorf("%w: %s", ErrUnsupportedPlatform, probe.OS)
+	if probe.OS != "linux" {
+		return s.uninstallRemotePortable(ctx, client, probe, request)
 	}
 	if !probe.SudoReady {
 		return UninstallResult{}, ErrPrivilegeRequired
@@ -678,7 +681,10 @@ func inspect(client commandHost, _ hostKeyInfo) (inspection, error) {
 	}
 	osName, err := runTrimmed(client, "uname -s")
 	if err != nil {
-		return inspection{}, fmt.Errorf("%w: could not inspect operating system", ErrConnection)
+		return inspectWindows(client, hostname)
+	}
+	if strings.Contains(strings.ToLower(osName), "mingw") || strings.Contains(strings.ToLower(osName), "msys") {
+		return inspectWindows(client, hostname)
 	}
 	architecture, err := runTrimmed(client, "uname -m")
 	if err != nil {
@@ -920,4 +926,11 @@ func enrollmentServerID(output string) string {
 		return ""
 	}
 	return match[1]
+}
+
+func platformAgentAsset(os, arch string) (string, error) {
+	if !hostplatform.Supported(os, normalizedArchitecture(arch)) {
+		return "", ErrUnsupportedPlatform
+	}
+	return hostplatform.Filename(os, normalizedArchitecture(arch)), nil
 }

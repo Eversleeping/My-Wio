@@ -34,7 +34,7 @@ func (a *API) agentAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	restarting := strings.HasSuffix(r.URL.Path, "/agent-restart")
 	capability := protocol.CapabilityAgentAccess
-	if restarting {
+	if restarting || r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access-settings/read") && server.OS != "" && server.OS != "linux" {
 		capability = protocol.CapabilityAgentRestart
 	}
 	if !server.Supports(capability) {

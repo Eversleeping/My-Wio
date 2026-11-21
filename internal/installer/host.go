@@ -30,11 +30,11 @@ func executeCommand(h commandHost, command string, input io.Reader, output io.Wr
 type localHost struct{ ctx context.Context }
 
 func (h localHost) execute(command string, input io.Reader, output io.Writer) error {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return ErrUnsupportedPlatform
 	}
 	cmd := childprocess.CommandContext(childprocess.WithScope(h.ctx, childprocess.Installation), "sh", "-c", command)
 	configureInstallerProcess(cmd)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, output, output
-	return childprocess.Result(cmd.Run())
+	return childprocess.Result(childprocess.Run(cmd))
 }

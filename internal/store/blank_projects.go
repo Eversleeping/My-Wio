@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"strings"
 	"time"
 
@@ -259,10 +259,10 @@ func (s *Store) CommitBlankProject(ctx context.Context, operation Operation, com
 // the requested command. It is shared by the gateway before the persistence
 // transaction so protocol mismatches become explicit operation failures.
 func ValidateBlankProjectResult(command protocol.GitProjectCreateCommand, result protocol.GitProjectCreateResult) error {
-	if command.ProjectID == "" || command.WorkspaceID == "" || result.Path == "" || !path.IsAbs(normalizeRemotePath(result.Path)) || result.Branch != command.InitialBranch {
+	if command.ProjectID == "" || command.WorkspaceID == "" || result.Path == "" || !hostplatform.Absolute(hostplatform.TargetOS(result.Path), result.Path) || result.Branch != command.InitialBranch {
 		return errors.New("blank project result does not match command")
 	}
-	if strings.HasPrefix(normalizeRemotePath(command.Destination), "/") && normalizeRemotePath(result.Path) != normalizeRemotePath(command.Destination) {
+	if hostplatform.Absolute(hostplatform.TargetOS(command.Destination), command.Destination) && !hostplatform.Equal(result.Path, command.Destination) {
 		return errors.New("blank project result path does not match command")
 	}
 	if strings.TrimSpace(result.RemoteURL) != strings.TrimSpace(command.RemoteURL) {
@@ -319,12 +319,4 @@ func (s *Store) FailBlankProject(ctx context.Context, operation Operation, comma
 		return err
 	}
 	return tx.Commit()
-}
-
-func normalizeRemotePath(raw string) string {
-	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
-	if raw == "" {
-		return ""
-	}
-	return path.Clean(raw)
 }

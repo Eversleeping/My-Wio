@@ -70,7 +70,7 @@ func TestStoreReloadsReplacedChangedAddedAndRemovedPackages(t *testing.T) {
 	}
 	write(filepath.Join(dir, "wio-agent-linux-arm64"), "arm-package")
 	command, err := s.Command()
-	if err != nil || len(command.Packages) != 2 {
+	if err != nil || len(command.Packages) != 4 {
 		t.Fatalf("added package missing: %+v %v", command, err)
 	}
 	if err := os.Remove(path); err != nil {

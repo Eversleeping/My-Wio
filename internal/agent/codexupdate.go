@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/wio-platform/wio/internal/childprocess"
@@ -17,7 +18,7 @@ import (
 const codexCurrentVersionFile = "current-version"
 
 var runCodexUpdateCommand = func(ctx context.Context, name string, args ...string) error {
-	return childprocess.Result(childprocess.CommandContext(childprocess.WithScope(ctx, childprocess.Installation), name, args...).Run())
+	return childprocess.Result(childprocess.Run(childprocess.CommandContext(childprocess.WithScope(ctx, childprocess.Installation), name, args...)))
 }
 var findCodexUpdateCommand = exec.LookPath
 var readCodexUpdateVersion = func(ctx context.Context, executable string) string {
@@ -84,7 +85,7 @@ func managedCodexPrefix(stateDir, version string) string {
 }
 
 func managedCodexExecutable(stateDir, version string) string {
-	return filepath.Join(managedCodexPrefix(stateDir, version), "node_modules", ".bin", "codex")
+	return managedCLIExecutable(managedCodexPrefix(stateDir, version), "codex")
 }
 
 func writeManagedCodexVersion(stateDir, version string) error {
@@ -118,4 +119,11 @@ func writeManagedCLIVersion(stateDir, kind, version string) error {
 		return err
 	}
 	return os.Rename(temporaryPath, filepath.Join(root, codexCurrentVersionFile))
+}
+
+func managedCLIExecutable(prefix, kind string) string {
+	if runtime.GOOS == "windows" {
+		kind += ".cmd"
+	}
+	return filepath.Join(prefix, "node_modules", ".bin", kind)
 }

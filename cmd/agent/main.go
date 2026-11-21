@@ -14,8 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"encoding/json"
 	"github.com/wio-platform/wio/internal/agent"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/hostplatform"
+	"github.com/wio-platform/wio/internal/installer"
 	"github.com/wio-platform/wio/internal/prerequisite"
 	"github.com/wio-platform/wio/internal/runtimeaccess"
 )
@@ -36,6 +39,26 @@ func run(log *slog.Logger, args []string) error {
 	case "version", "--version", "-version":
 		fmt.Println(buildinfo.Version)
 		return nil
+	case "uninstall":
+		flags := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+		id := flags.String("server", "", "installed server ID (required)")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		release, err := lockAgentInstaller()
+		if err != nil {
+			return err
+		}
+		defer release()
+		result, err := installer.UninstallLocal(ctx, *id)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	case "service-install":
+		return runCLIService(args[1:])
 	case "install":
 		return installAgent(args[1:])
 	case "enroll":
@@ -45,8 +68,8 @@ func run(log *slog.Logger, args []string) error {
 		token := flags.String("token", "", "one-time enrollment token (visible to other local users in the process list; prefer --token-file)")
 		tokenFile := flags.String("token-file", "", "read the one-time enrollment token from this file, or from standard input when set to -")
 		configPath := flags.String("config", defaultConfig(), "configuration file")
-		cloneRoot := flags.String("clone-root", "/var/lib/wio-agent/projects", "managed Git clone root")
-		stateDir := flags.String("state-dir", "/var/lib/wio-agent", "agent state directory")
+		cloneRoot := flags.String("clone-root", hostplatform.Join(hostplatform.Current().State, "projects"), "managed Git clone root")
+		stateDir := flags.String("state-dir", hostplatform.Current().State, "agent state directory")
 		codexPath := flags.String("codex", "codex", "Codex CLI executable")
 		dockerPath := flags.String("docker", "docker", "Docker CLI executable")
 		preserveAccess := flags.Bool("preserve-access-settings", false, "preserve installed access settings during repair")
@@ -65,6 +88,7 @@ func run(log *slog.Logger, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		allowSudoValue := *allowSudo
+		var previousConfig *agent.Config
 		if *preserveAccess {
 			previous, loadErr := agent.LoadConfig(*configPath)
 			if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
@@ -72,21 +96,23 @@ func run(log *slog.Logger, args []string) error {
 			}
 			if loadErr == nil {
 				allowSudoValue = previous.AllowSudo
+				previousConfig = &previous
 			}
 		}
-		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{RegistrationID: *registrationID, ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, AllowSudo: allowSudoValue})
+		config, err := agent.Enroll(ctx, agent.EnrollmentOptions{PreviousConfig: previousConfig, RegistrationID: *registrationID, ControlURL: *controlURL, EnrollmentToken: secret, ConfigPath: *configPath, CloneRoot: *cloneRoot, StateDir: *stateDir, CodexPath: *codexPath, DockerPath: *dockerPath, InsecureSkipVerify: *insecure, AllowSudo: allowSudoValue})
 		if err != nil {
 			return err
 		}
 		fmt.Printf("Enrolled server %s; configuration written to %s\n", config.ServerID, *configPath)
 		return nil
 	case "run":
-		if runtime.GOOS != "linux" {
-			return errors.New("wio-agent run is supported only on Linux")
-		}
 		flags := flag.NewFlagSet("run", flag.ContinueOnError)
 		configPath := flags.String("config", defaultConfig(), "configuration file")
+		worker := flags.Bool("worker", false, "service worker (internal)")
 		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if handled, err := runPlatformService(log, *configPath, *worker); handled {
 			return err
 		}
 		config, err := agent.LoadConfig(*configPath)
@@ -136,12 +162,7 @@ func run(log *slog.Logger, args []string) error {
 	}
 }
 
-func defaultConfig() string {
-	if runtime.GOOS == "linux" {
-		return "/etc/wio-agent/config.json"
-	}
-	return "wio-agent.json"
-}
+func defaultConfig() string { return hostplatform.Current().Config }
 
 // maximumEnrollmentTokenSize bounds what --token-file reads.
 const maximumEnrollmentTokenSize = 64 << 10

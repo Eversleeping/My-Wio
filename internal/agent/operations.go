@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -144,7 +145,7 @@ func (c *Client) handleOperation(parent context.Context, envelope *protocol.Cont
 			c.log.Warn("Agent update result was not sent before restart; it will be replayed after reconnect", "operation_id", envelope.OperationID)
 		}
 		restartErr := error(nil)
-		if strings.HasPrefix(restartPath, runtimeAccessRestart+":") || strings.HasPrefix(restartPath, runtimeServiceRestart+":") {
+		if strings.HasPrefix(restartPath, runtimeAccessRestart+":") || strings.HasPrefix(restartPath, runtimeServiceRestart+":") || restartPath == "platform-service-restart" {
 			if !resultSaved {
 				restartErr = errors.New("runtime settings receipt was not persisted; refusing to restart")
 			} else {
@@ -177,6 +178,9 @@ func (c *Client) execute(ctx context.Context, envelope *protocol.ControlEnvelope
 }
 
 func (c *Client) dispatchOperation(ctx context.Context, envelope *protocol.ControlEnvelope) (string, json.RawMessage, bool, error) {
+	if runtime.GOOS != "linux" && strings.HasPrefix(envelope.Kind, protocol.OpDeployPrefix) {
+		return "", nil, false, errors.New("deployment operations require a Linux Agent")
+	}
 	ctx = childprocess.WithExtraEnvironment(ctx, c.config.ExtraEnvironment)
 	if err := c.verifyTaskReview(ctx, envelope); err != nil {
 		return "", nil, false, err

@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/wio-platform/wio/internal/childprocess"
@@ -193,6 +194,18 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 		err = errors.New("read operation cannot change runtime settings")
 		return
 	}
+	if runtime.GOOS != "linux" {
+		if envelope.Kind != protocol.OpAgentRestart && envelope.Kind != protocol.OpAgentAccessRead {
+			err = errors.New("runtime access settings require Linux")
+			return
+		}
+		revision := sha256.Sum256([]byte("platform:" + c.config.ServerID))
+		data, err = json.Marshal(protocol.AgentAccessSettings{Revision: hex.EncodeToString(revision[:]), Applied: true, InstanceID: c.runtimeInstanceID()})
+		if envelope.Kind == protocol.OpAgentRestart {
+			restart = "platform-service-restart"
+		}
+		return
+	}
 	settings, callErr := c.callRuntimeAccess(ctx, request)
 	if callErr != nil {
 		err = callErr
@@ -209,6 +222,13 @@ func (c *Client) runRuntimeAccess(ctx context.Context, envelope *protocol.Contro
 	return
 }
 func (c *Client) restartRuntimeAccess(ctx context.Context, path string) error {
+	if path == "platform-service-restart" {
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		return execAgentBinary(exe)
+	}
 	revision := strings.TrimPrefix(path, runtimeAccessRestart+":")
 	force := strings.HasPrefix(path, runtimeServiceRestart+":")
 	if force {

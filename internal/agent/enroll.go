@@ -14,6 +14,7 @@ import (
 )
 
 type EnrollmentOptions struct {
+	PreviousConfig     *Config
 	RegistrationID     string
 	AllowSudo          bool
 	ControlURL         string
@@ -74,7 +75,16 @@ func Enroll(ctx context.Context, options EnrollmentOptions) (Config, error) {
 		return Config{}, fmt.Errorf("enrollment failed: %s", result.Error)
 	}
 	config := Config{ControlURL: options.ControlURL, ServerID: result.ServerID, AgentToken: result.AgentToken, ScanRoots: result.ScanRoots, CloneRoot: options.CloneRoot, StateDir: options.StateDir, CodexPath: options.CodexPath, DockerPath: options.DockerPath, InsecureSkipVerify: options.InsecureSkipVerify}
-	config.AllowSudo = options.AllowSudo
+	if options.PreviousConfig != nil {
+		previous := *options.PreviousConfig
+		if previous.ServerID != config.ServerID {
+			return Config{}, errors.New("repair response belongs to another server")
+		}
+		previous.ControlURL, previous.AgentToken = config.ControlURL, config.AgentToken
+		config = previous
+	} else {
+		config.AllowSudo = options.AllowSudo
+	}
 	config.defaults()
 	if err := SaveConfig(options.ConfigPath, config); err != nil {
 		return Config{}, err

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
-	"strings"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -333,24 +331,6 @@ func decodeManagedRoots(raw string) []string {
 	var roots []string
 	_ = json.Unmarshal([]byte(raw), &roots)
 	return roots
-}
-
-func insideManagedWorkspaceRoot(workspacePath string, roots []string) bool {
-	workspacePath = path.Clean(strings.TrimSpace(workspacePath))
-	if workspacePath == "." || !strings.HasPrefix(workspacePath, "/") {
-		return false
-	}
-	for _, root := range roots {
-		root = path.Clean(strings.TrimSpace(root))
-		if root == "." || !strings.HasPrefix(root, "/") || workspacePath == root {
-			continue
-		}
-		prefix := strings.TrimSuffix(root, "/") + "/"
-		if strings.HasPrefix(workspacePath, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func migrateWorkspaceMetadata(ctx context.Context, db *sqlx.DB, driver string) error {

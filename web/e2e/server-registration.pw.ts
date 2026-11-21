@@ -19,7 +19,7 @@ test("generates a temporary Linux registration, tracks progress, and reopens his
   }});
   await page.goto("/?view=servers");
   await page.getByRole("button", {name: "Enroll server", exact: true}).click();
-  const form = page.getByRole("dialog", {name: "Enroll Linux server"});
+  const form = page.getByRole("dialog", {name: "Enroll server"});
   await form.getByLabel("Registration method").selectOption("command");
   await expect(form.getByLabel("SSH host or IP")).toHaveCount(0);
   await form.getByLabel("Server name").fill("command-node");
@@ -42,3 +42,29 @@ test("generates a temporary Linux registration, tracks progress, and reopens his
   await expect(dialog.getByLabel("One-time registration code")).toHaveCount(0);
   await page.screenshot({path: testInfo.outputPath("registration-complete.png"), fullPage: true});
 });
+
+for (const os of ["darwin", "windows"] as const) {
+ test(`generates a ${os} command with matching scan roots`, async ({page},testInfo)=>{
+  let received:unknown;
+  const registration={id:"33333333-3333-4333-8333-333333333333",name:"platform-node",state:"pending",server_id:"",expires_at:"2099-01-01T00:15:00Z",session_expires_at:"2099-01-01T01:00:00Z",error_code:"",progress:[],result:{}};
+  await installMockApplication(page,{configured:true,onAPIRequest:request=>{
+   if(request.method==="GET"&&request.path==="/servers")return {body:[]};
+   if(request.method==="GET"&&request.path==="/servers/registrations")return {body:[]};
+   if(request.method==="GET"&&request.path==="/credential-profiles")return {body:[{id:"codex",kind:"codex",name:"Codex",model:"gpt-6.1-sol"}]};
+   if(request.method==="POST"&&request.path==="/servers/registrations"){received=JSON.parse(request.body!);return {status:201,body:{registration,command:os==="windows"?"Invoke-WebRequest https://wio.example.test/api/agent/install.ps1":"curl https://wio.example.test/api/agent/install.sh | sudo sh",code:"platform-once"}};}
+   return undefined;
+  }});
+  await page.goto("/?view=servers");
+  await page.getByRole("button",{name:"Enroll server",exact:true}).click();
+  const form=page.getByRole("dialog",{name:"Enroll server"});
+  await form.getByLabel("Operating system").selectOption(os);
+  await form.getByLabel("Registration method").selectOption("command");
+  await expect(form.getByLabel("Repository scan roots")).toHaveValue(os==="windows"?"C:\\Projects":"/Users, /opt");
+  await form.getByLabel("Server name").fill("platform-node");
+  await form.getByRole("button",{name:"Generate registration command"}).click();
+  const progress=page.getByRole("dialog",{name:"Registration progress"});
+  await expect(progress.getByLabel("One-time registration code")).toHaveValue("platform-once");
+  expect(received).toMatchObject({os,scan_roots:os==="windows"?["C:\\Projects"]:["/Users","/opt"]});
+  await page.screenshot({path:testInfo.outputPath(`${os}-registration.png`),fullPage:true});
+ });
+}

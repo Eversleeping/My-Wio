@@ -183,7 +183,7 @@ func TestInstallScriptPinsPackageAndUsesNoCodeInArguments(t *testing.T) {
 }
 func TestRegistrationRejectsOtherPlatformsAndRevokedSessions(t *testing.T) {
 	api, profile := registrationTestAPI(t)
-	bad := registrationRequest(t, api.createServerRegistration, "", "", "POST", registrationConfiguration{Name: "windows", OS: "windows", CodexProfileID: profile.ID})
+	bad := registrationRequest(t, api.createServerRegistration, "", "", "POST", registrationConfiguration{Name: "freebsd", OS: "freebsd", CodexProfileID: profile.ID})
 	if bad.Code != 400 {
 		t.Fatal("unsupported platform accepted")
 	}
@@ -312,5 +312,113 @@ func assertGeneratedRegistrationCommand(t *testing.T, command string) {
 		if err != nil || !strings.Contains(string(raw), "--registration") || !strings.Contains(string(raw), "https://wio.example.com") {
 			t.Fatalf("command lost installation arguments for uid %s: %s %v", uid, raw, err)
 		}
+	}
+}
+
+func TestCrossPlatformRegistrationCommandsAndClaims(t *testing.T) {
+	api, profile := registrationTestAPI(t)
+	// Linux aliases remain available while every new platform uses its own asset.
+	assets := t.TempDir()
+	for _, name := range []string{"wio-agent-linux-amd64", "wio-agent-darwin-amd64", "wio-agent-darwin-arm64", "wio-agent-windows-amd64.exe"} {
+		if err := os.WriteFile(filepath.Join(assets, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api.agentUpdates = agentupdate.New(assets)
+	for _, osName := range []string{"darwin", "windows"} {
+		t.Run(osName, func(t *testing.T) {
+			created := registrationRequest(t, api.createServerRegistration, "", "", "POST", registrationConfiguration{Name: osName, OS: osName, CodexProfileID: profile.ID})
+			if created.Code != 201 {
+				t.Fatalf("create=%d %s", created.Code, created.Body.String())
+			}
+			var command struct {
+				Registration  store.ServerRegistration
+				Command, Code string
+			}
+			if err := json.Unmarshal(created.Body.Bytes(), &command); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(command.Command, command.Code) || strings.Contains(command.Command, "api-key-registration-secret") {
+				t.Fatal("command exposed a secret")
+			}
+			if (osName == "windows") != strings.Contains(command.Command, "install.ps1") {
+				t.Fatal("wrong bootstrap language")
+			}
+			wrong := registrationRequest(t, api.claimServerRegistration, command.Registration.ID, "", "POST", map[string]string{"code": command.Code, "device_key": strings.Repeat("b", 64), "os": "linux", "architecture": "amd64"})
+			if wrong.Code != 400 {
+				t.Fatal("foreign platform consumed registration")
+			}
+			claim := registrationRequest(t, api.claimServerRegistration, command.Registration.ID, "", "POST", map[string]string{"code": command.Code, "device_key": strings.Repeat("b", 64), "os": osName, "architecture": "amd64"})
+			if claim.Code != 200 {
+				t.Fatalf("claim=%d %s", claim.Code, claim.Body.String())
+			}
+			var plan struct{ Request installer.InstallRequest }
+			_ = json.Unmarshal(claim.Body.Bytes(), &plan)
+			if plan.Request.OS != osName {
+				t.Fatal("plan lost platform")
+			}
+		})
+	}
+	ps := httptest.NewRecorder()
+	api.agentInstallPowerShell(ps, httptest.NewRequest("GET", "/api/agent/install.ps1", nil))
+	for _, required := range []string{"Get-FileHash", "WindowsBuiltInRole", "windows-amd64?version=", "finally"} {
+		if !strings.Contains(ps.Body.String(), required) {
+			t.Fatal(required)
+		}
+	}
+	sh := httptest.NewRecorder()
+	api.agentInstallScript(sh, httptest.NewRequest("GET", "/api/agent/install.sh", nil))
+	if !strings.Contains(sh.Body.String(), "Darwin)") || !strings.Contains(sh.Body.String(), "shasum -a 256") {
+		t.Fatal("macOS bootstrap missing")
+	}
+	syntax := exec.Command("sh", "-n")
+	syntax.Stdin = strings.NewReader(sh.Body.String())
+	if output, err := syntax.CombinedOutput(); err != nil {
+		t.Fatalf("invalid bootstrap shell: %s %v", output, err)
+	}
+}
+
+func TestRegistrationRequiresSelectedPlatformArtifact(t *testing.T) {
+	api, profile := registrationTestAPI(t)
+	response := registrationRequest(t, api.createServerRegistration, "", "", "POST", registrationConfiguration{Name: "windows", OS: "windows", CodexProfileID: profile.ID})
+	if response.Code != 503 {
+		t.Fatalf("missing Windows asset issued command: %d", response.Code)
+	}
+}
+
+func TestTemporaryRepairPlanBindsExistingServer(t *testing.T) {
+	api, profile := registrationTestAPI(t)
+	ctx := context.Background()
+	if _, err := api.store.CreateEnrollment(ctx, "existing", []string{"/srv"}, "repair-bootstrap", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := api.store.ConsumeEnrollment(ctx, "repair-bootstrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := api.store.EnrollServer(ctx, enrollment, "existing-host", "existing-permanent")
+	id := server.ID
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := registrationRequest(t, api.createServerRegistration, "", "", "POST", registrationConfiguration{Name: "existing", OS: "linux", CodexProfileID: profile.ID, RepairServerID: id})
+	if created.Code != 201 {
+		t.Fatalf("repair create=%d %s", created.Code, created.Body.String())
+	}
+	var command struct {
+		Registration store.ServerRegistration
+		Code         string
+	}
+	if json.Unmarshal(created.Body.Bytes(), &command) != nil {
+		t.Fatal("invalid command")
+	}
+	key := strings.Repeat("c", 64)
+	claimed := registrationRequest(t, api.claimServerRegistration, command.Registration.ID, "", "POST", map[string]string{"code": command.Code, "device_key": key, "os": "linux", "architecture": "amd64"})
+	if claimed.Code != 200 {
+		t.Fatalf("repair claim=%d %s", claimed.Code, claimed.Body.String())
+	}
+	var plan struct{ Request installer.InstallRequest }
+	if json.Unmarshal(claimed.Body.Bytes(), &plan) != nil || plan.Request.ExpectedServerID != id || !plan.Request.PreserveAccessSettings {
+		t.Fatal("repair plan lost installed identity")
 	}
 }

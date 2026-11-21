@@ -19,6 +19,7 @@ import (
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/scanner"
 )
@@ -35,7 +36,7 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	ctx = c.processContext(ctx)
 	hostname, _ := os.Hostname()
 	codexPath := c.currentCodexPath()
-	heartbeat := protocol.Heartbeat{Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(childprocess.WithScope(ctx, childprocess.Codex), codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
+	heartbeat := protocol.Heartbeat{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(childprocess.WithScope(ctx, childprocess.Codex), codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
 	geminiPath := c.gemini.Command()
 	heartbeat.GeminiVersion = c.currentGeminiVersion(ctx, geminiPath)
 	heartbeat.GeminiReady = commandAvailable(geminiPath)
@@ -43,18 +44,19 @@ func (c *Client) enqueueHeartbeat(ctx context.Context) error {
 	heartbeat.ClaudeVersion = c.currentClaudeVersion(ctx, claudePath)
 	heartbeat.ClaudeReady = commandAvailable(claudePath)
 	heartbeat.Capabilities = capabilities.AgentDeclaration(heartbeat.GeminiVersion, heartbeat.ClaudeVersion)
-	if runtime.GOOS != "linux" || c.config.configPath != "/etc/wio-agent/config.json" {
-		heartbeat.Capabilities = slices.DeleteFunc(heartbeat.Capabilities, func(name string) bool {
-			return name == protocol.CapabilityAgentAccess || name == protocol.CapabilityAgentRestart
-		})
-	}
+	heartbeat.Capabilities = slices.DeleteFunc(heartbeat.Capabilities, func(name string) bool {
+		if runtime.GOOS != "linux" && (name == protocol.CapabilityAgentAccess || name == protocol.CapabilityDeployRollbackExact) {
+			return true
+		}
+		return c.config.configPath != hostplatform.Current().Config && (name == protocol.CapabilityAgentAccess || name == protocol.CapabilityAgentRestart)
+	})
 	return c.queue(protocol.AgentKindHeartbeat, heartbeat, false)
 }
 
 func (c *Client) enqueueMetrics(ctx context.Context) error {
 	percentages, _ := cpu.PercentWithContext(ctx, 250*time.Millisecond, false)
 	memory, _ := mem.VirtualMemoryWithContext(ctx)
-	usage, _ := disk.UsageWithContext(ctx, "/")
+	usage, _ := disk.UsageWithContext(ctx, metricDiskPath(c.config.StateDir))
 	average, _ := load.AvgWithContext(ctx)
 	interfaces, _ := gnet.IOCountersWithContext(ctx, false)
 	metric := protocol.Metrics{}
@@ -137,4 +139,11 @@ func commandVersionWithTimeout(ctx context.Context, command string, timeout time
 func commandAvailable(command string) bool {
 	_, err := exec.LookPath(command)
 	return err == nil
+}
+
+func metricDiskPath(state string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.VolumeName(state) + `\`
+	}
+	return "/"
 }

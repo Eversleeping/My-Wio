@@ -185,3 +185,36 @@ jobs:
             outputs/playwright/real-test-results
             outputs/playwright/real-controlplane.log
           retention-days: 7
+
+  native-agent:
+    name: Native Agent (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build native Agent
+        shell: bash
+        run: go build -o "$RUNNER_TEMP/wio-agent.exe" ./cmd/agent
+      - name: Test target paths, packages, update recovery, and process jobs
+        shell: bash
+        run: go test ./internal/hostplatform ./internal/agentupdate ./internal/childprocess ./internal/claudeadapter ./internal/agent ./internal/installer -run 'Test(TargetPath|SupportedPackage|StoreRetries|StoreReloads|ServiceUpdate|RollbackRespects|Portable|ManagedCLISelection|WindowsJob|WindowsMCP)' -count=1
+      - name: Test real launchd service
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          go test -c -tags=platformintegration -o "$RUNNER_TEMP/wio-installer-test" ./internal/installer
+          sudo env WIO_TEST_AGENT_BINARY="$RUNNER_TEMP/wio-agent.exe" "$RUNNER_TEMP/wio-installer-test" -test.run TestNativeServiceHeartbeatRestartAndUninstall -test.v -test.timeout 4m
+      - name: Test real Windows service
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:WIO_TEST_AGENT_BINARY = Join-Path $env:RUNNER_TEMP 'wio-agent.exe'
+          go test -tags=platformintegration ./internal/installer -run TestNativeServiceHeartbeatRestartAndUninstall -v -count=1 -timeout 4m

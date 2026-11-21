@@ -101,6 +101,9 @@ func (a *API) deploymentTargetFromInput(ctx context.Context, input deploymentTar
 	if err != nil {
 		return store.DeploymentTarget{}, inputStoreFailure{err}
 	}
+	if server.OS != "" && server.OS != "linux" {
+		return store.DeploymentTarget{}, errors.New("deployment requires a Linux server")
+	}
 	if server.Status != "online" {
 		return store.DeploymentTarget{}, errors.New("target server must be online")
 	}

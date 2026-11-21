@@ -8,18 +8,16 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"runtime"
+
 	"syscall"
 	"time"
 
 	"github.com/wio-platform/wio/internal/enrollment"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/installer"
 )
 
 func installAgent(args []string) error {
-	if runtime.GOOS != "linux" {
-		return errors.New("Agent installation is supported only on Linux")
-	}
 	flags := flag.NewFlagSet("install", flag.ContinueOnError)
 	controlURL := flags.String("url", "", "Wio control-plane URL")
 	id := flags.String("registration", "", "temporary registration ID")
@@ -30,12 +28,19 @@ func installAgent(args []string) error {
 	if !*requestStdin && (*controlURL == "" || !enrollment.ValidID(*id)) {
 		return errors.New("--url and --registration are required")
 	}
-	if os.Geteuid() != 0 {
-		return errors.New("run the installer as root (sudo)")
+	if !hostplatform.Administrator() {
+		return errors.New("run the installer as administrator/root")
 	}
-	if _, err := os.Stat("/run/systemd/system"); err != nil {
-		return errors.New("a running systemd is required")
+	if err := installationPreflight(); err != nil {
+		return err
 	}
+	if err := os.MkdirAll(hostplatform.Current().Installer, 0700); err != nil {
+		return err
+	}
+	if err := hostplatform.ProtectInstaller(hostplatform.Current().Installer); err != nil {
+		return err
+	}
+
 	release, err := lockAgentInstaller()
 	if err != nil {
 		return err
@@ -46,7 +51,7 @@ func installAgent(args []string) error {
 	ctx, timeout := context.WithTimeout(ctx, time.Hour)
 	defer timeout()
 	if !*requestStdin {
-		return enrollment.Run(ctx, *controlURL, *id, "/var/lib/wio-installer", func() (string, error) { return readInstallationCode(ctx) }, os.Stdout)
+		return enrollment.Run(ctx, *controlURL, *id, hostplatform.Current().Installer, func() (string, error) { return readInstallationCode(ctx) }, os.Stdout)
 	}
 	var request installer.InstallRequest
 	if err := json.NewDecoder(io.LimitReader(os.Stdin, 2<<20)).Decode(&request); err != nil {

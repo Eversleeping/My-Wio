@@ -26,14 +26,14 @@ type Stream struct {
 func StartStream(cmd *exec.Cmd) (*Stream, error) {
 	reader, writer := io.Pipe()
 	cmd.Stdout = writer
-	if err := cmd.Start(); err != nil {
+	if err := Start(cmd); err != nil {
 		_ = reader.Close()
 		_ = writer.Close()
 		return nil, err
 	}
 	stream := &Stream{reader: reader, done: make(chan error, 1)}
 	go func() {
-		err := cmd.Wait()
+		err := Wait(cmd)
 		_ = writer.Close()
 		stream.done <- err
 	}()

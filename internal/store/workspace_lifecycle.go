@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"strings"
 	"time"
 
@@ -402,7 +402,7 @@ func (s *Store) CompleteWorkspaceLifecycle(ctx context.Context, operation Operat
 		}
 	case "copy":
 		_, err = tx.ExecContext(ctx, s.Q(`INSERT INTO workspaces(id,project_id,server_id,path,display_name,management_mode,status,kind,parent_workspace_id,branch,commit_sha,dirty,last_git_refresh_at,last_scanned_at)
-			SELECT ?,project_id,server_id,?,?,'managed','ready','primary',NULL,branch,commit_sha,dirty,last_git_refresh_at,? FROM workspaces WHERE id=?`), command.TargetWorkspaceID, result.TargetPath, filepath.Base(result.TargetPath), now, command.WorkspaceID)
+			SELECT ?,project_id,server_id,?,?,'managed','ready','primary',NULL,branch,commit_sha,dirty,last_git_refresh_at,? FROM workspaces WHERE id=?`), command.TargetWorkspaceID, result.TargetPath, hostplatform.Base(result.TargetPath), now, command.WorkspaceID)
 		if err != nil {
 			return err
 		}
@@ -481,7 +481,11 @@ func isWorkspaceWriteConflict(err error) bool {
 }
 
 func cleanLifecyclePath(value string) string {
-	return filepath.Clean(strings.TrimSpace(value))
+	value = hostplatform.Clean(hostplatform.TargetOS(value), strings.TrimSpace(value))
+	if hostplatform.TargetOS(value) == "windows" {
+		return strings.ToLower(value)
+	}
+	return value
 }
 
 func ManagedRoots(server Server) []string {

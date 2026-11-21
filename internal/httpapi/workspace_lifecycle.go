@@ -3,9 +3,9 @@ package httpapi
 import (
 	"database/sql"
 	"errors"
+	"github.com/wio-platform/wio/internal/hostplatform"
 	"net/http"
-	"path/filepath"
-	"regexp"
+
 	"strings"
 	"time"
 	"unicode"
@@ -21,8 +21,6 @@ const (
 	workspaceDisplayNameLimit = 200
 	workspacePathLimit        = 4096
 )
-
-var windowsAbsolutePath = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
 
 func (a *API) updateWorkspace(w http.ResponseWriter, r *http.Request) {
 	var input struct {
@@ -325,10 +323,10 @@ func containsControlRune(value string) bool {
 
 func validAgentAbsolutePath(value string) bool {
 	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\\`) || windowsAbsolutePath.MatchString(value)
+	return hostplatform.Absolute(hostplatform.TargetOS(value), value)
 }
 
 func cleanAgentPath(value string) string {
 	value = strings.ReplaceAll(strings.TrimSpace(value), `\`, "/")
-	return filepath.ToSlash(filepath.Clean(value))
+	return hostplatform.Clean(hostplatform.TargetOS(value), value)
 }

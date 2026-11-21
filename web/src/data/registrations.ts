@@ -8,7 +8,7 @@ export type ServerRegistration = {
   result: Partial<SSHBootstrapResult>;
 };
 export type RegistrationCommand = {registration: ServerRegistration; command: string; code: string};
-export type RegistrationInput = {name: string; scan_roots: string[]; configuration: string; notes: string; codex_profile_id: string; git_profile_id: string; os: "linux"};
+export type RegistrationInput = {name: string; scan_roots: string[]; configuration: string; notes: string; codex_profile_id: string; git_profile_id: string; os: "linux" | "darwin" | "windows"; repair_server_id?: string};
 export const registrations = {
   list: () => query<ServerRegistration[]>("/servers/registrations", ["servers"], false, 750),
   create: (input: RegistrationInput) => writeResource(mutation<RegistrationCommand>("/servers/registrations", "POST", ["servers"]), input),

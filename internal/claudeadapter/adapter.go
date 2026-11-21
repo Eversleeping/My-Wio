@@ -122,7 +122,7 @@ func run(parent context.Context, executable, operationID string, command protoco
 	stdout, err := childprocess.StartStream(cmd)
 	// The CLI holds its own copy of any credential descriptor now.
 	releaseEnvironment()
-	releaseMCP()
+	// MCP configuration stays available until the CLI exits on every platform.
 	if err != nil {
 		return fmt.Errorf("start Claude Code CLI (install claude for the Agent account): %w", err)
 	}

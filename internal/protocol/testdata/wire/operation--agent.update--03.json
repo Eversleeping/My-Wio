@@ -1,0 +1,11 @@
+{
+  "baseline": "2355af0+P8-04",
+  "direction": "operation",
+  "kind": "agent.update",
+  "source": ["github.com/wio-platform/wio/internal/httpapi.(*API).updateAgent"],
+  "payload": {
+    "rollback": true,
+    "version": "",
+    "packages": null
+  }
+}
