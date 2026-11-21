@@ -2,7 +2,7 @@
 
 Wio 是面向小规模服务器集群的个人自托管控制平台。通过一个响应式 Web / PWA 界面，管理服务器、Git 项目与工作区、Codex / Gemini / Claude 会话、Docker Compose 部署、监控、告警和加密凭据。
 
-面向单管理员、1–20 台服务器、约 200 个项目的使用场景。控制面可在 Linux、macOS、Windows 上开发运行；Agent 新增 Linux、macOS 和 Windows 平台实现（macOS/Windows 原生发布验收待完成），Docker Compose 部署执行端仅支持 Linux。Wio 不提供通用终端或完整 Web IDE，不面向多租户或 Kubernetes。
+面向单管理员、1–20 台服务器、约 200 个项目的使用场景。控制面可在 Linux、macOS、Windows 上开发运行；Agent 新增 Linux、macOS 和 Windows 平台实现（macOS/Windows 原生服务 CI 已通过，完整新机依赖安装及 SSH 安装仍待实测），Docker Compose 部署执行端仅支持 Linux。Wio 不提供通用终端或完整 Web IDE，不面向多租户或 Kubernetes。
 
 ## 产品演示
 
@@ -62,7 +62,7 @@ Wio 向 Agent 下发结构化操作；AI CLI 和 Compose 项目仍会按执行�
 | --- | --- |
 | 本地开发 | Go 1.22+、Node.js 22+、npm；先构建前端再编译控制面 |
 | 生产控制面 | Linux、Docker Engine、Compose v2、公共域名和 HTTPS 入口；默认 Caddy 使用 80/443 |
-| 外部 Agent | Linux amd64/arm64（systemd）、macOS amd64/arm64（launchd）、Windows amd64（Windows Service）；macOS/Windows 原生发布验收待完成。SSH 或限时命令注册，需 root/sudo 或 Windows 管理员 |
+| 外部 Agent | Linux amd64/arm64（systemd）、macOS amd64/arm64（launchd）、Windows amd64（Windows Service）；macOS/Windows 原生服务 CI 已通过，完整新机依赖安装及 SSH 安装仍待实测。SSH 或限时命令注册，需 root/sudo 或 Windows 管理员 |
 | 外部连接 | Agent 可访问控制面；按需访问 Git、模型服务及 npm/浏览器下载源 |
 
 SSH 注册/修复会尝试补装 Git、Docker/Compose、Node.js/npm、三种 AI CLI 和 Playwright/Chromium，支持 apt-get、dnf、yum。核心 Agent 安装失败会终止流程；可选依赖失败会保留能力警告。CLI 已安装不代表模型认证成功。
@@ -218,7 +218,7 @@ Wio 面向可信单管理员环境。SSH 凭据仅用于当前请求；API Key�
 
 内置 Agent 使用 `WIO_CONTROL_AGENT_EXTRA_ENVIRONMENT=GOCACHE,GOMODCACHE,GOPATH,CUSTOM_PROVIDER_TOKEN`，修改后重启控制面。这里保存名字，取值仍来自服务环境，在构造每个命令时读取；不接受赋值、通配符或 `WIO_` 名字。只加入确实需要传给子进程的变量。未应用托管预设时，原生 CLI 登录及对应引擎命名空间下的服务环境认证继续可用。
 
-环境白名单减少无意泄露，文件访问仍由系统账号、服务限制和容器挂载决定。同账号模型进程仍可能读取 Agent 状态文件、Git 凭据、其他工作区和控制面进程资源。Codex、Gemini 的托管 API 密钥以及服务环境认证仍可能被其模型工具看到；Unix 上 Claude 的托管 API 密钥和回环 MCP 配置使用匿名描述符，Codex 的回环 MCP 令牌仍在进程参数中，Windows 上 Claude 保留原有环境 / 内联配置回退。工作区内容可通过网络发给模型服务，同引擎原生历史共享；这些边界不能由环境白名单消除。
+环境白名单减少无意泄露，文件访问仍由系统账号、服务限制和容器挂载决定。同账号模型进程仍可能读取 Agent 状态文件、Git 凭据、其他工作区和控制面进程资源。Codex、Gemini 的托管 API 密钥以及服务环境认证仍可能被其模型工具看到；Unix 上 Claude 的托管 API 密钥和回环 MCP 配置使用匿名描述符，Codex 的回环 MCP 令牌仍在进程参数中，Windows 上 Claude 的 API 密钥使用进程环境，回环 MCP 配置使用私有 ACL 临时文件。工作区内容可通过网络发给模型服务，同引擎原生历史共享；这些边界不能由环境白名单消除。
 
 ## 仓库结构
 

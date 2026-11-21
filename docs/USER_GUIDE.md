@@ -169,7 +169,7 @@ API_TOKEN=...
 
 ### 注册与指纹确认
 
-平台实现覆盖 Linux amd64/arm64（systemd）、macOS amd64/arm64（launchd）、Windows amd64（Windows Service）。macOS/Windows 尚待原生 CI 与实机发布验收；当前改动未发布。进入 **服务器 → 注册服务器** 后，先选择操作系统，再选择 **通过 SSH 远程安装** 或 **在目标服务器执行命令**。
+平台实现覆盖 Linux amd64/arm64（systemd）、macOS amd64/arm64（launchd）、Windows amd64（Windows Service）。已随 0.3.50 发布；macOS/Windows 原生服务 CI 已通过，完整新机依赖安装及 SSH 安装仍待实测。进入 **服务器 → 注册服务器** 后，先选择操作系统，再选择 **通过 SSH 远程安装** 或 **在目标服务器执行命令**。
 
 通过 SSH 远程安装：
 
