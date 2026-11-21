@@ -75,8 +75,20 @@ func protectPortableState(ctx context.Context, l hostplatform.Layout, state stri
 		}
 	}
 	// Binary files remain administrator-owned; workers only receive read/execute.
-	if _, err := portableCommand(ctx, "icacls.exe", filepath.Dir(l.Binary), "/inheritance:r", "/grant:r", `*S-1-5-18:(OI)(CI)F`, `*S-1-5-32-544:(OI)(CI)F`, `NT SERVICE\WioAgent:(OI)(CI)RX`, "/T", "/L", "/Q"); err != nil {
+	directory := filepath.Dir(l.Binary)
+	// Protect the directory first, then reset children to inherit it. Applying
+	// /inheritance:r recursively with directory-only grants empties file DACLs.
+	if _, err := portableCommand(ctx, "icacls.exe", directory, "/inheritance:r", "/grant:r", `*S-1-5-18:(OI)(CI)F`, `*S-1-5-32-544:(OI)(CI)F`, `NT SERVICE\WioAgent:(OI)(CI)RX`, "/Q"); err != nil {
 		return err
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if _, err := portableCommand(ctx, "icacls.exe", filepath.Join(directory, entry.Name()), "/reset", "/T", "/L", "/Q"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
