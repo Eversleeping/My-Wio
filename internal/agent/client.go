@@ -104,6 +104,14 @@ func (c *Client) Run(ctx context.Context) error {
 		// return while they or a reconnect's maintenance tasks still use state.
 		c.workers.Wait()
 	}()
+	// Maintenance belongs to the Agent lifetime, not an individual connection.
+	// A stalled OS probe must not block stream reads or add another blocked
+	// collector every time the control plane reconnects.
+	c.startMaintenance(ctx,
+		maintenanceTask{15 * time.Second, 40 * time.Second, c.enqueueHeartbeat},
+		maintenanceTask{15 * time.Second, 10 * time.Second, c.enqueueMetrics},
+		maintenanceTask{2 * time.Minute, 30 * time.Second, c.enqueueInventory},
+	)
 	backoff := initialReconnectBackoff
 	for {
 		if ctx.Err() != nil {
@@ -170,7 +178,6 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	}
 	traffic := make(chan struct{}, 1)
 	c.startWorker(func() { watchControlTraffic(streamContext, cancel, traffic, time.Minute) })
-	c.pruneOperationReceipts(time.Now())
 	// Start the app-server while the Agent connection is becoming ready. The
 	// first user turn can then reuse the initialized process instead of paying
 	// the process startup and handshake cost on its critical path.
@@ -181,9 +188,6 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			c.log.Warn("could not warm Codex app-server", "error", err)
 		}
 	})
-	_ = c.enqueueHeartbeat(ctx)
-	_ = c.enqueueMetrics(ctx)
-	_ = c.enqueueInventory(ctx)
 	capabilities := &controlPlaneCapabilities{}
 	sendErrors := make(chan error, 1)
 	sendDone := make(chan struct{})
@@ -198,7 +202,6 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		cancel()
 		<-sendDone
 	}()
-	c.startWorker(func() { c.periodic(streamContext) })
 	connected := false
 	for {
 		command, err := stream.Recv()
@@ -271,31 +274,6 @@ func (c *Client) sendLoop(ctx context.Context, stream protocol.AgentServiceConne
 			return
 		}
 		c.markSent(envelope)
-	}
-}
-
-func (c *Client) periodic(ctx context.Context) {
-	heartbeats := time.NewTicker(15 * time.Second)
-	metrics := time.NewTicker(15 * time.Second)
-	inventory := time.NewTicker(2 * time.Minute)
-	defer heartbeats.Stop()
-	defer metrics.Stop()
-	defer inventory.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-heartbeats.C:
-			c.pruneOperationReceipts(time.Now())
-			c.seenMu.Lock()
-			c.pruneCompletedOperations(time.Now())
-			c.seenMu.Unlock()
-			_ = c.enqueueHeartbeat(ctx)
-		case <-metrics.C:
-			_ = c.enqueueMetrics(ctx)
-		case <-inventory.C:
-			_ = c.enqueueInventory(ctx)
-		}
 	}
 }
 

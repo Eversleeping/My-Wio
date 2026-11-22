@@ -231,7 +231,7 @@ jobs:
         run: go test ./internal/agent -run 'Test(ConfigureCredentialsWrites|GeminiCredentialsPersist|ClaudeCredentialsPersist|LegacyCodexKey|WindowsCredentialAtomicReplace)' -v -count=1 -timeout 4m
       - name: Test target paths, packages, update recovery, and process jobs
         shell: bash
-        run: go test ./internal/hostplatform ./internal/agentupdate ./internal/childprocess ./internal/claudeadapter ./internal/agent ./internal/installer -run 'Test(TargetPath|SupportedPackage|StoreRetries|StoreReloads|ServiceUpdate|RollbackRespects|Portable|ManagedCLISelection|WindowsJob|WindowsMCP|WindowsInspection|NPMEntry)' -count=1
+        run: go test ./internal/hostplatform ./internal/agentupdate ./internal/childprocess ./internal/claudeadapter ./internal/agent ./internal/installer -run 'Test(TargetPath|SupportedPackage|StoreRetries|StoreReloads|ServiceUpdate|RollbackRespects|Portable|ManagedCLISelection|WindowsJob|WindowsMCP|WindowsInspection|NPMEntry|ControlReconnect|Maintenance)' -count=1
       - name: Test real launchd service
         if: runner.os == 'macOS'
         shell: bash

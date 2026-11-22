@@ -24,6 +24,33 @@ import (
 	"github.com/wio-platform/wio/internal/scanner"
 )
 
+type maintenanceTask struct {
+	interval time.Duration
+	timeout  time.Duration
+	collect  func(context.Context) error
+}
+
+// Each task runs serially in its own worker. Non-cancellable platform calls can
+// delay that collector, while heartbeats and control traffic remain independent.
+func (c *Client) startMaintenance(ctx context.Context, tasks ...maintenanceTask) {
+	for _, task := range tasks {
+		c.startWorker(func() {
+			ticker := time.NewTicker(task.interval)
+			defer ticker.Stop()
+			for ctx.Err() == nil {
+				collectCtx, cancel := context.WithTimeout(ctx, task.timeout)
+				_ = task.collect(collectCtx)
+				cancel()
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		})
+	}
+}
+
 func (c *Client) refreshInventory(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
@@ -33,6 +60,10 @@ func (c *Client) refreshInventory(parent context.Context) {
 }
 
 func (c *Client) enqueueHeartbeat(ctx context.Context) error {
+	c.pruneOperationReceipts(time.Now())
+	c.seenMu.Lock()
+	c.pruneCompletedOperations(time.Now())
+	c.seenMu.Unlock()
 	ctx = c.processContext(ctx)
 	hostname, _ := os.Hostname()
 	codexPath := c.currentCodexPath()

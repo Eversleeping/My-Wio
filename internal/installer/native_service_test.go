@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,36 @@ type nativeAgentControl struct {
 	connections chan struct{}
 	commands    chan *protocol.ControlEnvelope
 	results     chan protocol.OperationResult
+}
+
+func startNativeControl(listener net.Listener, control *nativeAgentControl, gitArchive string) func() {
+	server := grpc.NewServer(grpc.ForceServerCodec(protocol.Codec()))
+	protocol.RegisterAgentServiceServer(server, control)
+	var connections sync.Map
+	httpServer := &http.Server{Handler: h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			server.ServeHTTP(w, r)
+			return
+		}
+		if gitArchive != "" && r.URL.Path == "/api/agent/install-tools/windows-git" && r.URL.Query().Get("sha256") == WindowsGitSHA256 {
+			http.ServeFile(w, r, gitArchive)
+			return
+		}
+		http.NotFound(w, r)
+	}), &http2.Server{}), ConnState: func(conn net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Store(conn, true)
+		} else if state == http.StateClosed {
+			connections.Delete(conn)
+		}
+	}}
+	go httpServer.Serve(listener)
+	return func() {
+		// h2c hijacks connections; close those too, as replacing the process does.
+		connections.Range(func(key, _ any) bool { _ = key.(net.Conn).Close(); return true })
+		_ = httpServer.Close()
+		server.Stop()
+	}
 }
 
 func (s *nativeAgentControl) Connect(stream protocol.AgentServiceConnectServer) error {
@@ -110,23 +141,9 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	control := &nativeAgentControl{heartbeats: make(chan protocol.Heartbeat, 10), connections: make(chan struct{}, 10), commands: make(chan *protocol.ControlEnvelope, 1), results: make(chan protocol.OperationResult, 10)}
-	server := grpc.NewServer(grpc.ForceServerCodec(protocol.Codec()))
-	protocol.RegisterAgentServiceServer(server, control)
-	defer server.Stop()
-	// Serve the tool package and gRPC on the same origin, like the control plane.
-	httpServer := &http.Server{Handler: h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
-			server.ServeHTTP(w, r)
-			return
-		}
-		if gitArchive != "" && r.URL.Path == "/api/agent/install-tools/windows-git" && r.URL.Query().Get("sha256") == WindowsGitSHA256 {
-			http.ServeFile(w, r, gitArchive)
-			return
-		}
-		http.NotFound(w, r)
-	}), &http2.Server{})}
-	go httpServer.Serve(listener)
-	defer httpServer.Close()
+	address := listener.Addr().String()
+	stopControl := startNativeControl(listener, control, gitArchive)
+	defer func() { stopControl() }()
 	if err := preparePortableService(ctx, layout); err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +256,31 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 		t.Log("Worker downloaded and verified private Git from the control plane")
 	}
 	t.Log("Native service created a project with README")
+	stopControl()
+	draining := true
+	for draining {
+		select {
+		case <-control.heartbeats:
+		default:
+			draining = false
+		}
+	}
+	listener, err = net.Listen("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopControl = startNativeControl(listener, control, gitArchive)
+	select {
+	case <-control.connections:
+	case <-ctx.Done():
+		t.Fatal("service did not reconnect after control-plane replacement")
+	}
+	select {
+	case <-control.heartbeats:
+	case <-ctx.Done():
+		t.Fatal("service did not resume heartbeats after control-plane replacement")
+	}
+	t.Log("Native service reconnected and resumed heartbeats after control-plane replacement without restarting the service")
 	payload, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: id})
 	control.commands <- &protocol.ControlEnvelope{OperationID: "native-restart", Kind: protocol.OpAgentRestart, PayloadJSON: payload}
 	select {
