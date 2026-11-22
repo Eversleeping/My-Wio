@@ -19,6 +19,7 @@ import (
 type reconnectControl struct {
 	connections atomic.Int32
 	results     chan protocol.OperationResult
+	heartbeats  chan int32
 }
 
 func (s *reconnectControl) Connect(stream protocol.AgentServiceConnectServer) error {
@@ -46,11 +47,18 @@ func (s *reconnectControl) Connect(stream protocol.AgentServiceConnectServer) er
 				return stream.Context().Err()
 			}
 		}
+		if message.Kind == protocol.AgentKindHeartbeat {
+			select {
+			case s.heartbeats <- index:
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			}
+		}
 	}
 }
 
 func TestControlReconnectWhileVersionProbeIsBlocked(t *testing.T) {
-	control := &reconnectControl{results: make(chan protocol.OperationResult, 16)}
+	control := &reconnectControl{results: make(chan protocol.OperationResult, 16), heartbeats: make(chan int32, 16)}
 	start := func(address string) (*grpc.Server, string) {
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
@@ -107,6 +115,14 @@ func TestControlReconnectWhileVersionProbeIsBlocked(t *testing.T) {
 			}
 		}
 		deadline.Stop()
+		select {
+		case connection := <-control.heartbeats:
+			if connection != int32(generation) {
+				t.Fatalf("heartbeat belongs to stale connection %d", connection)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("connection %d did not send a heartbeat while version probing was blocked", generation)
+		}
 		if generation == 1 {
 			server.Stop()
 			server, _ = start(address)
