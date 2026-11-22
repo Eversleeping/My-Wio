@@ -101,7 +101,9 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitArchive := nativeGitArchive(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// The first Windows boot now downloads and extracts a full Git distribution.
+	// Keep restart/uninstall coverage inside a budget which includes that work.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
