@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -108,6 +109,9 @@ func Create(ctx context.Context, options CreateOptions, managedRoots []string) (
 		branch = defaultInitialBranch
 	}
 	if output, commandErr := runGit(ctx, "", "check-ref-format", "--branch", branch); commandErr != nil {
+		if errors.Is(commandErr, exec.ErrNotFound) {
+			return CreateResult{}, errors.New("Git is unavailable to Wio Agent; repair server dependencies before creating a project")
+		}
 		return CreateResult{}, fmt.Errorf("invalid initial branch: %s", cleanGitError(output, commandErr))
 	}
 	remoteURL := strings.TrimSpace(options.RemoteURL)

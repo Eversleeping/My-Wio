@@ -4,10 +4,32 @@ import (
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/wio-platform/wio/internal/buildinfo"
+	"github.com/wio-platform/wio/internal/installer"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 )
+
+func (a *API) downloadWindowsGit(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Query().Get("sha256") != installer.WindowsGitSHA256 {
+		writeError(w, http.StatusConflict, "Git installation package changed; update Wio Agent")
+		return
+	}
+	if a.agentUpdates == nil {
+		writeError(w, http.StatusServiceUnavailable, "Git installation package unavailable")
+		return
+	}
+	pkg, err := a.agentUpdates.Package("windows-amd64")
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "Git installation package unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Checksum-SHA256", installer.WindowsGitSHA256)
+	http.ServeFile(w, r, filepath.Join(filepath.Dir(pkg.Path), installer.WindowsGitArchive))
+}
 
 func (a *API) agentInstallScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

@@ -22,7 +22,7 @@ func uninstallPortableLocal(ctx context.Context, _ hostplatform.Layout) error {
 	return err
 }
 
-func ensurePortableGit(context.Context) error { return ErrUnsupportedPlatform }
+func ensurePortableGit(context.Context, string) error { return ErrUnsupportedPlatform }
 
 func installPortableCLIs(context.Context, string, CLIVersions) ([]string, error) {
 	return nil, ErrUnsupportedPlatform

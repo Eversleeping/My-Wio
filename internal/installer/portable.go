@@ -137,7 +137,7 @@ func installPortable(ctx context.Context, request InstallRequest) (InstallResult
 	warnings = append(warnings, cliWarnings...)
 
 	request.report("installing_git", 0, 0)
-	if err := ensurePortableGit(ctx); err != nil {
+	if err := ensurePortableGit(ctx, request.ControlURL); err != nil {
 		warnings = append(warnings, "git_unavailable")
 	}
 	request.report("enrolling_agent", 0, 0)

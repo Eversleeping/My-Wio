@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/protocol"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 )
 
@@ -96,6 +100,7 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gitArchive := nativeGitArchive(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -105,8 +110,21 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 	control := &nativeAgentControl{heartbeats: make(chan protocol.Heartbeat, 10), connections: make(chan struct{}, 10), commands: make(chan *protocol.ControlEnvelope, 1), results: make(chan protocol.OperationResult, 10)}
 	server := grpc.NewServer(grpc.ForceServerCodec(protocol.Codec()))
 	protocol.RegisterAgentServiceServer(server, control)
-	go server.Serve(listener)
 	defer server.Stop()
+	// Serve the tool package and gRPC on the same origin, like the control plane.
+	httpServer := &http.Server{Handler: h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			server.ServeHTTP(w, r)
+			return
+		}
+		if gitArchive != "" && r.URL.Path == "/api/agent/install-tools/windows-git" && r.URL.Query().Get("sha256") == WindowsGitSHA256 {
+			http.ServeFile(w, r, gitArchive)
+			return
+		}
+		http.NotFound(w, r)
+	}), &http2.Server{})}
+	go httpServer.Serve(listener)
+	defer httpServer.Close()
 	if err := preparePortableService(ctx, layout); err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +213,30 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 		}
 	}
 	t.Log("All four credential kinds applied and replaced under the native service account")
+	project, _ := json.Marshal(protocol.GitProjectCreateCommand{ProjectID: "native-git-project", Name: "native-project", InitialBranch: "main", InitializeREADME: true})
+	control.commands <- &protocol.ControlEnvelope{OperationID: "native-create-project", Kind: protocol.OpGitProjectCreate, PayloadJSON: project}
+	select {
+	case result := <-control.results:
+		if result.OperationID != "native-create-project" || result.Status != "succeeded" {
+			t.Fatalf("service could not create Git project: %s", result.Message)
+		}
+		var created protocol.GitProjectCreateResult
+		if json.Unmarshal(result.Data, &created) != nil || created.Branch != "main" || created.CommitSHA == "" {
+			t.Fatal("service did not commit README on the requested branch")
+		}
+	case <-ctx.Done():
+		t.Fatal("service did not acknowledge Git project creation")
+	}
+	if _, err := os.Stat(filepath.Join(layout.State, "projects", "native-project", ".git")); err != nil {
+		t.Fatal("service did not create the repository", err)
+	}
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(filepath.Join(layout.State, "tools", "git", "cmd", "git.exe")); err != nil {
+			t.Fatal("worker did not provision its own Git", err)
+		}
+		t.Log("Worker downloaded and verified private Git from the control plane")
+	}
+	t.Log("Native service created a project with README")
 	payload, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: id})
 	control.commands <- &protocol.ControlEnvelope{OperationID: "native-restart", Kind: protocol.OpAgentRestart, PayloadJSON: payload}
 	select {

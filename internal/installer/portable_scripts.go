@@ -78,19 +78,20 @@ try {
 
 const windowsGitScript = `$ErrorActionPreference='Stop'
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
-$release=Invoke-RestMethod -Headers @{'User-Agent'='WioInstaller'} 'https://api.github.com/repos/git-for-windows/git/releases/latest'
-$asset=$release.assets | Where-Object { $_.name -match '^PortableGit-[0-9.]+-64-bit\.7z\.exe$' } | Select-Object -First 1
-if(!$asset -or $asset.digest -notmatch '^sha256:([a-f0-9]{64})$'){throw 'Verified Git package unavailable'}
-$expected=$Matches[1]
-if($asset.browser_download_url -notlike 'https://github.com/git-for-windows/git/releases/download/*'){throw 'Invalid Git source'}
-$work=Join-Path $env:TEMP ([Guid]::NewGuid().ToString('N'))
+$expected=__WIO_GIT_SHA256__
+$work=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $work | Out-Null
 try {
  $exe=Join-Path $work 'git.exe'
- Invoke-WebRequest -UseBasicParsing $asset.browser_download_url -OutFile $exe
+ Invoke-WebRequest -UseBasicParsing __WIO_GIT_SOURCE__ -OutFile $exe -ErrorAction Stop
  if((Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected){throw 'Git checksum mismatch'}
  $target=__WIO_GIT_DIR__
- & $exe -y ('-o'+$target) | Out-Null
+ $stage=Join-Path $work 'extracted'
+ & $exe -y ('-o'+$stage) | Out-Null
  if($LASTEXITCODE -ne 0){throw 'Git extraction failed'}
+ & (Join-Path $stage 'cmd\git.exe') --version | Out-Null
+ if($LASTEXITCODE -ne 0){throw 'Git version verification failed'}
+ if(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target -Force -Recurse}
+ Move-Item -LiteralPath $stage -Destination $target
 } finally {Remove-Item -Force -Recurse $work}
 `

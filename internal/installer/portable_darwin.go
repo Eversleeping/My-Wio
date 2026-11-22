@@ -86,7 +86,7 @@ func uninstallPortableLocal(ctx context.Context, l hostplatform.Layout) error {
 	return nil
 }
 
-func ensurePortableGit(ctx context.Context) error {
+func ensurePortableGit(ctx context.Context, _ string) error {
 	if _, err := portableCommand(ctx, "xcode-select", "-p"); err == nil {
 		if _, err := portableCommand(ctx, "git", "--version"); err == nil {
 			return nil

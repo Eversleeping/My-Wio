@@ -127,6 +127,11 @@ func run(log *slog.Logger, args []string) error {
 		agent.ReapInheritedChildren(log)
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
+		runtimeContext, runtimeCancel := context.WithTimeout(ctx, 5*time.Minute)
+		if err := installer.PrepareRuntime(runtimeContext, config.StateDir, config.ControlURL); err != nil {
+			log.Warn("Git dependency setup failed; repository operations will be unavailable", "error", err)
+		}
+		runtimeCancel()
 		return agent.NewClient(config, log).Run(ctx)
 	case "runtime-access-helper":
 		flags := flag.NewFlagSet("runtime-access-helper", flag.ContinueOnError)

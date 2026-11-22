@@ -160,16 +160,15 @@ func uninstallPortableLocal(ctx context.Context, l hostplatform.Layout) error {
 	return nil
 }
 
-func ensurePortableGit(ctx context.Context) error {
+func ensurePortableGit(ctx context.Context, controlURL string) error {
 	gitDir := filepath.Join(filepath.Dir(hostplatform.Current().Binary), "git", "cmd")
 	if err := os.Setenv("PATH", gitDir+";"+os.Getenv("PATH")); err != nil {
 		return err
 	}
-	if _, err := portableCommand(ctx, "git", "--version"); err == nil {
+	if _, err := portableCommand(ctx, filepath.Join(gitDir, "git.exe"), "--version"); err == nil {
 		return nil
 	}
-	_, err := portableCommand(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", strings.ReplaceAll(windowsGitScript, "__WIO_GIT_DIR__", powershellQuote(filepath.Dir(gitDir))))
-	return err
+	return installWindowsGit(ctx, filepath.Dir(gitDir), strings.TrimRight(controlURL, "/"))
 }
 
 func installPortableCLIs(ctx context.Context, state string, versions CLIVersions) (warnings []string, resultErr error) {

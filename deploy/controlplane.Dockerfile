@@ -39,6 +39,8 @@ COPY --from=go /wio-agent-linux-arm64 /usr/local/share/wio/wio-agent-linux-arm64
 COPY --from=go /wio-agent-darwin-amd64 /usr/local/share/wio/wio-agent-darwin-amd64
 COPY --from=go /wio-agent-darwin-arm64 /usr/local/share/wio/wio-agent-darwin-arm64
 COPY --from=go /wio-agent-windows-amd64.exe /usr/local/share/wio/wio-agent-windows-amd64.exe
+# Verified PortableGit is served by Wio, including to hosts without GitHub access.
+RUN node -e 'const fs=require("node:fs"),crypto=require("node:crypto");(async()=>{const r=await fetch("https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/PortableGit-2.56.1-64-bit.7z.exe");if(!r.ok)throw Error("Git download failed");const b=Buffer.from(await r.arrayBuffer());if(crypto.createHash("sha256").update(b).digest("hex")!=="9dd04a608ceb5f6ab32a73709e0ecb159d211da71b697c45ff81f6dd0c6b49c7")throw Error("Git checksum mismatch");fs.writeFileSync("/usr/local/share/wio/wio-git-windows-amd64.7z.exe",b)})().catch(e=>{console.error(e.message);process.exit(1)})'
 COPY --from=go /src/deploy/agent.service /usr/local/share/wio/wio-agent.service
 COPY --from=go /src/deploy/prerequisite.service /usr/local/share/wio/wio-prerequisite.service
 EXPOSE 8080

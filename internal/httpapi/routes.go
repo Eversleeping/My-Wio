@@ -38,6 +38,7 @@ func (api *API) registerPublicRoutes(r chi.Router) {
 	r.Post("/agent/enroll", api.enrollAgent)
 	r.Get("/agent/install.sh", api.agentInstallScript)
 	r.Get("/agent/install.ps1", api.agentInstallPowerShell)
+	r.Get("/agent/install-tools/windows-git", api.downloadWindowsGit)
 	r.Get("/agent/install-status", api.agentInstallStatus)
 	r.Get("/agent/install-package/{architecture}", api.downloadInstallerPackage)
 	r.Post("/agent/registrations/{registrationID}/claim", api.claimServerRegistration)

@@ -207,3 +207,12 @@ P8-02、P8-03、P8-04 的联合实现及本轮发布已完成。**仍未覆盖�
 - 已按用户先前失败请求中的预设选择重试 Codex、Git 凭据，两项操作均成功；未读取或打印密钥内容。该机器尚无 Gemini/Claude 凭据的失败预设选择记录，不擅自替用户选择新预设；这两类写入已在原生服务 CI 验证。
 
 本轮补齐 Windows 新注册机器的三个 CLI 可用性、Agent 自更新、Codex/Git 实际凭据下发证据。完整 macOS 新机依赖安装、两系统 SSH 引导及其余更新故障演练仍按原记录继续验收，P8-02/03/04 不提前标为已完成。
+
+### 2026-11-22 Windows 缺少 Git 导致项目创建失败（0.3.54 候选）
+
+用户反馈创建项目时提示 `invalid initial branch: exec: "git": executable file not found in %PATH%`；管理员 PowerShell 的 `where.exe git` 也未找到 Git。注册结果确有 `git_unavailable` 警告，安装失败被保留为警告后服务器仍完成注册。
+
+- 控制面随镜像分发固定版本、固定 SHA-256 的官方 PortableGit，Windows 主机通过同一个 Wio 地址下载，不再依赖目标机访问 GitHub release API；解压后验证 Git，再发布工具目录。
+- 注册安装器验证专用目录中的 Git，避免管理员的个人 PATH 被误当作服务环境。Windows worker 启动时验证专用 Git，缺失时以原有服务账号安装到私有状态目录并设置 PATH；旧监督进程启动的新 worker 也会执行这一步。
+- 缺失 Git 的项目错误明确报告依赖问题；原生服务 CI 补上通过控制面同源下载真实 Git、使用真实服务账号初始化仓库和 README 提交的完整链路。
+- Agent 版本升至 0.3.54，schema 保持 14；实现与本地/原生验证进行中，未提交改动在 `main`。发布后仅更新受影响 Windows Agent，重试用户已有的失败项目，不新建额外项目或变更凭据预设。

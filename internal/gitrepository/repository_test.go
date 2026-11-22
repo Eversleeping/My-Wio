@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+func TestCreateReportsMissingGit(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PATH", root)
+	_, err := Create(context.Background(), CreateOptions{ProjectID: "missing-git", Path: filepath.Join(root, "project")}, []string{root})
+	if err == nil || !strings.Contains(err.Error(), "Git is unavailable") || strings.Contains(err.Error(), "invalid initial branch") {
+		t.Fatalf("missing dependency was not identified: %v", err)
+	}
+}
+
 func TestCreateEmptyRepository(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()
