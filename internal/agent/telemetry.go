@@ -19,6 +19,7 @@ import (
 	"github.com/wio-platform/wio/internal/buildinfo"
 	"github.com/wio-platform/wio/internal/capabilities"
 	"github.com/wio-platform/wio/internal/childprocess"
+	"github.com/wio-platform/wio/internal/codexcli"
 	"github.com/wio-platform/wio/internal/hostplatform"
 	"github.com/wio-platform/wio/internal/protocol"
 	"github.com/wio-platform/wio/internal/scanner"
@@ -80,21 +81,90 @@ func (c *Client) refreshInventory(parent context.Context) {
 	}
 }
 
-func (c *Client) enqueueHeartbeat(ctx context.Context) error {
+func (c *Client) maintainOperationReceipts(context.Context) error {
 	c.pruneOperationReceipts(time.Now())
 	c.seenMu.Lock()
 	c.pruneCompletedOperations(time.Now())
 	c.seenMu.Unlock()
+	return nil
+}
+
+type cliState struct {
+	version string
+	ready   bool
+}
+
+type cliInventory struct {
+	codex, gemini, claude cliState
+}
+
+func (c *Client) seedCLIInventory() {
+	for _, cli := range []struct{ kind, path string }{{"codex", c.currentCodexPath()}, {"gemini", c.gemini.Command()}, {"claude", effectiveClaudePath(c.config.StateDir)}} {
+		state := cliState{ready: commandAvailable(cli.path)}
+		raw, _ := os.ReadFile(filepath.Join(c.config.StateDir, cli.kind, codexCurrentVersionFile))
+		version := strings.TrimSpace(string(raw))
+		if state.ready && codexcli.ValidTargetVersion(version) && cli.path == managedCLIExecutable(filepath.Join(c.config.StateDir, cli.kind, "versions", version), cli.kind) {
+			state.version = version
+			if cli.kind == "codex" {
+				state.version = "codex-cli " + version
+			} else if cli.kind == "claude" {
+				state.version += " (Claude Code)"
+			}
+		}
+		c.updateCLIInventory(context.Background(), cli.kind, state)
+	}
+}
+
+func (c *Client) updateCLIInventory(ctx context.Context, kind string, state cliState) {
+	c.cliInventoryMu.Lock()
+	var previous cliState
+	switch kind {
+	case "codex":
+		previous, c.cliInventory.codex = c.cliInventory.codex, state
+	case "gemini":
+		previous, c.cliInventory.gemini = c.cliInventory.gemini, state
+	case "claude":
+		previous, c.cliInventory.claude = c.cliInventory.claude, state
+	}
+	c.cliInventoryMu.Unlock()
+	if previous != state && c.controlConnected.Load() {
+		_ = c.enqueueHeartbeat(ctx)
+	}
+}
+
+func (c *Client) refreshCLIInventory(ctx context.Context) error {
 	ctx = c.processContext(ctx)
+	for _, cli := range []struct {
+		kind    string
+		path    func() string
+		version func(context.Context, string) string
+	}{
+		{"codex", c.currentCodexPath, readCodexUpdateVersion},
+		{"gemini", c.gemini.Command, c.currentGeminiVersion},
+		{"claude", func() string { return effectiveClaudePath(c.config.StateDir) }, c.currentClaudeVersion},
+	} {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		path := cli.path()
+		version := cli.version(ctx, path)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.updateCLIInventory(ctx, cli.kind, cliState{version, commandAvailable(path)})
+	}
+	return nil
+}
+
+func (c *Client) enqueueHeartbeat(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	hostname, _ := os.Hostname()
-	codexPath := c.currentCodexPath()
-	heartbeat := protocol.Heartbeat{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: commandVersion(childprocess.WithScope(ctx, childprocess.Codex), codexPath), CodexReady: commandAvailable(codexPath), ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
-	geminiPath := c.gemini.Command()
-	heartbeat.GeminiVersion = c.currentGeminiVersion(ctx, geminiPath)
-	heartbeat.GeminiReady = commandAvailable(geminiPath)
-	claudePath := effectiveClaudePath(c.config.StateDir)
-	heartbeat.ClaudeVersion = c.currentClaudeVersion(ctx, claudePath)
-	heartbeat.ClaudeReady = commandAvailable(claudePath)
+	c.cliInventoryMu.RLock()
+	clis := c.cliInventory
+	c.cliInventoryMu.RUnlock()
+	heartbeat := protocol.Heartbeat{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, AgentVersion: buildinfo.Version, CodexVersion: clis.codex.version, CodexReady: clis.codex.ready, GeminiVersion: clis.gemini.version, GeminiReady: clis.gemini.ready, ClaudeVersion: clis.claude.version, ClaudeReady: clis.claude.ready, ScanRoots: c.inventoryRoots(), ManagedRoots: c.managedRoots()}
 	heartbeat.Capabilities = capabilities.AgentDeclaration(heartbeat.GeminiVersion, heartbeat.ClaudeVersion)
 	heartbeat.Capabilities = slices.DeleteFunc(heartbeat.Capabilities, func(name string) bool {
 		if runtime.GOOS != "linux" && (name == protocol.CapabilityAgentAccess || name == protocol.CapabilityDeployRollbackExact) {

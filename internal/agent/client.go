@@ -74,6 +74,8 @@ type Client struct {
 	workers          sync.WaitGroup
 	controlConnected atomic.Bool
 	wakeMaintenance  func()
+	cliInventoryMu   sync.RWMutex
+	cliInventory     cliInventory
 }
 
 func (c *Client) runtimeInstanceID() string {
@@ -94,6 +96,7 @@ func NewClient(config Config, log *slog.Logger) *Client {
 		log.Warn("Gemini API configuration could not be loaded")
 	}
 	client.codex.SetCollaborationTransport(client.callSessionTool)
+	client.seedCLIInventory()
 	return client
 }
 
@@ -114,6 +117,8 @@ func (c *Client) Run(ctx context.Context) error {
 		maintenanceTask{15 * time.Second, 40 * time.Second, c.connectedCollector(c.enqueueHeartbeat)},
 		maintenanceTask{15 * time.Second, 10 * time.Second, c.connectedCollector(c.enqueueMetrics)},
 		maintenanceTask{2 * time.Minute, 30 * time.Second, c.connectedCollector(c.enqueueInventory)},
+		maintenanceTask{15 * time.Second, 40 * time.Second, c.connectedCollector(c.refreshCLIInventory)},
+		maintenanceTask{15 * time.Second, 10 * time.Second, c.connectedCollector(c.maintainOperationReceipts)},
 	)
 	backoff := initialReconnectBackoff
 	for {

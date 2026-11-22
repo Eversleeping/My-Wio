@@ -181,19 +181,20 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 	if err := startPortableService(ctx, layout); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case h := <-control.heartbeats:
-		if verifyDependency && (!h.CodexReady || h.CodexVersion != buildinfo.Version) {
-			t.Fatalf("service could not execute normalized dependency: ready=%v version=%q", h.CodexReady, h.CodexVersion)
+	inventoryReady := false
+	for !inventoryReady {
+		select {
+		case h := <-control.heartbeats:
+			if h.OS != runtime.GOOS || h.Architecture != runtime.GOARCH {
+				t.Fatalf("wrong platform: %+v", h)
+			}
+			if slices.Contains(h.Capabilities, protocol.CapabilityAgentAccess) || slices.Contains(h.Capabilities, protocol.CapabilityDeployRollbackExact) {
+				t.Fatal("Linux-only capability advertised")
+			}
+			inventoryReady = !verifyDependency || (h.CodexReady && h.CodexVersion == buildinfo.Version)
+		case <-ctx.Done():
+			t.Fatal("native service did not publish heartbeat/CLI inventory")
 		}
-		if h.OS != runtime.GOOS || h.Architecture != runtime.GOARCH {
-			t.Fatalf("wrong platform: %+v", h)
-		}
-		if slices.Contains(h.Capabilities, protocol.CapabilityAgentAccess) || slices.Contains(h.Capabilities, protocol.CapabilityDeployRollbackExact) {
-			t.Fatal("Linux-only capability advertised")
-		}
-	case <-ctx.Done():
-		t.Fatal("native service did not send a heartbeat")
 	}
 	select {
 	case <-control.connections:
