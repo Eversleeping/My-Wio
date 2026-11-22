@@ -32,8 +32,11 @@ type maintenanceTask struct {
 
 // Each task runs serially in its own worker. Non-cancellable platform calls can
 // delay that collector, while heartbeats and control traffic remain independent.
-func (c *Client) startMaintenance(ctx context.Context, tasks ...maintenanceTask) {
-	for _, task := range tasks {
+func (c *Client) startMaintenance(ctx context.Context, tasks ...maintenanceTask) func() {
+	wakes := make([]chan struct{}, len(tasks))
+	for index, task := range tasks {
+		wake := make(chan struct{}, 1)
+		wakes[index] = wake
 		c.startWorker(func() {
 			ticker := time.NewTicker(task.interval)
 			defer ticker.Stop()
@@ -45,9 +48,27 @@ func (c *Client) startMaintenance(ctx context.Context, tasks ...maintenanceTask)
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+				case <-wake:
 				}
 			}
 		})
+	}
+	return func() {
+		for _, wake := range wakes {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+func (c *Client) connectedCollector(collect func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if !c.controlConnected.Load() {
+			return nil
+		}
+		return collect(ctx)
 	}
 }
 

@@ -71,3 +71,41 @@ func TestMaintenanceCollectorsReceiveDeadline(t *testing.T) {
 		t.Fatal("collector did not receive a bounded context")
 	}
 }
+
+func TestMaintenanceSkipsDisconnectedCollection(t *testing.T) {
+	client := &Client{}
+	calls := 0
+	collect := client.connectedCollector(func(context.Context) error { calls++; return nil })
+	_ = collect(context.Background())
+	if calls != 0 {
+		t.Fatal("offline maintenance accumulated telemetry")
+	}
+	client.controlConnected.Store(true)
+	_ = collect(context.Background())
+	client.controlConnected.Store(false)
+	_ = collect(context.Background())
+	if calls != 1 {
+		t.Fatal("collector did not follow connection state")
+	}
+}
+
+func TestMaintenanceWakesWithoutWaitingForNextInterval(t *testing.T) {
+	client := &Client{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); client.workers.Wait() }()
+	collected := make(chan struct{}, 2)
+	wake := client.startMaintenance(ctx, maintenanceTask{time.Hour, time.Second, func(context.Context) error {
+		collected <- struct{}{}
+		return nil
+	}})
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			wake()
+		}
+		select {
+		case <-collected:
+		case <-time.After(time.Second):
+			t.Fatal("collector did not run promptly after wake")
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,10 +68,12 @@ type Client struct {
 	lastReceiptCleanup time.Time
 	// sentMu guards the one-slot retry buffer and the waiters for tracked
 	// messages; both are touched only by queueTracked and sendLoop.
-	sentMu      sync.Mutex
-	retry       *protocol.AgentEnvelope
-	sentWaiters map[string]chan struct{}
-	workers     sync.WaitGroup
+	sentMu           sync.Mutex
+	retry            *protocol.AgentEnvelope
+	sentWaiters      map[string]chan struct{}
+	workers          sync.WaitGroup
+	controlConnected atomic.Bool
+	wakeMaintenance  func()
 }
 
 func (c *Client) runtimeInstanceID() string {
@@ -107,10 +110,10 @@ func (c *Client) Run(ctx context.Context) error {
 	// Maintenance belongs to the Agent lifetime, not an individual connection.
 	// A stalled OS probe must not block stream reads or add another blocked
 	// collector every time the control plane reconnects.
-	c.startMaintenance(ctx,
-		maintenanceTask{15 * time.Second, 40 * time.Second, c.enqueueHeartbeat},
-		maintenanceTask{15 * time.Second, 10 * time.Second, c.enqueueMetrics},
-		maintenanceTask{2 * time.Minute, 30 * time.Second, c.enqueueInventory},
+	c.wakeMaintenance = c.startMaintenance(ctx,
+		maintenanceTask{15 * time.Second, 40 * time.Second, c.connectedCollector(c.enqueueHeartbeat)},
+		maintenanceTask{15 * time.Second, 10 * time.Second, c.connectedCollector(c.enqueueMetrics)},
+		maintenanceTask{2 * time.Minute, 30 * time.Second, c.connectedCollector(c.enqueueInventory)},
 	)
 	backoff := initialReconnectBackoff
 	for {
@@ -155,6 +158,7 @@ func reconnectBackoffAfterResult(current time.Duration, connected bool) time.Dur
 }
 
 func (c *Client) connect(ctx context.Context) (bool, error) {
+	defer c.controlConnected.Store(false)
 	parsed, err := url.Parse(c.config.ControlURL)
 	if err != nil {
 		return false, err
@@ -215,6 +219,10 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		}
 		if !connected {
 			connected = true
+			c.controlConnected.Store(true)
+			if c.wakeMaintenance != nil {
+				c.wakeMaintenance()
+			}
 			confirmed, confirmErr := confirmCurrentUpdate(c.config.StateDir)
 			if confirmErr != nil {
 				c.log.Warn("could not confirm Agent update", "error", confirmErr)
