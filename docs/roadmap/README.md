@@ -267,8 +267,8 @@ npm --prefix web run typecheck
 | P7-09 | 完整链路验收与使用文档 | M | P7-08、P0-08 | 已完成 | 11-18 Codex（全 P7 接续） | GPT-6.2 Sol（Codex，本会话自验） | 256f68a |
 | P8-01 | Linux 临时注册命令、进度页与共用安装流程 | L | 用户明确指派、P1-04、P4-02 | 已完成 | 11-21 Codex（当前会话） | GPT-6（Codex，本会话自验；本地及发布验收） | 8f9dc6f |
 | P8-02 | 平台、路径与 macOS 注册和服务生命周期 | L | P8-01、用户明确指派 | 进行中 | 11-22 Codex（当前会话） | GPT-6（Codex，原生 CI / 发布验收；完整新机安装待补） | 7dcfc02、ba47ff1 |
-| P8-03 | Windows 安装、服务、进程树与更新助手 | L | P8-02、用户明确指派 | 进行中 | 11-22 Codex（当前会话） | GPT-6（Codex，原生 CI / Windows CLI 与凭据实机验收；其余边界待补） | 7dcfc02、ba47ff1、5613e19、e9594c3、ea4cbcf |
-| P8-04 | 各平台修复、卸载、更新回滚与回归 | L | P8-02、P8-03、用户明确指派 | 进行中 | 11-22 Codex（当前会话） | GPT-6（Codex，原生 CI / Windows CLI 与凭据实机验收；其余边界待补） | 7dcfc02、ba47ff1、5613e19、e9594c3、ea4cbcf |
+| P8-03 | Windows 安装、服务、进程树与更新助手 | L | P8-02、用户明确指派 | 进行中 | 11-22 Codex（当前会话） | GPT-6（Codex，原生 CI / Windows CLI 与凭据实机验收；其余边界待补） | 7dcfc02、ba47ff1、5613e19、e9594c3、ea4cbcf、ccd917b、79e39a2 |
+| P8-04 | 各平台修复、卸载、更新回滚与回归 | L | P8-02、P8-03、用户明确指派 | 进行中 | 11-22 Codex（当前会话） | GPT-6（Codex，原生 CI / Windows CLI 与凭据实机验收；其余边界待补） | 7dcfc02、ba47ff1、5613e19、e9594c3、ea4cbcf、ccd917b、79e39a2 |
 
 ## 待决策事项
 
