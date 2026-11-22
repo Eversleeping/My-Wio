@@ -3,6 +3,7 @@ package childprocess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,19 +14,29 @@ import (
 )
 
 func configurePlatformCommand(cmd *exec.Cmd) {
-	// npm .cmd wrappers cannot be passed directly to CreateProcess. Launch their
-	// underlying JS file with node instead of interpolating user input into cmd.exe.
-	if resolved, err := exec.LookPath(cmd.Path); err == nil && (strings.HasSuffix(strings.ToLower(resolved), ".cmd") || strings.HasSuffix(strings.ToLower(resolved), ".bat")) {
-		scripts := map[string]string{"codex.cmd": "@openai/codex/bin/codex.js", "gemini.cmd": "@google/gemini-cli/dist/index.js", "claude.cmd": "@anthropic-ai/claude-code/cli.js", "npm.cmd": "npm/bin/npm-cli.js", "npx.cmd": "npm/bin/npx-cli.js"}
-		if script, ok := scripts[strings.ToLower(filepath.Base(resolved))]; ok {
-			root := filepath.Join(filepath.Dir(resolved), "node_modules")
-			if filepath.Base(filepath.Dir(resolved)) == ".bin" {
-				root = filepath.Dir(filepath.Dir(resolved))
+	// Resolve npm's declared bin instead of assuming every CLI uses a fixed JS
+	// path. Recent Claude packages declare a native executable.
+	if resolved, err := exec.LookPath(cmd.Path); err == nil {
+		entry, managed, err := npmEntry(resolved)
+		if managed {
+			if err == nil {
+				switch strings.ToLower(filepath.Ext(entry)) {
+				case ".exe":
+					cmd.Path = entry
+					cmd.Args = append([]string{entry}, cmd.Args[1:]...)
+				case ".js", ".cjs", ".mjs":
+					var node string
+					node, err = exec.LookPath("node.exe")
+					if err == nil {
+						cmd.Path = node
+						cmd.Args = append([]string{node, entry}, cmd.Args[1:]...)
+					}
+				default:
+					err = fmt.Errorf("unsupported npm entry point extension: %s", filepath.Ext(entry))
+				}
 			}
-			entry := filepath.Join(root, filepath.FromSlash(script))
-			if node, err := exec.LookPath("node.exe"); err == nil {
-				cmd.Path = node
-				cmd.Args = append([]string{node, entry}, cmd.Args[1:]...)
+			if err != nil && cmd.Err == nil {
+				cmd.Err = err
 			}
 		}
 	}
