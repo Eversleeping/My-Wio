@@ -145,12 +145,19 @@ func (a *API) createServerRegistration(w http.ResponseWriter, r *http.Request) {
 	arguments := " -s -- --url " + registrationShellQuote(origin) + " --registration " + registrationShellQuote(registration.ID)
 	command := "curl -fsSL " + registrationShellQuote(origin+"/api/agent/install.sh") + " | (if [ \"$(id -u)\" = 0 ]; then sh" + arguments + "; else sudo sh" + arguments + "; fi)"
 	if input.OS == "windows" {
-		command = "& { " + `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $work=Join-Path $env:TEMP ([Guid]::NewGuid().ToString('N')+'.ps1'); try { Invoke-WebRequest -UseBasicParsing ` + installer.PowerShellQuote(origin+"/api/agent/install.ps1") + ` -OutFile $work; & ([scriptblock]::Create([IO.File]::ReadAllText($work))) -Url ` + installer.PowerShellQuote(origin) + ` -Registration ` + installer.PowerShellQuote(registration.ID) + ` } finally { Remove-Item -Force $work -ErrorAction SilentlyContinue } }`
+		command = windowsRegistrationCommand(origin, registration.ID)
 	}
 	_ = a.store.Audit(r.Context(), currentSession(r).UserID, "server.registration.create", "registration", registration.ID, map[string]any{"name": input.Name, "os": input.OS}, clientIP(r))
 	a.publishRegistration(registration.ID)
 	writeJSON(w, 201, map[string]any{"registration": registration, "command": command, "code": code})
 }
+
+func windowsRegistrationCommand(origin, registrationID string) string {
+	// Use Windows PowerShell's file entry point so the installer has its own scope
+	// and a process-local execution policy, including on Windows PowerShell 5.1.
+	return "& { " + `$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $work=Join-Path $env:TEMP ([Guid]::NewGuid().ToString('N')+'.ps1'); try { Invoke-WebRequest -UseBasicParsing ` + installer.PowerShellQuote(origin+"/api/agent/install.ps1") + ` -OutFile $work -ErrorAction Stop; if(!(Test-Path -LiteralPath $work -PathType Leaf) -or (Get-Item -LiteralPath $work).Length -eq 0){throw 'Installer download was empty.'}; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $work -Url ` + installer.PowerShellQuote(origin) + ` -Registration ` + installer.PowerShellQuote(registrationID) + `; if($LASTEXITCODE -ne 0){throw ('Installer failed (exit '+$LASTEXITCODE+').')} } finally { Remove-Item -LiteralPath $work -Force -ErrorAction SilentlyContinue } }`
+}
+
 func registrationShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

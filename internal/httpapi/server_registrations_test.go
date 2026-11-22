@@ -344,6 +344,9 @@ func TestCrossPlatformRegistrationCommandsAndClaims(t *testing.T) {
 			if (osName == "windows") != strings.Contains(command.Command, "install.ps1") {
 				t.Fatal("wrong bootstrap language")
 			}
+			if osName == "windows" && command.Command != windowsRegistrationCommand(api.publicURL, command.Registration.ID) {
+				t.Fatal("Windows registration did not return the tested bootstrap command")
+			}
 			wrong := registrationRequest(t, api.claimServerRegistration, command.Registration.ID, "", "POST", map[string]string{"code": command.Code, "device_key": strings.Repeat("b", 64), "os": "linux", "architecture": "amd64"})
 			if wrong.Code != 400 {
 				t.Fatal("foreign platform consumed registration")
