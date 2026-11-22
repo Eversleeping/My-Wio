@@ -243,15 +243,7 @@ func replaceCredentialFile(path string, data []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporary.Name(), path); err != nil {
-		return err
-	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return commitCredentialFile(temporary.Name(), path)
 }
 
 func pointer(value string) *string { return &value }

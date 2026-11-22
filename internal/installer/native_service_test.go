@@ -25,6 +25,7 @@ type nativeAgentControl struct {
 	heartbeats  chan protocol.Heartbeat
 	connections chan struct{}
 	commands    chan *protocol.ControlEnvelope
+	results     chan protocol.OperationResult
 }
 
 func (s *nativeAgentControl) Connect(stream protocol.AgentServiceConnectServer) error {
@@ -63,6 +64,16 @@ func (s *nativeAgentControl) Connect(stream protocol.AgentServiceConnectServer) 
 				}
 			}
 		}
+		if message.Kind == protocol.AgentKindOperationResult {
+			var result protocol.OperationResult
+			if json.Unmarshal(message.PayloadJSON, &result) == nil {
+				select {
+				case s.results <- result:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		}
 	}
 }
 
@@ -91,7 +102,7 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := &nativeAgentControl{heartbeats: make(chan protocol.Heartbeat, 10), connections: make(chan struct{}, 10), commands: make(chan *protocol.ControlEnvelope, 1)}
+	control := &nativeAgentControl{heartbeats: make(chan protocol.Heartbeat, 10), connections: make(chan struct{}, 10), commands: make(chan *protocol.ControlEnvelope, 1), results: make(chan protocol.OperationResult, 10)}
 	server := grpc.NewServer(grpc.ForceServerCodec(protocol.Codec()))
 	protocol.RegisterAgentServiceServer(server, control)
 	go server.Serve(listener)
@@ -152,6 +163,38 @@ func TestNativeServiceHeartbeatRestartAndUninstall(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	// Exercise the credential operations under the actual service account/ACL,
+	// not only the administrator which installed the service. Values are fixtures.
+	for _, update := range []struct {
+		kind string
+		body any
+	}{
+		{protocol.OpCodexCredentialsConfigure, protocol.ConfigureCredentialsCommand{Scope: "codex", CodexAPIURL: "https://api.example.test/v1", CodexAPIKey: "native-synthetic-key", CodexModel: "test-model"}},
+		{protocol.OpGitCredentialsConfigure, protocol.ConfigureCredentialsCommand{Scope: "git", GitEndpoint: "https://git.example.test", GitUsername: "native-test", GitToken: "native-synthetic-token", GitCommitName: "Native Test", GitCommitEmail: "native@example.test"}},
+		{protocol.OpGeminiCredentialsConfigure, protocol.ConfigureGeminiCredentialsCommand{Endpoint: "https://gemini.example.test", APIKey: "native-synthetic-key", Model: "test-model"}},
+		{protocol.OpClaudeCredentialsConfigure, protocol.ConfigureClaudeCredentialsCommand{Endpoint: "https://claude.example.test", APIKey: "native-synthetic-key", Model: "test-model"}},
+	} {
+		for attempt := 0; attempt < 2; attempt++ {
+			// A second application must replace the existing files successfully.
+			raw, _ := json.Marshal(update.body)
+			opID := update.kind + time.Now().Format("150405.000000000")
+			control.commands <- &protocol.ControlEnvelope{OperationID: opID, Kind: update.kind, PayloadJSON: raw}
+			select {
+			case result := <-control.results:
+				if result.OperationID != opID || result.Status != "succeeded" {
+					t.Fatalf("service credential operation %s failed: %s", update.kind, result.Message)
+				}
+			case <-ctx.Done():
+				t.Fatal("service did not acknowledge credential operation: " + update.kind)
+			}
+		}
+	}
+	for _, file := range []string{"codex.key", ".git-credentials", ".gitconfig", filepath.Join("gemini", "api.json"), filepath.Join("claude", "api.json")} {
+		if info, err := os.Stat(filepath.Join(layout.State, file)); err != nil || info.Size() == 0 {
+			t.Fatalf("service credential file %s missing: %v", file, err)
+		}
+	}
+	t.Log("All four credential kinds applied and replaced under the native service account")
 	payload, _ := json.Marshal(protocol.AgentAccessCommand{ServerID: id})
 	control.commands <- &protocol.ControlEnvelope{OperationID: "native-restart", Kind: protocol.OpAgentRestart, PayloadJSON: payload}
 	select {

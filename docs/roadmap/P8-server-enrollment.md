@@ -187,3 +187,11 @@ P8-02、P8-03、P8-04 的联合实现及本轮发布已完成。**仍未覆盖�
 - 增加新旧入口、不同包和无效入口回归；Windows 原生 CI 下载并安装用户遇到问题的两个正式版本，调用真实 Agent CLI 安装流程验证版本和持久化选择，不调用模型。
 - Agent 依赖代码发生改动，版本升至 0.3.52，schema 保持 14。本地检查、原生 CI 及发布验证进行中，未提交改动在 `main`；生产当前仍为 0.3.51。
 - 本轮修复需更新受影响的 Windows Agent 后复验两种 CLI；其他外部服务器及承载本任务的 Agent 不在更新范围。
+
+### 2026-11-22 Windows 凭据写入兼容补充（0.3.53 候选）
+
+用户补充四类凭据下发都失败，Git 明确报 `sync C:\ProgramData\Wio: Access is denied`。四类凭据共用 `replaceCredentialFile`，该函数在文件已刷盘、替换后对只读目录句柄调用 `Sync`；Windows 不支持这个 Unix 目录同步流程。
+
+- Windows 改用 `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` 发布已刷盘的临时文件；Linux/macOS 保留原子 rename 加目录 fsync。不会扩大目录权限或忽略一般 Access denied 错误。
+- 新增 Windows 首次写入、覆盖和真实只读文件失败时保留旧内容的回归；真实原生服务测试通过协议分别下发 Codex、Git、Gemini、Claude 合成凭据，每种重复应用两次，并检查文件落地。
+- 新候选版本为 0.3.53 / schema 14；0.3.52 尚未上线，CLI 启动修复与凭据修复将一并发布。本地与原生 CI 验证进行中，未提交改动仍位于 `main`。
