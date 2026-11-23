@@ -4,6 +4,7 @@ import { Field } from "../components/FormUI";
 import { Empty, ErrorState, PageLoading, RefreshWarning, Section } from "../components/PageUI";
 import { projects } from "../data/projects";
 import { invalidateResources, useResource } from "../data/resources";
+import { servers } from "../data/servers";
 import { tasks, type TaskState } from "../data/tasks";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { useI18n } from "../i18n";
@@ -18,7 +19,10 @@ export default function TasksPage({ location, onNavigate, connected }: {
   location: TaskLocation; onNavigate: (location: TaskLocation, replace?: boolean) => void; connected: boolean;
 }) {
   const { t } = useI18n();
-  const allProjects = useResource(projects.list());
+  const serverID = location.serverID;
+  const allServers = useResource(servers.list());
+  const allProjects = useResource(projects.list({ server_id: serverID ?? "" }));
+  const navigate = (next: TaskLocation, replace?: boolean) => onNavigate({ serverID, ...next }, replace);
   const locator = useResource(location.taskID && !location.projectID ? tasks.locate(location.taskID) : null);
   const projectID = location.projectID || locator.data?.project_id || (!location.taskID ? allProjects.data?.[0]?.id : "") || "";
   const snapshot = useResource(location.taskID && projectID ? tasks.detail(location.taskID, projectID) : null);
@@ -31,22 +35,31 @@ export default function TasksPage({ location, onNavigate, connected }: {
   const selectTask = (event: MouseEvent, taskID: string) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    onNavigate({ projectID, taskID });
+    navigate({ projectID, taskID });
   };
 
   return <div className="page-stack">
     <div className="task-toolbar">
-      <Field label={t("column.project")}><select value={projectID} onChange={e => onNavigate({ projectID: e.target.value })}>
-        {!projectID && <option value="">{t("tasks.chooseProject")}</option>}
-        {projectID && !allProjects.data?.some(item => item.id === projectID) && <option value={projectID}>{snapshot.data?.task.project_id ?? projectID}</option>}
-        {allProjects.data?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select></Field>
-      <button className="primary-button" disabled={!projectID} onClick={() => onNavigate({ projectID, create: true })}><Plus size={17} />{t("tasks.new")}</button>
+      <div className="task-filters">
+        <Field label={t("column.server")}><select value={serverID ?? ""} onChange={e => onNavigate({ serverID: e.target.value || undefined })}>
+          <option value="">{t("project.filterAllServers")}</option>
+          {serverID && !allServers.data?.some(item => item.id === serverID) && <option value={serverID}>{serverID}</option>}
+          {allServers.data?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select></Field>
+        <Field label={t("column.project")}><select value={projectID} disabled={!allProjects.data?.length} onChange={e => navigate({ projectID: e.target.value })}>
+          {!projectID && <option value="">{t("tasks.chooseProject")}</option>}
+          {projectID && !allProjects.data?.some(item => item.id === projectID) && <option value={projectID}>{snapshot.data?.task.project_id ?? projectID}</option>}
+          {allProjects.data?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select></Field>
+      </div>
+      <button className="primary-button" disabled={!projectID} onClick={() => navigate({ projectID, create: true })}><Plus size={17} />{t("tasks.new")}</button>
     </div>
+    {allServers.error && <RefreshWarning error={allServers.error} reload={allServers.reload} />}
     {allProjects.error && <RefreshWarning error={allProjects.error} reload={allProjects.reload} />}
     {workspaces.error && <RefreshWarning error={workspaces.error} reload={workspaces.reload} />}
+    {!projectID && allProjects.loading && <PageLoading />}
     <div className={`task-layout ${location.taskID ? "task-selected" : ""}`}>
-      {projectID && <TaskList key={projectID} projectID={projectID} selected={location.taskID} onSelect={selectTask} />}
+      {projectID && <TaskList key={projectID} serverID={serverID} projectID={projectID} selected={location.taskID} onSelect={selectTask} />}
       {location.taskID && <div className="task-selection">
         {locator.error && <ErrorState error={locator.error} reload={locator.reload} />}
         {(locator.loading || snapshot.loading) && <PageLoading />}
@@ -54,16 +67,16 @@ export default function TasksPage({ location, onNavigate, connected }: {
         {snapshot.data && <TaskDetail key={snapshot.data.task.id} detail={snapshot.data} workspaces={workspaceOptions} reload={snapshot.reload} />}
       </div>}
       {!location.taskID && projectID && <Section title={t("tasks.detail")}><Empty icon={<ListChecks size={22} />} text={t("tasks.selectTask")} /></Section>}
-      {!projectID && !location.taskID && !allProjects.loading && <p>{t("tasks.noProject")}</p>}
+      {!projectID && !location.taskID && !allProjects.loading && !allProjects.error && <p>{t(serverID ? "tasks.noProjectsOnServer" : "tasks.noProject")}</p>}
     </div>
     {location.create && projectID && <TaskSpecForm key={projectID} projectID={projectID}
-      onClose={() => onNavigate({ projectID }, true)}
-      onSaved={task => onNavigate({ projectID, taskID: task.id }, true)} />}
+      onClose={() => navigate({ projectID }, true)}
+      onSaved={task => navigate({ projectID, taskID: task.id }, true)} />}
   </div>;
 }
 
-function TaskList({ projectID, selected, onSelect }: {
-  projectID: string; selected?: string; onSelect: (event: MouseEvent, id: string) => void;
+function TaskList({ serverID, projectID, selected, onSelect }: {
+  serverID?: string; projectID: string; selected?: string; onSelect: (event: MouseEvent, id: string) => void;
 }) {
   const { t } = useI18n();
   const [state, setState] = useState("");
@@ -79,7 +92,7 @@ function TaskList({ projectID, selected, onSelect }: {
       {list.error && <ErrorState error={list.error} reload={list.reload} />}
       {list.data?.items.length === 0 && <p>{t("tasks.empty")}</p>}
       {list.data?.items.map(item => <a className="task-list-row" aria-current={selected === item.id ? "page" : undefined} key={item.id}
-        href={tasksLocation({ projectID, taskID: item.id })} onClick={e => onSelect(e, item.id)}>
+        href={tasksLocation({ serverID, projectID, taskID: item.id })} onClick={e => onSelect(e, item.id)}>
         <strong>{item.title}</strong><TaskStatus state={item.archived_at ? "archived" : item.state} />
       </a>)}
       {(cursors.length > 1 || list.data?.next_cursor) && <div className="task-actions">

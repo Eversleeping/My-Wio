@@ -223,6 +223,7 @@ test("dependency graph flags a cycle and preserves a concurrent plan revision", 
   };
   let writes = 0;
   await installMockApplication(page, {configured:true,onAPIRequest:request => {
+    if (request.path === "/servers") return {body:[]};
     if (request.path === "/projects") return {body:[{id:"project",name:"Project"}]};
     if (request.path === "/workspaces") return {body:[workspace]};
     if (request.path === "/tasks") return {body:{items:[detail.task],next_cursor:null}};
@@ -258,4 +259,71 @@ test("dependency graph flags a cycle and preserves a concurrent plan revision", 
   await page.getByRole("combobox",{name:"Plan version",exact:true}).selectOption("plan-v1");
   await expect(graph.getByText("Implement with codex",{exact:true})).toBeVisible();
   expect(writes).toBe(1);
+});
+
+
+test("server filter scopes projects and survives task navigation and reload", async ({ page }) => {
+  const projectOptions = [
+    { id: "project", name: "Project" },
+    { id: "other", name: "Other project" },
+    { id: "shared", name: "Shared project" }
+  ];
+  await installMockApplication(page, { configured: true, onAPIRequest: request => {
+    if (request.path === "/servers") return { body: [
+      { id: "server", name: "Build server", status: "online" },
+      { id: "other-server", name: "Other server", status: "offline" },
+      { id: "empty-server", name: "Empty server", status: "online" }
+    ] };
+    if (request.path === "/projects") {
+      const serverID = new URLSearchParams(request.search).get("server_id");
+      return { body: serverID === "server" ? [projectOptions[0], projectOptions[2]]
+        : serverID === "other-server" ? projectOptions.slice(1)
+        : serverID === "empty-server" ? [] : projectOptions };
+    }
+    if (request.path === "/workspaces") return { body: [workspace] };
+    if (request.path === "/tasks") {
+      const projectID = new URLSearchParams(request.search).get("project_id");
+      return { body: { items: projectID === "project" ? [initialTask] : [], next_cursor: null } };
+    }
+    if (request.path === "/tasks/feature") return { body: {
+      task: initialTask, plan: null, run: null, steps: [], attempts: [], blockers: [], grant: null,
+      capabilities: { edit_plan: false, start_run: false }
+    } };
+    return undefined;
+  }});
+  await page.goto("/?view=tasks");
+  const server = page.getByRole("combobox", { name: "Server", exact: true });
+  const project = page.getByRole("combobox", { name: "Project", exact: true });
+  const options = project.locator("option");
+  await expect(options).toHaveText(["Project", "Other project", "Shared project"]);
+  await server.selectOption("server");
+  await expect(options).toHaveText(["Project", "Shared project"]);
+  await expect(project).toHaveValue("project");
+  const task = page.getByRole("link", { name: /Ship the feature/ });
+  await expect(task).toHaveAttribute("href", "/?view=tasks&server_id=server&project_id=project&task=feature");
+  await task.click();
+  await expect(page.getByRole("region", { name: initialTask.title })).toBeVisible();
+  await page.reload();
+  await expect(server).toHaveValue("server");
+  await expect(options).toHaveText(["Project", "Shared project"]);
+  await server.selectOption("other-server");
+  await expect(options).toHaveText(["Other project", "Shared project"]);
+  await expect(project).toHaveValue("other");
+  await expect(page.getByRole("region", { name: initialTask.title })).toHaveCount(0);
+  await project.selectOption("shared");
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await expect(page).toHaveURL("/?view=tasks&server_id=other-server&project_id=shared&create=1");
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
+  await expect(server).toHaveValue("other-server");
+  await server.selectOption("empty-server");
+  await expect(page.getByText("This server has no projects.", { exact: true })).toBeVisible();
+  await expect(project).toBeDisabled();
+  await expect(page.getByRole("button", { name: "New task", exact: true })).toBeDisabled();
+  await page.goBack();
+  await expect(server).toHaveValue("other-server");
+  await expect(project).toHaveValue("shared");
+  await server.selectOption("");
+  await expect(options).toHaveText(["Project", "Other project", "Shared project"]);
+  const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
+  expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.width);
 });

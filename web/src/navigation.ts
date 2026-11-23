@@ -37,9 +37,10 @@ export function settingsLocation(section: SettingsSection = defaultSettingsSecti
   return `${window.location.pathname}?${params}${window.location.hash}`;
 }
 
-export type TaskLocation = { projectID?: string; taskID?: string; create?: boolean };
-export function tasksLocation({ projectID, taskID, create }: TaskLocation = {}) {
+export type TaskLocation = { serverID?: string; projectID?: string; taskID?: string; create?: boolean };
+export function tasksLocation({ serverID, projectID, taskID, create }: TaskLocation = {}) {
   const params = new URLSearchParams({ view: "tasks" });
+  if (serverID) params.set("server_id", serverID);
   if (projectID) params.set("project_id", projectID);
   if (taskID) params.set("task", taskID);
   if (create) params.set("create", "1");
@@ -60,6 +61,7 @@ export function readLocationState(): { view: View; threadID: string; engine?: En
   if (isEngine(requestedView)) return { view: "sessions", engine: requestedView, threadID: params.get("thread") ?? "", ...(!params.get("thread") ? { initialFilter: requestedView } : {}) };
   const view = navigation.some(item => item.id === requestedView) ? requestedView as View : "dashboard";
   if (view === "tasks") return { view, threadID: "", task: {
+    serverID: params.get("server_id") || undefined,
     projectID: params.get("project_id") || undefined,
     taskID: params.get("task") || undefined,
     create: params.get("create") === "1"

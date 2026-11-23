@@ -1,10 +1,11 @@
-.task-toolbar, .task-inline, .task-actions, .task-detail-header {
+.task-toolbar, .task-filters, .task-inline, .task-actions, .task-detail-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
 }
 .task-toolbar { align-items: end; justify-content: space-between; }
+.task-filters { flex: 1; min-width: 0; }
 .task-toolbar .field { flex: 1 1 14rem; max-width: 25rem; }
 .task-layout { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2.3fr); gap: 18px; align-items: start; }
 .task-selection, .task-layout > .section { min-width: 0; }
@@ -48,6 +49,7 @@
   .task-layout, .task-form-grid { grid-template-columns: minmax(0, 1fr); }
   .task-selected .task-selection { grid-row: 1; }
   .task-toolbar { align-items: stretch; }
+  .task-filters { flex-basis: 100%; }
   .task-toolbar .field { max-width: none; }
 }
 .task-graph-scroll { max-width: 100%; overflow: auto; }
