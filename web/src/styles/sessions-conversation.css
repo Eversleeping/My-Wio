@@ -1,6 +1,7 @@
 
-.event-stream { position: relative; min-height: 0; max-height: calc(100vh - 370px); overflow-y: auto; overflow-anchor: none; padding: 20px 18px; background: #090c12; }
-.conversation-stream > [data-history-loader] { overflow-anchor: none; }
+.event-stream { position: relative; min-height: 0; max-height: calc(100vh - 370px); overflow-y: auto; padding: 20px 18px; background: #090c12; }
+[data-history-loader], .virtualized-space { overflow-anchor: none; }
+.event-stream > [data-virtualized-list] { flex: none; }
 .conversation-stream { display: flex; flex-direction: column; align-items: stretch; }
 .conversation-stream .virtualized-item { display: flex; flex-direction: column; align-items: stretch; }
 .history-loader { display: flex; justify-content: center; padding: 0 0 14px; }

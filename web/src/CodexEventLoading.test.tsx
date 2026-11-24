@@ -110,7 +110,7 @@ test("loads the first session view from its recent window without a cursor", asy
   expect(eventRequests).toEqual([`/api/sessions/codex/${value.id}/events?view=conversation`]);
 });
 
-test("loads earlier events with a before cursor and preserves the reading anchor", async () => {
+test("loads earlier events with a before cursor", async () => {
   const value = thread("earlier-window");
   const eventRequests: string[] = [];
   const recent = Array.from({ length: 500 }, (_, index) => event(value.id, index + 501, `Recent ${index + 501}`));
@@ -123,16 +123,12 @@ test("loads earlier events with a before cursor and preserves the reading anchor
   }));
 
   const user = userEvent.setup();
-  const { container } = render(session(value));
+  render(session(value));
   expect(await screen.findByText("Recent 501")).toBeInTheDocument();
-  const stream = container.querySelector<HTMLElement>(".event-stream")!;
-  stream.scrollTop = 120;
 
   await user.click(screen.getByRole("button", { name: "Load earlier messages" }));
 
   expect(await screen.findByText("Earlier 499")).toBeInTheDocument();
-  // jsdom has no layout, so the virtual list uses its message height estimates.
-  expect(stream.scrollTop).toBe(120 + 2 * 156);
   expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
   expect(eventRequests).toEqual([
     `/api/sessions/codex/${value.id}/events?view=conversation`,

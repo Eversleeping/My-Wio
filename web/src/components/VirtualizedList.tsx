@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode, type RefObject } from "react";
 
 export type VirtualizedWindow = {
   start: number;
@@ -22,6 +22,18 @@ type VirtualizedScrollOptions = {
   scrollToAlign?: "start" | "center" | "end";
 };
 
+export function captureVirtualizedReadingPosition(stream: HTMLElement) {
+  const viewport = stream.getBoundingClientRect();
+  return Array.from(stream.querySelectorAll<HTMLElement>("[data-virtual-key]")).flatMap(element => {
+    const rect = element.getBoundingClientRect();
+    return rect.bottom <= viewport.top || rect.top >= viewport.bottom
+      ? []
+      : [{ key: element.dataset.virtualKey!, top: rect.top - viewport.top }];
+  });
+}
+
+type ReadingPositionRef = MutableRefObject<ReturnType<typeof captureVirtualizedReadingPosition> | undefined>;
+
 function clampSize(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? Math.max(20, value) : fallback;
 }
@@ -37,11 +49,10 @@ function findStart(offsets: number[], scrollTop: number) {
   return low;
 }
 
-export function useVirtualizedWindow<T>({ items, scrollRef, getKey = (_item, index) => String(index), estimateSize = 120, overscan = 6 }: VirtualizedWindowOptions<T>, followEnd?: RefObject<boolean>): VirtualizedWindow {
-  const [scrollState, setScrollState] = useState({ top: 0, height: 0 });
+export function useVirtualizedWindow<T>({ items, scrollRef, getKey = (_item, index) => String(index), estimateSize = 120, overscan = 6 }: VirtualizedWindowOptions<T>, followEnd?: RefObject<boolean>, restoreReadingPosition?: ReadingPositionRef): VirtualizedWindow {
+  const [scrollState, setScrollState] = useState({ top: 0, height: 0, listTop: 0 });
   const listRef = useRef<HTMLDivElement>(null);
-  const previousLayout = useRef<{ keys: string[]; offsets: number[]; top: number }>();
-  const readingAnchor = useRef<{ key: string; scrollTop: number }>();
+  const previousKeys = useRef<string[]>();
   const measuredRef = useRef(new Map<string, number>());
   const [measureVersion, redraw] = useState(0);
   const keyList = useMemo(() => items.map(getKey), [getKey, items]);
@@ -54,43 +65,34 @@ export function useVirtualizedWindow<T>({ items, scrollRef, getKey = (_item, ind
     return output;
   }, [estimates, items.length, keyList, measureVersion]);
 
+  const pendingPosition = restoreReadingPosition?.current;
+  const restoring = pendingPosition !== undefined && previousKeys.current !== keyList;
+  const anchor = restoring ? pendingPosition.find(item => keyList.includes(item.key)) : undefined;
+  const anchorIndex = anchor ? keyList.indexOf(anchor.key) : 0;
   useLayoutEffect(() => {
     const stream = scrollRef.current;
     const list = listRef.current;
     if (!followEnd || !stream || !list) return;
-    // The list's offset parent is the scroll container when this option is used.
-    const top = list.offsetTop;
-    const previous = previousLayout.current;
-    previousLayout.current = { keys: keyList, offsets, top };
-    if (!previous || !previous.keys.length) return;
+    const hadRows = Boolean(previousKeys.current?.length);
+    previousKeys.current = keyList;
 
     const scrollTop = stream.scrollTop;
-    if (followEnd.current) {
-      readingAnchor.current = undefined;
-      if (top !== previous.top || offsets.at(-1) !== previous.offsets.at(-1)) {
-        stream.scrollTop = Math.max(0, stream.scrollHeight - stream.clientHeight);
-      }
-    } else {
-      // Keep the same row through successive measurements until the reader scrolls.
-      const anchor = readingAnchor.current;
-      let index = anchor?.scrollTop === scrollTop ? previous.keys.indexOf(anchor.key) : -1;
-      if (index === -1) {
-        index = Math.min(findStart(previous.offsets, scrollTop - previous.top), previous.keys.length - 1);
-      }
-      let nextIndex = keyList.indexOf(previous.keys[index]);
-      if (nextIndex === -1) {
-        const nextIndexes = new Map(keyList.map((key, index) => [key, index]));
-        while (nextIndex === -1 && ++index < previous.keys.length) {
-          nextIndex = nextIndexes.get(previous.keys[index]) ?? -1;
+    if (restoring && restoreReadingPosition) {
+      restoreReadingPosition.current = undefined;
+      if (anchor) {
+        const row = list.querySelector(`[data-virtual-index="${anchorIndex}"]`);
+        if (row) {
+          stream.scrollTop += row.getBoundingClientRect().top - stream.getBoundingClientRect().top - anchor.top;
         }
       }
-      if (nextIndex !== -1) {
-        stream.scrollTop = scrollTop + (top + offsets[nextIndex]) - (previous.top + previous.offsets[index]);
-        readingAnchor.current = { key: keyList[nextIndex], scrollTop: stream.scrollTop };
-      }
+    } else if (hadRows && followEnd.current) {
+      const end = Math.max(0, stream.scrollHeight - stream.clientHeight);
+      if (Math.abs(scrollTop - end) > 1) stream.scrollTop = end;
     }
-    if (stream.scrollTop !== scrollTop) setScrollState({ top: stream.scrollTop, height: stream.clientHeight });
-  }, [followEnd, keyList, offsets, scrollRef]);
+    if (restoring || stream.scrollTop !== scrollTop || list.offsetTop !== scrollState.listTop) {
+      setScrollState({ top: stream.scrollTop, height: stream.clientHeight, listTop: list.offsetTop });
+    }
+  }, [anchor, anchorIndex, followEnd, keyList, offsets, restoreReadingPosition, restoring, scrollRef, scrollState.listTop]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -98,7 +100,11 @@ export function useVirtualizedWindow<T>({ items, scrollRef, getKey = (_item, ind
     let frame = 0;
     const update = () => {
       frame = 0;
-      setScrollState({ top: element.scrollTop, height: element.clientHeight });
+      const top = element.scrollTop;
+      const height = element.clientHeight;
+      const listTop = followEnd ? listRef.current?.offsetTop ?? 0 : 0;
+      setScrollState(previous => previous.top === top && previous.height === height && previous.listTop === listTop
+        ? previous : { top, height, listTop });
     };
     const onScroll = () => {
       if (!frame) frame = window.requestAnimationFrame(update);
@@ -112,48 +118,50 @@ export function useVirtualizedWindow<T>({ items, scrollRef, getKey = (_item, ind
       resize?.disconnect();
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, [scrollRef]);
+  }, [followEnd, scrollRef]);
 
   const onMeasure = useCallback((index: number, element: HTMLElement | null) => {
     if (!element) return;
     const key = keyList[index];
     if (!key) return;
-    const measured = Math.ceil(element.getBoundingClientRect().height);
+    const height = element.getBoundingClientRect().height;
+    const measured = followEnd ? height : Math.ceil(height);
     const previous = measuredRef.current.get(key);
     if (measured <= 0 || previous === measured) return;
     measuredRef.current.set(key, measured);
     redraw(value => value + 1);
-  }, [keyList]);
+  }, [followEnd, keyList]);
+
+  const viewport = Math.max(0, scrollState.height || 560);
+  const top = Math.max(0, anchor ? offsets[anchorIndex] - anchor.top : scrollState.top - scrollState.listTop);
+  const first = items.length ? findStart(offsets, top) : 0;
+  const start = Math.max(0, first - overscan);
+  const end = Math.min(items.length, findStart(offsets, top + viewport) + overscan + 1);
 
   useLayoutEffect(() => {
-    const element = scrollRef.current;
-    if (!element) return;
+    const list = listRef.current;
+    if (!list) return;
     const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(entries => {
       let changed = false;
       for (const entry of entries) {
         const node = entry.target as HTMLElement;
         const index = Number(node.dataset.virtualIndex);
         const key = keyList[index];
-        const size = Math.ceil(entry.contentRect.height);
+        const size = followEnd ? entry.contentRect.height : Math.ceil(entry.contentRect.height);
         if (!key || !Number.isFinite(size) || size <= 0 || measuredRef.current.get(key) === size) continue;
         measuredRef.current.set(key, size);
         changed = true;
       }
       if (changed) redraw(value => value + 1);
     });
-    if (resize) element.querySelectorAll<HTMLElement>("[data-virtual-index]").forEach(node => resize.observe(node));
+    if (resize) list.querySelectorAll<HTMLElement>("[data-virtual-index]").forEach(node => resize.observe(node));
     return () => resize?.disconnect();
-  }, [keyList, scrollRef, scrollState.top]);
-
-  const viewport = Math.max(0, scrollState.height || 560);
-  const first = items.length ? findStart(offsets, Math.max(0, scrollState.top)) : 0;
-  const start = Math.max(0, first - overscan);
-  const end = Math.min(items.length, findStart(offsets, Math.max(0, scrollState.top) + viewport) + overscan + 1);
+  }, [end, followEnd, keyList, start]);
   return { start, end, totalSize: offsets.at(-1) ?? 0, offsets, onMeasure, listRef };
 }
 
-export function VirtualizedItems<T>({ items, scrollRef, getKey, estimateSize, overscan = 6, renderItem, className = "", style, scrollToIndex, scrollToAlign = "center", followEnd }: VirtualizedItemsProps<T> & VirtualizedScrollOptions & { style?: CSSProperties; followEnd?: RefObject<boolean> }) {
-  const virtual = useVirtualizedWindow({ items, scrollRef, getKey, estimateSize, overscan }, followEnd);
+export function VirtualizedItems<T>({ items, scrollRef, getKey, estimateSize, overscan = 6, renderItem, className = "", style, scrollToIndex, scrollToAlign = "center", followEnd, restoreReadingPosition }: VirtualizedItemsProps<T> & VirtualizedScrollOptions & { followEnd?: RefObject<boolean>; restoreReadingPosition?: ReadingPositionRef }) {
+  const virtual = useVirtualizedWindow({ items, scrollRef, getKey, estimateSize, overscan }, followEnd, restoreReadingPosition);
   const lastScrolledIndex = useRef<number | null>(null);
   useEffect(() => {
     if (scrollToIndex == null || !items.length || lastScrolledIndex.current === scrollToIndex) return;
@@ -167,16 +175,20 @@ export function VirtualizedItems<T>({ items, scrollRef, getKey, estimateSize, ov
     lastScrolledIndex.current = scrollToIndex;
     element.dispatchEvent(new Event("scroll"));
   }, [items.length, scrollRef, scrollToAlign, scrollToIndex, virtual.offsets]);
-  return <div ref={virtual.listRef} className={className} style={{ ...style, minHeight: virtual.totalSize }} data-virtualized-list data-item-count={items.length}>
-    <div style={{ height: virtual.totalSize, position: "relative" }}>
-      {items.slice(virtual.start, virtual.end).map((item, relativeIndex) => {
-        const index = virtual.start + relativeIndex;
-        const key = getKey ? getKey(item, index) : String(index);
-        return <div key={key} className="virtualized-item" data-virtual-index={index} data-virtual-key={key} ref={element => virtual.onMeasure(index, element)} style={{ position: "absolute", top: virtual.offsets[index], left: 0, right: 0 }}>
-          {renderItem(item, index)}
-        </div>;
-      })}
-    </div>
+  const rows = items.slice(virtual.start, virtual.end).map((item, relativeIndex) => {
+    const index = virtual.start + relativeIndex;
+    const key = getKey ? getKey(item, index) : String(index);
+    return <div key={key} className="virtualized-item" data-virtual-index={index} data-virtual-key={key} ref={element => virtual.onMeasure(index, element)} style={followEnd ? undefined : { position: "absolute", top: virtual.offsets[index], left: 0, right: 0 }}>
+      {renderItem(item, index)}
+    </div>;
+  });
+  // Normal-flow conversation rows let the browser anchor changes to their heights.
+  return <div ref={virtual.listRef} className={className} style={followEnd ? style : { ...style, minHeight: virtual.totalSize }} data-virtualized-list data-item-count={items.length}>
+    {followEnd ? <>
+      <div className="virtualized-space" style={{ height: virtual.offsets[virtual.start] }} />
+      {rows}
+      <div className="virtualized-space" style={{ height: virtual.totalSize - virtual.offsets[virtual.end] }} />
+    </> : <div style={{ height: virtual.totalSize, position: "relative" }}>{rows}</div>}
   </div>;
 }
 

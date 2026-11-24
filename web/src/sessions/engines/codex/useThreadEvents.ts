@@ -167,7 +167,7 @@ export function useThreadEvents(threadID: string, rawEvents: boolean, realtime: 
     };
   }, [path, realtime, globalRevision, streamRevision, invalidationSequence, reloadNonce]);
 
-  const loadEarlier = useCallback(async () => {
+  const loadEarlier = useCallback(async (beforePrepend: () => void) => {
     const entry = threadEventsCache.get(path);
     const earliestSequence = entry?.events[0]?.sequence ?? 0;
     if (!entry?.hasEarlier || earliestSequence <= 0 || loadingEarlierRef.current) return false;
@@ -179,6 +179,7 @@ export function useThreadEvents(threadID: string, rawEvents: boolean, realtime: 
       if (!current || current.globalRevision !== entry.globalRevision || current.streamRevision !== entry.streamRevision) return false;
       const events = mergeThreadEvents(page, current.events);
       const next = { ...current, events, hasEarlier: page.length >= threadEventsPageSize };
+      beforePrepend();
       storeThreadEvents(path, next);
       setState(currentState => currentState.path === path ? { path, data: events, error: "", loading: false, loadingEarlier: false } : currentState);
       return true;

@@ -59,7 +59,7 @@ import { DialogActions } from "../../../components/Dialog";
 import { Dialog,ErrorBanner,Field } from "../../../components/FormUI";
 import { Empty,ErrorState,Status } from "../../../components/PageUI";
 import { SessionUsage } from "../../../components/SessionUsage";
-import { VirtualizedItems } from "../../../components/VirtualizedList";
+import { captureVirtualizedReadingPosition, VirtualizedItems } from "../../../components/VirtualizedList";
 import { formatDate } from "../../../format";
 import { useI18n } from "../../../i18n";
 import { compressImage } from "../../../imageCompression";
@@ -157,6 +157,7 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   const streamRef = useRef<HTMLDivElement>(null);
   const restoredScrollKeyRef = useRef("");
   const autoFollowStreamRef = useRef(true);
+  const restoreReadingPosition = useRef<ReturnType<typeof captureVirtualizedReadingPosition>>();
   const latestSequenceRef = useRef(0);
   const [hasNewEventsBelow, setHasNewEventsBelow] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -385,12 +386,18 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
   };
   const loadEarlierEvents = () => {
     autoFollowStreamRef.current = false;
-    void events.loadEarlier();
+    void events.loadEarlier(() => {
+      const stream = streamRef.current;
+      if (stream && restoredScrollKeyRef.current === scrollStateKey) {
+        restoreReadingPosition.current = captureVirtualizedReadingPosition(stream);
+      }
+    });
   };
   useLayoutEffect(() => {
     const stream = streamRef.current;
     if (!stream || !eventsReady) return;
     if (restoredScrollKeyRef.current !== scrollStateKey) {
+      restoreReadingPosition.current = undefined;
       stream.scrollTop = codexScrollPositions.get(scrollStateKey) ?? conversationEnd(stream);
       restoredScrollKeyRef.current = scrollStateKey;
       autoFollowStreamRef.current = isAtConversationEnd(stream);
@@ -534,12 +541,12 @@ export function SessionView({ thread, approvals, realtime, globalStreamRevision 
     <div className="session-header"><div className="session-heading"><h2>{thread.title}</h2><span className="session-meta" title={`${thread.project_name} · ${thread.server_name}`}><GitBranch size={13} />{thread.project_name}<i /> <ServerIcon size={13} />{thread.server_name}</span></div><div className="session-actions"><button className={`icon-button ${rawEvents ? "active" : ""}`} aria-pressed={rawEvents} title={rawEvents ? t("codex.showConversation") : t("codex.showRawEvents")} onClick={() => setRawEvents(value => !value)}><Braces size={16} /></button><Status value={thread.status} /></div><SessionUsage provider="codex" threadID={thread.id} revision={`${realtime}:${globalStreamRevision}`} running={activeTurn} /></div>
     <div className={`event-stream ${rawEvents ? "raw-stream" : "conversation-stream"}`} ref={streamRef} aria-live="polite" onScroll={event => { const stream = event.currentTarget; autoFollowStreamRef.current = isAtConversationEnd(stream); if (autoFollowStreamRef.current) setHasNewEventsBelow(false); if (restoredScrollKeyRef.current === scrollStateKey) codexScrollPositions.set(scrollStateKey, stream.scrollTop); }}>
       {events.loading ? <div className="page-loading"><LoaderCircle className="spin" size={20} /></div> : events.error && !events.data ? <ErrorState error={events.error} reload={events.reload} /> : <>
-        {events.hasEarlier && <div className="history-loader"><button type="button" className="secondary-button small" disabled={events.loadingEarlier} onClick={loadEarlierEvents}>{events.loadingEarlier ? <LoaderCircle className="spin" size={15} /> : <ArrowUpFromLine size={15} />}{t(events.loadingEarlier ? "codex.loadingEarlier" : "codex.loadEarlier")}</button></div>}
+        {events.hasEarlier && <div className="history-loader" data-history-loader><button type="button" className="secondary-button small" disabled={events.loadingEarlier} onClick={loadEarlierEvents}>{events.loadingEarlier ? <LoaderCircle className="spin" size={15} /> : <ArrowUpFromLine size={15} />}{t(events.loadingEarlier ? "codex.loadingEarlier" : "codex.loadEarlier")}</button></div>}
         {events.error && events.data && <div className="snapshot-notice warning"><AlertTriangle size={15} />{events.error}</div>}
         {chatEvents.length === 0 && approvals.length === 0 && thread.status !== "running" ? <Empty icon={<Bot size={26} />} text={t("codex.noMessages")} /> : <>
           {rawEvents
-            ? sourceEvents.length > 0 && <VirtualizedItems<StreamEvent> key={scrollStateKey} items={sourceEvents} scrollRef={streamRef} followEnd={autoFollowStreamRef} getKey={rawEventKey} estimateSize={116} renderItem={event => <RawEventItem event={event} />} />
-            : displayItems.length > 0 && <VirtualizedItems<ConversationDisplayItem> key={scrollStateKey} items={displayItems} scrollRef={streamRef} followEnd={autoFollowStreamRef} getKey={displayItemKey} estimateSize={estimateDisplayItemSize} renderItem={renderDisplayItem} />}
+            ? sourceEvents.length > 0 && <VirtualizedItems<StreamEvent> key={scrollStateKey} items={sourceEvents} scrollRef={streamRef} followEnd={autoFollowStreamRef} restoreReadingPosition={restoreReadingPosition} getKey={rawEventKey} estimateSize={116} renderItem={event => <RawEventItem event={event} />} />
+            : displayItems.length > 0 && <VirtualizedItems<ConversationDisplayItem> key={scrollStateKey} items={displayItems} scrollRef={streamRef} followEnd={autoFollowStreamRef} restoreReadingPosition={restoreReadingPosition} getKey={displayItemKey} estimateSize={estimateDisplayItemSize} renderItem={renderDisplayItem} />}
           {approvals.map(item => <ApprovalPrompt key={item.id} item={item} onDecided={reloadApprovals} notify={notify} />)}
           {thread.status === "running" && approvals.length === 0 && <WorkingIndicator events={sourceEvents} />}
         </>}</>
