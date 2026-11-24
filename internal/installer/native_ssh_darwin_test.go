@@ -77,6 +77,7 @@ func TestNativeMacSSHInstallRepairAndUninstall(t *testing.T) {
 	if err != nil || probe.Fingerprint != fingerprint {
 		t.Fatalf("OpenSSH fingerprint probe failed: %v", err)
 	}
+	lastStep := ""
 	request := InstallRequest{
 		OS: "darwin", Target: target, ExpectedFingerprint: fingerprint,
 		ControlURL: controlURL, EnrollmentToken: "native-enrollment-token",
@@ -84,10 +85,22 @@ func TestNativeMacSSHInstallRepairAndUninstall(t *testing.T) {
 		GitEndpoint: "https://git.example.test", GitUsername: "native", GitToken: "native-synthetic-token",
 		GitCommitName: "Native Test", GitCommitEmail: "native@example.test",
 		Versions: CLIVersions{Codex: "0.171.0", Gemini: "0.70.0", Claude: "2.1.330"},
-		Progress: func(p InstallProgress) { t.Log("target installer:", p.Step) },
+		Progress: func(p InstallProgress) {
+			if p.Step != lastStep {
+				t.Log("target installer:", p.Step)
+				lastStep = p.Step
+			}
+		},
 	}
 	installed, err := service.Install(ctx, request)
 	if err != nil || len(installed.Warnings) != 0 || installed.OS != "darwin" {
+		if client, _, err := connect(ctx, target, fingerprint); err == nil {
+			script := `pwd; command -v node; node --version; command -v npm; npm --version; sudo -n -u _wio-agent env HOME='/Library/Application Support/Wio' PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin sh -c 'pwd; command -v node; node --version; command -v npm; npm --version'`
+			var output strings.Builder
+			_ = client.execute(elevated(false, script), nil, &output)
+			t.Log("Native dependency diagnostics:", output.String())
+			client.Close()
+		}
 		t.Fatalf("SSH installation failed: warnings=%v error=%v", installed.Warnings, err)
 	}
 	const serverID = "11111111-1111-4111-8111-111111111111"
