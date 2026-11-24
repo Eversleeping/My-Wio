@@ -133,6 +133,11 @@ func TestNativeMacSSHInstallRepairAndUninstall(t *testing.T) {
 		}
 	}
 	t.Log("Real SSH installer downloaded Node, installed all three official CLIs, and launchd published verified CLI inventory")
+	if raw, err := exec.CommandContext(ctx, "dscl", ".", "-read", "/Users/_wio-agent", "NFSHomeDirectory").Output(); err != nil {
+		t.Fatal(err)
+	} else {
+		t.Log("Native Directory Services home representation:", string(raw))
+	}
 	before, err := agent.LoadConfig(layout.Config)
 	if err != nil {
 		t.Fatal(err)

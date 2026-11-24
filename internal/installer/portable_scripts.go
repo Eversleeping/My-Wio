@@ -3,7 +3,8 @@ package installer
 const macAccountScript = `set -eu
 account=_wio-agent
 if dscl . -read /Users/$account >/dev/null 2>&1; then
- [ "$(dscl . -read /Users/$account NFSHomeDirectory | cut -d' ' -f2-)" = '/Library/Application Support/Wio' ] || exit 1
+ home=$(dscl -plist . -read /Users/$account NFSHomeDirectory | plutil -extract 'dsAttrTypeStandard:NFSHomeDirectory.0' raw -o - -)
+ [ "$home" = '/Library/Application Support/Wio' ] || exit 1
 else
  uid=400
  while dscl . -search /Users UniqueID "$uid" | grep -q . || dscl . -search /Groups PrimaryGroupID "$uid" | grep -q .; do uid=$((uid+1)); [ "$uid" -lt 500 ] || exit 1; done
