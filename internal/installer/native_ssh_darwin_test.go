@@ -140,7 +140,7 @@ func TestNativeMacSSHInstallRepairAndUninstall(t *testing.T) {
 	before.CloneRoot = filepath.Join(layout.State, "custom-projects")
 	before.ScanRoots = []string{before.CloneRoot}
 	before.DockerPath = "custom-docker"
-	before.ExtraEnvironment = []string{"WIO_NATIVE_REPAIR=preserved"}
+	before.ExtraEnvironment = []string{"NATIVE_REPAIR_TEST"}
 	if err := agent.SaveConfig(layout.Config, before); err != nil {
 		t.Fatal(err)
 	}
