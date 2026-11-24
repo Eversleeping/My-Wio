@@ -222,7 +222,9 @@ func backupNativeNode(t *testing.T) {
 
 func nativeOpenSSHTarget(t *testing.T, ctx context.Context) (Target, string) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "wio-native-sshd-")
+	// OpenSSH StrictModes rejects an authorized_keys ancestry under world-
+	// writable /tmp, even when the fixture's own directory is root-owned.
+	dir, err := os.MkdirTemp("/var/run", "wio-native-sshd-")
 	if err != nil {
 		t.Fatal(err)
 	}
