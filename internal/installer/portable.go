@@ -193,7 +193,12 @@ func atomicPortableWrite(name string, data []byte, mode os.FileMode) error {
 	return hostplatform.ReplaceFile(file.Name(), name)
 }
 func portableCommand(ctx context.Context, name string, args ...string) (string, error) {
+	return portableCommandInDirectory(ctx, "", name, args...)
+}
+
+func portableCommandInDirectory(ctx context.Context, directory, name string, args ...string) (string, error) {
 	cmd := childprocess.CommandContext(childprocess.WithScope(ctx, childprocess.Installation), name, args...)
+	cmd.Dir = directory
 	cmd.Env = childprocess.Environment(childprocess.WithScope(ctx, childprocess.Installation), "HOME="+hostplatform.Current().Home, "USERPROFILE="+hostplatform.Current().Home, "APPDATA="+filepath.Join(hostplatform.Current().Home, "AppData", "Roaming"), "LOCALAPPDATA="+filepath.Join(hostplatform.Current().Home, "AppData", "Local"))
 	output, err := childprocess.CombinedOutput(cmd)
 	if err != nil {

@@ -201,7 +201,10 @@ func backupNativeNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	targets := []string{"/usr/local/bin/node", "/usr/local/bin/npm", "/usr/local/bin/npx", "/usr/local/lib/node_modules"}
+	targets := []string{
+		"/usr/local/bin/node", "/usr/local/bin/npm", "/usr/local/bin/npx", "/usr/local/lib/node_modules",
+		"/opt/homebrew/bin/node", "/opt/homebrew/bin/npm", "/opt/homebrew/bin/npx",
+	}
 	saved := map[string]string{}
 	prepared := []string{}
 	t.Cleanup(func() {

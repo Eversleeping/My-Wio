@@ -135,7 +135,9 @@ func macServiceDefinition(l hostplatform.Layout, state string) string {
 func installPortableCLIs(ctx context.Context, state string, versions CLIVersions) ([]string, error) {
 	command := func(ctx context.Context, name string, args ...string) (string, error) {
 		base := []string{"-n", "-u", "_wio-agent", "env", "HOME=" + state, "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin", name}
-		return portableCommand(ctx, "sudo", append(base, args...)...)
+		// SSH usually starts in the login user's private home. npm calls getcwd
+		// before processing --prefix, so use a directory the service user owns.
+		return portableCommandInDirectory(ctx, state, "sudo", append(base, args...)...)
 	}
 	return installCLIs(ctx, state, versions, command)
 }
