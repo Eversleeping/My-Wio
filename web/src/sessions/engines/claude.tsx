@@ -20,13 +20,14 @@ import { Dialog, ErrorBanner, Field } from "../../components/FormUI";
 import { MessageImages } from "../../components/MessageImages";
 import { Empty, ErrorState, Status } from "../../components/PageUI";
 import { SessionUsage } from "../../components/SessionUsage";
-import { formatDate, formatTime } from "../../format";
+import { formatDateTime } from "../../format";
 import { useI18n } from "../../i18n";
 import { compressImage } from "../../imageCompression";
 import { message } from "../../text";
 import type { ClaudeThread,Server,StreamEvent,Workspace } from "../../types";
 import { useData, useThrottledValue } from "../../useData";
 import { ComposerAttachments, ComposerInput } from "../Composer";
+import { useConversationScroll } from "../useConversationScroll";
 
 const modes = ["default", "acceptEdits", "plan", "bypassPermissions"];
 const activeTurn = (thread: ClaudeThread) => ["queued", "running", "interrupting"].includes(thread.status);
@@ -53,7 +54,6 @@ export function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchi
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [confirming, setConfirming] = useState(false);
   const [allEvents, setAllEvents] = useState<StreamEvent[]>([]); const [historyBusy, setHistoryBusy] = useState(false);
   const allEventsRef = useRef<StreamEvent[]>([]);
-  const stream = useRef<HTMLDivElement>(null); const follow = useRef(true);
   const throttledRevision = useThrottledValue(revision, 750);
   const historySession = useRef(thread.session_id);
   useEffect(() => {
@@ -157,7 +157,7 @@ export function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchi
   });
   const latestMessage = [...allEvents].reverse().find(event => ["claude.message", "claude.user.message", "claude.steer.applied"].includes(event.kind));
   const items = useMemo(() => claudeDisplayEvents(allEvents, t("claude.denied")), [allEvents, t]);
-  useEffect(() => { if (follow.current && stream.current) stream.current.scrollTop = stream.current.scrollHeight; }, [items]);
+  const { stream, onScroll, preserveHistoryPosition, resumeFollowing } = useConversationScroll(items, running);
   const send = async (event: FormEvent) => {
     event.preventDefault(); if (blocked || busy || (!running && availableModels.loading) || imageBusy || slashOpen || (!prompt.trim() && !images.length)) return;
     const option=!editingEventID && !running && /^\/(model|effort|permissions)\s+(\S+)\s*$/.exec(prompt);
@@ -175,7 +175,7 @@ export function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchi
         if (steeringRequest.current) { setError(t("claude.steerTaskEnded")); return; }
         await post(editingEventID ? `/sessions/claude/${thread.id}/events/${editingEventID}/rewrite` : `/sessions/claude/${thread.id}/turns`, { prompt: prompt.trim(), model: model.trim(), permission_mode: mode, effort, ...(images.length ? {images:imagePayload} : {}) });
       }
-      setPrompt(""); setImages([]); setEditingEventID(""); follow.current=true; onChanged();
+      setPrompt(""); setImages([]); setEditingEventID(""); resumeFollowing(); onChanged();
     }
     catch (err) { setError(message(err)); } finally { setBusy(false); }
   };
@@ -183,15 +183,22 @@ export function ClaudeSession({ thread, revision, onChanged, onOpenFile, onArchi
   const confirmStopped = async () => { setBusy(true); try { await post(`/sessions/claude/${thread.id}/confirm-stopped`, { operation_id: thread.operation_id, confirmed: true }); setConfirming(false); onChanged(); } catch (err) { setError(message(err)); } finally { setBusy(false); } };
   const earlier = async () => {
     if (!allEvents.length || historyBusy) return; setHistoryBusy(true);
-    try { const session = historySession.current; const older = await api<StreamEvent[]>(`/sessions/claude/${thread.id}/events?before=${allEvents[0].sequence}`); if (historySession.current === session) mergeEvents(older); }
+    try {
+      const session = historySession.current;
+      const older = await api<StreamEvent[]>(`/sessions/claude/${thread.id}/events?before=${allEvents[0].sequence}`);
+      if (historySession.current === session && older.length) {
+        preserveHistoryPosition();
+        mergeEvents(older);
+      }
+    }
     catch (err) { setError(message(err)); } finally { setHistoryBusy(false); }
   };
   return <section className="session-panel gemini-session claude-session"><header className="session-header"><div className="session-heading"><h2>{thread.title}</h2><span className="session-meta" title={`${thread.server_name} · ${thread.path}`}>{thread.server_name}<i />{thread.path}</span></div><div className="session-actions"><Status value={thread.status} /><button className="icon-button" title={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} aria-label={t(thread.archived_at ? "gemini.showActive" : "gemini.showArchived")} disabled={busy || running || thread.recovery_pending} onClick={onArchive}><Archive size={16} /></button></div><SessionUsage provider="claude" threadID={thread.id} revision={revision} running={running} /></header>
-    <div ref={stream} className="gemini-stream conversation-stream" role="log" aria-label={t("gemini.conversation")} onScroll={() => { if (stream.current) follow.current = stream.current.scrollHeight - stream.current.scrollTop - stream.current.clientHeight < 100; }}>
-      {allEvents.length > 0 && allEvents[0].sequence > 1 && <button className="secondary-button" disabled={historyBusy} onClick={() => void earlier()}>{t("claude.loadEarlier")}</button>}
+    <div ref={stream} className="gemini-stream conversation-stream" role="log" aria-label={t("gemini.conversation")} onScroll={onScroll}>
+      {allEvents.length > 0 && allEvents[0].sequence > 1 && <button className="secondary-button" data-history-loader disabled={historyBusy} onClick={() => void earlier()}>{t("claude.loadEarlier")}</button>}
       {events.error && <ErrorState error={events.error} reload={events.reload} />}
       {!items.length && <Empty icon={<Bot size={30} />} text={t("claude.startPrompt")} />}
-      {items.map(item => item.role === "compaction" ? <ClaudeCompactionEvent key={item.id} item={item} activeOperationID={running && !thread.recovery_pending && thread.server_status === "online" ? thread.operation_id : undefined} /> : item.role === "question" ? <ClaudeQuestion key={item.id} item={item} threadID={thread.id} readOnly={!thread.capabilities?.questions || thread.status !== "running" || item.operationID !== thread.operation_id || !!item.cancelled || !!thread.archived_at || thread.server_status !== "online" || thread.recovery_pending} onAnswered={onChanged} /> : item.role === "toolGroup" ? <ClaudeToolGroup key={item.id} tools={item.tools ?? []} activeOperationID={running && !thread.recovery_pending && thread.server_status === "online" ? thread.operation_id : undefined} /> : <article className={`message ${item.role === "notice" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Claude"}</strong>{item.occurredAt && <time dateTime={item.occurredAt} title={formatDate(item.occurredAt)}>{formatTime(item.occurredAt)}</time>}</header>{!!item.images?.length && <MessageImages sources={item.images} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{(item.role === "user" || item.role === "assistant") && <div className="message-actions">
+      {items.map(item => item.role === "compaction" ? <ClaudeCompactionEvent key={item.id} item={item} activeOperationID={running && !thread.recovery_pending && thread.server_status === "online" ? thread.operation_id : undefined} /> : item.role === "question" ? <ClaudeQuestion key={item.id} item={item} threadID={thread.id} readOnly={!thread.capabilities?.questions || thread.status !== "running" || item.operationID !== thread.operation_id || !!item.cancelled || !!thread.archived_at || thread.server_status !== "online" || thread.recovery_pending} onAnswered={onChanged} /> : item.role === "toolGroup" ? <ClaudeToolGroup key={item.id} tools={item.tools ?? []} activeOperationID={running && !thread.recovery_pending && thread.server_status === "online" ? thread.operation_id : undefined} /> : <article className={`message ${item.role === "notice" ? "error" : item.role}`} key={item.id}><header>{item.role === "user" ? <UserRound size={15} /> : <Bot size={15} />}<strong>{item.role === "user" ? t("codex.you") : "Claude"}</strong>{item.occurredAt && <time dateTime={item.occurredAt}>{formatDateTime(item.occurredAt)}</time>}</header>{!!item.images?.length && <MessageImages sources={item.images} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{(item.role === "user" || item.role === "assistant") && <div className="message-actions">
         <button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(err => notify(message(err))); }}><Copy size={14} /></button>
         {item.role === "user" && !thread.archived_at && <button type="button" className="message-action" title={t(thread.capabilities?.rewrite ? "codex.editMessage" : "claude.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} disabled={busy || blocked || running || !thread.capabilities?.rewrite || !thread.session_id} onClick={() => { imageWork.current?.abort(); imageWork.current = null; setImageBusy(false); setPrompt(item.text); setImages((item.images ?? []).map(dataURL => ({ id: crypto.randomUUID(), dataURL }))); setEditingEventID(item.id); steeringRequest.current = undefined; setSlashSection(""); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}
         {item.role === "assistant" && item.endEventID === latestMessage?.event_id && <ContextMenu className="message-menu" label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.branchToNewChat"), icon: GitFork, disabled: busy || blocked || running || !thread.capabilities?.images || !thread.session_id, onSelect: () => onFork(item.endEventID) }]}>{null}</ContextMenu>}

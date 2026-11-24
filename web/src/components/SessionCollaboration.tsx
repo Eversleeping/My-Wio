@@ -1,3 +1,4 @@
+import { formatDateTime } from "../format";
 import { useEffect, useState } from "react";
 import { Network, ExternalLink, Trash2 } from "lucide-react";
 import { post, remove } from "../api";
@@ -73,7 +74,7 @@ export function SessionCollaboration({ engine, id, workspaceID, revision }: { en
       {native.error && <p role="alert">{native.error}<button type="button" onClick={native.reload}>{t("common.retry")}</button></p>}
       {agents.map(agent => <div className="collaboration-card native-subagent-card" key={agent.id}>
         <button type="button" className="subagent-open" onClick={() => setSelected(agent.id)}><strong>{agent.name || t("subagents.agent")}</strong><small>{agent.prompt || agent.native_id || agent.id}</small></button>
-        <Status value={agent.status || "unknown"} /><small>{engine}{agent.parent_id && agents.some(parent => parent.id === agent.parent_id) && ` · ${t("subagents.child")}`}</small><time dateTime={agent.updated_at} title={new Date(agent.updated_at).toLocaleString()}>{new Date(agent.updated_at).toLocaleTimeString()}</time>
+        <Status value={agent.status || "unknown"} /><small>{engine}{agent.parent_id && agents.some(parent => parent.id === agent.parent_id) && ` · ${t("subagents.child")}`}</small><time dateTime={agent.updated_at}>{formatDateTime(agent.updated_at)}</time>
       </div>)}
       {agents.length === 0 && state.data && !state.data.supported && <p>{t("collaboration.updateAgent")}</p>}
       {agents.length === 0 && !state.data?.grant?.enabled && <p>{t("collaboration.enableAll")}</p>}

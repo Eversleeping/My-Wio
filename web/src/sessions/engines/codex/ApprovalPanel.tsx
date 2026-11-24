@@ -3,7 +3,7 @@ import { ShieldCheck } from "lucide-react";
 import { Dialog } from "../../../components/FormUI";
 import { Empty, Status } from "../../../components/PageUI";
 import { UserInputPrompt, isUserInputRequest } from "../../../components/UserInputPrompt";
-import { relative } from "../../../format";
+import { formatDateTime, relative } from "../../../format";
 import { useI18n } from "../../../i18n";
 import type { CodexPageProps } from "../../../types";
 import { ApprovalActions } from "./approvals";
@@ -36,6 +36,6 @@ export default function ApprovalPanel(props: Pick<CodexPageProps, "approvals" | 
   useEffect(() => { setApprovalOpen(Boolean(key)); }, [key, props.approvalSignal]);
   return <>
     <button className={`approval-drawer-button ${props.approvals.length ? "visible" : ""}`} onClick={() => setApprovalOpen(true)}><ShieldCheck size={17} />{t("codex.approvalCount", { count: props.approvals.length })}</button>
-    <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{props.approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : props.approvals.map(item => isUserInputRequest(item) ? <UserInputPrompt key={item.id} item={item} onDecided={props.reloadApprovals} /> : <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time>{relative(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={props.reloadApprovals} notify={props.notify} /></div>)}</div></Dialog>
+    <Dialog open={approvalOpen} title={t("codex.pendingApprovals")} onClose={() => setApprovalOpen(false)} wide><div className="approval-list">{props.approvals.length === 0 ? <Empty icon={<ShieldCheck size={24} />} text={t("codex.noApprovals")} /> : props.approvals.map(item => isUserInputRequest(item) ? <UserInputPrompt key={item.id} item={item} onDecided={props.reloadApprovals} /> : <div className="approval-item" key={item.id}><div className="approval-meta"><Status value="pending" /><span>{item.title}</span><time title={relative(item.expires_at)} dateTime={item.expires_at}>{formatDateTime(item.expires_at)}</time></div><strong>{readableKind(item.kind)}</strong><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={props.reloadApprovals} notify={props.notify} /></div>)}</div></Dialog>
   </>;
 }

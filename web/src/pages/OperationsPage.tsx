@@ -4,7 +4,7 @@ import { LogPagination, logPageSize } from "../components/LogPagination";
 import { DataTable, ErrorState, PageLoading, Section, Status } from "../components/PageUI";
 import { operations as operationEndpoints } from "../data/operations";
 import { useResource } from "../data/resources";
-import { relative } from "../format";
+import { formatDateTime } from "../format";
 import { useI18n } from "../i18n";
 import type { OperationSummary } from "../types";
 
@@ -84,7 +84,7 @@ export default function OperationsPage({ active = true }: { active?: boolean }) 
             <td className="message-cell" title={operation.result}>{operation.result || "-"}
               {active && operation.interrupt_status === "failed" && <small className="operation-interrupt-error">{t("operation.interruptFailed")}{operation.interrupt_error && `: ${operation.interrupt_error}`}</small>}
             </td>
-            <td>{relative(operation.created_at)}</td><td>{relative(operation.updated_at)}</td>
+            <td><time dateTime={operation.created_at}>{formatDateTime(operation.created_at)}</time></td><td><time dateTime={operation.updated_at}>{formatDateTime(operation.updated_at)}</time></td>
             <td>{active && interruptibleKinds.has(operation.kind) && <button type="button" className="secondary-button operation-interrupt" disabled={!operation.interrupt_supported || stopping}
               title={!operation.interrupt_supported ? t("operation.interruptUpgrade") : stopping ? t("operation.interruptPending") : t("operation.interrupt")}
               onClick={() => void interrupt(operation)}><Square size={13} aria-hidden="true" />{stopping ? t("operation.interrupting") : t("operation.interrupt")}</button>}</td>

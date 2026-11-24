@@ -177,7 +177,7 @@ test("keeps the current position and offers a jump button when new events arrive
   const { container, rerender } = render(sessionView(value));
   expect(await screen.findByText("Earlier message")).toBeInTheDocument();
   const stream = container.querySelector<HTMLElement>(".event-stream")!;
-  stream.scrollTop = 200;
+  stream.scrollTop = 560;
   fireEvent.scroll(stream);
 
   streamHeight = 1400;
@@ -185,14 +185,14 @@ test("keeps the current position and offers a jump button when new events arrive
   rerender(sessionView(value, 1));
 
   expect(await screen.findByText("Incoming message")).toBeInTheDocument();
-  expect(stream).toHaveProperty("scrollTop", 200);
+  expect(stream).toHaveProperty("scrollTop", 560);
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "New messages below. Jump to latest" }));
   expect(stream).toHaveProperty("scrollTop", 1000);
   expect(screen.queryByRole("button", { name: "New messages below. Jump to latest" })).not.toBeInTheDocument();
 });
 
-test("follows new events when the reader remains close to the bottom", async () => {
+test("follows new events when the reader remains at the bottom", async () => {
   const value = thread("follow-latest");
   let includeNewEvent = false;
   let streamHeight = 1000;
@@ -209,7 +209,7 @@ test("follows new events when the reader remains close to the bottom", async () 
   const { container, rerender } = render(sessionView(value));
   expect(await screen.findByText("Current message")).toBeInTheDocument();
   const stream = container.querySelector<HTMLElement>(".event-stream")!;
-  stream.scrollTop = 520;
+  stream.scrollTop = 600;
   fireEvent.scroll(stream);
 
   streamHeight = 1400;

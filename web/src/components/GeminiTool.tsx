@@ -1,7 +1,7 @@
 import { Ban, ChevronRight, CircleCheck, CircleHelp, CircleX, FilePenLine, FileText, LoaderCircle, Search, SquareTerminal, Wrench } from "lucide-react";
 import type { GeminiMessage } from "../geminiContent";
 import { useI18n } from "../i18n";
-import { formatTime } from "../format";
+import { formatDateTime } from "../format";
 import { MessageImages } from "./MessageImages";
 
 export function GeminiToolGroup({ items, uncertainOperationID }: { items: GeminiMessage[]; uncertainOperationID?: string }) {
@@ -25,7 +25,7 @@ export function GeminiTool({ item, uncertain = false }: { item: GeminiMessage; u
   const status = failed ? "failed" : complete ? "completed" : interrupted ? "interrupted" : uncertain ? "unknown" : "running";
   const StatusIcon = failed ? CircleX : complete ? CircleCheck : interrupted ? Ban : uncertain ? CircleHelp : LoaderCircle;
   return <details className={`gemini-tool ${failed ? "failed" : ""}`}>
-    <summary><ChevronRight className="gemini-tool-chevron" size={14} /><Icon size={15} /><span className="gemini-tool-title">{item.title || t("gemini.tool")}</span><span className={`gemini-tool-status ${status}`}><StatusIcon size={13} className={status === "running" ? "spin" : undefined} />{t(`status.${status}`)}</span><time dateTime={item.time}>{formatTime(item.time)}</time></summary>
+    <summary><ChevronRight className="gemini-tool-chevron" size={14} /><Icon size={15} /><span className="gemini-tool-title">{item.title || t("gemini.tool")}</span><span className={`gemini-tool-status ${status}`}><StatusIcon size={13} className={status === "running" ? "spin" : undefined} />{t(`status.${status}`)}</span><time dateTime={item.time}>{formatDateTime(item.time)}</time></summary>
     {item.toolInput && <section><strong>{t("gemini.toolInput")}</strong><pre>{item.toolInput}</pre></section>}
     {item.toolOutput !== undefined && <section><strong>{t("gemini.toolOutput")}</strong><pre>{item.toolOutput || t("gemini.toolOutputUnavailable")}</pre></section>}
     {!!item.images?.length && <MessageImages sources={item.images.map(image => image.data_url)} />}

@@ -1,4 +1,5 @@
 import { useComposerDraft } from "../composerDrafts";
+import { useConversationScroll } from "../useConversationScroll";
 import { useVisibleClock } from "../../hooks/useVisibleInterval";
 import { ArrowUp, Bot, Boxes, CalendarClock, Copy, Download, GitFork, Globe, Lightbulb, ListChecks, LoaderCircle, MessageSquare, MoreHorizontal, Pause, Pencil, Play, Plus, RefreshCw, Sparkles, Square, Target, UserRound, Users, Workflow, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -18,7 +19,7 @@ import { GeminiTool, GeminiToolGroup } from "../../components/GeminiTool";
 import { MessageImages } from "../../components/MessageImages";
 import { Empty, ErrorState, Status } from "../../components/PageUI";
 import { SessionUsage, formatUsageNumber } from "../../components/SessionUsage";
-import { formatTime } from "../../format";
+import { formatDateTime } from "../../format";
 import { geminiForkTargets, geminiMessages, groupGeminiMessages } from "../../geminiContent";
 import { useGeminiModels } from "../../geminiModels";
 import { useI18n } from "../../i18n";
@@ -136,8 +137,6 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
   const goal = goalData.data && !Array.isArray(goalData.data) && goalData.data.id ? goalData.data : null;
   useEffect(() => { if (goal) { setGoalRounds(goal.max_continuations); setGoalMinutes(goal.max_seconds / 60); } }, [goal?.id]);
   const [confirmingOperation, setConfirmingOperation] = useState("");
-  const stream = useRef<HTMLDivElement>(null);
-  const follow = useRef(true);
   const running = isActive(thread);
   const recoveryPending = Boolean(thread.recovery_pending);
   const now = useVisibleClock(running, 15000);
@@ -177,6 +176,7 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
     ...nativeCommands.filter(item => !["goal", "schedule", "plan", "grill-me", "learn", "skills", "browser", "teamwork", "collab"].includes(item.name)).map(item => ({ id: `native-${item.name}`, name: `/${item.name}`, description: item.description, section: t("gemini.nativeCommands"), icon: Sparkles, onSelect: () => mode === "plan" && !["help", "about"].includes(item.name) ? finishSlash(() => notify(t("gemini.planCommandUnavailable"))) : draftSlash(`/${item.name} `) })),
   ];
   const messages = useMemo(() => groupGeminiMessages(geminiMessages(events)), [events]);
+  const { stream, onScroll, preserveHistoryPosition, resumeFollowing } = useConversationScroll(messages, running);
   const forkTargets = useMemo(() => geminiForkTargets(events), [events]);
   const merge = (incoming: StreamEvent[]) => setEvents(current => [...new Map([...current, ...incoming].map(event => [event.event_id, event])).values()].sort((a, b) => a.sequence - b.sequence));
   useEffect(() => {
@@ -206,14 +206,16 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
     })().catch(error => { if (!controller.signal.aborted) setError(message(error)); });
     return () => controller.abort();
   }, [realtime, reload, thread.id]);
-  useEffect(() => { if (follow.current && stream.current) stream.current.scrollTop = stream.current.scrollHeight; }, [messages, running]);
   const earlier = async () => {
     setHistoryBusy(true);
-    const element = stream.current;
-    const height = element?.scrollHeight ?? 0;
     const revision = historyRevision.current;
-    follow.current = false;
-    try { const next = await api<StreamEvent[]>(`/sessions/gemini/${thread.id}/events?before=${events[0]?.sequence ?? 0}`); if (revision !== historyRevision.current) return; merge(next); setHasEarlier(next.length === 500); requestAnimationFrame(() => { if (element) element.scrollTop += element.scrollHeight - height; }); }
+    try {
+      const next = await api<StreamEvent[]>(`/sessions/gemini/${thread.id}/events?before=${events[0]?.sequence ?? 0}`);
+      if (revision !== historyRevision.current) return;
+      preserveHistoryPosition();
+      merge(next);
+      setHasEarlier(next.length === 500);
+    }
     catch (error) { notify(message(error)); } finally { setHistoryBusy(false); }
   };
   const steerReady = thread.status === "running" && thread.capabilities?.steer && (thread.steer_ready || events.some(event => event.kind === "gemini.steer.ready" && (event.payload as {operation_id?:string}).operation_id === thread.operation_id));
@@ -239,7 +241,7 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
         await post(`/sessions/gemini/${thread.id}/steer`, {prompt,operation_id:thread.operation_id,request_id:steeringRequest.current.id, ...(images.length ? {images:images.map(image => ({data_url:image.dataURL}))} : {})});
         steeringRequest.current = undefined;
       } else await post(editingEventID ? `/sessions/gemini/${thread.id}/events/${editingEventID}/rewrite` : `/sessions/gemini/${thread.id}/turns`, { prompt: goalDraft ? goalObjective : prompt, model: model.trim(), approval_mode: mode, thinking_level: thinking, ...(goalDraft ? { goal: {max_continuations:goalRounds,max_seconds:goalMinutes*60} } : {}), ...(images.length ? { images: images.map(image => ({data_url:image.dataURL})) } : {}) });
-      setPrompt(""); setImages([]); setEditingEventID(""); follow.current = true; onChanged(); setReload(value => value + 1);
+      setPrompt(""); setImages([]); setEditingEventID(""); resumeFollowing(); onChanged(); setReload(value => value + 1);
     }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
@@ -287,10 +289,10 @@ export function GeminiSession({ thread, realtime, notify, onChanged, onNewSessio
     finally { setBusy(false); }
   };
   return <section className="session-panel gemini-session"><header className="session-header"><div className="session-heading"><h2>{thread.title}</h2><span className="session-meta" title={`${thread.server_name} · ${thread.path}`}>{thread.server_name}<i />{thread.path}</span></div><div className="session-actions"><Status value={thread.status} /><ContextMenu label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.continueInNewTask"), icon: GitFork, disabled: blocked || busy || !thread.capabilities?.fork || !thread.session_id || Boolean(thread.archived_at) || thread.server_status !== "online", onSelect: () => onFork() }]}>{null}</ContextMenu><button className="icon-button" aria-label={t("gemini.newSessionHere")} title={t("gemini.newSessionHere")} onClick={onNewSession}><Plus size={16} /></button><button className="icon-button" aria-label={t("gemini.export")} title={t("gemini.export")} disabled={running || exporting} onClick={() => void exportSession()}>{exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}</button><button className="icon-button" aria-label={t("common.refresh")} onClick={() => { onChanged(); setReload(value => value + 1); }}><RefreshCw size={16} /></button></div><SessionUsage provider="gemini" threadID={thread.id} revision={`${realtime}:${reload}`} running={running} /></header>
-    <div className="gemini-stream conversation-stream" ref={stream} role="log" aria-label={t("gemini.conversation")} onScroll={() => { const el = stream.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
-      {hasEarlier && <button className="secondary-button" disabled={historyBusy} onClick={() => void earlier()}>{t("gemini.loadEarlier")}</button>}
+    <div className="gemini-stream conversation-stream" ref={stream} role="log" aria-label={t("gemini.conversation")} onScroll={onScroll}>
+      {hasEarlier && <button className="secondary-button" data-history-loader disabled={historyBusy} onClick={() => void earlier()}>{t("gemini.loadEarlier")}</button>}
       {!messages.length && <Empty icon={<Sparkles size={30} />} text={t("gemini.startPrompt")} />}
-      {messages.map(item => item.role === "commandGroup" ? <GeminiToolGroup key={item.id} items={item.items} uncertainOperationID={recoveryPending ? thread.operation_id : undefined} /> : item.role === "question" ? <GeminiQuestion key={item.id} item={item} threadID={thread.id} readOnly={!running || thread.status === "interrupting" || item.operationID !== thread.operation_id || Boolean(thread.archived_at) || thread.server_status !== "online"} onAnswered={() => { onChanged(); setReload(value => value + 1); }} /> : item.role === "tool" ? <GeminiTool key={item.id} item={item} uncertain={recoveryPending && item.operationID === thread.operation_id} /> : item.role === "status" ? <p className="gemini-usage" key={item.id}>{item.text === "interrupted" ? t("status.interrupted") : item.stats ? t("gemini.usage", { input: formatUsageNumber(item.stats.input_tokens, language), output: formatUsageNumber(item.stats.output_tokens, language), tools: formatUsageNumber(item.stats.tool_calls, language) }) : item.text}</p> : <article className={`message ${item.role === "error" ? "error" : item.role === "steer" ? "user" : item.role}`} key={item.id}><header>{(item.role === "user" || item.role === "steer") ? <UserRound size={15} /> : <Bot size={15} />}<strong>{(item.role === "user" || item.role === "steer") ? t("codex.you") : "Gemini"}</strong><time>{formatTime(item.time)}</time>{item.role === "steer" && <small>{t(`gemini.steer.${item.steerStatus ?? "queued"}`)}</small>}</header>{!!item.images?.length && <MessageImages sources={item.images.map(image => image.data_url)} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{item.role === "user" && <div className="message-actions"><button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(error => notify(message(error))); }}><Copy size={14} /></button>{!thread.archived_at && <button type="button" className="message-action" disabled={busy || blocked || thread.server_status !== "online" || !thread.capabilities?.rewrite} title={t(thread.capabilities?.rewrite ? "codex.editMessage" : "gemini.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} onClick={() => { imageWork.current?.abort(); setImageBusy(false); setPrompt(item.text); setImages((item.images ?? []).map(image => ({id:crypto.randomUUID(),dataURL:image.data_url}))); setEditingEventID(item.id); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}</div>}{item.role === "assistant" && <div className="message-actions"><ContextMenu className="message-menu" label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.branchToNewChat"), icon: GitFork, disabled: blocked || busy || !forkTargets.has(item.id) || !thread.capabilities?.fork || Boolean(thread.archived_at) || thread.server_status !== "online", onSelect: () => onFork(item.id) }]}>{null}</ContextMenu></div>}</article>)}
+      {messages.map(item => item.role === "commandGroup" ? <GeminiToolGroup key={item.id} items={item.items} uncertainOperationID={recoveryPending ? thread.operation_id : undefined} /> : item.role === "question" ? <GeminiQuestion key={item.id} item={item} threadID={thread.id} readOnly={!running || thread.status === "interrupting" || item.operationID !== thread.operation_id || Boolean(thread.archived_at) || thread.server_status !== "online"} onAnswered={() => { onChanged(); setReload(value => value + 1); }} /> : item.role === "tool" ? <GeminiTool key={item.id} item={item} uncertain={recoveryPending && item.operationID === thread.operation_id} /> : item.role === "status" ? <p className="gemini-usage" key={item.id}>{item.text === "interrupted" ? t("status.interrupted") : item.stats ? t("gemini.usage", { input: formatUsageNumber(item.stats.input_tokens, language), output: formatUsageNumber(item.stats.output_tokens, language), tools: formatUsageNumber(item.stats.tool_calls, language) }) : item.text}</p> : <article className={`message ${item.role === "error" ? "error" : item.role === "steer" ? "user" : item.role}`} key={item.id}><header>{(item.role === "user" || item.role === "steer") ? <UserRound size={15} /> : <Bot size={15} />}<strong>{(item.role === "user" || item.role === "steer") ? t("codex.you") : "Gemini"}</strong><time dateTime={item.time}>{formatDateTime(item.time)}</time>{item.role === "steer" && <small>{t(`gemini.steer.${item.steerStatus ?? "queued"}`)}</small>}</header>{!!item.images?.length && <MessageImages sources={item.images.map(image => image.data_url)} />}<MarkdownContent text={item.text} workspaceRoot={thread.path} onOpenFile={onOpenFile} />{item.role === "user" && <div className="message-actions"><button type="button" className="message-action" title={t("codex.copyMessage")} aria-label={t("codex.copyMessage")} onClick={() => { void navigator.clipboard.writeText(item.text).then(() => notify(t("codex.messageCopied"))).catch(error => notify(message(error))); }}><Copy size={14} /></button>{!thread.archived_at && <button type="button" className="message-action" disabled={busy || blocked || thread.server_status !== "online" || !thread.capabilities?.rewrite} title={t(thread.capabilities?.rewrite ? "codex.editMessage" : "gemini.rewriteAgentUpdate")} aria-label={t("codex.editMessage")} onClick={() => { imageWork.current?.abort(); setImageBusy(false); setPrompt(item.text); setImages((item.images ?? []).map(image => ({id:crypto.randomUUID(),dataURL:image.data_url}))); setEditingEventID(item.id); requestAnimationFrame(() => { promptRef.current?.focus(); promptRef.current?.scrollIntoView({ block: "nearest" }); }); }}><Pencil size={14} /></button>}</div>}{item.role === "assistant" && <div className="message-actions"><ContextMenu className="message-menu" label={t("codex.messageMenu")} triggerIcon={MoreHorizontal} actions={[{ id: "fork", label: t("codex.branchToNewChat"), icon: GitFork, disabled: blocked || busy || !forkTargets.has(item.id) || !thread.capabilities?.fork || Boolean(thread.archived_at) || thread.server_status !== "online", onSelect: () => onFork(item.id) }]}>{null}</ContextMenu></div>}</article>)}
       {running && <p className="gemini-working" role="status"><LoaderCircle className="spin" size={16} />{t(thread.status === "interrupting" ? "gemini.interrupting" : lastActivity?.kind === "gemini.activity" && quietMinutes < 2 ? "gemini.modelActivity" : "gemini.working")}</p>}
       {running && !recoveryPending && !showGoalDiagnostic && thread.status !== "interrupting" && quietMinutes >= 2 && <p className="gemini-hint">{t("gemini.noUpdates", { count: quietMinutes })}</p>}
     </div>

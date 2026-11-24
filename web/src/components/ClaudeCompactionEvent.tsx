@@ -1,6 +1,6 @@
 import { AlertTriangle, Ban, LoaderCircle, Minimize2 } from "lucide-react";
 import type { ClaudeDisplayItem } from "../claudeContent";
-import { formatDate, formatTime } from "../format";
+import { formatDateTime } from "../format";
 import { useI18n } from "../i18n";
 
 export function ClaudeCompactionEvent({ item, activeOperationID }: { item: ClaudeDisplayItem; activeOperationID?: string }) {
@@ -12,7 +12,7 @@ export function ClaudeCompactionEvent({ item, activeOperationID }: { item: Claud
   const Icon = status === "running" ? LoaderCircle : status === "completed" ? Minimize2 : status === "interrupted" ? Ban : AlertTriangle;
   const count = (value: number) => value.toLocaleString(language);
   return <article className={`context-compaction-event claude-compaction-event ${status}`} role={status === "running" ? "status" : undefined}>
-    <header><Icon size={15} className={status === "running" ? "spin" : undefined} /><strong>{t(title)}</strong>{item.occurredAt && <time dateTime={item.occurredAt} title={formatDate(item.occurredAt)}>{formatTime(item.occurredAt)}</time>}</header>
+    <header><Icon size={15} className={status === "running" ? "spin" : undefined} /><strong>{t(title)}</strong>{item.occurredAt && <time dateTime={item.occurredAt}>{formatDateTime(item.occurredAt)}</time>}</header>
     <div className="message-content">{t(detail)}</div>
     {status === "completed" && (compaction.preTokens !== undefined || compaction.postTokens !== undefined) && <div className="claude-compaction-tokens">
       {compaction.preTokens !== undefined && <span>{t("claude.compactionBefore", { value: count(compaction.preTokens) })}</span>}

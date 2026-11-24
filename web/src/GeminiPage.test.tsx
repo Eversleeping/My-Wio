@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SessionTestPage } from "./sessions/SessionTestPage.test-support";
 import { I18nProvider } from "./i18n";
-import { formatTime } from "./format";
+import { formatDateTime } from "./format";
 import type { GeminiGoal } from "./types";
 
 vi.mock("./imageCompression", () => ({ compressImage: vi.fn() }));
@@ -219,7 +219,7 @@ test("renders one expandable tool record per call with separate parameters and o
   expect(within(tool).getByText("Completed")).toBeInTheDocument();
   expect(tool.querySelector(".lucide-file-text")).toBeTruthy();
   expect(tool.querySelector("time")).toHaveAttribute("datetime", thread.updated_at);
-  expect(tool.querySelector("time")).toHaveTextContent(formatTime(thread.updated_at));
+  expect(tool.querySelector("time")).toHaveTextContent(formatDateTime(thread.updated_at));
   await user.click(title);
   expect(tool).toHaveAttribute("open");
   expect(within(tool).getByText("Parameters")).toBeVisible();
@@ -228,7 +228,7 @@ test("renders one expandable tool record per call with separate parameters and o
   const failed = screen.getByText("printf hello").closest("details")!;
   expect(within(failed).getByText("Failed")).toBeInTheDocument();
   expect(failed.querySelector(".lucide-square-terminal")).toBeTruthy();
-  expect(failed.querySelector("time")).toHaveTextContent(formatTime(thread.updated_at));
+  expect(failed.querySelector("time")).toHaveTextContent(formatDateTime(thread.updated_at));
   await user.click(groupTitle);
   expect(group).not.toHaveAttribute("open");
 });
@@ -285,7 +285,7 @@ test("renders separate collapsed command groups around Gemini replies", async ()
   expect(within(first).getByText("ls")).toBeVisible();
   expect(second).not.toHaveAttribute("open");
   expect(first.querySelectorAll("time")).toHaveLength(2);
-  expect(first.querySelectorAll("time")[1]).toHaveTextContent(formatTime(events[2].occurred_at));
+  expect(first.querySelectorAll("time")[1]).toHaveTextContent(formatDateTime(events[2].occurred_at));
 });
 
 test("creates a session using workspace defaults without creation options",async () => {

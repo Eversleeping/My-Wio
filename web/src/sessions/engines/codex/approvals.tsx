@@ -2,7 +2,7 @@ import { Ban,Check,LoaderCircle,ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { post } from "../../../api";
 import { isUserInputRequest,UserInputPrompt } from "../../../components/UserInputPrompt";
-import { relative } from "../../../format";
+import { formatDateTime, relative } from "../../../format";
 import { useI18n } from "../../../i18n";
 import { message,pretty } from "../../../text";
 import { type Approval } from "../../../types";
@@ -11,7 +11,7 @@ import { asRecord,readableKind } from "./conversation";
 export function ApprovalPrompt({ item, onDecided, notify }: { item: Approval; onDecided: () => void; notify: (text: string) => void }) {
   const { t } = useI18n();
   if (isUserInputRequest(item)) return <UserInputPrompt item={item} onDecided={onDecided} />;
-  return <article className="approval-prompt"><header><ShieldCheck size={16} /><strong>{t("codex.pendingApprovals")}</strong><time>{relative(item.expires_at)}</time></header><small>{readableKind(item.kind)}</small><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={onDecided} notify={notify} /></article>;
+  return <article className="approval-prompt"><header><ShieldCheck size={16} /><strong>{t("codex.pendingApprovals")}</strong><time title={relative(item.expires_at)} dateTime={item.expires_at}>{formatDateTime(item.expires_at)}</time></header><small>{readableKind(item.kind)}</small><pre>{approvalDetail(item.detail)}</pre><ApprovalActions item={item} onDecided={onDecided} notify={notify} /></article>;
 }
 
 export function ApprovalActions({ item, onDecided, notify }: { item: Approval; onDecided: () => void; notify: (text: string) => void }) {

@@ -113,3 +113,5 @@
 .thread strong, .thread small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread strong { font-size: 13px; color: #ffffff; }
 .thread small { color: var(--muted); font-size: 11px; }
+.thread-meta { display: flex; flex-wrap: wrap; gap: 2px 8px; }
+.thread-meta > span { overflow: hidden; text-overflow: ellipsis; }
