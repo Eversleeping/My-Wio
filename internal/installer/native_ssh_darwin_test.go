@@ -222,9 +222,9 @@ func backupNativeNode(t *testing.T) {
 
 func nativeOpenSSHTarget(t *testing.T, ctx context.Context) (Target, string) {
 	t.Helper()
-	// OpenSSH StrictModes rejects an authorized_keys ancestry under world-
-	// writable /tmp, even when the fixture's own directory is root-owned.
-	dir, err := os.MkdirTemp("/var/run", "wio-native-sshd-")
+	// Hosted runners make both /tmp and /var/run writable by non-root groups.
+	// Keep StrictModes enabled and put only this fixture's files under /etc/ssh.
+	dir, err := os.MkdirTemp("/etc/ssh", "wio-native-sshd-")
 	if err != nil {
 		t.Fatal(err)
 	}
