@@ -238,6 +238,11 @@ jobs:
         run: |
           go test -c -tags=platformintegration -o "$RUNNER_TEMP/wio-installer-test" ./internal/installer
           sudo env WIO_TEST_AGENT_BINARY="$RUNNER_TEMP/wio-agent.exe" "$RUNNER_TEMP/wio-installer-test" -test.run TestNativeServiceHeartbeatRestartAndUninstall -test.v -test.timeout 8m
+      - name: Test macOS OpenSSH installation, repair, and uninstall
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo env WIO_TEST_AGENT_BINARY="$RUNNER_TEMP/wio-agent.exe" WIO_TEST_MACOS_INSTALL=1 "$RUNNER_TEMP/wio-installer-test" -test.run TestNativeMacSSHInstallRepairAndUninstall -test.v -test.timeout 15m
       - name: Test real Windows service
         if: runner.os == 'Windows'
         shell: pwsh
