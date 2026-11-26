@@ -13,6 +13,7 @@ const (
 	CapabilityCodexForkAtMessage   = "codex.fork_at_message"
 	CapabilityGeminiSessions       = "gemini.sessions"
 	CapabilityCLIManage            = "cli.manage"
+	CapabilityCLIInstallParallel   = "cli.install_parallel"
 	CapabilityGeminiCredentials    = "gemini.credentials"
 	CapabilityGeminiFork           = "gemini.fork"
 	CapabilityGeminiThinking       = "gemini.thinking"

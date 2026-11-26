@@ -67,10 +67,10 @@ func (c *Client) executeCredentialsConfigure(ctx context.Context, envelope *prot
 }
 
 func (c *Client) executeCodexUpdate(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	if !c.cliInstallMu.TryLock() {
+	if !c.cliInstallMu[0].TryLock() {
 		return errors.New("an AI CLI installation is already running")
 	}
-	defer c.cliInstallMu.Unlock()
+	defer c.cliInstallMu[0].Unlock()
 	var command protocol.CodexUpdateCommand
 	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
@@ -82,14 +82,25 @@ func (c *Client) executeCodexUpdate(ctx context.Context, envelope *protocol.Cont
 }
 
 func (c *Client) executeCLIInstall(ctx context.Context, envelope *protocol.ControlEnvelope) error {
-	if !c.cliInstallMu.TryLock() {
-		return errors.New("an AI CLI installation is already running")
-	}
-	defer c.cliInstallMu.Unlock()
 	var command protocol.CLIInstallCommand
 	if err := decodeOperationCommand(envelope.PayloadJSON, &command); err != nil {
 		return err
 	}
+	index := -1
+	switch command.Kind {
+	case "codex":
+		index = 0
+	case "gemini":
+		index = 1
+	case "claude":
+		index = 2
+	default:
+		return errors.New("unsupported AI CLI")
+	}
+	if !c.cliInstallMu[index].TryLock() {
+		return errors.New("an installation of this AI CLI is already running")
+	}
+	defer c.cliInstallMu[index].Unlock()
 	if err := c.installCLI(ctx, command); err != nil {
 		return err
 	}

@@ -47,8 +47,29 @@ func (s *Store) cliInstallBlockers(ctx context.Context, query sqlx.QueryerContex
 	} else if kind != "codex" {
 		return out, errors.New("unsupported AI CLI")
 	}
-	if err := sqlx.SelectContext(ctx, query, &out.BlockingOperations, s.Q("SELECT id,kind,status FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','agent.access.update','agent.restart','agent.isolation.install','gemini.credentials.configure','gemini.skills.manage','claude.credentials.configure') AND status IN ('queued','delivered','running') ORDER BY created_at,id"), serverID); err != nil {
+	var server Server
+	if err := sqlx.GetContext(ctx, query, &server, s.Q("SELECT s.agent_version,"+serverCapabilitySelect+" FROM servers s WHERE s.id=?"), serverID); err != nil {
 		return out, err
+	}
+	var operations []struct {
+		CLIBlockingOperation
+		Payload string `db:"payload"`
+	}
+	if err := sqlx.SelectContext(ctx, query, &operations, s.Q("SELECT id,kind,status,payload FROM agent_operations WHERE server_id=? AND kind IN ('cli.install','codex.update','agent.update','agent.access.update','agent.restart','agent.isolation.install','gemini.credentials.configure','gemini.skills.manage','claude.credentials.configure') AND status IN ('queued','delivered','running') ORDER BY created_at,id"), serverID); err != nil {
+		return out, err
+	}
+	parallel := server.Supports(protocol.CapabilityCLIInstallParallel)
+	for _, operation := range operations {
+		if parallel {
+			if operation.Kind == protocol.OpCodexUpdate && kind != "codex" {
+				continue
+			}
+			var command protocol.CLIInstallCommand
+			if operation.Kind == protocol.OpCLIInstall && json.Unmarshal([]byte(operation.Payload), &command) == nil && command.Kind != kind && (command.Kind == "codex" || command.Kind == "gemini" || command.Kind == "claude") {
+				continue
+			}
+		}
+		out.BlockingOperations = append(out.BlockingOperations, operation.CLIBlockingOperation)
 	}
 	active := "t.status IN ('queued','running','interrupting')"
 	if kind == "claude" {
@@ -60,7 +81,8 @@ func (s *Store) cliInstallBlockers(ctx context.Context, query sqlx.QueryerContex
 	return out, err
 }
 
-// Lock the server row so concurrent installation requests cannot both queue.
+// Lock the server row so concurrent requests atomically check maintenance and
+// same-CLI exclusion. Different CLIs may queue together on capable Agents.
 func (s *Store) QueueCLIInstall(ctx context.Context, serverID string, command protocol.CLIInstallCommand) (string, error) {
 	if command.Kind != "codex" && command.Kind != "gemini" && command.Kind != "claude" {
 		return "", errors.New("unsupported AI CLI")

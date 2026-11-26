@@ -65,6 +65,7 @@ var gates = []gate{
 	{protocol.CapabilityCodexForkAtMessage, nil},
 	{protocol.CapabilityGeminiSessions, nil},
 	{protocol.CapabilityCLIManage, nil},
+	{protocol.CapabilityCLIInstallParallel, nil},
 	{protocol.CapabilityGeminiCredentials, nil},
 	{protocol.CapabilityGeminiFork, nil},
 	{protocol.CapabilityGeminiThinking, nil},

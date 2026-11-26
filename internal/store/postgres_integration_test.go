@@ -230,6 +230,7 @@ func TestPostgresMigrationAndStorage(t *testing.T) {
 		assertLogPagination(t, logs)
 	})
 	t.Run("heartbeat capabilities", func(t *testing.T) { assertHeartbeatCapabilities(t, scans) })
+	t.Run("parallel CLI install guards", func(t *testing.T) { assertParallelCLIInstalls(t, scans) })
 	t.Run("worktree deletion", func(t *testing.T) { assertWorktreeDeletionCleansSessions(t, scans) })
 	assertPostgresInteractiveConnections(t, scans)
 	assertWorkspaceFileScanTimeoutAndRetry(t, scans)

@@ -14,11 +14,12 @@ import (
 )
 
 type serverCLI struct {
-	Kind      string           `json:"kind"`
-	Version   string           `json:"version"`
-	Ready     bool             `json:"ready"`
-	Supported bool             `json:"supported"`
-	Operation *store.Operation `json:"operation,omitempty"`
+	Kind              string           `json:"kind"`
+	Version           string           `json:"version"`
+	Ready             bool             `json:"ready"`
+	Supported         bool             `json:"supported"`
+	ParallelSupported bool             `json:"parallel_supported"`
+	Operation         *store.Operation `json:"operation,omitempty"`
 	store.CLIInstallBlockers
 }
 
@@ -52,6 +53,7 @@ func (a *API) serverCLIs(w http.ResponseWriter, r *http.Request) {
 		{Kind: "claude", Version: server.ClaudeVersion, Ready: server.ClaudeReady != 0, Supported: server.Supports(protocol.CapabilityClaudeManage)},
 	}
 	for i := range items {
+		items[i].ParallelSupported = server.Supports(protocol.CapabilityCLIInstallParallel)
 		items[i].CLIInstallBlockers, err = a.store.CLIInstallBlockers(r.Context(), server.ID, items[i].Kind)
 		if err != nil {
 			writeError(w, 500, "could not load CLI activity")

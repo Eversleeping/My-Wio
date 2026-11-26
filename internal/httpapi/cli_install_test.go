@@ -29,7 +29,7 @@ func cliRequest(a *API, id, kind, body string) *httptest.ResponseRecorder {
 func TestCLIInstallAndStatusPreserveExplicitVersion(t *testing.T) {
 	db := openBootstrapTestStore(t)
 	s := enrollResourceTestServer(t, db, "cli-install-token")
-	if err := db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.65.0", "", protocol.CapabilityClaudeManage), GeminiReady: true, GeminiVersion: "0.65.0"}); err != nil {
+	if err := db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("0.65.0", "", protocol.CapabilityClaudeManage, protocol.CapabilityCLIInstallParallel), GeminiReady: true, GeminiVersion: "0.65.0"}); err != nil {
 		t.Fatal(err)
 	}
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +95,7 @@ func TestCLIInstallRejectsOldOfflineAndBusyAgents(t *testing.T) {
 	if w := cliRequest(a, s.ID, "gemini", `{"version":"0.65.0"}`); w.Code != 409 {
 		t.Fatalf("old Agent: %d", w.Code)
 	}
-	db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "")})
+	db.Heartbeat(context.Background(), s.ID, protocol.Heartbeat{AgentVersion: "0.3.26", Capabilities: testCapabilities("", "", protocol.CapabilityCLIInstallParallel)})
 	if _, err := db.QueueOperation(context.Background(), s.ID, "codex.update", protocol.CodexUpdateCommand{Version: "0.162.1"}, "existing-update"); err != nil {
 		t.Fatal(err)
 	}
@@ -155,5 +155,39 @@ func TestCLIInstallRejectsActiveGeminiTurns(t *testing.T) {
 	}
 	if _, err := db.QueueCLIInstall(ctx, s.ID, protocol.CLIInstallCommand{Kind: "gemini", Version: "0.65.0"}); err != nil {
 		t.Fatalf("could not switch after conversation ended: %v", err)
+	}
+}
+
+func TestCLIInstallParallelCapabilityAndRequests(t *testing.T) {
+	ctx := context.Background()
+	db := openBootstrapTestStore(t)
+	server := enrollResourceTestServer(t, db, "parallel-cli-api")
+	if err := db.Heartbeat(ctx, server.ID, protocol.Heartbeat{AgentVersion: "0.3.60", Capabilities: testCapabilities("", "")}); err != nil {
+		t.Fatal(err)
+	}
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`[{"tag_name":"v1.0.0"}]`)) }))
+	defer releases.Close()
+	a := resourceTestAPI(db)
+	a.codexReleases = codexcli.NewTaggedReleaseChecker(releases.Client(), releases.URL, "v")
+	a.geminiReleases = a.codexReleases
+	a.claudeReleases = a.codexReleases
+	for _, kind := range []string{"codex", "gemini", "claude"} {
+		if response := cliRequest(a, server.ID, kind, `{"version":"1.0.0"}`); response.Code != 202 {
+			t.Fatalf("%s: %d %s", kind, response.Code, response.Body)
+		}
+	}
+	request := httptest.NewRequest("GET", "/", nil)
+	route := chi.NewRouteContext()
+	route.URLParams.Add("serverID", server.ID)
+	response := httptest.NewRecorder()
+	a.serverCLIs(response, request.WithContext(context.WithValue(ctx, chi.RouteCtxKey, route)))
+	var statuses []serverCLI
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &statuses) != nil || len(statuses) != 3 {
+		t.Fatal(response.Code, response.Body)
+	}
+	for _, status := range statuses {
+		if !status.ParallelSupported || len(status.BlockingOperations) != 1 {
+			t.Fatalf("parallel status: %+v", status)
+		}
 	}
 }

@@ -53,7 +53,7 @@ type Client struct {
 	updatePending      bool
 	codexPathMu        sync.RWMutex
 	codexPath          string
-	cliInstallMu       sync.Mutex
+	cliInstallMu       [3]sync.Mutex // Codex, Gemini and Claude have separate installation roots.
 	geminiVersionMu    sync.Mutex
 	geminiVersionPath  string
 	geminiVersion      string

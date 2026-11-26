@@ -197,3 +197,163 @@ test("switches Claude with its official version format and preserves the configu
  await user.click(screen.getByRole("button",{name:"Switch Claude to 2.1.317"}));
  await waitFor(()=>expect(requests).toContainEqual({url:"/api/servers/node-1/ai-clis/claude/install",body:{version:"2.1.317"}}));
 });
+
+function mockBatch(options: { fail?: boolean; readFailure?: boolean; versions?: string[] } = {}) {
+  const installs: Array<{ kind: string; version: string }> = [];
+  let polls = 0;
+  let complete = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    if (url.endsWith("/versions")) return new Response(JSON.stringify({ versions: options.versions ?? ["2.0.0", "1.0.0"], target_version: "1.0.0" }));
+    if (init.method === "POST") {
+      installs.push({ kind: url.split("/").at(-2)!, version: JSON.parse(String(init.body)).version });
+      return new Response(JSON.stringify({ operation_id: `install-${installs.length}` }));
+    }
+    if (installs.length && options.readFailure) return new Response(JSON.stringify({ error: "Connection lost" }), { status: 502 });
+    const latest = installs.at(-1);
+    if (latest) polls++;
+    return new Response(JSON.stringify(["codex", "gemini", "claude"].map(kind => ({
+      kind, version: kind === "codex" ? "codex-cli 1.0.0" : kind === "claude" ? "1.0.0 (Claude Code)" : "1.0.0", ready: true, supported: true,
+      ...(kind === latest?.kind ? { operation: polls === 1
+        ? { id: "previous-install", status: "succeeded" }
+        : { id: `install-${installs.length}`, status: complete ? options.fail ? "failed" : "succeeded" : "running", result: options.fail ? "npm unavailable" : "" } } : {})
+    }))));
+  }));
+  return { installs, finish: () => { complete = true; } };
+}
+
+async function startBatch() {
+  const user = userEvent.setup();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Update all Agents" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "Update all Agents" }));
+  const dialog = screen.getByRole("dialog", { name: "Update all Agents" });
+  expect(dialog).toHaveTextContent("Codex CLI → 2.0.0");
+  expect(dialog).toHaveTextContent("Gemini CLI → 2.0.0");
+  expect(dialog).toHaveTextContent("Claude CLI → 2.0.0");
+  await user.click(within(dialog).getByRole("button", { name: "Update all Agents" }));
+}
+
+test("updates all three Agents sequentially to latest releases, ignoring selected targets and old operation results", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const batch = mockBatch();
+  const notify = vi.fn();
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={notify} /></I18nProvider>);
+  await startBatch();
+  await screen.findByText("Updating Codex · 0/3 completed");
+  expect(screen.getByRole("combobox", { name: "Codex version" })).toHaveValue("1.0.0");
+  expect(batch.installs).toEqual([{ kind: "codex", version: "2.0.0" }]);
+  expect(screen.getByRole("button", { name: "Switch Gemini version" })).toBeDisabled();
+  // The first status response is an older succeeded operation. Only the new ID may advance the batch.
+  batch.finish();
+  await waitFor(() => expect(notify).toHaveBeenCalledWith("All Agent updates completed (3)"), { timeout: 4500 });
+  expect(batch.installs).toEqual(["codex", "gemini", "claude"].map(kind => ({ kind, version: "2.0.0" })));
+});
+
+test("stops the remaining updates when an installation fails", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const batch = mockBatch({ fail: true });
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
+  await startBatch();
+  batch.finish();
+  await waitFor(() => expect(screen.getAllByRole("alert").some(alert => alert.textContent?.includes("Remaining updates have stopped"))).toBe(true), { timeout: 4500 });
+  expect(screen.getAllByRole("alert").some(alert => alert.textContent?.includes("npm unavailable"))).toBe(true);
+  expect(batch.installs).toHaveLength(1);
+});
+
+test("stops remaining updates without cancelling the queued installation", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const batch = mockBatch();
+  const notify = vi.fn();
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={notify} /></I18nProvider>);
+  await startBatch();
+  await screen.findByText("Updating Codex · 0/3 completed");
+  await userEvent.setup().click(screen.getByRole("button", { name: "Stop remaining updates" }));
+  expect(notify).toHaveBeenCalledWith("Remaining updates stopped. Any installation already started will continue.");
+  expect(screen.queryByText("Updating Codex · 0/3 completed")).not.toBeInTheDocument();
+  expect(batch.installs).toEqual([{ kind: "codex", version: "2.0.0" }]);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Switch Gemini version" })).toBeDisabled());
+});
+
+test("does not send further install requests when polling fails after queueing an update", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const batch = mockBatch({ readFailure: true });
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
+  await startBatch();
+  expect(await screen.findByText(/Codex update failed: Connection lost/)).toBeInTheDocument();
+  expect(batch.installs).toEqual([{ kind: "codex", version: "2.0.0" }]);
+});
+
+test("skips current, newer, missing and unsupported Agents and prevents downgrades", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith("/versions") ? { versions: ["2.0.0", "1.0.0"] } : [
+    { kind: "codex", version: "codex-cli 2.0.0", ready: true, supported: true },
+    { kind: "gemini", version: "3.0.0", ready: true, supported: true },
+    { kind: "claude", version: "", ready: false, supported: false }
+  ]))));
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
+  await screen.findByText(/Upgrade Wio Agent/);
+  expect(screen.getByRole("button", { name: "Update all Agents" })).toBeDisabled();
+});
+
+test("offers only outdated installed Agents in the batch confirmation", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith("/versions") ? { versions: ["1.10.0", "1.9.0"] } : [
+    { kind: "codex", version: "codex-cli 1.9.0", ready: true, supported: true },
+    { kind: "gemini", version: "1.10.0", ready: true, supported: true },
+    { kind: "claude", version: "2.0.0 (Claude Code)", ready: true, supported: true }
+  ]))));
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Update all Agents" })).toBeEnabled());
+  await userEvent.setup().click(screen.getByRole("button", { name: "Update all Agents" }));
+  const dialog = screen.getByRole("dialog", { name: "Update all Agents" });
+  expect(within(dialog).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Codex CLI → 1.10.0"]);
+});
+
+test("rechecks active conversations before starting the batch", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  let blocked = false;
+  const installs: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    if (init.method === "POST") installs.push(String(input));
+    return new Response(JSON.stringify(String(input).endsWith("/versions") ? { versions: ["2.0.0"] } : ["codex", "gemini", "claude"].map(kind => ({
+      kind, version: "1.0.0", supported: true, ready: true, active_threads: blocked ? [{ id: "active", title: "Active turn", status: "running" }] : []
+    }))));
+  }));
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={vi.fn()} /></I18nProvider>);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Update all Agents" })).toBeEnabled());
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Update all Agents" }));
+  blocked = true;
+  await user.click(within(screen.getByRole("dialog", { name: "Update all Agents" })).getByRole("button", { name: "Update all Agents" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("This server has active conversations or maintenance tasks");
+  expect(installs).toEqual([]);
+});
+
+test("starts all supported engines in parallel and reports each failure after the others finish", async () => {
+  window.localStorage.setItem("wio_language", "en");
+  const installs: string[] = [];
+  let finished = false;
+  const notify = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    if (url.endsWith("/versions")) return new Response(JSON.stringify({ versions: ["2.0.0", "1.0.0"] }));
+    if (init.method === "POST") {
+      const kind = url.split("/").at(-2)!;
+      installs.push(kind);
+      return new Response(JSON.stringify({ operation_id: `parallel-${kind}` }));
+    }
+    return new Response(JSON.stringify(["codex", "gemini", "claude"].map(kind => ({
+      kind, version: finished && kind !== "codex" ? "2.0.0" : "1.0.0", supported: true, ready: true, parallel_supported: true,
+      ...(installs.includes(kind) ? { operation: { id: `parallel-${kind}`, status: kind === "codex" ? "failed" : finished ? "succeeded" : "running", result: kind === "codex" ? "network unavailable" : "" } } : {})
+    }))));
+  }));
+  render(<I18nProvider><ServerCLIManager server={server} onClose={vi.fn()} notify={notify} /></I18nProvider>);
+  await startBatch();
+  await waitFor(() => expect(installs).toEqual(["codex", "gemini", "claude"]));
+  expect(screen.getByText("Updating Codex / Gemini / Claude · 0/3 completed")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Stop waiting" })).toBeEnabled();
+  finished = true;
+  await waitFor(() => expect(screen.getByText(/Agent updates finished: 2\/3 succeeded. Codex: network unavailable/)).toBeInTheDocument(), { timeout: 4500 });
+  expect(notify).not.toHaveBeenCalledWith("All Agent updates completed (3)");
+  expect(installs).toHaveLength(3);
+});

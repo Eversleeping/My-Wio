@@ -612,7 +612,7 @@ func assertAcceptanceCapabilityDeclarations(t *testing.T, api *acceptanceAPI, da
 		t.Fatal(err)
 	}
 	// Fake Gemini is 0.66.0; fake Claude is 1.0.0 (no steer/questions).
-	if len(server.DeclaredCapabilities) != 32 || !capabilities.Supports(protocol.CapabilityTaskArtifacts, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilityTaskArtifactVerify, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilityTaskCollaboration, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilityGeminiGoal, server.AgentVersion, server.DeclaredCapabilities) || capabilities.Supports(protocol.CapabilityClaudeSteer, server.AgentVersion, server.DeclaredCapabilities) {
+	if len(server.DeclaredCapabilities) != 33 || !capabilities.Supports(protocol.CapabilityCLIInstallParallel, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilityTaskArtifacts, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilityTaskArtifactVerify, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilityTaskCollaboration, server.AgentVersion, server.DeclaredCapabilities) || !capabilities.Supports(protocol.CapabilityGeminiGoal, server.AgentVersion, server.DeclaredCapabilities) || capabilities.Supports(protocol.CapabilityClaudeSteer, server.AgentVersion, server.DeclaredCapabilities) {
 		t.Fatalf("real heartbeat declaration=%v", server.DeclaredCapabilities)
 	}
 	response, err := api.request(http.MethodGet, "/api/servers", nil)
